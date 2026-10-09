@@ -176,6 +176,8 @@ describe('hardcoded colours', () => {
       'packages/core/src/modules/trajectories/panels/HarnessSection.tsx',
       // Source colours live in follow.css as tokens; the component names families.
       'packages/core/src/modules/trajectories/panels/FollowSection.tsx',
+      'packages/core/src/modules/trajectories/panels/LineageSection.tsx',
+      'packages/core/src/modules/trajectories/panels/lineage.css',
     ];
     for (const rel of cleaned) {
       const hits = readFileSync(join(REPO, rel), 'utf8').match(HEX) ?? [];

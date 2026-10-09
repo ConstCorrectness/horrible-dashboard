@@ -39,8 +39,11 @@ const METHOD_NOTE: Record<SearchMethod, { kind: 'ok' | 'warn' | 'info'; text: st
 };
 
 export function RunsSection({
+  openRunId,
   onInspectHarness,
 }: {
+  /** A run another section asked to open — the Lineage card's "Open run". */
+  openRunId?: string;
   onInspectHarness: (fingerprint: string) => void;
 }) {
   const [runs, setRuns] = useState<TrajectoryRun[]>([]);
@@ -94,6 +97,10 @@ export function RunsSection({
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
+
+  useEffect(() => {
+    if (openRunId) void load(openRunId);
+  }, [openRunId, load]);
 
   const remove = async (id: string) => {
     await deleteRun(id);

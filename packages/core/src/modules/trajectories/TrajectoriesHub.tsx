@@ -29,6 +29,7 @@ import { usePaneSection } from '../../layout/use-sections';
 import { DatasetsSection } from './panels/DatasetsSection';
 import { FollowSection } from './panels/FollowSection';
 import { HarnessSection } from './panels/HarnessSection';
+import { LineageSection } from './panels/LineageSection';
 import { LiveSection } from './panels/LiveSection';
 import { CommonsSection } from './panels/CommonsSection';
 import { ConnectSection } from './panels/ConnectSection';
@@ -43,6 +44,13 @@ export function TrajectoriesHub() {
   // there is nowhere to hang one, and pretending this is a deep link would be a
   // promise a reload breaks.
   const [inspect, setInspect] = useState<string | undefined>(undefined);
+  // Set by the Lineage section's "Open run", for the same reason and with the same
+  // limits as `inspect`.
+  const [openRun, setOpenRun] = useState<string | undefined>(undefined);
+  const inspectHarness = (fingerprint: string) => {
+    setInspect(fingerprint);
+    setSection('harness');
+  };
 
   return (
     <div
@@ -70,13 +78,16 @@ export function TrajectoriesHub() {
         <DatasetsSection />
       ) : section === 'harness' ? (
         <HarnessSection inspect={inspect} />
-      ) : (
-        <RunsSection
-          onInspectHarness={(fingerprint) => {
-            setInspect(fingerprint);
-            setSection('harness');
+      ) : section === 'lineage' ? (
+        <LineageSection
+          onOpenRun={(runId) => {
+            setOpenRun(runId);
+            setSection('runs');
           }}
+          onInspectHarness={inspectHarness}
         />
+      ) : (
+        <RunsSection openRunId={openRun} onInspectHarness={inspectHarness} />
       )}
     </div>
   );

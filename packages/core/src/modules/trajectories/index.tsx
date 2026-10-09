@@ -42,6 +42,10 @@ export const trajectoriesModule: ModuleManifest = {
       sections: [
         { id: 'runs', label: 'Runs', icon: '▤', key: 'r', default: true },
         { id: 'live', label: 'Live', icon: '◉', key: 'l' },
+        // Every agent's harness revisions and the runs each produced, as one zoomable
+        // tree with a runs-over-time inset. Runs and Harness are where you read one;
+        // this is where you see how they relate.
+        { id: 'lineage', label: 'Lineage', icon: '⋔', key: 'g' },
         // The agent chat's turns from the inside: what each round was shown, what it
         // added, and what it did. Follows the chat pane used most recently.
         { id: 'follow', label: 'Agent', icon: '◈', key: 'a' },

@@ -647,12 +647,13 @@ FROM traj_runs r JOIN agent_turns t ON t.turn_id = r.turn_id;
 
 ## Frontend
 
-One pane, `trajectories.hub` (`role: document`, singleton), four sections:
+One pane, `trajectories.hub` (`role: document`, singleton), nine sections:
 
 | Section | Key | What it is |
 | --- | --- | --- |
 | **Runs** | `r` | Run index + timeline + step-by-step detail, with grading, deletion and search |
 | **Live** | `l` | Runs happening right now, socket-fed |
+| **Lineage** | `g` | Every agent's harness revisions and their runs as one zoomable tree, with a linked runs-over-time inset. See [Lineage](#lineage) |
 | **Agent** | `a` | The agent chat's turns from the inside: prompt by source, round-by-round diff, steps, sub-agents. See [Following the agent chat](#following-the-agent-chat) |
 | **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
 | **Harness** | `h` | The A/B comparison and the harness inspector |
@@ -707,6 +708,42 @@ Iconography inside the pane is inline stroke SVG (`icons.tsx` and the shared
 `glyphs.tsx`) rather than native emoji. The manifest's `icon:` field is the
 activity-rail glyph, typed as a string, and follows the rail's existing emoji
 convention.
+
+### Lineage
+
+The **Lineage** section (`panels/LineageSection.tsx`, model in the pure
+`panels/lineage-model.ts`) draws agent → harness revisions → runs as one tidy tree,
+generations left to right. **A harness's parent is the same agent's previous
+harness**, ordered by when each first ran on this node, so a run of fingerprints
+reads as a history. Each edge says what changed, most significant first: a model
+swap (dashed), a prompt edit (solid accent), tools, then params. `schema` means the
+fingerprint moved but none of the listed fields did, which is a tool-schema change.
+The card on a harness lists every change against the previous revision.
+
+Two levels: **harnesses** folds each revision's runs into one node sized by run
+count, and **runs** adds every run as a leaf. A run is coloured by its verdict, and
+**ungraded is grey, not accent**: finishing is not winning (`verdictOf`). A ring
+means somebody graded it. Focusing a node dims everything but its ancestors, its
+descendants and the far end of any delegation (`parent_run_id`) it is part of.
+
+The **runs over time** inset sits in the stage's bottom-right corner and is linked
+both ways with the tree. Its y axis is steps, time or output tokens (time and tokens
+use a log axis), and its vertical ticks mark harness revisions. Runs that never
+reported the chosen figure are counted as `n/a`, not drawn at zero.
+
+It reads `GET /runs?limit=500` and `GET /harnesses` and needs no backend of its own.
+Past 500 runs it shows the newest 500 and says so. The design keeps it fast:
+
+- **Pan and zoom never re-render.** `d3-zoom`'s handler writes one `transform`
+  attribute on one `<g>`. React renders only when the data, the level or the spread
+  changes. Nothing in `lineage.css` may animate `transform` on a node, because a CSS
+  transform on an SVG element *replaces* its `transform` attribute, which is where
+  the node's position lives.
+- **The inset and the card are overlays.** The inset is `pointer-events: none` with
+  its points opted back in, so wheel and drag fall through it to the tree.
+- **The fit has no transition.** d3 transitions run on `requestAnimationFrame`, which
+  never fires in a hidden window, and a fit that waited for a frame would leave the
+  tree at the origin there.
 
 ### Following the agent chat
 

@@ -1,0 +1,640 @@
+/* Trajectories → Lineage.
+ *
+ * Every colour is a token: the stage, the marks and the overlays all re-theme with
+ * the switcher, and `no-hex-literals.test.ts` holds this pane's files at zero.
+ *
+ * Two rules carry the "fast" feel and are worth not undoing:
+ *
+ * - Pan and zoom write one `transform` attribute on one `<g>` (see LineageSection).
+ *   Nothing here may animate `transform` on a node — a CSS `transform` on an SVG
+ *   element *replaces* its `transform` attribute, which is where its position lives.
+ *   Entrance and hover therefore animate opacity and `r` only.
+ * - The overlays are `pointer-events: none` with the marks inside them opted back
+ *   in, so wheel and drag pass straight through the inset to the tree beneath. */
+
+.traj-lin {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-5);
+  flex: 1;
+  min-height: 0;
+}
+
+.traj-lin-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.traj-lin-hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+/* Level switch: two segments, one rule between them. */
+.traj-lin-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.traj-lin-seg-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  line-height: var(--control-h);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-seg-btn:last-child {
+  border-right: 0;
+}
+
+.traj-lin-seg-btn:hover {
+  color: var(--accent);
+}
+
+.traj-lin-seg-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.traj-lin-seg-btn .cnt {
+  font-weight: var(--fw-regular);
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+
+.traj-lin-spread {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-display);
+}
+
+.traj-lin-spread input[type='range'] {
+  width: 96px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* --- the stage ------------------------------------------------------------- */
+
+.traj-lin-stage {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--accent) 14%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+}
+
+.traj-lin-stage > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.traj-lin-stage > svg:active {
+  cursor: grabbing;
+}
+
+.traj-lin-corner {
+  position: absolute;
+  top: var(--space-2);
+  z-index: 10;
+}
+
+.traj-lin-corner[data-at='left'] {
+  left: var(--space-3);
+  pointer-events: none;
+}
+
+.traj-lin-corner[data-at='right'] {
+  right: var(--space-2);
+}
+
+/* --- links ----------------------------------------------------------------- */
+
+.traj-lin-link {
+  fill: none;
+  stroke-width: 1.1;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-link[data-edge='origin'] {
+  stroke: var(--border-strong);
+}
+
+.traj-lin-link[data-edge='member'] {
+  stroke: var(--border);
+  stroke-width: 0.8;
+}
+
+/* A different model: the agent in name only. Dashed, because the comparison across
+ * this edge is the weakest one the view offers. */
+.traj-lin-link[data-edge='model'] {
+  stroke: var(--text-faint);
+  stroke-dasharray: 4 3;
+}
+
+/* Same model, new prompt: the usual experiment, and the edge worth following. */
+.traj-lin-link[data-edge='prompt'] {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.traj-lin-link[data-edge='tools'] {
+  stroke: var(--accent-2);
+  stroke-width: 1.4;
+}
+
+.traj-lin-link[data-edge='params'],
+.traj-lin-link[data-edge='schema'] {
+  stroke: var(--accent);
+  stroke-dasharray: 1 2.5;
+  stroke-width: 1.2;
+}
+
+.traj-lin-xedge {
+  fill: none;
+  stroke: var(--warning);
+  stroke-width: 1.2;
+  stroke-dasharray: 2 2;
+  opacity: 0.8;
+}
+
+/* --- nodes ----------------------------------------------------------------- */
+
+@keyframes traj-lin-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.traj-lin-node {
+  cursor: pointer;
+  animation: traj-lin-in var(--dur-base) var(--ease-entrance) both;
+  animation-delay: calc(var(--traj-i, 0) * var(--stagger-step));
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-dim {
+  opacity: 0.14;
+}
+
+.traj-lin-node .dot {
+  stroke: var(--bg-primary);
+  stroke-width: 1;
+  transition: r var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-node .halo {
+  fill: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    r var(--dur-fast) var(--ease-standard),
+    opacity var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-node[data-hot='true'] .halo {
+  opacity: 0.16;
+}
+
+/* Graded: somebody judged it. The run-level counterpart of a "verified" ring. */
+.traj-lin-node .ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.3;
+}
+
+.traj-lin-node .label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  fill: var(--text-secondary);
+  pointer-events: none;
+}
+
+.traj-lin-node[data-kind='agent'] .label {
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  fill: var(--text-primary);
+}
+
+.traj-lin-node .count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  fill: var(--accent-contrast);
+  pointer-events: none;
+}
+
+/* Agent: an angular marker rather than another dot, so the root of each chain
+ * reads as a different kind of thing at any zoom. */
+.traj-lin-node[data-kind='agent'] .dot {
+  fill: var(--text-primary);
+}
+
+.traj-lin-node[data-kind='harness'] .dot {
+  fill: var(--bg-elevated);
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+.traj-lin-node[data-kind='harness'][data-failing='true'] .dot {
+  stroke: var(--danger);
+}
+
+.traj-lin-node[data-kind='harness'] .count {
+  fill: var(--text-primary);
+}
+
+[data-verdict='success'] {
+  fill: var(--accent);
+}
+
+[data-verdict='failure'] {
+  fill: var(--danger);
+}
+
+[data-verdict='partial'] {
+  fill: var(--warning);
+}
+
+[data-verdict='ungraded'] {
+  fill: var(--text-faint);
+}
+
+[data-verdict='abandoned'] {
+  fill: var(--border-strong);
+}
+
+[data-verdict='running'] {
+  fill: var(--warning);
+}
+
+@keyframes traj-lin-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.traj-lin-live {
+  fill: none;
+  stroke: var(--warning);
+  stroke-width: 1.2;
+  animation: traj-lin-pulse 1.6s var(--ease-standard) infinite;
+  pointer-events: none;
+}
+
+/* --- inset: runs over time -------------------------------------------------- */
+
+.traj-lin-inset {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 11;
+  width: 320px;
+  max-width: calc(100% - 2 * var(--space-3));
+  height: 184px;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+  /* Empty areas pass wheel and drag through to the tree. */
+  pointer-events: none;
+}
+
+.traj-lin-inset-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.traj-lin-inset-head .spacer {
+  flex: 1;
+}
+
+.traj-lin-metric {
+  pointer-events: auto;
+  height: 18px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.traj-lin-metric:hover {
+  color: var(--accent);
+}
+
+.traj-lin-metric[aria-pressed='true'] {
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+.traj-lin-inset svg {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+}
+
+.traj-lin-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.traj-lin-axis {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  fill: var(--text-dim);
+}
+
+/* A harness revision: when the configuration changed, against the runs it changed. */
+.traj-lin-rev {
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.22;
+}
+
+.traj-lin-rev[data-edge='model'] {
+  stroke: var(--text-faint);
+  stroke-dasharray: 2 2;
+  opacity: 0.5;
+}
+
+.traj-lin-pt {
+  pointer-events: all;
+  cursor: pointer;
+  stroke: var(--bg-elevated);
+  stroke-width: 0.6;
+  transition:
+    r var(--dur-fast) var(--ease-standard),
+    opacity var(--dur-fast) var(--ease-standard);
+}
+
+.traj-lin-pt[data-hot='true'] {
+  stroke: var(--text-primary);
+  stroke-width: 1.4;
+}
+
+/* --- focus bar and card ------------------------------------------------------ */
+
+.traj-lin-focus {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: calc(100% - 360px);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  background: color-mix(in srgb, var(--bg-elevated) 95%, transparent);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+
+.traj-lin-focus b {
+  color: var(--accent);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 640px) {
+  .traj-lin-focus {
+    max-width: calc(100% - 2 * var(--space-3));
+    bottom: calc(184px + 2 * var(--space-3));
+  }
+}
+
+.traj-lin-card {
+  position: absolute;
+  z-index: 20;
+  width: 300px;
+  max-width: calc(100% - 2 * var(--space-3));
+  max-height: calc(100% - 2 * var(--space-3));
+  overflow: auto;
+  padding: var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+  animation: traj-lin-in var(--dur-fast) var(--ease-entrance) both;
+}
+
+.traj-lin-card[data-verdict='failure'] {
+  border-top-color: var(--danger);
+}
+
+.traj-lin-card-kicker {
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.traj-lin-card-title {
+  margin-top: var(--space-1);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.traj-lin-card-big {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.traj-lin-card-big .n {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.traj-lin-card-big .n[data-tone='fail'] {
+  color: var(--danger);
+}
+
+.traj-lin-card-rows {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.traj-lin-card-rows .k {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.traj-lin-card-rows .v {
+  color: var(--text-primary);
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+}
+
+.traj-lin-card-sec {
+  margin: var(--space-3) 0 var(--space-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.traj-lin-card-changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+
+.traj-lin-card-changes li::before {
+  content: '› ';
+  color: var(--accent);
+}
+
+.traj-lin-card-error {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--danger);
+  word-break: break-word;
+}
+
+.traj-lin-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* --- legend ---------------------------------------------------------------- */
+
+.traj-lin-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+.traj-lin-legend .it {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.traj-lin-legend svg {
+  overflow: visible;
+}
+
+.traj-lin-legend .end {
+  margin-left: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .traj-lin-node,
+  .traj-lin-card {
+    animation: none;
+  }
+  .traj-lin-live {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+.traj-lin-legend-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.3;
+}
