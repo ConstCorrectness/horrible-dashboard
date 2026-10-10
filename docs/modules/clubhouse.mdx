@@ -297,6 +297,33 @@ breaks is the **badge the rest of the room sees**, which is why the message says
 rather than "mute failed". Swallowed, this was 161 silent failures presenting as a
 button that does nothing.
 
+### Badge-letter names (the blue spaced capitals)
+
+Some names show on phones as bold, blue, widely spaced capitals. Clubhouse has no
+name-style feature: the profile payload carries no style, and the 26.09.16 APK has no
+font or colour key for names. The name is spelled in **regional indicator symbols**
+(U+1F1E6–U+1F1FF, the code points flag emoji are built from), with a **zero-width
+space between letters**. Without that separator adjacent letters pair into flags (P+R
+is Puerto Rico, I+N is India). A lone indicator has no flag to become, so the phone's
+emoji font draws it as a letter, and Samsung's draws a blue capital.
+
+[`badgeLetters.ts`](https://github.com/ConstCorrectness/horrible-dashboard/blob/main/packages/core/src/modules/clubhouse/badgeLetters.ts)
+encodes and decodes these names. It pairs indicators the way a phone does: an unfenced
+pair stays a real flag (🇮🇳 is a flag, not "IN"), and only an unpaired indicator is a
+letter. Desktop emoji fonts draw lone indicators inconsistently (Segoe UI Emoji shows
+small grey caps), so `<ClubhouseName>` decodes each run to ASCII and styles it itself
+in the accent blue. Every place the pane shows a name goes through it, along with
+`firstName` and `nameInitials`. Tiles show the first word, split on real whitespace
+only. A zero-width separator is not a word break, so a badge name keeps all its
+letters. Initials come from the decoded name, so they never show half an emoji.
+
+**Edit name** on your own profile card (`POST /me/name` → Clubhouse `/update_name`)
+opens an editor with a live preview. **Badge letters** converts the selected letters
+(or the whole name when nothing is selected), adding a separator against any badge
+letter already at either edge, so "Horrible PROBIN" can keep its first word plain.
+**Plain** converts the letters back. Clubhouse may limit how often a name can change.
+Its refusal is shown as a toast.
+
 ## Authentication Flow Diagrams
 
 ### SMS Phone Authentication Flow

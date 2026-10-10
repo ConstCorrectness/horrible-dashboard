@@ -19,6 +19,7 @@ import {
   blockFromClubhouseChannel,
   endClubhouseChannel,
   getAgentTtsVoices,
+  updateClubhouseName,
   updateClubhouseTopic,
   updateClubhouseHandraiseSettings,
   type HandraisePermission,
@@ -40,6 +41,14 @@ import {
   type GiphyResult,
 } from './api';
 import { bindClubhouse } from './actions';
+import {
+  firstName,
+  hasBadgeLetters,
+  nameInitials,
+  plainName,
+  toBadgeLettersInRange,
+} from './badgeLetters';
+import { ClubhouseName } from './ClubhouseName';
 import { MediaInsightsModal } from './MediaInsightsModal';
 import { DEFAULT_REACTIONS } from './reactions';
 import { useClubhouseVoice, type EarsHealth } from './useClubhouseVoice';
@@ -404,6 +413,10 @@ export function RoomsPanel() {
   const [activeRoomInfo, setActiveRoomInfo] = useState<Channel | null>(null);
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
+  // Editing your own display name from your profile card; null while not editing.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [gifPickerOpen, setGifPickerOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState('');
@@ -744,6 +757,101 @@ export function RoomsPanel() {
     }
   };
 
+  const closeProfile = () => {
+    setSelectedUser(null);
+    setNameDraft(null);
+  };
+
+  /** Badge the selected part of the draft, or all of it when nothing is selected. */
+  const badgeNameDraft = () => {
+    const el = nameInputRef.current;
+    if (nameDraft == null || !el) return;
+    setNameDraft(toBadgeLettersInRange(nameDraft, el.selectionStart ?? 0, el.selectionEnd ?? 0));
+    el.focus();
+  };
+
+  const saveName = async () => {
+    const name = nameDraft?.trim();
+    if (!name) return;
+    setSavingName(true);
+    try {
+      await updateClubhouseName(name);
+      setSelectedUser((p) => (p ? { ...p, name } : p));
+      setNameDraft(null);
+      toastsStore.add('success', 'Name updated', `Clubhouse now shows ${plainName(name)}.`);
+    } catch (err) {
+      toastsStore.add('error', 'Name not changed', String(err));
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  const renderNameEditor = () => {
+    if (nameDraft == null) {
+      return (
+        <button
+          className="ch-btn-action"
+          style={{ flex: 'none', alignSelf: 'flex-start', marginTop: '0.35rem' }}
+          onClick={() => setNameDraft(selectedUser?.name ?? '')}
+        >
+          Edit name
+        </button>
+      );
+    }
+    return (
+      <div
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.35rem' }}
+      >
+        <input
+          ref={nameInputRef}
+          type="text"
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void saveName();
+            if (e.key === 'Escape') setNameDraft(null);
+          }}
+          style={agentInputStyle}
+          aria-label="Display name"
+          autoFocus
+        />
+        <div
+          className="ch-profile-name"
+          style={{ fontSize: '0.95rem', minHeight: '1.3em' }}
+          title="How the room will see it"
+        >
+          <ClubhouseName name={nameDraft} />
+        </div>
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button
+            className="ch-btn-action"
+            onClick={badgeNameDraft}
+            title="Spell the selected letters (or all of them) as blue badge capitals"
+          >
+            Badge letters
+          </button>
+          <button
+            className="ch-btn-action"
+            onClick={() => setNameDraft(plainName(nameDraft))}
+            disabled={!hasBadgeLetters(nameDraft)}
+          >
+            Plain
+          </button>
+          <button
+            className="ch-btn-action"
+            onClick={() => void saveName()}
+            disabled={savingName || !nameDraft.trim()}
+          >
+            {savingName ? 'Saving…' : 'Save'}
+          </button>
+          <button className="ch-btn-action" onClick={() => setNameDraft(null)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderProfileOverlay = () => {
     if (!selectedUser) return null;
     const isCurrentUser = selectedUser.user_id === myUserId;
@@ -751,9 +859,9 @@ export function RoomsPanel() {
       selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
 
     return (
-      <div className="ch-profile-overlay" onClick={() => setSelectedUser(null)}>
+      <div className="ch-profile-overlay" onClick={closeProfile}>
         <div className="ch-profile-card" onClick={(e) => e.stopPropagation()}>
-          <button className="ch-profile-close" onClick={() => setSelectedUser(null)}>
+          <button className="ch-profile-close" onClick={closeProfile}>
             ✕
           </button>
           <div className="ch-profile-header">
@@ -761,12 +869,15 @@ export function RoomsPanel() {
               <img className="ch-profile-avatar" src={selectedUser.photo_url} alt="" />
             ) : (
               <div className="ch-profile-avatar-placeholder">
-                {selectedUser.name?.slice(0, 2).toUpperCase() || '?'}
+                {nameInitials(selectedUser.name ?? '').toUpperCase() || '?'}
               </div>
             )}
             <div className="ch-profile-names">
-              <h4 className="ch-profile-name">{selectedUser.name}</h4>
+              <h4 className="ch-profile-name">
+                <ClubhouseName name={selectedUser.name} />
+              </h4>
               <p className="ch-profile-username">@{selectedUser.username}</p>
+              {isCurrentUser && renderNameEditor()}
               {selectedUser.follows_me && <span className="ch-follows-badge">Follows you</span>}
               {!isCurrentUser && (
                 <button
@@ -1843,14 +1954,8 @@ export function RoomsPanel() {
     const audience = currentRoom?.users.filter((u) => !u.is_speaker) ?? [];
 
     const renderUserCard = (u: ChannelUser, isSpeaker: boolean) => {
-      const initials = u.name
-        ? u.name
-            .split(' ')
-            .map((n) => n[0])
-            .join('')
-            .slice(0, 2)
-        : '?';
-      const shortName = u.name ? u.name.split(' ')[0] : 'Anonymous';
+      const initials = nameInitials(u.name ?? '') || '?';
+      const shortName = u.name ? firstName(u.name) : 'Anonymous';
       const uid = u.user_id ?? 0;
       // Get live state for this user from PubNub events
       const liveState = liveUsers.find((l) => l.userId === uid);
@@ -1867,7 +1972,7 @@ export function RoomsPanel() {
           key={u.user_id || Math.random()}
           className="ch-user-card"
           data-user-id={u.user_id}
-          title={u.name || ''}
+          title={plainName(u.name || '')}
           onClick={() => handleUserClick(u.user_id)}
         >
           <div className="ch-avatar-container" style={{ position: 'relative' }}>
@@ -1939,7 +2044,9 @@ export function RoomsPanel() {
               </span>
             )}
           </div>
-          <span className={`ch-user-name ${isSpeaker ? '' : 'dim'}`}>{shortName}</span>
+          <span className={`ch-user-name ${isSpeaker ? '' : 'dim'}`}>
+            <ClubhouseName name={shortName} />
+          </span>
         </div>
       );
     };
@@ -5304,13 +5411,7 @@ export function RoomsPanel() {
                 ) : (
                   <ul className="ch-invite-list">
                     {followingUsers.map((u) => {
-                      const initials = u.name
-                        ? u.name
-                            .split(' ')
-                            .map((n) => n[0])
-                            .join('')
-                            .slice(0, 2)
-                        : '?';
+                      const initials = nameInitials(u.name ?? '') || '?';
                       const isInvited = invitedUserIds.has(u.user_id!);
                       return (
                         <li key={u.user_id} className="ch-invite-item">
@@ -5320,7 +5421,9 @@ export function RoomsPanel() {
                             <div className="ch-invite-avatar-placeholder">{initials}</div>
                           )}
                           <div className="ch-invite-user-info">
-                            <p className="ch-invite-name">{u.name}</p>
+                            <p className="ch-invite-name">
+                              <ClubhouseName name={u.name} />
+                            </p>
                             <p className="ch-invite-username">@{u.username}</p>
                           </div>
                           <button
@@ -5591,13 +5694,7 @@ export function RoomsPanel() {
                   <div className="ch-room-body">
                     <div className="ch-avatar-stack">
                       {mainSpeakers.map((u) => {
-                        const initials = u.name
-                          ? u.name
-                              .split(' ')
-                              .map((n) => n[0])
-                              .join('')
-                              .slice(0, 2)
-                          : '?';
+                        const initials = nameInitials(u.name ?? '') || '?';
                         return u.photo_url ? (
                           <img
                             key={u.user_id}
@@ -5643,7 +5740,7 @@ export function RoomsPanel() {
                           style={{ fontWeight: u.is_moderator ? 600 : 'normal' }}
                         >
                           {u.is_moderator && <span className="ch-pulse-dot" title="Moderator" />}
-                          {u.name}
+                          <ClubhouseName name={u.name} />
                           {idx < c.users.length - 1 ? ', ' : ''}
                         </span>
                       ))}
@@ -5770,13 +5867,7 @@ export function RoomsPanel() {
           ) : (
             <ul className="ch-people-list">
               {peopleSearchResults.map((u) => {
-                const initials = u.name
-                  ? u.name
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)
-                  : '?';
+                const initials = nameInitials(u.name ?? '') || '?';
                 const isFollowing = u.is_following;
 
                 const handleFollowToggleInline = async (e: React.MouseEvent) => {
@@ -5814,7 +5905,9 @@ export function RoomsPanel() {
                       <div className="ch-person-avatar-placeholder">{initials}</div>
                     )}
                     <div className="ch-person-info">
-                      <h4 className="ch-person-name">{u.name}</h4>
+                      <h4 className="ch-person-name">
+                        <ClubhouseName name={u.name} />
+                      </h4>
                       <p className="ch-person-username">@{u.username}</p>
                       {u.bio && <p className="ch-person-bio">{u.bio}</p>}
                     </div>
