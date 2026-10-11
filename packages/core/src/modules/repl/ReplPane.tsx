@@ -4,15 +4,28 @@
  * inserts a newline. stdout/stderr stream in; a trailing expression echoes its
  * repr. The injected `dash` SDK drives the dashboard. See docs/modules/repl.md.
  */
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { PaneInstanceContext, useAgentContext } from '../../agent-context';
-import { ReplSession, type CellResult } from './client';
+import { usePaneSession } from '../../layout/use-pane-session';
+import { ReplConsole, type EntryKind } from './console';
 
-type EntryKind = 'in' | 'out' | 'err' | 'result' | 'system';
-interface Entry {
-  kind: EntryKind;
-  text: string;
+function newConsole(ctxId: string | null): ReplConsole {
+  return new ReplConsole(`${ctxId ?? 'repl.console'}:${Math.random().toString(36).slice(2, 9)}`);
+}
+
+const disposeConsole = (c: ReplConsole): void => c.dispose();
+
+/**
+ * This pane's console: created once per pane and stopped only when the pane
+ * closes (see `console.ts`). Outside a pane there is no close event, so it falls
+ * back to the old per-mount lifetime rather than leaking a kernel forever.
+ */
+function useReplConsole(ctxId: string | null): ReplConsole {
+  const paneScoped = usePaneSession(() => newConsole(ctxId), disposeConsole);
+  const [local] = useState<ReplConsole | null>(() => (paneScoped ? null : newConsole(ctxId)));
+  useEffect(() => (local ? () => local.dispose() : undefined), [local]);
+  return (paneScoped ?? local)!;
 }
 
 const COLORS: Record<EntryKind, string> = {
@@ -25,13 +38,12 @@ const COLORS: Record<EntryKind, string> = {
 
 export function ReplPane() {
   const ctxId = useContext(PaneInstanceContext);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const repl = useReplConsole(ctxId);
+  const { entries, busy } = useSyncExternalStore(repl.subscribe, repl.getState);
   const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const sessionRef = useRef<ReplSession | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const history = useRef<string[]>([]);
-  const histPos = useRef<number>(-1);
+  const history = repl.history;
+  const histPos = useRef<number>(history.length);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const wasBusyRef = useRef(false);
 
@@ -42,18 +54,6 @@ export function ReplPane() {
     wasBusyRef.current = busy;
   }, [busy]);
 
-  // Append text, merging consecutive same-stream chunks into one block.
-  const append = (kind: EntryKind, text: string): void => {
-    if (!text) return;
-    setEntries((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && (kind === 'out' || kind === 'err') && last.kind === kind) {
-        return [...prev.slice(0, -1), { kind, text: last.text + text }];
-      }
-      return [...prev, { kind, text }];
-    });
-  };
-
   // Read path: the agent can read this REPL's recent transcript on demand.
   useAgentContext(() => ({
     transcript: entries
@@ -61,27 +61,6 @@ export function ReplPane() {
       .map((e) => `${e.kind}: ${e.text}`)
       .join('\n'),
   }));
-
-  useEffect(() => {
-    const id = `${ctxId ?? 'repl.console'}:${Math.random().toString(36).slice(2, 9)}`;
-    const session = new ReplSession(id, {
-      onStarted: (banner) => append('system', banner),
-      onStdout: (data) => append('out', data),
-      onStderr: (data) => append('err', data),
-      onResult: (result: CellResult) => {
-        if (result.error) append('err', result.error);
-        else if (result.repr != null) append('result', result.repr);
-        setBusy(false);
-      },
-    });
-    sessionRef.current = session;
-    session.start();
-    return () => {
-      session.dispose();
-      sessionRef.current = null;
-    };
-    // Mount once per pane; ctxId is read once at start by design.
-  }, []);
 
   // Keep the newest output in view.
   useEffect(() => {
@@ -108,12 +87,9 @@ export function ReplPane() {
   const submit = (): void => {
     const code = input.trim();
     if (!code || busy) return;
-    append('in', code);
-    history.current.push(input);
-    histPos.current = history.current.length;
+    repl.exec(input);
+    histPos.current = history.length;
     setInput('');
-    setBusy(true);
-    sessionRef.current?.exec(input);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -171,14 +147,14 @@ export function ReplPane() {
       e.preventDefault();
       submit();
     } else if (e.key === 'ArrowUp' && !input.includes('\n')) {
-      const h = history.current;
+      const h = history;
       if (h.length && histPos.current > 0) {
         e.preventDefault();
         histPos.current -= 1;
         setInput(h[histPos.current]);
       }
     } else if (e.key === 'ArrowDown' && !input.includes('\n')) {
-      const h = history.current;
+      const h = history;
       if (histPos.current < h.length - 1) {
         e.preventDefault();
         histPos.current += 1;

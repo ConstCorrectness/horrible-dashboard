@@ -6,13 +6,47 @@
  *
  * A board tile is **not a pane**. It renders the view's component inside the two
  * contexts a view actually reads (`PaneInstanceContext`, `PaneParamsContext`)
- * and stops there: no focus dispatch, no capture, no sections, no lifetime
- * session. Routing it through `PaneHost` would put a `FOCUS_PANE` for an
+ * and stops there: no focus dispatch, no capture, no sections. (A view may still
+ * take a lifetime session through `usePaneSession`; `useDisposeRemovedTiles` is
+ * what closes it.) Routing it through `PaneHost` would put a `FOCUS_PANE` for an
  * instance that is not in the frame into the store, and the frame's focused-pane
  * resolution would then be pointing at something that does not exist.
  */
-import { PaneInstanceContext, PaneParamsContext, registry, resolveView } from '@horrible/core';
-import { Suspense, useMemo } from 'react';
+import {
+  closePaneSession,
+  layoutStore,
+  PaneInstanceContext,
+  PaneParamsContext,
+  paneSessionKey,
+  registry,
+  resolveView,
+} from '@horrible/core';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
+
+/**
+ * Dispose what a tile's view acquired when the tile leaves the board.
+ *
+ * A tile is not a pane, but the view inside it does not know that: anything that
+ * calls `usePaneSession` gets a real session keyed `backdrop:<id>`, and no layout
+ * close path will ever name that key. Removing the tile is the tile's close.
+ *
+ * Only removal while the board stays up counts. The board itself unmounting is a
+ * desktop switch or a backdrop change, and unmount is not close — the workspace's
+ * own delete already sweeps every `<workspace>::backdrop:*` key with the rest.
+ */
+function useDisposeRemovedTiles(ids: string[]): void {
+  const previous = useRef<string[]>(ids);
+  const key = ids.join('\n');
+  useEffect(() => {
+    const now = new Set(ids);
+    const ws = layoutStore.getSnapshot().workspaceId;
+    for (const id of previous.current) {
+      if (!now.has(id)) closePaneSession(paneSessionKey(ws, `backdrop:${id}`));
+    }
+    previous.current = ids;
+    // `key` stands for `ids`: a fresh array every render must not re-run this.
+  }, [key]);
+}
 
 /**
  * What an unconfigured board shows: every view that declares `role: 'widget'`.
@@ -47,6 +81,7 @@ export function BoardBackdrop({ params }: { params?: Record<string, unknown> }) 
     .filter(
       (t): t is { id: string; decl: NonNullable<ReturnType<typeof resolveView>> } => !!t.decl,
     );
+  useDisposeRemovedTiles(tiles.map((t) => t.id));
 
   if (!tiles.length) {
     return (

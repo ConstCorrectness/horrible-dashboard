@@ -165,6 +165,23 @@ export function getLink(): Promise<ShareLink> {
   return apiGet<ShareLink>('/share/link');
 }
 
+/** Whether this node can make public links, and whether the relay is up. */
+export interface RelayInfo {
+  configured: boolean;
+  reachable: boolean;
+  /** Why not, when either is false. */
+  detail: string;
+}
+
+/**
+ * Ask about the relay — and wake it. The relay scales to zero, so this is
+ * called when the pane opens, putting any cold start before the host's click
+ * on "Create public link" instead of under it.
+ */
+export function getRelay(): Promise<RelayInfo> {
+  return apiGet<RelayInfo>('/share/relay');
+}
+
 export function mintLink(options: { ttlS?: number; passphrase?: string } = {}): Promise<ShareLink> {
   return apiPost<ShareLink>('/share/link', {
     ttl_s: options.ttlS ?? null,

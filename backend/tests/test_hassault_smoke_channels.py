@@ -7,6 +7,7 @@ Tests cover:
 2. `sight_blocked_by` respecting active channels (bypassing smoke)
 3. `snapshot()` serialising channels onto the wire
 """
+
 import time
 
 import pytest
@@ -57,9 +58,30 @@ class TestZoneChannels:
         snap = zone.snapshot()
         assert "channels" in snap
         assert len(snap["channels"]) == 1
-        # Each channel on the wire is [x, y, z, remaining_time]
+        # Each channel on the wire is [x, y, z, remaining_time, radius]
         ch = snap["channels"][0]
-        assert len(ch) == 4
+        assert len(ch) == 5
+        assert ch[4] == pytest.approx(1.2)
+
+    def test_cleared_goes_out_as_seconds_left_not_a_moment(self) -> None:
+        """The room's clock is `time.monotonic()`, which no client can read; an
+        absolute `cleared` was compared with `Date.now()` and never matched."""
+        zone = make_smoke()
+        zone.cleared_until = 102.5
+        snap = zone.snapshot(now=100.0)
+        assert snap["clearedFor"] == pytest.approx(2.5)
+        assert "cleared" not in snap
+        assert "clearedFor" not in zone.snapshot(now=103.0)
+
+    def test_sight_and_contains_ask_about_the_same_shape(self) -> None:
+        """A lobe that `contains` counts must stop a line of sight too."""
+        zone = make_smoke()
+        lobe = {"x": zone.x + zone.radius + 1.0, "y": zone.y, "z": zone.z, "r": 1.5}
+        zone.volumetric_nodes = [lobe]
+        assert zone.contains(lobe["x"], lobe["y"], lobe["z"])
+        a = (lobe["x"], lobe["y"] - 5.0, lobe["z"])
+        b = (lobe["x"], lobe["y"] + 5.0, lobe["z"])
+        assert sight_blocked_by([zone], a, b)
 
     def test_expired_channels_excluded_from_snapshot(self) -> None:
         zone = make_smoke()

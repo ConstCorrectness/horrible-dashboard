@@ -98,8 +98,28 @@ def _max_viewers() -> int:
     return value
 
 
+async def _announce(token: str, state: str) -> None:
+    """Tell everyone on a stream's chat socket what its media is doing.
+
+    `live` (a host just published), `paused` (the host stopped, the link still
+    works) or `ended` (the link is dead). The chat socket is the one channel a
+    viewer page holds that the relay can *push* on, so it carries this too.
+    Without it a viewer learnt the host had come back only by polling WHEP, and
+    learnt they had left only when ICE consent ran out about thirty seconds later.
+    """
+    room = chat.get(token)
+    if room is not None:
+        await room.broadcast({"kind": "stream", "state": state})
+
+
+async def _room_closed(token: str) -> None:
+    # Revoked or expired reads as `ended`, so a revoke that tears the room down
+    # never tells viewers to sit and wait for a host who cannot come back.
+    await _announce(token, "paused" if registry.get(token) else "ended")
+
+
 registry = Registry(max_viewers_per_stream=_max_viewers())
-rooms = Rooms()
+rooms = Rooms(on_close=_room_closed)
 chat = Chat()
 restreams = Restreams()
 limiter = MissLimiter()
@@ -321,6 +341,17 @@ async def revoke(token: str) -> dict[str, bool]:
     was_live = registry.revoke(token)
     await restreams.stop(token)
     await rooms.drop(token)
+    # Said again for a link revoked while nobody was publishing (there was no
+    # room to close), then the sockets go: the code no longer names anything.
+    await _announce(token, "ended")
+    room = chat.get(token)
+    if room is not None:
+        for ws in list(room.sockets):
+            try:
+                await ws.close(code=4404)
+            except Exception:
+                pass
+        chat.drop(token)
     return {"revoked": was_live}
 
 
@@ -377,6 +408,10 @@ async def whip(token: str, request: Request) -> Response:
     room = rooms.get_or_create(token)
     answer = await room.publish(offer, ice.ice_servers())
     stream.live = True
+    # Viewers already on the page -- waiting for the host, or holding a
+    # connection to the publisher this one just replaced -- reconnect on this
+    # rather than on their next poll.
+    await _announce(token, "live")
     return _sdp_response(answer, token, extra={"Location": f"/whip/{token}"})
 
 

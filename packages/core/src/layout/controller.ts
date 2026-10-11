@@ -18,7 +18,7 @@ import {
   type SplitDirection,
   type WidgetDecl,
 } from '../registry';
-import { isPaneDirty, runCloseGuard } from './close-guards';
+import { hasCloseGuard, isPaneDirty, runCloseGuard } from './close-guards';
 import { getRailPrefs } from './rail-prefs';
 import { setFrameCommandHandler } from './frame-bus';
 import { resolveShowTarget, type ShowCandidates, type ShowTarget } from './show';
@@ -1270,8 +1270,24 @@ export function joinAreaDirection(areaOrInstanceId: string, direction: NavDirect
     areaRole(neighbor) === 'document' &&
     (areaRole(area) === 'document' || area.tabs.length === 0),
   );
+  // Without adoption the neighbour's panes are not moved, they are *gone* — a
+  // close in all but name. It used to skip everything a close does: no guard, so
+  // unsaved work vanished without a prompt, and no session teardown, so a terminal's
+  // PTY or a call's audio kept running with no pane left to stop it. A join cannot
+  // wait on a guard's dialog (it is a drag gesture), so a neighbour that might
+  // object refuses the join instead; the user closes it first, on purpose.
+  const dropped = !adoptTabs && neighbor ? neighbor.tabs.map((t) => t.instanceId) : [];
+  if (dropped.some((id) => isPaneDirty(id) || hasCloseGuard(id))) return false;
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: 'JOIN_AREA', areaId, direction, adoptTabs }) !== before;
+  const joined =
+    layoutStore.dispatch({ type: 'JOIN_AREA', areaId, direction, adoptTabs }) !== before;
+  if (joined) {
+    const ws = layoutStore.getSnapshot().workspaceId;
+    for (const id of dropped) {
+      if (!findPaneAnywhere(frame(), id)) closePaneSession(paneSessionKey(ws, id));
+    }
+  }
+  return joined;
 }
 
 export function focusAreaDirection(direction: NavDirection): boolean {

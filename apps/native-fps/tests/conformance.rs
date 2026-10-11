@@ -580,3 +580,41 @@ fn vec3(v: &Value) -> [f32; 3] {
         a[2].as_f64().unwrap() as f32,
     ]
 }
+
+/// The flashbang's curve and countdown, replayed from the fixture the server
+/// generated (`scripts/gen_hassault_flash_vectors.py`). The browser replays the
+/// same file in `flashbang.test.ts`; a fourth seat at this table is how the
+/// white on one client comes to clear before the other's.
+#[test]
+fn the_flash_curve_matches_the_server_and_the_browser_client() {
+    use hassault_native::flashbang::{flash_alpha, FlashFields, FLASH_BLIND};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/core/src/modules/hassault/__tests__/flash-vectors.json");
+    let text = std::fs::read_to_string(&path).expect("flash vectors missing");
+    let vectors: Value = serde_json::from_str(&text).expect("flash vectors are not JSON");
+    let tol = 1e-5_f32;
+    assert_eq!(vectors["blind"].as_f64().unwrap() as f32, FLASH_BLIND);
+    for case in vectors["alpha"].as_array().expect("alpha") {
+        let g = |k: &str| case[k].as_f64().unwrap() as f32;
+        let got = flash_alpha(g("peak"), g("hold"), g("fade"), g("fadeTotal"));
+        assert!((got - g("alpha")).abs() < tol, "alpha {case}: got {got}");
+    }
+    for series in vectors["steps"].as_array().expect("steps") {
+        let g = |k: &str| series[k].as_f64().unwrap() as f32;
+        let mut state = FlashFields {
+            peak: g("peak"),
+            hold: g("hold"),
+            fade: g("fade"),
+            fade_total: g("fade"),
+        };
+        for (i, want) in series["series"].as_array().unwrap().iter().enumerate() {
+            state = state.step(g("dt"));
+            let w = |k: &str| want[k].as_f64().unwrap() as f32;
+            // f32 against f64 accumulated over a few hundred steps.
+            let loose = 1e-3_f32;
+            assert!((state.hold - w("hold")).abs() < loose, "step {i}: hold");
+            assert!((state.fade - w("fade")).abs() < loose, "step {i}: fade");
+            assert!((state.alpha() - w("alpha")).abs() < loose, "step {i}: alpha");
+        }
+    }
+}

@@ -970,7 +970,27 @@ data** at every level and changes only how much of it is drawn
 | Map lights | 0 | 4 nearest | 8 nearest |
 | Sky dome | no | yes | yes |
 | Anisotropy | 1 | 4 | 16 |
-| Fog density | ×2, as native Low | ×1.36, as native Medium | the map's own |
+| Surfaces | Lambert, generated tiles | PBR, photographed | PBR, photographed |
+| Fog density | the map's own | the map's own | the map's own |
+
+**A level is a preset, and every row is its own setting**, as on the native
+client's video page. Picking a level sets every row. A row changed afterwards
+(the Advanced rows in Settings: resolution, anti-aliasing, surfaces, texture
+filtering, shadow map, soft shadows, map lamps, sky) is kept as an override on
+top of the level, and the level shows `CUSTOM`. Moving a row back to the level's
+own value drops the override, and picking a level clears them all. The overrides
+are one JSON string under `hassault.graphics.custom` (or `localStorage` in the
+standalone build), parsed defensively: an unknown row or a value off that row's
+list is dropped (`parseOverrides`). Surfaces is one choice over two fields:
+Simple (Lambert), Standard (PBR with the generated tiles) and Photographed. Turning
+photographs off live puts the generated tiles back (`restoreGeneratedSurfaces`);
+the images stay cached.
+
+There is deliberately **no shadows-off row**. Turning off the sun's shadow lights
+a player standing in shade, which is a visibility change, so the rows offer
+shadow resolution and filtering only. The native client still has a `SHADOWS`
+on/off row, which turns off the world's shadow while characters keep receiving
+it; that is an open question rather than a settled rule.
 
 `auto` picks from the device pixel ratio and the WebGL renderer string. The pane
 stores the choice in the settings bag. The standalone build (`apps/assault-web`)
@@ -991,6 +1011,37 @@ kind: z-up map coordinates were put into y-up three space unconverted.
 - **Ladders** lay on their side (`ladders.ts`).
 
 Water and ladders now also appear on modelled maps, not only cube ones.
+
+### What a graphics setting may not change
+
+A setting may change how the game looks. It may not change **what a player can
+see**, because a setting that shows you more is a setting that wins gunfights.
+Four things were found doing that and were taken out, in both clients:
+
+- **Fog.** Low doubled the map's fog density and Medium thickened it by ×1.36, to
+  save fill rate by hiding distance. A player on a weak laptop could not see
+  somebody a player on a good machine could. Every tier and every native quality
+  level now draws the map's own density (`graphics.ts` has no `fogScale`;
+  `settings.rs` has no `Quality::fog_scale`). Fill rate comes out of the pixel
+  ratio and render scale, the lamps' shading cost and the shadow filter instead.
+- **How a player is lit.** The native skin shader took its shading detail from
+  the quality level, and at Low detail 0 `shade()` returns the raw albedo: a fully
+  lit operator on the setting meant to look worse, standing out of every dark
+  corner. Characters now always shade at full detail. And because Low draws none
+  of the map's lamps, both clients add the same light floor to a player
+  (`CHARACTER_FLOOR`: an emissive in `models/operator.ts`, a term in
+  `skin.wgsl`), so a player is never a black shape where a lamp is not drawn.
+- **Field of view.** The browser allowed 60–110° and the native client 70–120°.
+  Both are now 60–110 (`FOV_MIN`/`FOV_MAX`, `FOV_RANGE`).
+- **Brightness.** The native client had a 0.6–1.6 exposure multiplier and the
+  browser had none. The browser now has the same row, stored under the same key
+  (`hassault.video.brightness`), so on the desktop one slider moves both clients.
+
+Smoke, fire and flash opacity are not tier-dependent in either client, and no
+`TierSpec` or `Preset` field may name them. `atmosphere.test.ts` fails if a tier
+grows a key about fog, smoke, flash, players or props, and `browser_parity.rs`
+reads both clients' sources to pin the fog, the light floor, the FOV and the
+brightness ranges.
 
 ### GLB map surfaces: UVs are derived, colour is authored
 
@@ -4171,7 +4222,14 @@ closed except while the Push to talk key is held. That works in a match, where t
 game owns the keyboard, but not in the menu, where the keyboard is the shell's.
 Push-to-talk toggles `track.enabled` rather than renegotiating, so each press is
 free and cannot drop a link. A window blur releases it, because a key released
-elsewhere never sends its key-up. The pane hangs up when it unmounts, since it is the only path handshakes arrive on. A
+elsewhere never sends its key-up. Voice hangs up when the pane **closes**, not
+when it unmounts: the match session is pane-owned (`pane-match.ts`, via
+`usePaneSession`), so a tab or desktop switch keeps the session — the only path
+handshakes arrive on — and with it the match, the lobby and the mesh. It used to
+`disconnect()` on unmount, which sent `leave`: glancing at another tab dropped you
+from the match and put you back on the main menu. A remount now lands on the
+click-to-play overlay in the same room, on its map. The standalone assault-web page
+has no pane to close, so there the old per-mount lifetime stands. A
 mesh is right for a party and wrong for sixteen people, which is a known
 limit rather than a bug. ICE uses the `network.stunServer`/`network.turn*`
 settings, with the same semantics as `share`. Two networks with symmetric NAT
@@ -5044,13 +5102,38 @@ every tick by `expires_at`. Two things read the list:
   treats a ray passing through one as unblocked, the same way it already
   treats a ray that misses the zone's sphere entirely.
 - **`Zone.snapshot()`** serialises the active channels as `[x, y, z,
-  remainingSec]`. Internally a channel stores an *absolute* expiry
+  remainingSec, radius]`. Internally a channel stores an *absolute* expiry
   (`time.monotonic()` at append time, plus its 0.8 s life), because that is
   what a tick-by-tick prune compares against — `snapshot()` converts it to a
   duration (`expires_at − now`) on the way out, since a raw expiry timestamp
   means nothing to a client that doesn't share the server's monotonic clock.
-  The id and radius are fixed constants the client already knows, so the wire
-  carries only what varies.
+  The radius goes on the wire too. The browser used to assume a hole 0.26 of the
+  cloud's radius (2.7 cubes on a 10.5-cube smoke) against the server's 1.2, so
+  it drew holes more than twice the size of the ones bots could see through.
+
+**Both clients carve a tunnel along the view ray**, not on the cloud's surface:
+a fragment is cleared where the line from the eye through it passes within the
+tunnel's radius of its centre. That is the server's own question
+(`sight_blocked_by` asks it of a line of sight), so the hole you see is the hole
+a bot sees through. The browser's first version compared the sphere's *surface*
+point with the tunnel's centre, which is inside the cloud, so a shot through the
+middle never showed a hole at all. The native client did not draw tunnels until
+this change. It now carries them in a small uniform (`SmokeUniform`, group 3 of
+the volume pass) and runs the same test in `smoke_tunnel`.
+
+**The HE clearing goes out as seconds left** (`clearedFor`), never as a moment.
+It used to go out as `cleared`, the absolute `time.monotonic()` value, and the
+browser compared it with `Date.now() / 1000`. Those clocks never match, so after
+an HE the smoke stayed opaque on screen while the server let bots and the radar
+see through it. Both clients now count `clearedFor` down locally, along with the
+cloud's own `left`, so its opacity moves smoothly between 20 Hz snapshots. The
+opacity curve (`SMOKE_BLOOM`, `SMOKE_FADE`, `SMOKE_CLEARED`) is one number set,
+pinned between `nades.ts` and `nades.rs`.
+
+**One shape, every reader.** A smoke can have lobes (`volumetric_nodes`), and
+`Zone.contains` counted them while `sight_blocked_by` did not, so the edge that
+stopped a flash was not the edge that stopped a bot. `Zone.spheres()` is now the
+one shape both ask about, and both clients draw the lobes.
 
 The client mirrors this rather than re-deciding it. `net.ts`'s `ZoneRow`
 carries the same `channels` field, and `NadePool.punchSmoke()` (`nades.ts`) —
@@ -5290,6 +5373,86 @@ defining property rather than a detail: it is aimed at a *place*, so a throw tha
 lands right must not then be spoiled by the grenade rolling somewhere else.
 Everything else cooks on a timer, which is what makes bouncing one round a corner
 work at all.
+
+### A flashbang blinds: hold, fade, afterimage
+
+The flash was resolved per victim from the start, but it did not blind anybody.
+`flash_strength` returned one number, 0..1, and that number did two jobs: the
+overlay drew its square as the whiteness, and the server faded it linearly over
+six seconds as the duration. A flash at medium range came out at 0.5, which drew
+as a 25% white wash for three seconds: never a white-out, just a nuisance. The
+facing term was linear in the dot product too, so a flash 90° off still got
+five-eighths of a frontal one and one directly behind got a quarter. Turning
+round halved a flash rather than countering it.
+
+It is now modelled on Counter-Strike's, which is the version players already
+know how to play against:
+
+- **Whiteness and duration are separate.** `grenades.flash_effect` returns a
+  `FlashEffect(peak, hold, fade)`: how white at its height, seconds held there,
+  and seconds to clear. Distance shortens the hold and the fade. It does not make
+  a frontal flash grey.
+- **Facing picks a band**, by angle off the crosshair (`FLASH_BANDS`). Within 53°
+  (the edge of a 16:9 screen) is a full hold. 53–72° is white but with less than
+  half the hold. 72–101° is a flicker. Past 101° it never reaches white and is
+  never held. Within `FLASH_POINT_BLANK` the band is never worse than the second
+  one, because light that close wraps round your head.
+- **Light is sampled from six points round the bang** (`FLASH_PROBES`), so a flash
+  half round a corner is half a flash. With one ray to its centre, a lip of floor
+  between you and it was a hard zero.
+- **A smoke between you and the bang stops it.** A cloud dense enough to hide a
+  player is dense enough to hide a flash. The exception is a cloud you are inside,
+  where the smoke is around you rather than between.
+- **A second flash replaces a weaker one and never adds** (`apply_flash`, by dose).
+  Two flashes a second apart are the same white screen, not twice as long a one.
+
+**The wire carries the inputs, not the output.** `you.flashPeak`, `flashHold`,
+`flashFade` and `flashFadeTotal` are seconds *remaining*. Each client runs the
+shared curve, `flash_alpha` (held at the peak, then a smoothstep down), at its own
+frame rate, and counts the hold and fade down between snapshots exactly as
+`MatchPlayer.step_flash` does. Drawing `you.flash` as received was a 20 Hz
+staircase. The curve and the countdown exist three times (`grenades.py`,
+`flashbang.ts`, `flashbang.rs`) and `__tests__/flash-vectors.json`, written by
+`scripts/gen_hassault_flash_vectors.py`, binds all three.
+
+`you.flashed` is drained per recipient like `hits`, and is the single trigger for
+the two things that happen once per flash:
+
+- **The afterimage.** The last frame you saw stays burned in under the white
+  while it clears. That is why turning to face a blank wall helps. The browser
+  copies the WebGL canvas in the same frame it was drawn (`flash-layer.ts`; the
+  drawing buffer is gone by the next task) into a half-resolution canvas under
+  the white. The native client copies the scene into a half-resolution texture in
+  the post pass (`fs_capture`) and blends it in the composite.
+- **The ring.** A narrow band of noise at 4.1 kHz with a sine under it, lasting
+  as long as the flash. Synthesized, not sampled, and played **round** the muffle.
+
+While the screen is white the **world's sound is muffled** too: a low-pass from
+open down to 700 Hz at full white, interpolated in log frequency
+(`muffle_hz`). This is a gameplay effect, not mixing taste: a flash costs you
+your ears as well as your eyes, which is most of why a flash before a push
+works. It is not the "ducking" the mixer has a recorded decision against. The
+ring, muffle and afterimage constants are pinned between the clients by
+`browser_parity.rs`.
+
+**Blind means blind for everyone, not only humans.** Above `FLASH_BLIND` (0.6)
+a bot's `_visible` returns false and an ally paints nothing on the radar, because
+a radar fed by a teammate staring at a white screen is a wall hack with a delay.
+Between `FLASH_DAZED` (0.15) and 0.6 a bot's aim error grows up to sevenfold. A
+blinded bot backs away from where it last saw somebody rather than walking on
+through them. Bots also used to throw their flashes flat at an enemy they were
+looking at. Now that flashes affect them that would blind themselves, so a bot
+lobs its flash and then turns its back and looks at the floor until it has gone
+off.
+
+**The thrower is told what the flash did**, as counts only: `you.flashAssists`
+(enemies, teammates, longest blind), never who or where, by the `noise.py` rule.
+Both clients show it under the crosshair ("FLASHED 2 · 1.9s", or "TEAM FLASHED"
+in red when it caught nobody but your own side). Only a real blind counts: a
+flicker behind somebody's back is not an assist.
+
+There is no spectator view server-side yet. When one arrives it should mirror the
+followed player's flash fields, as Counter-Strike does.
 
 ### Equipping a grenade, and what the mouse buttons mean
 

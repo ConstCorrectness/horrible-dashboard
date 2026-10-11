@@ -1,6 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import { IconStop } from '../../../glyphs';
+import { IconCheck, IconCopy, IconStop } from '../../../glyphs';
 import { registry } from '../../../registry';
 import { getStreamState, stopStream, subscribeStream } from '../stream';
 import { getShareSnapshot, subscribeShare } from '../ws';
@@ -25,6 +25,12 @@ export function ShareLiveIndicator() {
   const share = useSyncExternalStore(subscribeShare, getShareSnapshot, getShareSnapshot);
   const hosting = share.hosting;
   const linkOpen = Boolean(hosting?.link);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
   if (!stream.live && !linkOpen) return null;
 
   const guests = hosting?.participants.filter((p) => p.role === 'guest').length ?? 0;
@@ -53,6 +59,25 @@ export function ShareLiveIndicator() {
         <span className="share-live__label">{stream.live ? 'Live' : 'Link open'}</span>
         {meta.length > 0 && <span className="share-live__meta">{meta.join(' · ')}</span>}
       </button>
+      {/* "Send the link again" is the most common thing anyone does mid-share,
+          and it should not mean opening a pane to find it. */}
+      {linkOpen && hosting && (
+        <button
+          type="button"
+          className="share-live__copy"
+          aria-label={copied ? 'Link copied' : 'Copy the public link'}
+          title={copied ? 'Copied' : `Copy ${hosting.link}`}
+          data-copied={copied ? 'true' : undefined}
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(hosting.link)
+              .then(() => setCopied(true))
+              .catch(() => registry.openPanel('share.session'));
+          }}
+        >
+          {copied ? <IconCheck /> : <IconCopy />}
+        </button>
+      )}
       {stream.live && (
         <button
           type="button"

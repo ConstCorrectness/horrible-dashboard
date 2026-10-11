@@ -1072,13 +1072,23 @@ export class MatchSession {
     this.pendingBlasts = [];
   }
 
-  private emit(): void {
-    this.onChange({
+  /**
+   * The state as `onChange` would deliver it — fresh arrays, so React sees a new
+   * value. For a pane remounting onto a session that kept running while it was
+   * unmounted: nothing changed *for* it, so nothing would otherwise tell it where
+   * the match is.
+   */
+  snapshot(): SessionState {
+    return {
       ...this.state,
       peers: [...this.state.peers],
       invites: [...this.state.invites],
       killfeed: [...this.state.killfeed],
       roundKills: [...this.state.roundKills],
-    });
+    };
+  }
+
+  private emit(): void {
+    this.onChange(this.snapshot());
   }
 }

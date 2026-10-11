@@ -159,6 +159,26 @@ footer { padding: 7px 16px; border-top: 1px solid var(--border);
 .diag .tools { display: flex; gap: 6px; padding: 0 12px 10px; }
 .diag button { height: 26px; font-size: 11px; padding: 0 10px; }
 
+/* --- on-video controls -----------------------------------------------------
+   Two buttons, bottom right, and only once a picture exists: sound and
+   fullscreen are the only things a viewer does to the video itself. Faded until
+   the pointer is over the stage, except the unmute prompt, which has to be
+   seen -- it is the one thing standing between the viewer and the audio. */
+.controls { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px;
+  opacity: 0; transition: opacity 160ms ease; }
+.stage:hover .controls, .controls:focus-within, .controls.show { opacity: 1; }
+.controls.hidden { display: none; }
+.ctl { height: 32px; min-width: 32px; padding: 0 10px; display: inline-flex;
+  align-items: center; justify-content: center; gap: 7px;
+  background: rgba(14,16,20,0.78); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; }
+.ctl:hover { border-color: var(--accent); }
+.ctl svg { width: 15px; height: 15px; flex: none; }
+.ctl.prompt { border-color: var(--accent); border-top: 2px solid var(--accent); }
+@media (hover: none) { .controls { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .controls { transition: none; } }
+
 @media (max-width: 760px) {
   main { flex-direction: column; }
   aside { width: auto; border-left: none; border-top: 1px solid var(--border);
@@ -210,6 +230,27 @@ let gotFrame = false;
 let generation = 0;
 let statsTimer = null;
 let countdownTimer = null;
+// The link is dead (revoked, expired, or the relay forgot it). Nothing retries
+// after this -- a page that keeps knocking on a dead link is just noise.
+let ended = false;
+// The host stopped sharing and the relay said so. The page waits for the
+// relay's `live` push rather than hammering WHEP, with a slow poll as backstop.
+let paused = false;
+// Waiting on a passphrase. Pushes are ignored meanwhile, or a host coming back
+// would wipe the prompt out from under someone typing into it.
+let locked = false;
+// Consecutive reconnects since the last decoded frame, for the backoff.
+let reconnects = 0;
+// A 'disconnected' peer connection often recovers by itself; this is how long
+// it gets before the page stops waiting and dials again.
+const DISCONNECT_GRACE_MS = 4000;
+let graceTimer = null;
+// Whether the chat socket is up. While it is, the relay pushes stream state,
+// so waiting for the host can poll slowly instead of every few seconds.
+let chatOpen = false;
+// The browser refused to autoplay with sound, so the page is playing muted and
+// the unmute button is prompting for the click that will unlock it.
+let autoMuted = false;
 
 // --- diagnostics -----------------------------------------------------------
 //
@@ -384,9 +425,11 @@ function watchFirstFrame(stale) {
     gotFrame = true;
     if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
     diagLine('first frame decoded');
+    reconnects = 0;
     setPhase('live');
     hideOverlay();
     setStatus('live', true);
+    showControls(true);
   };
   if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(arrive);
   video.addEventListener('loadeddata', arrive, { once: true });
@@ -395,20 +438,142 @@ function watchFirstFrame(stale) {
   if (video.readyState >= 2) arrive();
 }
 
+/** Drop whatever attempt is running, including one still mid-await. */
+function tearDown() {
+  generation += 1; // every in-flight attempt is now stale
+  if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+  if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+  if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
+  if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
+  stopCountdown();
+  stopStats();
+  gotFrame = false;
+  video.srcObject = null;
+  showControls(false);
+}
+
+/**
+ * Dial again after a dropped connection, backing off: 2s, 4s, 8s, then every 15s.
+ *
+ * This used to be a Retry button. A viewer whose Wi-Fi blinked had to notice
+ * the stream had stopped, find the button and press it -- and somebody watching
+ * a screen share is, by definition, not looking at the controls.
+ */
+function scheduleReconnect(reason) {
+  if (ended || paused) return;
+  tearDown();
+  const delay = Math.min(2000 * Math.pow(2, reconnects), 15000);
+  reconnects += 1;
+  diagLine('reconnecting in ' + (delay / 1000) + 's: ' + reason);
+  setStatus('reconnecting', false);
+  showOverlay('Reconnecting', reason, false);
+  $('progress').style.display = '';
+  countdown(Math.round(delay / 1000), 'Reconnecting');
+  retryTimer = setTimeout(connect, delay);
+}
+
+/** The link is dead. Says so once and stops every timer that would retry it. */
+function endLink() {
+  if (ended) return;
+  ended = true;
+  tearDown();
+  diagLine('link ended');
+  setStatus('ended', false);
+  showOverlay('This share has ended', 'The link was revoked or expired. Ask whoever shared it for a new one.', false);
+  $('progress').style.display = 'none';
+  retryBtn.style.display = 'none';
+}
+
+/** The relay pushed a change in the stream's state over the chat socket. */
+function onStreamEvent(state) {
+  diagLine('relay says: ' + state);
+  if (state === 'ended') return endLink();
+  if (ended || locked) return;
+  if (state === 'paused') {
+    paused = true;
+    tearDown();
+    setStatus('paused', false);
+    showOverlay('Paused', 'The host stopped sharing. The stream comes back here on its own when they start again.', false);
+    $('progress').style.display = '';
+    setWaiting('Waiting for the host');
+    // Backstop for a push that never arrives (the chat socket dropped).
+    retryTimer = setTimeout(connect, 30000);
+    return;
+  }
+  if (state === 'live') {
+    paused = false;
+    reconnects = 0;
+    connect();
+  }
+}
+
+// --- on-video controls -----------------------------------------------------
+
+const ICON_SOUND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const ICON_MUTED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>';
+const ICON_FULL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg>';
+const ICON_EXIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M9 20v-5H4"/><path d="M15 20v-5h5"/></svg>';
+
+const controls = $('controls');
+const muteBtn = $('mute');
+const fullBtn = $('full');
+const stage = document.querySelector('.stage');
+
+function renderControls() {
+  // Labelled only when it is asking for something. A muted-by-the-browser
+  // stream says "Unmute" in words; the rest of the time an icon is enough.
+  muteBtn.innerHTML = (video.muted ? ICON_MUTED : ICON_SOUND) + (autoMuted ? '<span>Unmute</span>' : '');
+  muteBtn.classList.toggle('prompt', autoMuted);
+  muteBtn.setAttribute('aria-label', video.muted ? 'Unmute' : 'Mute');
+  controls.classList.toggle('show', autoMuted);
+  const full = Boolean(document.fullscreenElement);
+  fullBtn.innerHTML = full ? ICON_EXIT : ICON_FULL;
+  fullBtn.setAttribute('aria-label', full ? 'Exit fullscreen' : 'Fullscreen');
+}
+
+function showControls(on) {
+  controls.classList.toggle('hidden', !on);
+  if (on) renderControls();
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+  if (stage.requestFullscreen) { stage.requestFullscreen().catch(() => {}); return; }
+  // iOS Safari: no element fullscreen, only the video's own player.
+  if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+}
+
+muteBtn.addEventListener('click', () => {
+  video.muted = !video.muted;
+  autoMuted = false;
+  if (!video.muted) video.play().catch(() => {});
+  renderControls();
+});
+fullBtn.addEventListener('click', toggleFullscreen);
+video.addEventListener('dblclick', toggleFullscreen);
+document.addEventListener('fullscreenchange', renderControls);
+
 async function connect() {
   if (!CFG.found) {
     showOverlay('Link not available', 'This link has expired, been revoked, or never existed. Ask whoever shared it for a new one.', false);
     return;
   }
+  if (ended) return;
   attempts += 1;
+  paused = false;
   setStatus('connecting', false);
   stopCountdown();
   stopStats();
+  showControls(false);
   showOverlay('Connecting', 'Setting up the connection.', false);
+  // A previous attempt may have hidden these for its own prompt.
+  $('progress').style.display = '';
+  retryBtn.textContent = 'Retry';
   setPhase('offer');
   diagLine('connect attempt #' + attempts);
   if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
+  if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
 
   // This function awaits five times, and every one of them is a window in which
@@ -459,12 +624,22 @@ async function connect() {
     inbound.addTrack(e.track);
     video.srcObject = inbound;
     video.play().catch((err) => {
-      // Autoplay with audio is blocked until a gesture. Muting is the wrong fix
-      // (it silently drops the audio the host chose to send), so ask instead.
-      diagLine('autoplay blocked: ' + err);
-      showOverlay('Ready to play', 'Your browser blocked autoplay. Click to start watching.', false);
-      $('progress').style.display = 'none';
-      retryBtn.textContent = 'Play';
+      if (stale()) return;
+      // Autoplay with sound is blocked until a gesture. Play muted rather than
+      // holding the picture hostage to a click, and put a labelled Unmute
+      // button on the video: the audio is one click away and visibly so, which
+      // is what made muting the wrong fix back when it was silent.
+      diagLine('autoplay with sound blocked, playing muted: ' + err);
+      video.muted = true;
+      autoMuted = true;
+      video.play().then(() => { if (gotFrame) renderControls(); }).catch((err2) => {
+        if (stale()) return;
+        // Even muted autoplay refused (data saver, a strict policy): ask.
+        diagLine('muted autoplay blocked too: ' + err2);
+        showOverlay('Ready to play', 'Your browser blocked autoplay. Click to start watching.', false);
+        $('progress').style.display = 'none';
+        retryBtn.textContent = 'Play';
+      });
     });
   };
   self.onconnectionstatechange = () => {
@@ -488,10 +663,20 @@ async function connect() {
       startStats();
       watchFirstFrame(stale);
     }
+    if (self.connectionState === 'connected' && graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
     if (self.connectionState === 'failed') {
-      stopStats();
-      setStatus('disconnected', false);
-      showOverlay('Connection lost', 'The stream dropped. It may come back on its own.', false);
+      scheduleReconnect('The connection dropped.');
+    }
+    if (self.connectionState === 'disconnected' && graceTimer === null) {
+      // Often a blip that ICE repairs by itself, so give it a moment first.
+      graceTimer = setTimeout(() => {
+        graceTimer = null;
+        if (stale() || self.connectionState === 'connected') return;
+        scheduleReconnect('The connection stalled.');
+      }, DISCONNECT_GRACE_MS);
     }
   };
 
@@ -525,39 +710,51 @@ async function connect() {
     });
   } catch (err) {
     if (stale()) return abandon();
-    diagLine('relay unreachable: ' + err);
-    setStatus('offline', false);
-    showOverlay('Cannot reach the relay', String(err), false);
+    // A network blip or a relay waking from scale-to-zero, both of which pass.
+    abandon();
+    scheduleReconnect('Cannot reach the relay (' + err + ').');
     return;
   }
   if (stale()) return abandon();
   diagLine('relay answered ' + res.status);
 
   if (res.status === 403) {
+    abandon();
+    locked = true;
     setStatus('locked', false);
     showOverlay('Passphrase needed', 'This stream is protected. Enter the passphrase you were given.', true);
     return;
   }
   if (res.status === 409) {
+    abandon();
     setStatus('waiting', false);
-    showOverlay('Not started yet', 'The link works — the host has not started sharing. This page will keep checking.', false);
-    countdown(4, 'Waiting for the host');
-    retryTimer = setTimeout(connect, 4000);
+    showOverlay('Not started yet', 'The link works — the host has not started sharing. Video appears here the moment they do.', false);
+    // With the chat socket up the relay pushes `live` the instant the host
+    // publishes, so this poll is only a backstop and can be slow. Without it,
+    // polling is the only way to find out.
+    const wait = chatOpen ? 20 : 4;
+    if (chatOpen) setWaiting('Waiting for the host');
+    else countdown(wait, 'Waiting for the host');
+    retryTimer = setTimeout(connect, wait * 1000);
     return;
   }
   if (res.status === 503) {
+    abandon();
     setStatus('full', false);
-    showOverlay('Stream is full', 'This relay caps how many people can watch one stream at once. Try again shortly.', false);
+    showOverlay('Stream is full', 'This relay caps how many people can watch one stream at once. A seat is checked for every 15 seconds.', false);
+    countdown(15, 'Waiting for a seat');
+    retryTimer = setTimeout(connect, 15000);
     return;
   }
   if (res.status === 429) {
+    abandon();
     setStatus('slow down', false);
     showOverlay('Too many attempts', 'This address tried too many wrong links or passphrases. Wait a minute, then retry.', false);
     return;
   }
   if (!res.ok) {
-    setStatus('unavailable', false);
-    showOverlay('Link not available', 'This link has expired, been revoked, or never existed.', false);
+    abandon();
+    endLink();
     return;
   }
 
@@ -625,6 +822,7 @@ retryBtn.addEventListener('click', () => {
 });
 $('unlock').addEventListener('click', () => {
   passphrase = passInput.value;
+  locked = false;
   connect();
 });
 passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('unlock').click(); });
@@ -648,15 +846,41 @@ function addMessage(who, text) {
   log.scrollTop = log.scrollHeight;
 }
 
+// Consecutive chat reconnects, for the backoff. The chat socket is also how the
+// relay pushes stream state, so it is worth keeping up rather than letting one
+// proxy hiccup turn the page back into a poller for the rest of the session.
+let chatRetries = 0;
+
 function openChat() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(proto + '://' + location.host + '/chat/' + CFG.code);
-  ws.onopen = () => sysLine('Connected to chat.');
-  ws.onclose = () => sysLine('Chat disconnected.');
-  ws.onmessage = (e) => {
+  const sock = new WebSocket(proto + '://' + location.host + '/chat/' + CFG.code);
+  ws = sock;
+  sock.onopen = () => {
+    const again = chatRetries > 0;
+    chatRetries = 0;
+    chatOpen = true;
+    sysLine(again ? 'Chat reconnected.' : 'Connected to chat.');
+    // Anything pushed while the socket was down was missed, so catch up.
+    if (again && !gotFrame && !ended && !locked) connect();
+  };
+  sock.onclose = (e) => {
+    chatOpen = false;
+    if (ended) return;
+    // 4404: the code names nothing any more -- revoked, expired, or a relay
+    // that restarted and forgot it. 4429: this address is being rate limited,
+    // and reconnecting would only extend that.
+    if (e.code === 4404) return endLink();
+    if (e.code === 4429) return sysLine('Chat refused: too many attempts from this address.');
+    const delay = Math.min(1000 * Math.pow(2, chatRetries), 15000);
+    chatRetries += 1;
+    sysLine('Chat disconnected. Reconnecting…');
+    setTimeout(openChat, delay);
+  };
+  sock.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.kind === 'chat') addMessage(m.name, m.text);
     else if (m.kind === 'system') sysLine(m.text);
+    else if (m.kind === 'stream') onStreamEvent(m.state);
   };
 }
 
@@ -694,12 +918,17 @@ addEventListener('pagehide', () => { stopStats(); if (pc) { try { pc.close(); } 
 
 diagLine('page loaded; found=' + CFG.found + ' turn=' +
   (CFG.iceServers || []).some((s) => String(s.urls).indexOf('turn') === 0));
-openChat();
+// A dead code gets no chat socket: it would be refused, and every refusal is
+// charged to this address as a guess.
+if (CFG.found) openChat();
 connect();
 """
 
 
-def _page(body: str, script: str, config: dict[str, object]) -> str:
+def _page(
+    body: str, script: str, config: dict[str, object], title: str = "Shared screen"
+) -> str:
+    """`title` must already be HTML-escaped."""
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -708,7 +937,14 @@ def _page(body: str, script: str, config: dict[str, object]) -> str:
         # default for a page whose URL is the credential.
         "<meta name='robots' content='noindex, nofollow'>"
         "<meta name='referrer' content='no-referrer'>"
-        "<title>Shared screen</title>"
+        f"<title>{title}</title>"
+        # What a chat app's link preview shows when the link is pasted, which is
+        # how nearly every one of these links travels. Without it the preview is
+        # a bare hostname that says nothing about what clicking will do.
+        f"<meta property='og:title' content='{title}'>"
+        "<meta property='og:description' content='A live screen share. Opens in "
+        "the browser; nothing to install.'>"
+        "<meta name='theme-color' content='#0e1014'>"
         f"<style>{_STYLE}</style></head><body>{body}"
         f"<script>window.__SHARE__ = {json.dumps(config)};</script>"
         f"<script>{script}</script></body></html>"
@@ -739,6 +975,10 @@ def render(
 <main>
   <div class='stage'>
     <video id='video' playsinline autoplay></video>
+    <div class='controls hidden' id='controls'>
+      <button class='ctl' id='mute' type='button' aria-label='Mute'></button>
+      <button class='ctl' id='full' type='button' aria-label='Fullscreen'></button>
+    </div>
     <div class='overlay' id='overlay'>
       <h1 id='overlay-title'>Connecting</h1>
       <p id='overlay-text'>Reaching the relay.</p>
@@ -793,7 +1033,7 @@ def render(
         # bandwidth free for the whole internet. See `ice.viewer_ice`.
         "iceServers": ice.viewer_ice(),
     }
-    return _page(body, _SCRIPT, config)
+    return _page(body, _SCRIPT, config, title=safe_title)
 
 
 def render_index() -> str:

@@ -73,6 +73,24 @@ pub struct VolumeVertex {
     pub mode: f32,
 }
 
+/// How many bullet tunnels the smoke uniform carries — eight per cloud is what
+/// the server sends, and two clouds in one sightline is the case that matters.
+pub const MAX_SMOKE_CHANNELS: usize = 16;
+
+/// The bullet tunnels through every smoke this frame, for `fs_volume`.
+///
+/// A tunnel is carved where **the view ray** passes within its radius of its
+/// centre — the same question `grenades.sight_blocked_by` asks of a line of
+/// sight — so the hole you can see through is the hole a bot sees through.
+#[repr(C)]
+#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SmokeUniform {
+    /// x: how many of `channels` are live. The rest pads to 16 bytes.
+    pub head: [f32; 4],
+    /// `[x, height, y, radius]`, render space.
+    pub channels: [[f32; 4]; MAX_SMOKE_CHANNELS],
+}
+
 /// Volume shading: the noisy interior of a smoke or fire cloud.
 pub const MODE_CLOUD: f32 = 0.0;
 /// Volume shading: flat colour, for tracers, impacts and blast shells, which are
@@ -298,6 +316,9 @@ pub struct Renderer {
     volume_pipeline: wgpu::RenderPipeline,
     volume_buffer: wgpu::Buffer,
     volume_verts: u32,
+    /// The bullet tunnels through this frame's smokes. See `SmokeUniform`.
+    smoke_buffer: wgpu::Buffer,
+    smoke_bind_group: wgpu::BindGroup,
     /// The weapon in your hands, in **camera space**. Its own uniform, because
     /// the pass that draws it uses a different projection and an identity view.
     /// The weapon props, and the camera they are drawn through.
@@ -631,9 +652,38 @@ impl Renderer {
         // the detail texture nor the shadow map, and a pipeline layout that
         // declared them would oblige every caller to keep those groups bound
         // for a pass that never looks at them.
+        // Plus, at group 3, the bullet tunnels through the smokes this frame
+        // (`SmokeUniform`). Group 3 rather than 1 so its slot can never be
+        // mistaken for the world pass's detail texture, which shares the shader.
+        let smoke_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("smoke-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let smoke_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("smoke"),
+            contents: bytemuck::cast_slice(&[SmokeUniform::default()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let smoke_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("smoke-bind-group"),
+            layout: &smoke_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: smoke_buffer.as_entire_binding(),
+            }],
+        });
         let volume_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volume-layout"),
-            bind_group_layouts: &[Some(&camera_layout)],
+            bind_group_layouts: &[Some(&camera_layout), None, None, Some(&smoke_layout)],
             immediate_size: 0,
         });
         let volume_pipeline =
@@ -820,6 +870,8 @@ impl Renderer {
             volume_pipeline,
             volume_buffer,
             volume_verts: 0,
+            smoke_buffer,
+            smoke_bind_group,
             props,
             prop_model: None,
             prop_parts: Vec::new(),
@@ -1032,6 +1084,18 @@ impl Renderer {
         self.reveal = reveal;
     }
 
+    /// This frame's bullet tunnels through smoke: `[x, height, y, radius]` in
+    /// render space, the radius already scaled by how much of its life is left.
+    /// More than `MAX_SMOKE_CHANNELS` keeps the first ones.
+    pub fn set_smoke_channels(&mut self, channels: &[[f32; 4]]) {
+        let mut u = SmokeUniform::default();
+        let n = channels.len().min(MAX_SMOKE_CHANNELS);
+        u.head[0] = n as f32;
+        u.channels[..n].copy_from_slice(&channels[..n]);
+        self.queue
+            .write_buffer(&self.smoke_buffer, 0, bytemuck::cast_slice(&[u]));
+    }
+
     /// Replace this frame's translucent volumes.
     pub fn set_volumes(&mut self, vertices: &[VolumeVertex]) {
         if vertices.len() > MAX_VOLUME_VERTS {
@@ -1168,7 +1232,7 @@ impl Renderer {
         // The map's own density, thickened at the lower quality levels. 3D maps
         // used to get none at all; they now get the thin haze their atmosphere
         // asks for, which is what the browser has always drawn.
-        let fog = self.lighting.atmosphere.fog_density * self.video.quality.fog_scale();
+        let fog = self.lighting.atmosphere.fog_density;
         // Every point light, the rig and the eye, for every pass this frame.
         let eye = camera.eye();
         self.queue.write_buffer(
@@ -1414,6 +1478,7 @@ impl Renderer {
                 // Re-bound because the volume pipeline has its own layout, which
                 // invalidates the groups the world pipeline had set.
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_bind_group(3, &self.smoke_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.volume_buffer.slice(..));
                 pass.draw(0..self.volume_verts, 0..1);
             }
@@ -1569,6 +1634,12 @@ impl Renderer {
     /// rebuild, and the render scale is a scene rebuild alone. Quality also
     /// carries the shader's fog and detail, which need nothing rebuilt at all —
     /// they are uniform data, written next frame.
+    /// The flashbang's afterimage for the next frame: its strength, and whether
+    /// to take a new ghost from that frame's scene first. See `post.rs`.
+    pub fn set_flash(&mut self, afterimage: f32, capture: bool) {
+        self.post.set_flash(&self.queue, afterimage, capture);
+    }
+
     pub fn set_video(&mut self, video: Video) {
         let samples_changed = video.samples() != self.video.samples();
         let scale_changed = (video.render_scale - self.video.render_scale).abs() > 1e-4;

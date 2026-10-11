@@ -69,23 +69,30 @@ function PdfPage({
       viewport,
       transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
     });
+    // Cancelling (zoom, unmount) and destroying the document both reject this;
+    // neither is an error, and unhandled they flood the console on every switch.
+    renderTask.promise.catch(() => {});
 
     textDiv.replaceChildren();
     textDiv.style.width = `${viewport.width}px`;
     textDiv.style.height = `${viewport.height}px`;
-    void view.page.getTextContent().then((textContent) => {
-      if (cancelled) return;
-      registerText(
-        view.pageNumber,
-        textContent.items.map((it) => ('str' in it ? it.str : '')).join(' '),
-      );
-      const layer = new pdfjs.TextLayer({
-        textContentSource: textContent,
-        container: textDiv,
-        viewport,
-      });
-      void layer.render();
-    });
+    view.page
+      .getTextContent()
+      .then((textContent) => {
+        if (cancelled) return;
+        registerText(
+          view.pageNumber,
+          textContent.items.map((it) => ('str' in it ? it.str : '')).join(' '),
+        );
+        const layer = new pdfjs.TextLayer({
+          textContentSource: textContent,
+          container: textDiv,
+          viewport,
+        });
+        return layer.render();
+      })
+      // A document destroyed mid-fetch rejects here; the page is gone anyway.
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -132,6 +139,12 @@ export function PdfViewer() {
     setDoc(null);
     setViews([]);
     pageTexts.current.clear();
+    // Held here so the cleanup can free it. pdf.js keeps every document it parsed
+    // in the shared worker until `destroy()`, so each open — and each remount, a
+    // tab switch being one — used to leave a whole parsed PDF behind for the life
+    // of the page. Freed on unmount, unlike a pane's live resources: this is a
+    // cache that reloads, not a process that would be lost.
+    let loaded: PDFDocumentProxy | null = null;
 
     (async () => {
       let src = urlParam;
@@ -142,12 +155,16 @@ export function PdfViewer() {
         src = artifactUrl(source.artifact_id);
       }
       if (!src) throw new Error('open a PDF from the library, ArXiv, or an upload');
-      const loaded = await pdfjs.getDocument(src).promise;
-      if (cancelled) return;
-      setDoc(loaded);
+      const doc = await pdfjs.getDocument(src).promise;
+      if (cancelled) {
+        void doc.destroy();
+        return;
+      }
+      loaded = doc;
+      setDoc(doc);
       const pages: PageView[] = [];
-      for (let i = 1; i <= loaded.numPages; i += 1) {
-        pages.push({ pageNumber: i, page: await loaded.getPage(i) });
+      for (let i = 1; i <= doc.numPages; i += 1) {
+        pages.push({ pageNumber: i, page: await doc.getPage(i) });
         if (cancelled) return;
       }
       setViews(pages);
@@ -157,6 +174,7 @@ export function PdfViewer() {
 
     return () => {
       cancelled = true;
+      void loaded?.destroy();
     };
   }, [artifactIdParam, sourceId, urlParam]);
 

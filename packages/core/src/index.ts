@@ -155,6 +155,9 @@ export {
 // The frame layout engine (packages/ui renders it; modules go through the
 // registry / controller, never the store directly).
 export { layoutStore } from './layout/store';
+/** For hosts that render a view outside the frame (desktop board tiles) and so
+ *  own the close of whatever it acquired through `usePaneSession`. */
+export { closePaneSession, paneSessionKey } from './layout/pane-lifetime';
 /** Recently opened panes — the Start menu's Recent band. */
 export { MAX_RECENTS, recentViewIds, subscribeRecents } from './layout/recents';
 export type { LayoutAction } from './layout/actions';

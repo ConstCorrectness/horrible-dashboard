@@ -2,6 +2,8 @@ import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { clubhouseAction } from './actions';
 import { clubhouseAgentTools } from './agentTools';
+import { leaveClubhouse } from './presence';
+import { ClubhouseRoomIndicator } from './RoomIndicator';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
 const ClubhouseWidget = lazyPane(() => import('./ClubhouseWidget'), 'ClubhouseWidget');
@@ -25,7 +27,15 @@ export const clubhouseModule: ModuleManifest = {
       agentTools: clubhouseAgentTools,
     },
   ],
+  // A live room is audio, and audio must stay findable with its pane closed,
+  // hidden or on another desktop.
+  shellIndicators: [{ id: 'clubhouse.room', component: ClubhouseRoomIndicator }],
   commands: [
+    {
+      id: 'clubhouse.leave',
+      title: 'Clubhouse: Leave the room',
+      run: () => void leaveClubhouse(),
+    },
     {
       id: 'clubhouse.connect',
       title: 'Clubhouse: Connect account',

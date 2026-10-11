@@ -37,6 +37,17 @@ export type TextureFetch = (path: string) => Promise<THREE.Texture>;
 const loads = new WeakMap<typeof THREE, Map<PhotoKind, Promise<PhotoMaps>>>();
 const upgraded = new WeakSet<THREE.Material>();
 
+/** What a material had before its photo maps: the generated stand-in, put back
+ * by `restoreGeneratedSurfaces` when the photographed surfaces are turned off. */
+interface StandIn {
+  map: THREE.Texture | null;
+  normalMap: THREE.Texture | null;
+  roughnessMap: THREE.Texture | null;
+  normalScale: [number, number];
+  roughness: number;
+}
+const standIns = new WeakMap<THREE.Material, StandIn>();
+
 function defaultFetch(three: typeof THREE): TextureFetch {
   const loader = new three.TextureLoader();
   return async (path) => loader.loadAsync(await getCachedAssetUrl(path));
@@ -132,6 +143,15 @@ export async function upgradePhotoSurfaces(
       try {
         const maps = await loadPhotoMaps(three, kind, fetchTexture);
         for (const m of materials) {
+          if (!standIns.has(m)) {
+            standIns.set(m, {
+              map: m.map,
+              normalMap: m.normalMap,
+              roughnessMap: m.roughnessMap,
+              normalScale: [m.normalScale.x, m.normalScale.y],
+              roughness: m.roughness,
+            });
+          }
           applyPhotoMaps(m, kind, maps, anisotropy);
           upgraded.add(m);
           changed++;
@@ -141,5 +161,35 @@ export async function upgradePhotoSurfaces(
       }
     }),
   );
+  return changed;
+}
+
+/**
+ * Put the generated tiles back on every material `upgradePhotoSurfaces` changed
+ * under `root` — the photographed surfaces turned off, live. The images stay in
+ * the per-three cache, so turning them on again costs no download. Returns how
+ * many materials changed.
+ */
+export function restoreGeneratedSurfaces(root: THREE.Object3D | null): number {
+  if (!root) return 0;
+  let changed = 0;
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of list) {
+      const std = m as THREE.MeshStandardMaterial;
+      const before = standIns.get(std);
+      if (!before || !upgraded.has(std)) continue;
+      std.map = before.map;
+      std.normalMap = before.normalMap;
+      std.roughnessMap = before.roughnessMap;
+      std.normalScale.set(before.normalScale[0], before.normalScale[1]);
+      std.roughness = before.roughness;
+      std.needsUpdate = true;
+      upgraded.delete(std);
+      changed++;
+    }
+  });
   return changed;
 }

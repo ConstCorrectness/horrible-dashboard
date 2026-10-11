@@ -86,6 +86,11 @@ class Chat:
             self._rooms[token] = room
         return room
 
+    def get(self, token: str) -> Room | None:
+        """The room if anyone is in it. Never creates one -- announcing to an
+        empty room should not leave an empty room behind."""
+        return self._rooms.get(token)
+
     def drop(self, token: str) -> None:
         self._rooms.pop(token, None)
 

@@ -31,7 +31,20 @@ import {
   type GameAction,
 } from './controls';
 import type { MatchInvite, Invitee } from './api';
-import { GRAPHICS_CHOICES, useGraphicsChoice } from './graphics';
+import {
+  deviceHints,
+  effectiveSpec,
+  GRAPHICS_CHOICES,
+  GRAPHICS_OPTIONS,
+  resolveTier,
+  setGraphicsOverrides,
+  useGraphicsChoice,
+  useGraphicsOverrides,
+  withOverride,
+  type GraphicsOverrides,
+  type GraphicsTier,
+  type TierSpec,
+} from './graphics';
 import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 import type { MatchPeer } from './session';
 
@@ -101,8 +114,29 @@ export function grenadeArcAllowed(joined: boolean, host: string, ranked: boolean
 
 const SENS_MIN = 0.1;
 const SENS_MAX = 4;
+/**
+ * The FOV range, in degrees (vertical, before the scope divides it). The native
+ * client's `FOV_RANGE` is the same pair and `browser_parity.rs` pins them: a
+ * wider ceiling on one client is a wider view of the map for that player.
+ */
 export const FOV_MIN = 60;
 export const FOV_MAX = 110;
+
+/**
+ * A multiplier on the map's exposure, shared with the native client — the same
+ * key, so on the desktop one slider moves both. The same range as its
+ * `BRIGHTNESS_RANGE`: bounded, because a brightness that could turn every dark
+ * corner to daylight would be a setting that wins gunfights.
+ */
+export const BRIGHTNESS_KEY = 'hassault.video.brightness';
+export const BRIGHTNESS_MIN = 0.6;
+export const BRIGHTNESS_MAX = 1.6;
+
+/** A stored brightness, clamped to the shared range. */
+export function clampBrightness(value: number | undefined): number {
+  const v = typeof value === 'number' && Number.isFinite(value) ? value : 1;
+  return Math.max(BRIGHTNESS_MIN, Math.min(BRIGHTNESS_MAX, v));
+}
 
 function Slider({
   label,
@@ -162,6 +196,206 @@ function Slider({
  * deliberately not there — it is a JSON document rather than a scalar, and the
  * settings page renders scalars — which is why `ControlsPanel` is its only editor.
  */
+type SurfaceChoice = 'simple' | 'standard' | 'photo';
+
+/** The two surface rows as the one choice a player actually makes. */
+function surfaceOf(spec: TierSpec): SurfaceChoice {
+  if (spec.lambert) return 'simple';
+  return spec.photos ? 'photo' : 'standard';
+}
+
+const SURFACE_ROWS: Record<SurfaceChoice, Pick<TierSpec, 'lambert' | 'photos'>> = {
+  simple: { lambert: true, photos: false },
+  standard: { lambert: false, photos: false },
+  photo: { lambert: false, photos: true },
+};
+
+/** One row of choices, highlighting the current one. */
+function ChoiceRow<T extends string | number | boolean>({
+  label,
+  hint,
+  value,
+  options,
+  onPick,
+}: {
+  label: string;
+  hint: string;
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onPick: (value: T) => void;
+}) {
+  return (
+    <div style={styles.row}>
+      <div style={styles.rowMain}>
+        <span>{label}</span>
+        <span style={styles.dim}>{hint}</span>
+      </div>
+      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        {options.map((option) => (
+          <button
+            key={String(option.value)}
+            type="button"
+            aria-pressed={value === option.value}
+            onClick={() => onPick(option.value)}
+            style={{ ...styles.choice, ...(value === option.value ? styles.choiceActive : null) }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const ON_OFF = [
+  { value: true, label: 'On' },
+  { value: false, label: 'Off' },
+] as const;
+
+/**
+ * The graphics level, and every row under it as its own setting.
+ *
+ * A level is a **preset**, as in the native client's video page: picking one
+ * sets every row, and a row changed afterwards is kept as an override, with the
+ * level shown as `Custom`. Moving a row back to the level's own value drops the
+ * override again. See `graphics.ts`.
+ *
+ * Nothing here can change what a player can see — the fog, smoke, flashes and
+ * how players are lit are the same at every setting — and the rows say so, so
+ * nobody goes looking for the one that does.
+ */
+export function GraphicsRows() {
+  const [choice, setChoice] = useGraphicsChoice();
+  const overrides = useGraphicsOverrides();
+  const [open, setOpen] = useState(false);
+  const tier: GraphicsTier = resolveTier(choice, deviceHints());
+  const spec = effectiveSpec(tier, overrides);
+  const custom = Object.keys(overrides).length > 0;
+
+  const set = <K extends keyof TierSpec>(key: K, value: TierSpec[K]) =>
+    setGraphicsOverrides(withOverride(overrides, tier, key, value));
+  const setSurfaces = (surface: SurfaceChoice) => {
+    let next: GraphicsOverrides = overrides;
+    for (const [key, value] of Object.entries(SURFACE_ROWS[surface]) as [
+      'lambert' | 'photos',
+      boolean,
+    ][]) {
+      next = withOverride(next, tier, key, value);
+    }
+    setGraphicsOverrides(next);
+  };
+  const numbers = <K extends keyof typeof GRAPHICS_OPTIONS>(
+    key: K,
+    label: (v: number) => string,
+  ) => GRAPHICS_OPTIONS[key].map((v) => ({ value: v as number, label: label(v) }));
+
+  return (
+    <>
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>
+            Graphics
+            {custom && <span style={styles.badge}>CUSTOM</span>}
+          </span>
+          <span style={styles.dim}>
+            {choice === 'auto' ? `Auto picked ${tier}. ` : ''}A level sets every row below; change
+            a row and it is kept on top. Nothing here changes what you can see — fog, smoke,
+            flashes and how players are lit are the same at every setting.
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          {GRAPHICS_CHOICES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={!custom && choice === c}
+              onClick={() => setChoice(c)}
+              style={{
+                ...styles.choice,
+                ...(!custom && choice === c ? styles.choiceActive : null),
+              }}
+            >
+              {c === 'auto' ? 'Auto' : c[0].toUpperCase() + c.slice(1)}
+            </button>
+          ))}
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            style={{ ...styles.choice, ...(open ? styles.choiceActive : null) }}
+          >
+            {open ? 'Hide rows' : 'Advanced'}
+          </button>
+        </div>
+      </div>
+      {open && (
+        <>
+          <ChoiceRow
+            label="Resolution"
+            hint="A cap on the screen's pixel ratio. The biggest single cost on a HiDPI laptop."
+            value={spec.pixelRatio}
+            options={numbers('pixelRatio', (v) => `${v}×`)}
+            onPick={(v) => set('pixelRatio', v)}
+          />
+          <ChoiceRow
+            label="Anti-aliasing"
+            hint="Smooths edges. Applies the next time the game loads."
+            value={spec.antialias}
+            options={ON_OFF}
+            onPick={(v) => set('antialias', v)}
+          />
+          <ChoiceRow
+            label="Surfaces"
+            hint="Simple is flat-shaded and cheapest; Photographed downloads real material scans."
+            value={surfaceOf(spec)}
+            options={[
+              { value: 'simple', label: 'Simple' },
+              { value: 'standard', label: 'Standard' },
+              { value: 'photo', label: 'Photographed' },
+            ]}
+            onPick={setSurfaces}
+          />
+          <ChoiceRow
+            label="Texture filtering"
+            hint="Keeps floors sharp at a glancing angle."
+            value={spec.anisotropy}
+            options={numbers('anisotropy', (v) => (v === 1 ? 'Off' : `${v}×`))}
+            onPick={(v) => set('anisotropy', v)}
+          />
+          <ChoiceRow
+            label="Shadow map"
+            hint="Resolution of the sun's shadow. Shadows are always on: who is standing in shade is information."
+            value={spec.shadowSize}
+            options={numbers('shadowSize', (v) => `${v}`)}
+            onPick={(v) => set('shadowSize', v)}
+          />
+          <ChoiceRow
+            label="Soft shadows"
+            hint="Filtered shadow edges."
+            value={spec.softShadows}
+            options={ON_OFF}
+            onPick={(v) => set('softShadows', v)}
+          />
+          <ChoiceRow
+            label="Map lamps"
+            hint="How many of the nearest lamps light the scene. Players are never darker than their light floor."
+            value={spec.lights}
+            options={numbers('lights', (v) => (v === 0 ? 'Off' : `${v}`))}
+            onPick={(v) => set('lights', v)}
+          />
+          <ChoiceRow
+            label="Sky"
+            hint="The sky dome on open maps; off draws the flat horizon colour."
+            value={spec.sky}
+            options={ON_OFF}
+            onPick={(v) => set('sky', v)}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * `standalone` is the browser build, which shows none of the last three rows:
  * there is no native client to choose, and hitboxes and the grenade arc are the
@@ -173,40 +407,16 @@ function Slider({
 export function SettingsPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
   const fov = useSetting<number>(FOV_KEY) ?? 75;
+  const brightness = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
   const grenadeArc = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
-  const [graphics, setGraphics] = useGraphicsChoice();
 
   return (
     <div style={styles.rows}>
-      <div style={styles.row}>
-        <div style={styles.rowMain}>
-          <span>Graphics</span>
-          <span style={styles.dim}>
-            The same map, sky and lamps at every level — fewer of them lower down. Anti-aliasing
-            changes on the next load.
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          {GRAPHICS_CHOICES.map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              aria-pressed={graphics === choice}
-              onClick={() => setGraphics(choice)}
-              style={{
-                ...styles.choice,
-                ...(graphics === choice ? styles.choiceActive : null),
-              }}
-            >
-              {choice === 'auto' ? 'Auto' : choice[0].toUpperCase() + choice.slice(1)}
-            </button>
-          ))}
-        </div>
-      </div>
+      <GraphicsRows />
       <Slider
         label="Mouse sensitivity"
         hint="Turn per pixel of mouse movement, this game only."
@@ -228,6 +438,17 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
         suffix="°"
         fallback={75}
         onChange={(v) => void setSetting(FOV_KEY, v)}
+      />
+      <Slider
+        label="Brightness"
+        hint="The map's exposure. Bounded, and the same range as the native client."
+        value={brightness}
+        min={BRIGHTNESS_MIN}
+        max={BRIGHTNESS_MAX}
+        step={0.05}
+        suffix="×"
+        fallback={1}
+        onChange={(v) => void setSetting(BRIGHTNESS_KEY, v)}
       />
       <Slider
         label="Volume"

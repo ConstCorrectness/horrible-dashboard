@@ -82,6 +82,45 @@ class LinkHandle:
         return self.short_url or self.view_url
 
 
+#: How long the warm-up ping may take. Longer than `TIMEOUT_S`, because the
+#: point of the ping is to sit through a cold start so the mint does not.
+WARM_TIMEOUT_S = 20.0
+
+
+async def relay_health() -> dict[str, Any]:
+    """Ask the relay whether it is up -- and, as a side effect, wake it.
+
+    The relay scales to zero when idle, so the first request after a quiet spell
+    waits for a machine to boot. That request used to be the mint, which put the
+    cold start under the host's "Create public link" click. The share pane calls
+    this when it opens instead, so by the time anyone clicks, the relay is awake.
+    """
+    base = relay_base()
+    if not base:
+        return {
+            "configured": False,
+            "reachable": False,
+            "detail": "No share relay is configured (share.relayUrl), so this "
+            "node can share with friends but cannot make a public link.",
+        }
+    try:
+        async with httpx.AsyncClient(timeout=WARM_TIMEOUT_S) as client:
+            res = await client.get(f"{base}/health")
+    except httpx.HTTPError as exc:
+        return {
+            "configured": True,
+            "reachable": False,
+            "detail": f"Could not reach the share relay at {base}: {exc}",
+        }
+    if res.status_code >= 400:
+        return {
+            "configured": True,
+            "reachable": False,
+            "detail": f"The share relay answered {res.status_code}.",
+        }
+    return {"configured": True, "reachable": True, "detail": ""}
+
+
 async def mint(
     *, title: str, ttl_s: int | None = None, passphrase: str = ""
 ) -> LinkHandle:

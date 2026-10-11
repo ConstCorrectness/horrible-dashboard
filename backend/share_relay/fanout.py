@@ -55,9 +55,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+#: Told when a room has finished closing. A room closes for more reasons than
+#: anyone asks it to -- a host whose network dropped closes it from inside
+#: aiortc's own state handler -- so this is the one place every exit passes.
+OnClose = Callable[["Room"], Awaitable[None]]
 
 #: How long to wait for one peer connection to shut down before abandoning it.
 #:
@@ -120,8 +126,9 @@ class Room:
     `Registry` is what knows whether the *link* is still good.
     """
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, on_close: OnClose | None = None) -> None:
         self.token = token
+        self._on_close = on_close
         self._relay: Any = None
         self._publisher: Any = None
         #: The tracks the host is sending, by kind. A screen share is one video
@@ -325,18 +332,44 @@ class Room:
         await asyncio.gather(
             *(_close_pc(pc, f"{self.token[:8]} viewer") for pc in subscribers)
         )
+        if self._on_close is not None:
+            try:
+                await self._on_close(self)
+            except Exception:
+                # Telling people the stream stopped is a courtesy; it must not
+                # turn a clean teardown into a failed one.
+                logger.warning(
+                    "relay %s: on_close failed", self.token[:8], exc_info=True
+                )
 
 
 class Rooms:
-    """Every live room on this process, keyed by token."""
+    """Every live room on this process, keyed by token.
 
-    def __init__(self) -> None:
+    `on_close` hears about every room that closes, however it closed. The table
+    also forgets a room the moment it closes, and that is not tidiness: a room
+    that closed *itself* (its publisher's connection failed) used to stay here
+    with `_closing` latched, so the host's next WHIP landed in a room whose
+    `close()` was a no-op forever and whose viewers could never be dropped.
+    """
+
+    def __init__(
+        self, on_close: Callable[[str], Awaitable[None]] | None = None
+    ) -> None:
         self._rooms: dict[str, Room] = {}
+        self._on_close = on_close
+
+    async def _closed(self, room: Room) -> None:
+        # Only if it is still *this* room: a fresh one may already hold the token.
+        if self._rooms.get(room.token) is room:
+            del self._rooms[room.token]
+        if self._on_close is not None:
+            await self._on_close(room.token)
 
     def get_or_create(self, token: str) -> Room:
         room = self._rooms.get(token)
         if room is None:
-            room = Room(token)
+            room = Room(token, on_close=self._closed)
             self._rooms[token] = room
         return room
 

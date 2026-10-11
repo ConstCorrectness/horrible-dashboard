@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 
 import type { TacticalSpec } from '../api';
+import type { FlashLayer } from '../flash-layer';
 import type { PingRow, PlayerRow } from '../net';
 import type { World } from '../world';
 
@@ -317,30 +318,126 @@ export function NadeTray({ specs, counts, selected }: NadeTrayProps) {
 }
 
 /**
- * The flashbang, as a white-out that fades.
+ * The flashbang: a white-out, with the last frame you saw burned in under it.
  *
- * `strength` is `you.flash` — resolved per player on the server from where they
- * were looking and whether a wall was in the way, so this is a renderer for a
- * number rather than a client-side effect. Squared on the way in, so the tail of
- * a flash clears quickly and the peak is what hurts: a linear fade spends most
- * of its duration at a brightness that is annoying rather than blinding.
+ * Renders two empty layers and hands them to a `FlashLayer` (`flash-layer.ts`),
+ * which the render loop drives directly. The white moves every frame for seconds
+ * at a time, and routing that through React state would re-render the whole pane
+ * at 60 Hz to change one opacity.
+ *
+ * How white, and for how long, is the server's answer (`grenades.flash_effect`),
+ * run through the shared curve in `flashbang.ts` — so this is a renderer for a
+ * number, not a client-side effect.
  */
-export function FlashOverlay({ strength }: { strength: number }) {
-  if (strength <= 0.01) return null;
-  const eased = strength * strength;
+export function FlashOverlay({ layer }: { layer: FlashLayer }) {
+  const white = useRef<HTMLDivElement>(null);
+  const afterimage = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (white.current && afterimage.current) {
+      layer.attach({ white: white.current, afterimage: afterimage.current });
+    }
+    return () => layer.attach(null);
+  }, [layer]);
+  const fill = {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    pointerEvents: 'none',
+    opacity: 0,
+  } as const;
+  return (
+    <div aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      {/* Slightly blurred and brightened: an afterimage is a ghost, not a
+          screenshot, and a sharp copy reads as the game having frozen. */}
+      <canvas ref={afterimage} style={{ ...fill, filter: 'blur(1.5px) brightness(1.35)' }} />
+      <div ref={white} style={{ ...fill, background: '#ffffff' }} />
+    </div>
+  );
+}
+
+/** What the thrower is told: counts and the longest blind, never who or where. */
+export interface FlashAssist {
+  enemies: number;
+  allies: number;
+  longest: number;
+  /** `Date.now()` when it arrived, so a second assist restarts the entrance. */
+  at: number;
+}
+
+/** Seconds the assist readout stays up. */
+const ASSIST_MS = 2600;
+
+/**
+ * "FLASHED 2 · 1.9s" for the thrower, under the crosshair.
+ *
+ * The seconds roll up to their value rather than appearing, per the HUD's rule
+ * for numbers that changed — seeded at the final value and snapped to it by a
+ * timeout, because `requestAnimationFrame` does not fire in a backgrounded tab
+ * and a readout stuck at 0.0 would be worse than no animation at all.
+ */
+export function FlashAssistToast({ assist }: { assist: FlashAssist | null }) {
+  const seconds = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const el = seconds.current;
+    if (!assist || !el) return;
+    const final = `${assist.longest.toFixed(1)}s`;
+    el.textContent = final;
+    const started = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - started) / 450);
+      el.textContent = `${(assist.longest * k).toFixed(1)}s`;
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const snap = setTimeout(() => {
+      cancelAnimationFrame(raf);
+      el.textContent = final;
+    }, 500);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(snap);
+    };
+  }, [assist]);
+  if (!assist || Date.now() - assist.at > ASSIST_MS) return null;
+  const teamkill = assist.enemies === 0;
+  const accent = teamkill ? '#f87171' : '#fbbf24';
   return (
     <div
-      aria-hidden="true"
+      key={assist.at}
+      aria-live="polite"
       style={{
         position: 'absolute',
-        inset: 0,
+        left: '50%',
+        top: '62%',
+        transform: 'translateX(-50%)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        padding: '0.3rem 0.7rem',
+        background: 'rgba(8, 10, 14, 0.72)',
+        borderTop: `2px solid ${accent}`,
+        clipPath: 'polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%)',
         pointerEvents: 'none',
-        background: '#ffffff',
-        opacity: Math.min(1, eased),
-        // No transition: the value already arrives smoothed from the server, and
-        // a CSS ease on top would lag the recovery behind the simulation.
-        mixBlendMode: 'screen',
+        color: accent,
+        animation: `hassault-assist-in 180ms ease-out, hassault-assist-out 400ms ease-in ${ASSIST_MS - 400}ms forwards`,
       }}
-    />
+    >
+      <style>{`@keyframes hassault-assist-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@keyframes hassault-assist-out { to { opacity: 0; } }`}</style>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+        <circle cx="8" cy="8" r="2.4" />
+        <path d="M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2M3.4 3.4l1.5 1.5M11.1 11.1l1.5 1.5M3.4 12.6l1.5-1.5M11.1 4.9l1.5-1.5" />
+      </svg>
+      <span style={{ fontWeight: 700, letterSpacing: '0.14em', fontSize: '0.7rem' }}>
+        {teamkill ? 'TEAM FLASHED' : 'FLASHED'}
+      </span>
+      <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)' }}>
+        {teamkill ? assist.allies : assist.enemies}
+        {!teamkill && assist.allies > 0 ? ` +${assist.allies} TEAM` : ''} ·{' '}
+        <span ref={seconds}>{assist.longest.toFixed(1)}s</span>
+      </span>
+    </div>
   );
 }

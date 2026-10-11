@@ -504,6 +504,37 @@ fn volume_noise(p: vec3<f32>) -> f32 {
     return mix(mix(x00, x10, w.y), mix(x01, x11, w.y), w.z);
 }
 
+// The bullet tunnels through this frame's smokes. See `SmokeUniform`.
+struct Smoke {
+    head: vec4<f32>,
+    channels: array<vec4<f32>, 16>,
+};
+@group(3) @binding(0) var<uniform> smoke: Smoke;
+
+// How much of a cloud a tunnel has carved away along this view ray, 0..1.
+//
+// The ray, not the surface: a tunnel is a line of sight, and the question is
+// the server's — does the line from the eye pass within the tunnel's radius of
+// its centre (`grenades.sight_blocked_by`). Testing the cloud's *surface* point
+// against the centre, which this used to be modelled on, only ever opened a
+// hole for a shot that grazed the edge.
+fn smoke_tunnel(world: vec3<f32>) -> f32 {
+    let eye = lights.eye.xyz;
+    let dir = normalize(world - eye);
+    var carved = 0.0;
+    let count = min(u32(smoke.head.x), 16u);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let ch = smoke.channels[i];
+        if (ch.w <= 0.001) {
+            continue;
+        }
+        let t = max(dot(ch.xyz - eye, dir), 0.0);
+        let d = length(ch.xyz - (eye + dir * t));
+        carved = max(carved, smoothstep(ch.w, ch.w * 0.25, d));
+    }
+    return carved;
+}
+
 @fragment
 fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     // Flat: a tracer is a beam a few centimetres across, and cloud noise across
@@ -534,6 +565,7 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     if (chord > 0.38) {
         density = 1.0;
     }
+    density = density * (1.0 - smoke_tunnel(in.world_position) * 0.95);
 
     let shaded = in.color.rgb * mix(0.82, 1.14, n * 0.7 + chord * 0.3);
     var alpha = in.color.a * density;

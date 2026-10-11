@@ -28,6 +28,7 @@ import type { StripHandle } from '../audio/types';
 import { leaveClubhouseChannel, sendChannelMessage } from './api';
 import { ChatSender } from './chatSender';
 import type { PcmCapture, UtteranceBuffer } from './liveCapture';
+import { publishClubhousePresence, setClubhouseLeaver } from './presence';
 
 export interface LiveUserState {
   userId: number;
@@ -253,6 +254,11 @@ export class ClubhouseRoomSession {
    *  sees it; that is why every field is copied rather than mutated in place. */
   patch(next: Partial<RoomState>): void {
     this.state = { ...this.state, ...next };
+    this.notify();
+  }
+
+  private notify(): void {
+    if (this === appSession) publishPresence(this.state);
     for (const listener of this.listeners) listener();
   }
 
@@ -367,7 +373,7 @@ export class ClubhouseRoomSession {
       // call) therefore left the pane showing a room with every control dead and
       // nothing to say why.
       this.state = EMPTY_ROOM_STATE;
-      for (const listener of this.listeners) listener();
+      this.notify();
     }
   }
 
@@ -454,9 +460,70 @@ export class ClubhouseRoomSession {
   }
 }
 
-/** `create` for `usePaneSession`. */
+/** A fresh, unshared session — tests, and nothing else. The app uses `clubhouseSession`. */
 export function createRoomSession(): ClubhouseRoomSession {
   return new ClubhouseRoomSession();
+}
+
+/**
+ * The app's one Clubhouse room.
+ *
+ * App-wide, not per pane, and the reason is upstream: one account is in at most
+ * one room, and joining a second moves it out of the first. The session used to
+ * be pane-scoped, and `singleton` only means one per *desktop* — so opening
+ * Clubhouse on Desktop 2 built a second, empty session while Desktop 1's call kept
+ * playing out of sight. Closing the Desktop 2 window then tore down a session that
+ * had never joined anything, and the people kept talking until the app closed.
+ *
+ * Every Clubhouse pane now renders this one room, and closing any of them leaves
+ * it (`useClubhouseVoice`). Unmount still does not: a tab switch or a desktop
+ * switch keeps the call, which is the whole point of `pane-lifetime`.
+ */
+let appSession: ClubhouseRoomSession | null = null;
+
+export function clubhouseSession(): ClubhouseRoomSession {
+  if (!appSession) {
+    appSession = new ClubhouseRoomSession();
+    setClubhouseLeaver(leaveClubhouseRoom);
+  }
+  return appSession;
+}
+
+/**
+ * Leave the app's room, through the same queue as a join so a Leave during a
+ * room switch cannot let the half-built connection install itself afterwards.
+ * A no-op when not in (or entering) a room, so closing an idle pane changes
+ * nothing.
+ */
+export function leaveClubhouseRoom(): Promise<void> {
+  const session = appSession;
+  if (!session) return Promise.resolve();
+  return session.serialize(async () => {
+    const live =
+      session.state.joined ||
+      session.state.activeChannel !== null ||
+      session.rtcClient !== null ||
+      session.localAudioTrack !== null ||
+      session.music !== null;
+    if (!live) return;
+    session.patch({ loading: true });
+    await session.teardown();
+  });
+}
+
+function publishPresence(state: RoomState): void {
+  publishClubhousePresence({
+    joined: state.joined,
+    loading: state.loading,
+    people: state.liveUsers.length,
+    muted: state.isMuted,
+  });
+}
+
+/** Test-only: forget the app session without tearing it down. */
+export function resetClubhouseSessionForTests(): void {
+  appSession = null;
+  setClubhouseLeaver(null);
 }
 
 /**

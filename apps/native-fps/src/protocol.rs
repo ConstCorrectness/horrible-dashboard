@@ -366,13 +366,32 @@ pub struct SelfState {
     /// What we are carrying, keyed by grenade id. Private, like `ammo`.
     #[serde(default)]
     pub nades: std::collections::HashMap<String, i32>,
-    /// How blind a flashbang has left **us**, 0..1.
+    /// How white a flashbang has left **our** screen, 0..1, as of this snapshot.
     ///
     /// Resolved per player on the server, because it depends on where we were
-    /// looking and whether a wall was in the way. A client that computed its own
-    /// would make not being blinded a setting.
+    /// looking and whether a wall or a smoke was in the way. A client that
+    /// computed its own would make not being blinded a setting.
     #[serde(default)]
     pub flash: f32,
+    /// The flash we are under, as `flash_alpha`'s inputs: the peak, and the
+    /// **seconds left** of its hold and fade. `flashbang.rs` runs the curve on
+    /// them at frame rate, so the fade is smooth at a 20 Hz tick. `None` from a
+    /// server older than the fields, which then gets `flash` as a plain fade.
+    #[serde(default, rename = "flashPeak")]
+    pub flash_peak: Option<f32>,
+    #[serde(default, rename = "flashHold")]
+    pub flash_hold: f32,
+    #[serde(default, rename = "flashFade")]
+    pub flash_fade: f32,
+    #[serde(default, rename = "flashFadeTotal")]
+    pub flash_fade_total: f32,
+    /// Flashes that landed on us since the last snapshot, drained server-side
+    /// like `hits`. The one trigger for the afterimage and the ringing.
+    #[serde(default)]
+    pub flashed: Vec<Flashed>,
+    /// What our own flashes did: counts and the longest blind, never who.
+    #[serde(default, rename = "flashAssists")]
+    pub flash_assists: Vec<FlashAssist>,
     /// Enemy ids our team can currently see, for the radar.
     ///
     /// Teammates are deliberately *not* in this list — they are always shown, so
@@ -842,11 +861,58 @@ pub struct ZoneRow {
     pub left: f32,
     #[serde(default)]
     pub duration: f32,
+    /// Seconds left of an HE blast's clearing, when one is open. A duration,
+    /// never a moment: the server's clock is its own `time.monotonic()`.
+    #[serde(default, rename = "clearedFor")]
+    pub cleared_for: f32,
+    /// Bullet tunnels through the cloud: `[x, y, z, seconds left, radius]`, the
+    /// radius absent from a server older than it.
+    #[serde(default)]
+    pub channels: Vec<Vec<f32>>,
+    /// The cloud's lobes.
+    #[serde(default)]
+    pub nodes: Vec<ZoneNode>,
     /// Wire keys this struct does not name. See `divergence::Extra` — the point
     /// is that adding a real field below makes the key disappear from here on
     /// its own, so the check cannot rot the way a hand-kept list would.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// A flash that just landed on us: its peak and the seconds of hold and fade.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+pub struct Flashed {
+    #[serde(default)]
+    pub peak: f32,
+    #[serde(default)]
+    pub hold: f32,
+    #[serde(default)]
+    pub fade: f32,
+}
+
+/// What one of our flashes did, for the thrower's readout.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+pub struct FlashAssist {
+    #[serde(default)]
+    pub enemies: u32,
+    #[serde(default)]
+    pub allies: u32,
+    #[serde(default)]
+    pub longest: f32,
+}
+
+/// One lobe of a smoke cloud, in cube coordinates. Part of the shape the
+/// server tests sight against (`Zone.spheres`), so it is drawn too.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+pub struct ZoneNode {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    #[serde(default)]
+    pub r: f32,
 }
 
 /// One console line on its way to the node.

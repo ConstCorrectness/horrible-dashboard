@@ -12,9 +12,8 @@ import { MAX_FLOATERS, parseRoomReaction } from './reactions';
 import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
 import { splitForSpeech } from './speechChunks';
 import {
-  ClubhouseRoomSession,
-  createRoomSession,
-  disposeRoomSession,
+  clubhouseSession,
+  leaveClubhouseRoom,
   type ChatComment,
   type FloatingReaction,
   type LiveUserState,
@@ -161,31 +160,27 @@ export interface PubNubRoomMessage {
   moderator_photo_url?: string | null;
 }
 
-/**
- * The room used when the hook runs outside a pane (no instance id in context —
- * a test, or a component rendered outside the frame). One module-level session
- * rather than one per call, so the behaviour still matches "the room outlives the
- * component"; it simply has no close event to be disposed by.
- */
-let orphanSession: ClubhouseRoomSession | null = null;
-function fallbackSession(): ClubhouseRoomSession {
-  orphanSession ??= createRoomSession();
-  return orphanSession;
-}
+/** `create` for the pane-close hook below: the pane needs a lifetime, not a value. */
+const PANE_MARK = () => true;
+/** `dispose` for it: a real close of any Clubhouse pane leaves the room. */
+const LEAVE_ON_CLOSE = () => void leaveClubhouseRoom();
 
 export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   /**
-   * The pane's room. Created once per pane and disposed only when the pane really
-   * closes — NOT on unmount. A tab switch, a split, or a workspace change unmounts
-   * this component while the call keeps running; the old unmount cleanup called
-   * `leaveClubhouseChannel()` on every one of those, so the whole room watched you
-   * leave because you looked at another tab. See `layout/pane-lifetime`.
+   * The app's room — one for the whole app, because one account is in at most
+   * one room (see `clubhouseSession`). It is never torn down on unmount: a tab
+   * switch, a split or a desktop switch unmounts this component while the call
+   * keeps running, and the old unmount cleanup made the whole room watch you leave
+   * because you looked at another tab. See `layout/pane-lifetime`.
    *
-   * Outside a pane (no instance id in context) there is no session to own the room,
-   * so the hook degrades to a local one that lives as long as the module does.
+   * A real **close** of any Clubhouse pane does leave. It used to dispose only that
+   * pane's own session, and a second Clubhouse pane on another desktop had its own,
+   * so closing the window in front of you could leave the call playing with nothing
+   * on screen that owned it. A desktop board tile has no close, so it never leaves
+   * — the shell's room indicator is the way out from there.
    */
-  const paneScoped = usePaneSession<ClubhouseRoomSession>(createRoomSession, disposeRoomSession);
-  const session = paneScoped ?? fallbackSession();
+  usePaneSession(PANE_MARK, LEAVE_ON_CLOSE);
+  const session = clubhouseSession();
 
   // State lives on the session, not in `useState`: it has to survive the same
   // unmounts the connection does, or a remount renders an empty room on top of a

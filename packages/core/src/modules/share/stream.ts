@@ -153,7 +153,8 @@ async function startRelay(outgoing: MediaStream): Promise<void> {
   }
   if (!ingest) return;
   try {
-    await whip.publish(ingest, outgoing);
+    // Superseded by a newer publish (or a stop): that call owns the outcome.
+    if (!(await whip.publish(ingest, outgoing))) return;
     state.relaying = true;
     state.relayState = 'live';
     state.relayError = null;

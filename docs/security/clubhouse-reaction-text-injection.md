@@ -1,8 +1,8 @@
 # Security disclosure — Clubhouse room reactions render unvalidated text
 
 **To:** Clubhouse security team
-**From:** Horrible Dashboard (third-party Clubhouse client)
-**Date:** 2026-10-07
+**From:** _[YOUR NAME / HANDLE — third-party Clubhouse client developer]_
+**Date:** _[DATE]_
 **Severity (our assessment):** Medium — abuse / social-engineering vector, no account compromise observed
 
 ---

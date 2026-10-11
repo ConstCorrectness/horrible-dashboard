@@ -99,6 +99,15 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "backend.share_relay.app:app", "--port", "9100"],
       "port": 9100
+    },
+    {
+      "name": "share-relay-open",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "backend.share_relay.app:app", "--port", "9100"],
+      "port": 9100,
+      "env": {
+        "SHARE_RELAY_KEY": ""
+      }
     }
   ]
 }

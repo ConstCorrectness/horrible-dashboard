@@ -222,6 +222,20 @@ class LinkStatusOut(BaseModel):
     detail: str = ""
 
 
+class RelayOut(BaseModel):
+    """Whether this node can make public links at all, asked before it tries.
+
+    `configured` is the setting; `reachable` is whether the relay answered just
+    now. Separate, because they are fixed in different places -- one in Settings,
+    the other by waiting or by checking the relay -- and a pane that knows which
+    can say so before the host has clicked anything.
+    """
+
+    configured: bool = False
+    reachable: bool = False
+    detail: str = ""
+
+
 class RestreamIn(BaseModel):
     """Which configured destination to push to (`twitch`, `youtube`, `custom`)."""
 

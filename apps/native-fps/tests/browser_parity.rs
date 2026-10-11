@@ -222,13 +222,26 @@ fn the_browser_fallback_rig_is_the_servers_too() {
 }
 
 #[test]
-fn high_quality_fog_is_the_maps_own_density() {
-    // The lower levels are free to trade distance for fill rate. High is not: it
-    // is the level at which the two clients are meant to be the same picture,
-    // and the browser draws the served density exactly.
-    use hassault_native::settings::Quality;
-    assert_eq!(Quality::High.fog_scale(), 1.0);
-    assert_eq!(Quality::Ultra.fog_scale(), 1.0);
+fn no_quality_level_changes_how_far_you_can_see() {
+    // Every level draws the map's own fog density, in both clients: the
+    // distance a player can see somebody at is gameplay, and a quality preset
+    // that thickened it (as Low and Medium used to) is a setting that loses
+    // gunfights. Read from the sources, so a fog term creeping back into either
+    // shows up here.
+    const SETTINGS_RS: &str = include_str!("../src/settings.rs");
+    const RENDERER_RS: &str = include_str!("../src/renderer.rs");
+    const GRAPHICS_TS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    assert!(!SETTINGS_RS.contains("fn fog_scale"), "a quality level scales the fog again");
+    assert!(
+        RENDERER_RS.contains("let fog = self.lighting.atmosphere.fog_density;"),
+        "the renderer no longer draws the map's own fog density"
+    );
+    assert!(!GRAPHICS_TS.contains("fogScale"), "a browser tier scales the fog again");
+    assert!(
+        PANEL_TSX.contains("new THREE.FogExp2(a.fogColor, a.fogDensity)"),
+        "the browser no longer draws the map's own fog density"
+    );
 }
 
 #[test]
@@ -833,5 +846,98 @@ fn the_default_key_map_is_the_browsers() {
     assert_eq!(
         rust, ts,
         "controls.rs DEFAULTS drifted from DEFAULT_CONTROLS"
+    );
+}
+
+/// The browser's flashbang screen and ears.
+const FLASHBANG_TS: &str = include_str!("../../../packages/core/src/modules/hassault/flashbang.ts");
+/// This client's.
+const FLASHBANG_RS: &str = include_str!("../src/flashbang.rs");
+/// The browser's grenade renderer, for the smoke's opacity curve.
+const NADES_TS: &str = include_str!("../../../packages/core/src/modules/hassault/nades.ts");
+const NADES_RS: &str = include_str!("../src/nades.rs");
+/// The browser's flashbang layer, for the afterimage's strength.
+const FLASH_LAYER_TS: &str =
+    include_str!("../../../packages/core/src/modules/hassault/flash-layer.ts");
+
+#[test]
+fn both_clients_ring_and_muffle_a_flash_the_same() {
+    // The curve itself is pinned by `flash-vectors.json` in `conformance.rs`;
+    // these are the presentation numbers around it. A ring that lasts longer on
+    // one client, or a muffle that bites harder, is a flash that costs one
+    // player more than the other.
+    for name in [
+        "FLASH_BLIND",
+        "FLASH_RING_HZ",
+        "FLASH_RING_Q",
+        "FLASH_RING_GAIN",
+        "FLASH_RING_BODY",
+        "FLASH_MUFFLE_HZ",
+        "FLASH_OPEN_HZ",
+        "FLASH_RING_MIN",
+    ] {
+        assert_eq!(
+            rust_f32(FLASHBANG_RS, name),
+            browser_f32(FLASHBANG_TS, name),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        rust_f32(FLASHBANG_RS, "AFTERIMAGE_STRENGTH"),
+        browser_f32(FLASH_LAYER_TS, "AFTERIMAGE_STRENGTH"),
+        "how strong the burned-in frame is"
+    );
+}
+
+#[test]
+fn both_clients_thin_and_clear_a_smoke_on_the_same_clock() {
+    // A smoke that blooms later, fades sooner or opens wider after an HE on
+    // one client is one that player sees through first.
+    for name in [
+        "SMOKE_BLOOM",
+        "SMOKE_FADE",
+        "SMOKE_CLEARED",
+        "SMOKE_CHANNEL_LIFE",
+        "SMOKE_CHANNEL_RADIUS",
+    ] {
+        assert_eq!(rust_f32(NADES_RS, name), browser_f32(NADES_TS, name), "{name}");
+    }
+}
+
+#[test]
+fn both_clients_offer_the_same_field_of_view_and_brightness() {
+    // The two settings on the video page that change how the game plays rather
+    // than how it looks. Both are allowed; a wider range on one client is not.
+    use hassault_native::settings::{BRIGHTNESS_RANGE, FOV_RANGE, KEY_BRIGHTNESS};
+    const MENU_TS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/menu-panels.tsx");
+    assert_eq!(FOV_RANGE.0, browser_f32(MENU_TS, "FOV_MIN"), "the FOV floor");
+    assert_eq!(FOV_RANGE.1, browser_f32(MENU_TS, "FOV_MAX"), "the FOV ceiling");
+    assert_eq!(BRIGHTNESS_RANGE.0, browser_f32(MENU_TS, "BRIGHTNESS_MIN"));
+    assert_eq!(BRIGHTNESS_RANGE.1, browser_f32(MENU_TS, "BRIGHTNESS_MAX"));
+    assert!(
+        MENU_TS.contains(&format!("BRIGHTNESS_KEY = '{KEY_BRIGHTNESS}'")),
+        "the two clients store brightness under different keys"
+    );
+}
+
+#[test]
+fn both_clients_give_a_player_the_same_light_floor_at_every_level() {
+    // How visible somebody standing in a dark corner is decides gunfights, so
+    // it is not a graphics setting. Both clients add the same floor, and the
+    // native skin shader shades at full detail whatever the quality level —
+    // Low used to return the raw albedo, a fully lit silhouette on the setting
+    // meant to look worse.
+    const SKIN_WGSL: &str = include_str!("../src/skin.wgsl");
+    const OPERATOR_TS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/models/operator.ts");
+    assert_eq!(
+        rust_f32(SKIN_WGSL, "CHARACTER_FLOOR"),
+        browser_f32(OPERATOR_TS, "CHARACTER_FLOOR"),
+        "the player light floor"
+    );
+    assert!(
+        SKIN_WGSL.contains("shade(albedo, in.normal, in.world_position, 2.0, occlusion)"),
+        "the skin shader takes its detail from the quality level again"
     );
 }

@@ -519,3 +519,105 @@ def test_max_viewers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     # setting -- so it is floored, not honoured.
     monkeypatch.setenv("SHARE_RELAY_MAX_VIEWERS", "0")
     assert relay_app._max_viewers() == 1
+
+
+# --- stream state pushed over the chat socket ----------------------------------
+#
+# The chat socket is the one channel a viewer page holds that the relay can push
+# on. Before these events a viewer found out the host had come back only by
+# polling WHEP, and that they had left only when ICE consent expired ~30s later.
+
+
+class FakeSocket:
+    """Enough of a WebSocket for `chat.Room`: records what it is sent."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self.closed_with: int | None = None
+
+    async def send_text(self, payload: str) -> None:
+        import json
+
+        self.sent.append(json.loads(payload))
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed_with = code
+
+
+def _stream_events(sock: FakeSocket) -> list[str]:
+    return [m["state"] for m in sock.sent if m.get("kind") == "stream"]
+
+
+@pytest.fixture
+def watcher(monkeypatch):
+    """A fresh chat table, so a socket from one test never hears another's."""
+    from backend.share_relay.chat import Chat
+
+    monkeypatch.setattr(relay_app, "chat", Chat())
+
+    def join(token: str) -> FakeSocket:
+        sock = FakeSocket()
+        relay_app.chat.room(token).sockets.add(sock)
+        return sock
+
+    return join
+
+
+@pytest.mark.anyio
+async def test_publishing_tells_viewers_the_stream_is_live(client, watcher) -> None:
+    token = (await mint(client))["token"]
+    sock = watcher(token)
+    pub, offer = await publisher_offer()
+    try:
+        assert (await client.post(f"/whip/{token}", content=offer)).status_code == 201
+        assert _stream_events(sock) == ["live"]
+    finally:
+        await pub.close()
+        await relay_app.rooms.drop(token)
+
+
+@pytest.mark.anyio
+async def test_stopping_is_a_pause_not_an_end(client, watcher) -> None:
+    """The link outlives a stopped share, so viewers should wait, not give up.
+
+    An empty room stands in for a published one. Closing a real publisher that
+    never finished ICE makes aiortc's own connect task raise in the background,
+    which says nothing about this route and fails the test from the side.
+    """
+    token = (await mint(client))["token"]
+    sock = watcher(token)
+    relay_app.rooms.get_or_create(token)
+    await client.delete(f"/whip/{token}")
+    assert _stream_events(sock) == ["paused"]
+    assert sock.closed_with is None
+    assert relay_app.rooms.get(token) is None
+
+
+@pytest.mark.anyio
+async def test_revoking_ends_it_and_closes_the_chat(client, watcher) -> None:
+    token = (await mint(client))["token"]
+    sock = watcher(token)
+    pub, offer = await publisher_offer()
+    try:
+        await client.post(f"/whip/{token}", content=offer)
+        await client.delete(f"/streams/{token}")
+        # Never `paused` -- that would tell viewers to wait for a host who can
+        # no longer come back.
+        assert "paused" not in _stream_events(sock)
+        assert _stream_events(sock)[-1] == "ended"
+        # 4404 is what the page reads as "this link is dead, stop retrying".
+        assert sock.closed_with == 4404
+        assert relay_app.chat.get(token) is None
+    finally:
+        await pub.close()
+
+
+@pytest.mark.anyio
+async def test_revoking_an_unpublished_link_still_says_it_ended(
+    client, watcher
+) -> None:
+    token = (await mint(client))["token"]
+    sock = watcher(token)
+    await client.delete(f"/streams/{token}")
+    assert _stream_events(sock) == ["ended"]
+    assert sock.closed_with == 4404

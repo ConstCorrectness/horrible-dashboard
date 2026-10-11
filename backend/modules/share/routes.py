@@ -19,6 +19,7 @@ from backend.modules.share.models import (
     LinkOut,
     LinkStatusOut,
     MintLinkIn,
+    RelayOut,
     RestreamIn,
     RestreamOut,
     SessionOut,
@@ -92,6 +93,17 @@ async def join(body: JoinIn) -> ActionResult:
 async def leave(body: JoinIn) -> ActionResult:
     await fabric.leave_remote(body.session_id)
     return ActionResult(ok=True)
+
+
+@router.get("/relay", response_model=RelayOut)
+async def relay() -> RelayOut:
+    """Whether public links are possible, asked when the pane opens.
+
+    Also wakes a relay that scaled to zero, so a cold start lands while the host
+    is still deciding what to share rather than under their click. See
+    `link.relay_health`.
+    """
+    return RelayOut(**await link.relay_health())
 
 
 @router.get("/link", response_model=LinkOut)

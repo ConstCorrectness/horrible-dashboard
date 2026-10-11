@@ -48,6 +48,31 @@ const ZONE_TINT: Record<string, number> = {
   fire: 0xff6a2a,
 };
 
+/**
+ * How a cloud's opacity moves, in seconds and fractions. The native client
+ * carries the same numbers (`nades.rs`) and `browser_parity.rs` pins the two
+ * together: a smoke that thins sooner on one client is a smoke one player can
+ * see through first.
+ */
+export const SMOKE_BLOOM = 0.65;
+export const SMOKE_FADE = 1.6;
+/** Opacity left while an HE blast has the cloud open. */
+export const SMOKE_CLEARED = 0.08;
+/**
+ * A bullet tunnel's radius in cubes and its life in seconds — the server's
+ * (`match.py`, the channel append in `_fire`). Used for a shot this client
+ * punches before the server's channel arrives; the wire's own radius wins.
+ */
+export const SMOKE_CHANNEL_RADIUS = 1.2;
+export const SMOKE_CHANNEL_LIFE = 0.8;
+
+/** A cloud's opacity, from its age, its time left and whether it is cleared. */
+export function smokeOpacity(age: number, left: number, cleared: boolean): number {
+  const bloom = Math.min(1, Math.max(0, age) / SMOKE_BLOOM);
+  const fade = Math.min(1, Math.max(0, left) / SMOKE_FADE);
+  return Math.max(0, Math.min(1, bloom * fade * (cleared ? SMOKE_CLEARED : 1)));
+}
+
 interface LiveNade {
   group: THREE.Group;
   body: THREE.Mesh;
@@ -62,6 +87,7 @@ interface LiveNade {
   fuse: number;
 }
 
+/** A bullet tunnel, in **three** world coordinates (x, height, z) and cubes. */
 interface SmokeChannel {
   x: number;
   y: number;
@@ -78,8 +104,11 @@ interface LiveZone {
   /** Seconds left when last told, for the fade-out. */
   left: number;
   duration: number;
-  clearedUntil?: number;
+  /** Seconds left of an HE blast's clearing, counted down locally. */
+  clearedFor: number;
   channels: SmokeChannel[];
+  /** The lobes: children of `mesh`, sharing its material. */
+  lobes: THREE.Mesh[];
 }
 
 export class NadePool {
@@ -139,31 +168,30 @@ export class NadePool {
       if (!live) live = this.createZone(row);
       live.left = row.left;
       live.duration = row.duration;
-      live.clearedUntil = row.cleared;
+      live.clearedFor = row.clearedFor ?? 0;
       live.mesh.position.set(row.x, row.z, row.y);
       live.mesh.scale.setScalar(row.r);
+      if (live.lobes.length === 0 && row.nodes && row.nodes.length > 0 && row.r > 0.01) {
+        this.addLobes(live, row);
+      }
 
       if (row.channels && live.kind === 'smoke') {
-        for (const [cx, cy, cz, remaining] of row.channels) {
-          const r = row.r;
-          if (r > 0.01) {
-            const lx = (cx - row.x) / r;
-            const ly = (cz - row.z) / r;
-            const lz = (cy - row.y) / r;
-            const exists = live.channels.some(
-              (c) => Math.hypot(c.x - lx, c.y - ly, c.z - lz) < 0.15,
-            );
-            if (!exists) {
-              live.channels.push({
-                x: lx,
-                y: ly,
-                z: lz,
-                age: Math.max(0, 0.8 - remaining),
-                life: 0.8,
-                radius: 0.26,
-              });
-            }
-          }
+        for (const [cx, cy, cz, remaining, radius] of row.channels) {
+          // Cube (x, y, height) → three (x, height, z).
+          const [wx, wy, wz] = [cx, cz, cy];
+          // A tunnel this client already punched for its own shot is the same
+          // tunnel arriving from the server: adopt it rather than draw two.
+          const mine = live.channels.find((c) => Math.hypot(c.x - wx, c.y - wy, c.z - wz) < 0.5);
+          const fresh = {
+            x: wx,
+            y: wy,
+            z: wz,
+            age: Math.max(0, SMOKE_CHANNEL_LIFE - remaining),
+            life: SMOKE_CHANNEL_LIFE,
+            radius: radius ?? SMOKE_CHANNEL_RADIUS,
+          };
+          if (mine) Object.assign(mine, fresh);
+          else live.channels.push(fresh);
         }
       }
     }
@@ -206,17 +234,15 @@ export class NadePool {
 
       const distSq = (px - zx) ** 2 + (py - zy) ** 2 + (pz - zz) ** 2;
       if (distSq <= r * r) {
-        // Pierced the smoke! Local coordinates on the unit sphere
-        const lx = (px - zx) / r;
-        const ly = (pz - zz) / r;
-        const lz = (py - zy) / r;
+        // Pierced: the tunnel sits where the shot passed nearest the centre,
+        // which is where the server puts it too (`_fire`).
         live.channels.push({
-          x: lx,
-          y: ly,
-          z: lz,
+          x: px,
+          y: pz,
+          z: py,
           age: 0,
-          life: 0.8,
-          radius: 0.28,
+          life: SMOKE_CHANNEL_LIFE,
+          radius: SMOKE_CHANNEL_RADIUS,
         });
         if (live.channels.length > 8) {
           live.channels.shift();
@@ -243,18 +269,21 @@ export class NadePool {
       const rate = live.fuse > 0 ? 2 + 10 / Math.max(0.25, live.fuse) : 24;
       live.light.visible = Math.sin(this.elapsed * rate) > 0;
     }
-    const nowSec = Date.now() / 1000;
     for (const live of this.zones.values()) {
       live.material.uniforms.uTime.value = this.elapsed;
+      // Counted down here between snapshots: the server sends seconds left, and
+      // a 20 Hz step in a cloud's opacity reads as flicker.
+      live.left = Math.max(0, live.left - dt);
+      live.clearedFor = Math.max(0, live.clearedFor - dt);
       // Clouds bloom in over their first moment and thin out at the end, rather
       // than appearing and vanishing at full density — the two instants where a
       // hard cut would read as the effect glitching rather than expiring.
-      const age = live.duration - live.left;
-      const bloom = Math.min(1, age / 0.65);
-      const fade = Math.min(1, live.left / 1.6);
-      const isCleared = live.kind === 'smoke' && live.clearedUntil !== undefined && live.clearedUntil > nowSec;
-      const clearFactor = isCleared ? 0.08 : 1.0;
-      live.material.uniforms.uOpacity.value = Math.max(0, Math.min(1, bloom * fade * clearFactor));
+      const isCleared = live.kind === 'smoke' && live.clearedFor > 0;
+      live.material.uniforms.uOpacity.value = smokeOpacity(
+        live.duration - live.left,
+        live.left,
+        isCleared,
+      );
 
       if (live.kind === 'smoke' && live.channels.length > 0) {
         for (let i = live.channels.length - 1; i >= 0; i--) {
@@ -349,8 +378,10 @@ export class NadePool {
         varying vec3 vViewNormal;
         varying vec3 vViewDir;
         varying vec3 vLocal;
+        varying vec3 vWorld;
         void main() {
           vLocal = position;
+          vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           vViewNormal = normalize(normalMatrix * normal);
           vViewDir = normalize(-mvPosition.xyz);
@@ -367,6 +398,7 @@ export class NadePool {
         varying vec3 vViewNormal;
         varying vec3 vViewDir;
         varying vec3 vLocal;
+        varying vec3 vWorld;
 
         // Value noise, the same shape as the surface detail's — a hashed lattice
         // read at three frequencies. Procedural because there is no texture to
@@ -409,17 +441,21 @@ export class NadePool {
               density = 1.0;
             }
 
-            // CS2 Bullet smoke channels: holes punched through volumetric smoke by high-velocity rounds
+            // Bullet tunnels, carved where **the view ray** passes within a
+            // tunnel's radius of its centre — the server's question for a line
+            // of sight (\`grenades.sight_blocked_by\`), so the hole you see is
+            // the hole a bot sees through. The native client's \`smoke_tunnel\`
+            // is the same function. Testing the surface point instead, as this
+            // used to, only ever opened a hole for a shot grazing the edge.
             float channelVoid = 0.0;
+            vec3 rayDir = normalize(vWorld - cameraPosition);
             for (int i = 0; i < 8; i++) {
               if (i >= uChannelCount) break;
               vec4 ch = uChannels[i];
               if (ch.w > 0.001) {
-                float d = length(vLocal - ch.xyz);
-                if (d < ch.w) {
-                  float hole = smoothstep(ch.w, ch.w * 0.25, d);
-                  channelVoid = max(channelVoid, hole);
-                }
+                float t = max(dot(ch.xyz - cameraPosition, rayDir), 0.0);
+                float d = length(ch.xyz - (cameraPosition + rayDir * t));
+                channelVoid = max(channelVoid, smoothstep(ch.w, ch.w * 0.25, d));
               }
             }
             density *= (1.0 - channelVoid * 0.95);
@@ -454,10 +490,34 @@ export class NadePool {
       kind: row.kind,
       left: row.left,
       duration: row.duration,
+      clearedFor: row.clearedFor ?? 0,
       channels: [],
+      lobes: [],
     };
     this.zones.set(row.id, live);
     return live;
+  }
+
+  /**
+   * The cloud's lobes, as children of its sphere sharing its material.
+   *
+   * They are part of what blocks sight on the server (`Zone.spheres`), so they
+   * are part of what is drawn: an edge of smoke that stops a bot must be an edge
+   * of smoke a player can see. In the parent's unit space, so they follow its
+   * scale and opacity for free.
+   */
+  private addLobes(live: LiveZone, row: ZoneRow): void {
+    for (const node of row.nodes ?? []) {
+      // Cube (x, y, height) → three (x, height, z), relative and unit-scaled.
+      const lobe = new this.three.Mesh(this.zoneGeo, live.material);
+      lobe.position.set((node.x - row.x) / row.r, (node.z - row.z) / row.r, (node.y - row.y) / row.r);
+      lobe.scale.setScalar(node.r / row.r);
+      lobe.renderOrder = live.mesh.renderOrder;
+      lobe.castShadow = false;
+      lobe.receiveShadow = false;
+      live.mesh.add(lobe);
+      live.lobes.push(lobe);
+    }
   }
 
   /**
@@ -474,23 +534,20 @@ export class NadePool {
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const r = live.mesh.scale.x;
       if (dist < r) {
+        // Standing in a tunnel thins the shroud the same way looking down one
+        // thins the cloud.
         let channelVoid = 0;
-        if (live.channels.length > 0) {
-          const lx = dx / r;
-          const ly = dy / r;
-          const lz = dz / r;
-          for (const ch of live.channels) {
-            const chDist = Math.hypot(lx - ch.x, ly - ch.y, lz - ch.z);
-            if (chDist < ch.radius) {
-              const fade = Math.max(0, 1 - ch.age / ch.life);
-              channelVoid = Math.max(channelVoid, (1 - chDist / ch.radius) * fade);
-            }
+        for (const ch of live.channels) {
+          const fade = Math.max(0, 1 - ch.age / ch.life);
+          const radius = ch.radius * fade;
+          const chDist = Math.hypot(x - ch.x, y - ch.y, z - ch.z);
+          if (radius > 0 && chDist < radius) {
+            channelVoid = Math.max(channelVoid, 1 - chDist / radius);
           }
         }
         const t = 1 - dist / r;
-        const bloom = Math.min(1, (live.duration - live.left) / 0.65);
-        const fade = Math.min(1, live.left / 1.6);
-        const density = Math.min(1, t * 1.6) * bloom * fade * (1.0 - channelVoid * 0.9);
+        const opacity = smokeOpacity(live.duration - live.left, live.left, live.clearedFor > 0);
+        const density = Math.min(1, t * 1.6) * opacity * (1.0 - channelVoid * 0.9);
         if (density > maxDensity) maxDensity = density;
       }
     }

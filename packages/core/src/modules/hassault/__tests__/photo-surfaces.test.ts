@@ -20,7 +20,12 @@ import {
   PHOTO_NORMAL_SCALE,
   photoTexturePath,
 } from '../glb-surfaces';
-import { applyPhotoMaps, loadPhotoMaps, upgradePhotoSurfaces } from '../photo-surfaces';
+import {
+  applyPhotoMaps,
+  loadPhotoMaps,
+  restoreGeneratedSurfaces,
+  upgradePhotoSurfaces,
+} from '../photo-surfaces';
 import { drawGlbSurfaceTile } from '../textures3d';
 import vectors from './glb-surface-vectors.json';
 
@@ -188,5 +193,30 @@ describe('loading and applying', () => {
     expect(m.roughness).toBe(0.55);
     // The failure was not cached.
     expect(await upgradePhotoSurfaces(THREE, root, 4, fakeFetch)).toBe(1);
+  });
+});
+
+describe('turning the photographed surfaces off', () => {
+  it('puts the generated tile back, and turning them on again re-applies the photos', async () => {
+    const root = world('mat_dust2_sandstone_ochre');
+    const mesh = root.children[0] as THREE.Mesh;
+    const m = mesh.material as THREE.MeshStandardMaterial;
+    const tile = new THREE.Texture();
+    m.map = tile;
+    m.roughness = 0.55;
+
+    expect(await upgradePhotoSurfaces(THREE, root, 4, fakeFetch)).toBe(1);
+    expect(m.map).not.toBe(tile);
+    expect(m.normalMap).not.toBeNull();
+
+    expect(restoreGeneratedSurfaces(root)).toBe(1);
+    expect(m.map).toBe(tile);
+    expect(m.normalMap).toBeNull();
+    expect(m.roughness).toBe(0.55);
+    // Nothing left to restore.
+    expect(restoreGeneratedSurfaces(root)).toBe(0);
+
+    expect(await upgradePhotoSurfaces(THREE, root, 4, fakeFetch)).toBe(1);
+    expect(m.map).not.toBe(tile);
   });
 });

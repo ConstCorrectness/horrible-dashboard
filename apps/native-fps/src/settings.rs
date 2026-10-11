@@ -76,14 +76,15 @@ pub const KEY_CONTROLS: &str = "hassault.controls";
 ///
 /// Since the Advanced Video page this is a **preset**: picking a level writes
 /// every row under it (`Video::apply_preset`), and the level itself only keeps
-/// the two things no row owns — how much of the light rig shades a surface, and
-/// how far the fog reaches. A row changed afterwards leaves the level where it
-/// was and the menu shows `CUSTOM`, so the preset never shadows a choice.
+/// the one thing no row owns — how much of the light rig shades a surface. A row
+/// changed afterwards leaves the level where it was and the menu shows `CUSTOM`,
+/// so the preset never shadows a choice.
 ///
-/// **High is the browser's picture**: its fog, its light rig, 4× MSAA and a
-/// 2048 shadow map, which is what the pane draws. Ultra is where this client
-/// goes past the browser — bloom, every map light, finer shadows and textures —
-/// and Low and Medium trade distance and detail for fill rate on a laptop.
+/// **High is the browser's picture**: its light rig, 4× MSAA and a 2048 shadow
+/// map, which is what the pane draws. Ultra is where this client goes past the
+/// browser — bloom, every map light, finer shadows and textures — and Low and
+/// Medium trade detail for fill rate on a laptop. **No level changes what a
+/// player can see**: the fog, smoke, flashes and props are the same at all four.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Quality {
     Low,
@@ -123,24 +124,13 @@ impl Quality {
         }
     }
 
-    /// How much denser than the map's own fog this level draws it.
-    ///
-    /// Denser is cheaper only in the sense that it hides distance — but it is
-    /// also the most visible difference between the levels, and a quality
-    /// setting whose effect is invisible is one people flip back and forth
-    /// wondering whether it did anything.
-    ///
-    /// **High and Ultra draw the map's density exactly**, which is what the
-    /// browser draws: that is the level at which the two clients are meant to be
-    /// the same picture. The lower levels keep the old ratios (0.0110 and 0.0075
-    /// against the cube default's 0.0055).
-    pub fn fog_scale(self) -> f32 {
-        match self {
-            Quality::Low => 2.0,
-            Quality::Medium => 0.0075 / 0.0055,
-            Quality::High | Quality::Ultra => 1.0,
-        }
-    }
+    // There is deliberately no fog term here any more. Low and Medium used to
+    // thicken the map's fog (x2 and x1.36) to save fill rate, which meant a
+    // player on a weak GPU could not see somebody a player on a good one could:
+    // a quality setting that loses gunfights. How far you can see is gameplay,
+    // so every level draws the map's own density, as the browser now does at
+    // every tier too. Fill rate comes out of the render scale, the light count
+    // and the shadow taps. `browser_parity.rs` pins it.
 
     /// Shading detail, read by the fragment shader: 0 flat, 1 the hemisphere
     /// and sun, 2 the fill as well.
@@ -630,8 +620,11 @@ impl Video {
 }
 
 /// The FOV range, in degrees. Narrow enough that nobody can zoom out to a
-/// fish-eye that renders every enemy a pixel wide and calls it a setting.
-pub const FOV_RANGE: (f32, f32) = (70.0, 120.0);
+/// fish-eye that renders every enemy a pixel wide and calls it a setting — and
+/// **the browser's range** (`FOV_MIN`/`FOV_MAX` in `menu-panels.tsx`), pinned by
+/// `browser_parity.rs`: a wider ceiling here was a wider view of the map for a
+/// player on this client than for one in the pane.
+pub const FOV_RANGE: (f32, f32) = (60.0, 110.0);
 
 /// The frame caps offered, `0` being uncapped. Not a free-form number: the useful
 /// values are the refresh rates displays actually run at, plus one below all of

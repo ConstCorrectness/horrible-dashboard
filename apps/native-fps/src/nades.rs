@@ -31,7 +31,7 @@
 //! exactly as `bodies.rs` does it; carrying two conventions around in the same
 //! module is how a grenade ends up drawn inside the floor.
 
-use crate::protocol::{NadeRow, ZoneRow};
+use crate::protocol::{NadeRow, ZoneNode, ZoneRow};
 use crate::renderer::{Vertex, VolumeVertex, MODE_CLOUD};
 
 /// How fast a drawn grenade converges on the position the server last sent.
@@ -99,12 +99,53 @@ struct LiveNade {
     spin: f32,
 }
 
+/// How a cloud's opacity moves — the browser's `SMOKE_BLOOM`, `SMOKE_FADE` and
+/// `SMOKE_CLEARED`, pinned to them by `browser_parity.rs`. A smoke that thins
+/// sooner on one client is a smoke one player can see through first.
+pub const SMOKE_BLOOM: f32 = 0.65;
+pub const SMOKE_FADE: f32 = 1.6;
+pub const SMOKE_CLEARED: f32 = 0.08;
+/// A tunnel's life, for its fade: the server's (`_fire`, `now + 0.8`).
+pub const SMOKE_CHANNEL_LIFE: f32 = 0.8;
+/// A tunnel's radius in cubes when the wire omits it (an older server).
+pub const SMOKE_CHANNEL_RADIUS: f32 = 1.2;
+
+/// A cloud's opacity, from its age, its time left and whether it is cleared.
+pub fn smoke_opacity(age: f32, left: f32, cleared: bool) -> f32 {
+    let bloom = (age.max(0.0) / SMOKE_BLOOM).min(1.0);
+    let fade = (left.max(0.0) / SMOKE_FADE).min(1.0);
+    (bloom * fade * if cleared { SMOKE_CLEARED } else { 1.0 }).clamp(0.0, 1.0)
+}
+
+/// A bullet tunnel through a cloud, in cube coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct Tunnel {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub left: f32,
+}
+
 /// One cloud being drawn, with the opacity curve it is partway through.
 pub struct LiveZone {
     pub kind: String,
     pub pos: [f32; 3],
     pub radius: f32,
     pub opacity: f32,
+    /// Seconds left, and in all — counted down locally between snapshots.
+    pub left: f32,
+    pub duration: f32,
+    /// Seconds left of an HE blast's clearing.
+    pub cleared_for: f32,
+    pub tunnels: Vec<Tunnel>,
+    /// The cloud's lobes: part of the shape the server tests sight against.
+    pub nodes: Vec<ZoneNode>,
+}
+
+impl LiveZone {
+    fn refresh_opacity(&mut self) {
+        let cleared = self.kind == "smoke" && self.cleared_for > 0.0;
+        self.opacity = smoke_opacity(self.duration - self.left, self.left, cleared);
+    }
 }
 
 /// Every grenade and cloud currently on screen.
@@ -150,30 +191,48 @@ impl NadePool {
             .retain(|(id, _)| nades.iter().any(|r| &r.id == id));
 
         for row in zones {
-            let age = (row.duration - row.left).max(0.0);
             // Clouds bloom in over their first moment and thin at the end rather
             // than appearing and vanishing at full density — the two instants
             // where a hard cut reads as the effect glitching rather than
-            // expiring.
-            let bloom = (age / 0.65).min(1.0);
-            let fade = (row.left / 1.6).min(1.0);
-            let opacity = (bloom * fade).clamp(0.0, 1.0);
-            match self.zones.iter_mut().find(|(id, _)| id == &row.id) {
-                Some((_, live)) => {
-                    live.pos = [row.x, row.y, row.z];
-                    live.radius = row.r;
-                    live.opacity = opacity;
+            // expiring. See `smoke_opacity`.
+            let tunnels: Vec<Tunnel> = row
+                .channels
+                .iter()
+                .filter(|c| c.len() >= 4)
+                .map(|c| Tunnel {
+                    pos: [c[0], c[1], c[2]],
+                    left: c[3],
+                    radius: c.get(4).copied().unwrap_or(SMOKE_CHANNEL_RADIUS),
+                })
+                .collect();
+            let live = match self.zones.iter_mut().position(|(id, _)| id == &row.id) {
+                Some(i) => &mut self.zones[i].1,
+                None => {
+                    self.zones.push((
+                        row.id.clone(),
+                        LiveZone {
+                            kind: row.kind.clone(),
+                            pos: [row.x, row.y, row.z],
+                            radius: row.r,
+                            opacity: 0.0,
+                            left: row.left,
+                            duration: row.duration,
+                            cleared_for: 0.0,
+                            tunnels: Vec::new(),
+                            nodes: Vec::new(),
+                        },
+                    ));
+                    &mut self.zones.last_mut().expect("just pushed").1
                 }
-                None => self.zones.push((
-                    row.id.clone(),
-                    LiveZone {
-                        kind: row.kind.clone(),
-                        pos: [row.x, row.y, row.z],
-                        radius: row.r,
-                        opacity,
-                    },
-                )),
-            }
+            };
+            live.pos = [row.x, row.y, row.z];
+            live.radius = row.r;
+            live.left = row.left;
+            live.duration = row.duration;
+            live.cleared_for = row.cleared_for;
+            live.tunnels = tunnels;
+            live.nodes = row.nodes.clone();
+            live.refresh_opacity();
         }
         self.zones
             .retain(|(id, _)| zones.iter().any(|r| &r.id == id));
@@ -189,6 +248,33 @@ impl NadePool {
             }
             live.spin += dt * 7.0;
         }
+        // Counted down between snapshots: the server sends seconds left, and a
+        // 20 Hz step in a cloud's opacity reads as flicker.
+        for (_, zone) in &mut self.zones {
+            zone.left = (zone.left - dt).max(0.0);
+            zone.cleared_for = (zone.cleared_for - dt).max(0.0);
+            for t in &mut zone.tunnels {
+                t.left = (t.left - dt).max(0.0);
+            }
+            zone.tunnels.retain(|t| t.left > 0.0);
+            zone.refresh_opacity();
+        }
+    }
+
+    /// Every live tunnel as `[x, height, y, radius]` in render space, the
+    /// radius shrinking over its life as the browser's does.
+    pub fn tunnels(&self) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        for (_, zone) in &self.zones {
+            if zone.kind != "smoke" {
+                continue;
+            }
+            for t in &zone.tunnels {
+                let fade = (t.left / SMOKE_CHANNEL_LIFE).clamp(0.0, 1.0);
+                out.push([t.pos[0], t.pos[2], t.pos[1], t.radius * fade]);
+            }
+        }
+        out
     }
 
     pub fn zones(&self) -> impl Iterator<Item = &LiveZone> {
@@ -334,6 +420,17 @@ pub fn volume_vertices(pool: &NadePool, out: &mut Vec<VolumeVertex>) {
             12,
             zone_tint(&zone.kind),
         );
+        // The lobes, which block sight on the server too (`Zone.spheres`).
+        for node in &zone.nodes {
+            push_sphere(
+                &mut scratch,
+                [node.x, node.y, node.z],
+                [node.r; 3],
+                12,
+                8,
+                zone_tint(&zone.kind),
+            );
+        }
         // Fire is thinner than smoke: it is meant to be walked *around*, not
         // hidden in, so it must never become a place to hide. Smoke reaches 1.0 in its core.
         let density = if zone.kind == "fire" { 0.45 } else { 1.0 };

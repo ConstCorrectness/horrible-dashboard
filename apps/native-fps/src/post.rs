@@ -1,4 +1,5 @@
-//! What happens between the scene and the window: bloom and sharpening.
+//! What happens between the scene and the window: bloom, sharpening, and the
+//! flashbang's afterimage.
 //!
 //! This replaced the blit, and the blit's job is still the last step — the scene,
 //! drawn at the render scale, stretched into the window — it just has two
@@ -29,6 +30,8 @@ const KNEE: f32 = 0.12;
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct PostUniform {
     params: [f32; 4],
+    /// x: afterimage strength, 0..1. The rest is padding to a 16-byte row.
+    flash: [f32; 4],
 }
 
 pub struct Post {
@@ -49,6 +52,16 @@ pub struct Post {
     composite_group: Option<wgpu::BindGroup>,
     bloom: f32,
     sharpen: f32,
+    /// The flashbang's ghost: a half-resolution copy of the scene taken the
+    /// frame a flash landed, blended back in under the white as it fades. The
+    /// browser's is a canvas copy (`flash-layer.ts`); this is the same frame,
+    /// kept on the GPU.
+    capture: wgpu::RenderPipeline,
+    afterimage: Option<wgpu::TextureView>,
+    afterimage_strength: f32,
+    /// A capture is owed on the next `encode`. A `Cell` because `encode` takes
+    /// `&self`, like every other pass the renderer records.
+    capture_pending: std::cell::Cell<bool>,
 }
 
 impl Post {
@@ -96,6 +109,7 @@ impl Post {
         });
         let mut composite_entries = base_entries.to_vec();
         composite_entries.push(texture_entry(3));
+        composite_entries.push(texture_entry(4));
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post-composite-layout"),
             entries: &composite_entries,
@@ -163,6 +177,12 @@ impl Post {
             output_format,
             wgpu::BlendState::REPLACE,
         );
+        let capture = pipeline(
+            &pass_layout,
+            "fs_capture",
+            BLOOM_FORMAT,
+            wgpu::BlendState::REPLACE,
+        );
 
         // Linear and clamped: a bloom tap past the edge must not wrap round to
         // the opposite side of the screen, which puts a lamp's glow on the far
@@ -179,6 +199,7 @@ impl Post {
             label: Some("post-uniform"),
             contents: bytemuck::cast_slice(&[PostUniform {
                 params: [0.0, 0.0, THRESHOLD, KNEE],
+                flash: [0.0; 4],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -198,6 +219,10 @@ impl Post {
             composite_group: None,
             bloom: 0.0,
             sharpen: 0.0,
+            capture,
+            afterimage: None,
+            afterimage_strength: 0.0,
+            capture_pending: std::cell::Cell::new(false),
         }
     }
 
@@ -255,6 +280,22 @@ impl Post {
                 ],
             })
         };
+        let afterimage = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("flash-afterimage"),
+                size: wgpu::Extent3d {
+                    width: (width / 2).max(1),
+                    height: (height / 2).max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: BLOOM_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let scene_group = group(scene);
         let mip_groups: Vec<wgpu::BindGroup> = self.mips.iter().map(group).collect();
         self.scene_group = Some(scene_group);
@@ -279,18 +320,42 @@ impl Post {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&self.mips[0]),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&afterimage),
+                },
             ],
         }));
+        self.afterimage = Some(afterimage);
+        // A resize throws the old ghost away; one owed is still owed.
     }
 
     pub fn set(&mut self, queue: &wgpu::Queue, bloom: f32, sharpen: f32) {
         self.bloom = bloom.clamp(0.0, 1.0);
         self.sharpen = sharpen.clamp(0.0, 1.0);
+        self.write(queue);
+    }
+
+    /// The flashbang's afterimage: how strongly the ghost shows this frame, and
+    /// whether to take a new one from this frame's scene first.
+    pub fn set_flash(&mut self, queue: &wgpu::Queue, strength: f32, capture: bool) {
+        let strength = strength.clamp(0.0, 1.0);
+        if capture {
+            self.capture_pending.set(true);
+        }
+        if (strength - self.afterimage_strength).abs() > 1e-4 {
+            self.afterimage_strength = strength;
+            self.write(queue);
+        }
+    }
+
+    fn write(&self, queue: &wgpu::Queue) {
         queue.write_buffer(
             &self.uniform,
             0,
             bytemuck::cast_slice(&[PostUniform {
                 params: [self.bloom, self.sharpen, THRESHOLD, KNEE],
+                flash: [self.afterimage_strength, 0.0, 0.0, 0.0],
             }]),
         );
     }
@@ -328,6 +393,15 @@ impl Post {
             return;
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
+
+        // Before the composite, from the scene this frame drew: the ghost of a
+        // flash is the last thing you saw, which is this frame.
+        if self.capture_pending.get() {
+            if let Some(afterimage) = self.afterimage.as_ref() {
+                fullscreen(encoder, afterimage, clear, &self.capture, scene_group);
+                self.capture_pending.set(false);
+            }
+        }
 
         if self.bloom > 0.001 && !self.mips.is_empty() {
             fullscreen(encoder, &self.mips[0], clear, &self.prefilter, scene_group);

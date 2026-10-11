@@ -20,6 +20,17 @@ export const OPERATOR_URL = '/hassault-operator.glb';
 export const OPERATOR_CT_URL = '/hassault-operator.glb';
 export const OPERATOR_T_URL = '/hassault-operator-t.glb';
 
+/**
+ * A player's light floor, as an emissive fraction of the uniform's colour.
+ *
+ * A player is lit the same at every graphics tier, because how visible somebody
+ * in a dark corner is decides gunfights — and Low draws none of the map's lamps,
+ * so without a floor a player under one is a black shape on Low and lit on High.
+ * The native skin shader adds the same fraction (`CHARACTER_FLOOR` in
+ * `skin.wgsl`); `browser_parity.rs` pins the two.
+ */
+export const CHARACTER_FLOOR = 0.12;
+
 export interface OperatorAsset {
   /** The loaded scene, kept as the template. Never added to a live scene. */
   readonly prototype: THREE.Object3D;
@@ -123,11 +134,22 @@ export function instantiateOperator(
       if (seen.has(copy)) return copy;
       seen.add(copy);
       materials.push(copy);
+      const lit = copy as THREE.MeshStandardMaterial;
+      if (lit.emissive) {
+        // The readability floor: the uniform's own colour, glowing faintly, so
+        // a player is never a black shape in a corner whose lamp a graphics
+        // tier does not draw. Same number in the native skin shader.
+        lit.emissiveMap = lit.map ?? null;
+        lit.emissive.copy(lit.color ?? new three.Color(1, 1, 1)).multiplyScalar(CHARACTER_FLOOR);
+      }
       if (tint !== undefined) {
         const standard = copy as THREE.MeshStandardMaterial;
         // A wash, not a repaint: the texture still has to read as a uniform, and
         // a full replace would make both teams the same silhouette in one colour.
         if (standard.color) standard.color.lerp(new three.Color(tint), 0.28);
+        if (standard.emissive && standard.color) {
+          standard.emissive.copy(standard.color).multiplyScalar(CHARACTER_FLOOR);
+        }
       }
       return copy;
     });

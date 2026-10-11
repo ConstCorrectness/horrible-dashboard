@@ -274,3 +274,63 @@ def test_closing_the_tab_releases_the_relay_slot() -> None:
     assert "pagehide" in script
     hook = script[script.index("pagehide") :]
     assert "pc.close()" in hook[:400]
+
+
+def _function(script: str, name: str) -> str:
+    """One top-level function's text, up to the next top-level declaration."""
+    start = script.index(f"function {name}(")
+    rest = script[start:]
+    end = re.search(r"\n(?:async )?function |\n(?:const|let) |\n// ---", rest[1:])
+    return rest[: end.start() + 1] if end else rest
+
+
+def test_a_dropped_connection_redials_by_itself() -> None:
+    """It used to sit on "Connection lost" until somebody pressed Retry.
+
+    Somebody watching a screen share is not looking at the controls, so a blip
+    in their Wi-Fi ended the share for them until they happened to notice.
+    """
+    body = _connect_body(_script())
+    assert "scheduleReconnect(" in body
+    redial = _function(_script(), "scheduleReconnect")
+    assert "retryTimer = setTimeout(connect" in redial
+    # Bounded, or a dead relay is dialled in a tight loop forever.
+    assert "Math.min(" in redial
+
+
+def test_relay_pushes_drive_the_page() -> None:
+    script = _script()
+    assert "m.kind === 'stream'" in script, "the chat socket ignores stream state"
+    handler = _function(script, "onStreamEvent")
+    for state in ("'live'", "'paused'", "'ended'"):
+        assert state in handler, f"onStreamEvent does not handle {state}"
+
+
+def test_a_dead_link_stops_retrying() -> None:
+    """Knocking on a revoked link forever is noise and charged as guesses."""
+    assert "if (ended) return;" in _connect_body(_script())
+    assert "ended = true" in _function(_script(), "endLink")
+    # The relay closes the chat with 4404 when the code stops naming anything.
+    assert "4404" in _function(_script(), "openChat")
+
+
+def test_blocked_autoplay_plays_muted_with_a_visible_unmute() -> None:
+    """A click-to-play overlay held the picture hostage; silent muting hid the
+    audio. Playing muted with a labelled Unmute button does neither."""
+    body = _connect_body(_script())
+    assert "video.muted = true" in body
+    assert "autoMuted = true" in body
+    assert "Unmute" in _function(_script(), "renderControls")
+
+
+def test_the_tab_and_link_preview_carry_the_stream_title() -> None:
+    page = viewer.render(
+        code="k7m2x9qp",
+        title="Demo <night>",
+        found=True,
+        needs_passphrase=False,
+        live=True,
+    )
+    assert "<title>Demo &lt;night&gt;</title>" in page
+    assert "og:title' content='Demo &lt;night&gt;'" in page
+    assert "<night>" not in page

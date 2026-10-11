@@ -55,6 +55,14 @@ async function gathered(pc: RTCPeerConnection): Promise<void> {
 export class WhipPublisher {
   private pc: RTCPeerConnection | null = null;
   private ingestUrl = '';
+  /**
+   * Bumped by every `publish`. Two calls can overlap — a share starting while
+   * a link is being minted publishes from both paths — and the second one's
+   * `stop()` closes the first's connection mid-await. Without this the first
+   * then failed on its own closed connection and reported that as a relay
+   * error, over a stream the second call had published perfectly well.
+   */
+  private generation = 0;
 
   /** Whether media is currently being pushed to a relay. */
   get live(): boolean {
@@ -67,10 +75,15 @@ export class WhipPublisher {
    * Throws with a message worth showing. A public link that silently fails to
    * carry video is the worst outcome here: the host believes strangers are
    * watching and they are looking at a spinner.
+   *
+   * Resolves `false` when a later `publish` or a `stop` superseded this one —
+   * not an error, and the caller should leave the outcome to whoever won.
    */
-  async publish(ingestUrl: string, stream: MediaStream): Promise<void> {
-    await this.stop();
+  async publish(ingestUrl: string, stream: MediaStream): Promise<boolean> {
+    const gen = ++this.generation;
+    await this.stop(gen);
     this.ingestUrl = ingestUrl;
+    const stale = () => gen !== this.generation;
 
     const pc = new RTCPeerConnection(iceConfig());
     this.pc = pc;
@@ -83,6 +96,7 @@ export class WhipPublisher {
 
     await pc.setLocalDescription(await pc.createOffer());
     await gathered(pc);
+    if (stale()) return false;
 
     let res: Response;
     try {
@@ -92,9 +106,11 @@ export class WhipPublisher {
         body: pc.localDescription?.sdp ?? '',
       });
     } catch (err) {
+      if (stale()) return false;
       await this.stop();
       throw new Error(`Could not reach the share relay: ${(err as Error).message}`);
     }
+    if (stale()) return false;
 
     if (!res.ok) {
       await this.stop();
@@ -106,7 +122,9 @@ export class WhipPublisher {
     }
 
     const answer = await res.text();
+    if (stale()) return false;
     await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+    return true;
   }
 
   /**
@@ -116,7 +134,10 @@ export class WhipPublisher {
    * relay drops a publisher whose connection dies anyway, and a host closing a
    * laptop lid should not be waiting on an HTTP round trip.
    */
-  async stop(): Promise<void> {
+  async stop(generation?: number): Promise<void> {
+    // An outside stop supersedes any publish still in flight; the stop inside
+    // `publish` passes its own generation so it does not supersede itself.
+    if (generation === undefined) this.generation += 1;
     const pc = this.pc;
     this.pc = null;
     if (!pc) return;

@@ -9,6 +9,7 @@ import {
   GRANT_BLURB,
   GRANT_LADDER,
   getInvitees,
+  getRelay,
   getRestream,
   mintLink,
   revokeLink,
@@ -17,6 +18,7 @@ import {
   type RestreamState,
   type GrantLevel,
   type Invitee,
+  type RelayInfo,
   type RelayState,
 } from '../api';
 import { probeCapture } from '../capture';
@@ -150,6 +152,19 @@ function GuestCursors({ cursors }: { cursors: Record<string, GuestCursor> }) {
 
 /** How long a pointer stands before it is treated as gone. */
 const CURSOR_STALE_S = 15;
+
+/** How long "Link copied" stays up after a link is minted. */
+const COPIED_FLASH_MS = 4000;
+
+/** Put text on the clipboard; false when the browser refused. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function rungOf(grant: GrantLevel): number {
   return GRANT_LADDER.indexOf(grant);
@@ -302,8 +317,42 @@ export function SessionPanel() {
   const [picking, setPicking] = useState(false);
   const [pending, setPending] = useState<Preflight | null>(null);
   const [passphrase, setPassphrase] = useState('');
+  const [askPassphrase, setAskPassphrase] = useState(false);
   const [minting, setMinting] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  // Opt-in, per share, and never remembered: ticking it is the deliberate step
+  // that minting has always required, just taken before the picker instead of
+  // after it. A remembered tick would make some later Share click public by
+  // default, which is the side effect this pane exists to rule out.
+  const [withLink, setWithLink] = useState(false);
+  const [relay, setRelay] = useState<RelayInfo | null>(null);
+  // What happened to the clipboard after a mint: the link is copied, or it is
+  // ready and has to be copied by hand. Null once the moment has passed.
+  const [linkFlash, setLinkFlash] = useState<'copied' | 'ready' | null>(null);
+
+  // Ask once on open. Besides saying whether public links are possible at all,
+  // the request wakes a relay that scaled to zero — so its cold start happens
+  // now, while the host is choosing what to share, not under their click.
+  useEffect(() => {
+    let cancelled = false;
+    getRelay()
+      .then((r) => {
+        if (!cancelled) setRelay(r);
+      })
+      .catch(() => {
+        // Our own node did not answer. Leave `relay` unknown rather than
+        // claiming links are impossible; minting reports its own errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (linkFlash === null) return;
+    const timer = setTimeout(() => setLinkFlash(null), COPIED_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [linkFlash]);
 
   const makeLink = useCallback(async () => {
     setMinting(true);
@@ -311,10 +360,15 @@ export function SessionPanel() {
     try {
       // The relay reports a misconfiguration as text rather than a status code,
       // because "no relay configured" is a thing the host can fix and a 500 is not.
-      const link = await mintLink({ passphrase: passphrase.trim() });
+      const link = await mintLink({ passphrase: askPassphrase ? passphrase.trim() : '' });
       if (link.error) setLinkError(link.error);
       else {
         setPassphrase('');
+        setAskPassphrase(false);
+        // Straight onto the clipboard: the only thing anyone does with a fresh
+        // link is send it, and the old flow made that a second hunt for a
+        // second button.
+        setLinkFlash((await copyText(link.view_url)) ? 'copied' : 'ready');
         // A share that is already running has to be pushed to the link we just
         // made. Minting is deliberately independent of sharing, so this is the
         // ordinary "start sharing, then decide to make it public" order — and
@@ -326,7 +380,7 @@ export function SessionPanel() {
     } finally {
       setMinting(false);
     }
-  }, [passphrase]);
+  }, [askPassphrase, passphrase]);
 
   const dropLink = useCallback(async () => {
     setLinkError(null);
@@ -369,9 +423,16 @@ export function SessionPanel() {
     async (force: boolean) => {
       const blocked = await startStream(force, { title });
       setPending(blocked);
-      if (!blocked) setTitle('');
+      if (blocked) return;
+      setTitle('');
+      // Only once the capture is actually running: a dismissed picker must not
+      // leave a public link behind for a share that never started.
+      if (withLink && getStreamState().live && !getShareSnapshot().hosting?.link) {
+        setWithLink(false);
+        await makeLink();
+      }
     },
-    [title],
+    [title, withLink, makeLink],
   );
 
   useEffect(() => {
@@ -475,8 +536,34 @@ export function SessionPanel() {
               onChange={(e) => setTitle(e.target.value)}
             />
           </Field>
+          {relay?.configured && (
+            <label
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'center',
+                margin: '4px 0 10px',
+                cursor: 'pointer',
+                // A control, not prose: the empty state's body colour is a
+                // step dimmer than the hint beside it would otherwise be.
+                color: 'var(--text)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={withLink}
+                onChange={(e) => setWithLink(e.target.checked)}
+              />
+              <span>
+                Also make a public link{' '}
+                <span style={{ color: 'var(--text-dim)' }}>
+                  — copied for you once sharing starts
+                </span>
+              </span>
+            </label>
+          )}
           Share screen asks which screen or window to send, then opens a session. Friends you invite
-          join view-only, and a public link is a separate step you take on purpose.
+          join view-only; anyone with a public link can watch and chat, nothing else.
           <em> Session only</em> shares your workspace layout without any video.
         </EmptyState>
       )}
@@ -576,36 +663,82 @@ export function SessionPanel() {
               minting one is the single most consequential thing in this pane and
               deliberately never happens as a side effect of starting a share. */}
           {hosting.link ? (
-            <ShareableLink
-              url={hosting.link}
-              lead={stream.live ? 'Watch my screen' : `Join “${hosting.title || 'my session'}”`}
-              expiresAt={hosting.link_expires_at}
-              passphrase={hosting.link_protected}
-              actions={
-                <Button size="sm" intent="danger" onClick={() => void dropLink()}>
-                  Revoke link
-                </Button>
-              }
-            />
+            <>
+              {linkFlash && (
+                <p
+                  role="status"
+                  style={{
+                    margin: 0,
+                    fontSize: 12.5,
+                    color: linkFlash === 'copied' ? 'var(--ok)' : 'var(--text-dim)',
+                  }}
+                >
+                  {linkFlash === 'copied'
+                    ? 'Link copied. Paste it anywhere; it opens in any browser.'
+                    : 'Link ready. Copy it below.'}
+                </p>
+              )}
+              <ShareableLink
+                url={hosting.link}
+                lead={stream.live ? 'Watch my screen' : `Join “${hosting.title || 'my session'}”`}
+                expiresAt={hosting.link_expires_at}
+                passphrase={hosting.link_protected}
+                actions={
+                  <Button size="sm" intent="danger" onClick={() => void dropLink()}>
+                    Revoke link
+                  </Button>
+                }
+              />
+            </>
+          ) : relay && !relay.configured ? (
+            <Field label="Public link">
+              <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>{relay.detail}</span>
+            </Field>
           ) : (
             <Field
               label="Public link"
-              hint="Anyone with the link can watch and chat — nothing else. Only invited friends can reach this session until you make one."
+              hint="Anyone with the link can watch and chat — nothing else. It is copied for you as soon as it exists."
+              // Load-bearing. `Field` is a <label>, and with no passphrase box
+              // open its first labelable child is the Create button — so a click
+              // on the hint text would mint a public link. Naming the input
+              // means a label with nothing to point at does nothing.
+              htmlFor="share-link-passphrase"
             >
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="password"
-                  value={passphrase}
-                  autoComplete="new-password"
-                  aria-label="Passphrase for the public link (optional)"
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="passphrase (optional)"
-                  style={{ flex: '1 1 10rem', minWidth: 0 }}
-                />
-                <Button size="sm" onClick={() => void makeLink()} disabled={minting}>
-                  {minting ? 'Creating…' : 'Create public link'}
+                {askPassphrase && (
+                  <input
+                    id="share-link-passphrase"
+                    type="password"
+                    value={passphrase}
+                    autoComplete="new-password"
+                    aria-label="Passphrase for the public link"
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !minting) void makeLink();
+                    }}
+                    placeholder="passphrase"
+                    // Opened on purpose a moment ago; typing is the next thing.
+                    autoFocus
+                    style={{ flex: '1 1 10rem', minWidth: 0 }}
+                  />
+                )}
+                <Button
+                  size="sm"
+                  intent="primary"
+                  onClick={() => void makeLink()}
+                  disabled={minting}
+                >
+                  {minting ? 'Creating…' : 'Create & copy link'}
                 </Button>
+                {!askPassphrase && (
+                  <Button size="sm" intent="ghost" onClick={() => setAskPassphrase(true)}>
+                    Add passphrase
+                  </Button>
+                )}
               </div>
+              {relay && relay.configured && !relay.reachable && (
+                <span style={{ fontSize: 12.5, color: 'var(--warn)' }}>{relay.detail}</span>
+              )}
             </Field>
           )}
 

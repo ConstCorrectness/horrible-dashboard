@@ -324,8 +324,50 @@ question worth asking about a viewer that never starts.
 
 Waiting on the **host** is deliberately not drawn as progress. The host may never
 start sharing, so a bar creeping toward 100% would be a lie; that state sweeps
-instead and counts the retry down out loud (`retrying in 3s`), which is what
-keeps the page from looking abandoned.
+instead, and when it is polling it counts the retry down out loud
+(`retrying in 3s`), which is what keeps the page from looking abandoned.
+
+## The relay pushes stream state
+
+The chat socket is the one channel a viewer page holds that the relay can push
+on, so it also carries `{"kind": "stream", "state": ...}`:
+
+| state    | sent when                                   | the page                                     |
+| -------- | ------------------------------------------- | -------------------------------------------- |
+| `live`   | a WHIP publish succeeds                     | connects now, superseding any wait or poll   |
+| `paused` | a room closes and the link is still valid   | drops its connection, shows Paused, waits    |
+| `ended`  | the link is revoked or expired              | stops every retry; the chat closes with 4404 |
+
+Before this a viewer learnt the host had come back only by polling WHEP, and
+that they had left only when ICE consent ran out about thirty seconds later. With
+the socket up, waiting for the host polls every 20s as a backstop rather than
+every 4s; without it (socket down, reconnecting with backoff) it polls as before.
+
+`paused` comes from the `Rooms` close hook, not from the WHIP DELETE route,
+because a room closes for more reasons than anyone asks it to — a host whose
+network dropped closes it from inside aiortc's state handler. The same hook
+forgets the room: one that closed *itself* used to stay in the table with
+`_closing` latched, so the host's next publish landed in a room whose `close()`
+was a no-op forever.
+
+## The page recovers by itself
+
+Somebody watching a screen share is not looking at the controls, so nothing a
+network can fix waits for a click:
+
+- **A dropped connection redials** with backoff (2s, 4s, 8s, then every 15s),
+  reset by the next decoded frame. `disconnected` gets a 4s grace first, since
+  ICE often repairs it alone. An unreachable relay — a blip, or a machine waking
+  from scale-to-zero — is treated the same way.
+- **A full stream** checks for a seat every 15s instead of stopping.
+- **Blocked autoplay plays muted** with a labelled **Unmute** button on the video,
+  instead of holding the picture behind a click-to-play overlay. Muting used to be
+  rejected here because it was *silent*; a visible Unmute is not. Only if muted
+  autoplay is refused too does the page fall back to asking.
+
+A **fullscreen** button (and double-click) sits beside it. The page's `<title>`
+and `og:title` are the stream's own title, so the link's preview in a chat app
+says what it is rather than showing a bare hostname.
 
 ## The page carries its own diagnostics
 

@@ -1,0 +1,70 @@
+/* ClubhouseRoomIndicator — the shell readout for a live room. Same shape as the
+   share LIVE chip (clipped corner, 2px rule, no glow) so the two read as one
+   family; the accent colour rather than danger, because a call you are in is
+   presence, not broadcast. */
+.ch-live {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  align-self: center;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-inset);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+}
+
+.ch-live__open,
+.ch-live__leave {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.ch-live__open:hover,
+.ch-live__leave:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.ch-live__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ch-live__label {
+  font-size: var(--fs-micro, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.ch-live__meta {
+  font-family: var(--font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  font-size: var(--fs-meta, 0.72rem);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.ch-live__leave {
+  --icon-size: 11px;
+  border-left: 1px solid var(--border);
+  padding: 0 7px 0 6px;
+  color: var(--text-dim);
+}
+
+.ch-live__leave:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.ch-live__leave:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

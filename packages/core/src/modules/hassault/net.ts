@@ -290,13 +290,28 @@ export interface SelfState {
    */
   picked?: PickedItem[];
   /**
-   * How blind a flashbang has left *us*, 0..1.
+   * How white a flashbang has left *our* screen, 0..1, as of this snapshot.
    *
    * Resolved per player on the server, because it depends on where we were
-   * looking and whether a wall was in the way — see `grenades.flash_strength`.
-   * A client that computed its own would make not being blinded a setting.
+   * looking and whether a wall or a smoke was in the way — see
+   * `grenades.flash_effect`. A client that computed its own would make not being
+   * blinded a setting.
    */
   flash?: number;
+  /**
+   * The flash we are under, as the server's `flash_alpha` inputs: its peak and
+   * the **seconds left** of its hold and fade. `flashbang.ts` runs the curve
+   * from these at frame rate, so the fade is smooth at a 20 Hz tick.
+   */
+  flashPeak?: number;
+  flashHold?: number;
+  flashFade?: number;
+  flashFadeTotal?: number;
+  /** Flashes that landed on us since the last snapshot, drained server-side.
+   * The one trigger for the afterimage and the ringing. */
+  flashed?: { peak: number; hold: number; fade: number }[];
+  /** What our own flashes did: counts and the longest blind, never who. */
+  flashAssists?: { enemies: number; allies: number; longest: number }[];
   /**
    * Enemy ids our team can currently see, for the radar.
    *
@@ -381,10 +396,17 @@ export interface ZoneRow {
   /** Seconds left, so a cloud can thin as it dies rather than vanishing. */
   left: number;
   duration: number;
-  /** Server timestamp/timer until which smoke is cleared by HE blast dispersion. */
-  cleared?: number;
-  /** Bullet channels carved through smoke: [x, y, z, remainingSec]. */
-  channels?: [number, number, number, number][];
+  /**
+   * Seconds left of an HE blast's clearing, when one is open. A duration, never
+   * a moment: the server's clock is `time.monotonic()`, which this side cannot
+   * read, and comparing it with `Date.now()` left cleared smokes opaque.
+   */
+  clearedFor?: number;
+  /** Bullet channels carved through smoke: [x, y, z, remainingSec, radius]. */
+  channels?: [number, number, number, number, number?][];
+  /** The cloud's lobes, in cube coordinates. Part of the shape that blocks
+   * sight (`Zone.spheres`), so they are drawn too. */
+  nodes?: { x: number; y: number; z: number; r: number }[];
 }
 
 /** A shot somebody took, batched into the snapshot rather than sent as it happened. */

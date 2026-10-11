@@ -26,6 +26,11 @@ export function registerCloseGuard(instanceId: string, guard: CloseGuard): () =>
 
 /** Run a pane's guard, if any. Resolves true when the close should proceed. A
  * guard that throws is treated as "allow" so a bug can't wedge closing. */
+/** Whether a pane has a close guard, i.e. might want to veto being removed. */
+export function hasCloseGuard(instanceId: string): boolean {
+  return guards.has(instanceId);
+}
+
 export async function runCloseGuard(instanceId: string): Promise<boolean> {
   const guard = guards.get(instanceId);
   if (!guard) return true;

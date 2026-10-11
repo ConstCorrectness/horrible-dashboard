@@ -535,7 +535,32 @@ Minting is **never implicit**. Starting a share does not create a URL, and
 `share.copyLink` copies the existing one rather than making one — a command that
 silently published a screen to the open internet because somebody was looking for
 a link would be the most surprising thing this module could do. The pane puts it
-on its own row with its own button, and an optional passphrase beside it.
+on its own row with its own button, **Create & copy link**, and a passphrase only
+behind **Add passphrase**.
+
+Deliberate is not the same as slow, though, so the deliberate step is one click:
+
+- **The new link goes straight onto the clipboard.** The only thing anyone does
+  with a fresh link is send it; a line under the card says whether the copy
+  worked or the link has to be copied by hand.
+- **"Also make a public link"** on the empty state takes that step *before* the
+  picker, so Share screen → pick a window → paste is the whole flow. It is
+  unticked every time and never remembered: a remembered tick would make some
+  later Share click public by default, and it does nothing if the picker is
+  dismissed.
+- **The relay is woken when the pane opens.** It scales to zero, and the first
+  request after a quiet spell waits for a machine to boot. `GET /api/share/relay`
+  pings it on open, so the cold start happens while the host is choosing what to
+  share instead of under the Create click — and the pane learns early whether
+  public links are possible at all (no `share.relayUrl` reads as a sentence, not
+  a button that fails).
+- **The LIVE chip in the shell has a copy button** while a link is open, because
+  sending the link again is the most common thing anyone does mid-share.
+
+The public-link `Field` points its label at the passphrase input on purpose
+(`htmlFor`). A `<label>` with no named control activates its first labelable
+child, which with the passphrase box closed is the Create button — so a click on
+the hint text would otherwise mint a link.
 
 Once minted, the link is drawn as a **shareable link card** (`ShareableLink`, also
 used by notebook publishing) rather than a bare URL. Elsewhere in the app a link

@@ -31,7 +31,7 @@ import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from backend.modules.hassault import physics, weapons
+from backend.modules.hassault import grenades, physics, weapons
 from backend.modules.hassault.modes import Goal
 from backend.modules.hassault.weapons import PLAYER_EYE_HEIGHT
 
@@ -240,6 +240,14 @@ class BotBrain:
         self.investigate: tuple[float, float] | None = None
         self.investigate_in = 0.0
         self.throw_in = 2.0 + self.rng.random() * 4.0
+        #: Where the last target was when this bot last saw it. What a blinded
+        #: bot backs away from, since it can no longer see what to shoot at.
+        self.last_seen: tuple[float, float] | None = None
+        #: Seconds left looking away from a flash this bot threw, and which way.
+        #: A bot that throws a flash and keeps staring at it blinds itself, which
+        #: is what bots did for as long as flashes had no effect on them.
+        self.avert_in = 0.0
+        self.avert_yaw = 0.0
         #: The objective the mode wants this bot on, and how long it may chase it.
         #:
         #: The timeout is not politeness. Bots stick on concave geometry, and a
@@ -265,6 +273,11 @@ class BotBrain:
         something it could not have hit — and never fails to see something it
         could.
         """
+        # A white screen shows nothing. Asked here, where the bot decides what it
+        # can see, rather than in the aim — the same reason the smoke is: a flash
+        # that only humans have to respect is not a mechanic.
+        if me.flash >= grenades.FLASH_BLIND:
+            return False
         dx = other.state.x - me.state.x
         dy = other.state.y - me.state.y
         distance = math.hypot(dx, dy)
@@ -525,8 +538,19 @@ class BotBrain:
             self.error_yaw = self.rng.gauss(0.0, self.skill.aim_error)
             self.error_pitch = self.rng.gauss(0.0, self.skill.aim_error * 0.6)
 
+        # Half-blind: the target is visible but the aim wanders, up to seven
+        # times the bot's own error at the edge of `FLASH_BLIND`.
+        dazed = _clamp(
+            (me.flash - grenades.FLASH_DAZED)
+            / (grenades.FLASH_BLIND - grenades.FLASH_DAZED),
+            0.0,
+            1.0,
+        )
+        blur = 1.0 + 6.0 * dazed
+
         if target is not None:
             self.seen_at += dt
+            self.last_seen = (target.state.x, target.state.y)
             dx = target.state.x - me.state.x
             dy = target.state.y - me.state.y
             distance = math.hypot(dx, dy)
@@ -536,8 +560,10 @@ class BotBrain:
             dz = (target.state.z + PLAYER_EYE_HEIGHT * 0.75) - (
                 me.state.z + PLAYER_EYE_HEIGHT
             )
-            wanted_yaw = math.atan2(dy, dx) + self.error_yaw
-            wanted_pitch = math.atan2(dz, max(distance, 0.001)) + self.error_pitch
+            wanted_yaw = math.atan2(dy, dx) + self.error_yaw * blur
+            wanted_pitch = (
+                math.atan2(dz, max(distance, 0.001)) + self.error_pitch * blur
+            )
             limit = self.skill.turn_rate * dt
             yaw = me.state.yaw + _clamp(_wrap(wanted_yaw - me.state.yaw), -limit, limit)
             pitch = me.state.pitch + _clamp(
@@ -603,6 +629,18 @@ class BotBrain:
                 wanted_heading = bearing + self.strafe_dir * 0.35
             else:
                 wanted_heading = bearing + self.strafe_dir * 1.15
+        elif me.flash >= grenades.FLASH_BLIND and self.last_seen is not None:
+            # Blind, with somebody last seen out there: back away from where
+            # they were rather than walk on to an objective through them. What a
+            # flashed player does, and what makes a flash worth throwing at a
+            # bot — one that kept walking its route would barely notice.
+            wanted_heading = (
+                math.atan2(
+                    self.last_seen[1] - me.state.y, self.last_seen[0] - me.state.x
+                )
+                + math.pi
+                + self.strafe_dir * 0.5
+            )
         else:
             goal = self._objective(room, me, dt)
             if goal is not None:
@@ -710,6 +748,8 @@ class BotBrain:
             limit = self.skill.turn_rate * dt
             yaw = yaw + _clamp(_wrap(heading - yaw), -limit, limit)
             pitch = pitch - _clamp(pitch, -limit, limit)
+        if me.flash < grenades.FLASH_BLIND and target is None:
+            self.last_seen = None
 
         # Movement is expressed in the player's own frame, so a bot that is aiming
         # one way and walking another — which is most of a firefight — needs the
@@ -784,6 +824,28 @@ class BotBrain:
                         throw_nade = slot_idx
                         self.throw_in = 6.0 + self.rng.random() * 4.0
                         break
+            if throw and grenades.spec_at(throw_nade) is not None:
+                spec = grenades.spec_at(throw_nade)
+                assert spec is not None
+                if spec.kind == "flash":
+                    # Lobbed high so it arcs in over the target rather than
+                    # flying flat at eye height, and then the bot turns its back
+                    # on it until it has gone off.
+                    pitch = _clamp(pitch + 0.45, -1.5, 1.5)
+                    self.avert_in = spec.fuse + 0.25
+                    self.avert_yaw = yaw + math.pi
+
+        # -- look away from your own flash ----------------------------------
+        #
+        # After the throw block, because the throw itself must leave along the
+        # aim it was given; every tick after it turns away and looks at the
+        # floor, which together put the bang in the "behind you" band.
+        if self.avert_in > 0 and not throw:
+            self.avert_in -= dt
+            limit = self.skill.turn_rate * dt
+            yaw = yaw + _clamp(_wrap(self.avert_yaw - yaw), -limit, limit)
+            pitch = pitch + _clamp(-1.3 - pitch, -limit, limit)
+            fire = False
 
         me.bot_seq += 1
         return Command(

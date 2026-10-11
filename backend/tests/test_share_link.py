@@ -348,3 +348,43 @@ def test_the_status_route_without_a_link_says_unknown(client) -> None:
     _start(client)
     body = client.get("/api/share/link/status").json()
     assert body["state"] == "unknown"
+
+
+# --- the warm-up ping ---------------------------------------------------------
+#
+# The pane asks this on open. It says whether a public link is possible at all,
+# and it wakes a relay that scaled to zero, so the cold start lands before the
+# host's click rather than under it.
+
+
+def test_an_unconfigured_relay_says_so_before_anyone_clicks(monkeypatch) -> None:
+    monkeypatch.setattr(link_api, "relay_base", lambda: "")
+    health = asyncio.run(link_api.relay_health())
+    assert health["configured"] is False
+    assert health["reachable"] is False
+    assert "share.relayUrl" in health["detail"]
+
+
+def test_a_relay_that_answers_is_reachable(monkeypatch) -> None:
+    _relay_answering(monkeypatch, _FakeResponse(200, {"service": "horrible-share"}))
+    health = asyncio.run(link_api.relay_health())
+    assert health == {"configured": True, "reachable": True, "detail": ""}
+
+
+def test_an_unreachable_relay_is_configured_but_not_reachable(monkeypatch) -> None:
+    import httpx
+
+    _relay_answering(monkeypatch, httpx.ConnectError("boom"))
+    health = asyncio.run(link_api.relay_health())
+    assert health["configured"] is True
+    assert health["reachable"] is False
+    assert "Could not reach" in health["detail"]
+
+
+def test_the_relay_route_carries_every_field(monkeypatch) -> None:
+    # Over HTTP, not just the function: a field the response model does not
+    # declare is dropped silently, and the pane would read it as `undefined`.
+    _relay_answering(monkeypatch, _FakeResponse(200, {}))
+    res = TestClient(app).get("/api/share/relay")
+    assert res.status_code == 200
+    assert res.json() == {"configured": True, "reachable": True, "detail": ""}

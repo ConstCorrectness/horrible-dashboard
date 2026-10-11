@@ -444,6 +444,9 @@ struct Voice {
     /// warble rather than as a thump.
     sub_phase: f32,
     rng: u32,
+    /// Mixed round the flashbang's muffle. Only the ring itself: a filter that
+    /// muffled the tinnitus would muffle the one sound a flash adds.
+    dry: bool,
 }
 
 impl Voice {
@@ -519,6 +522,9 @@ impl Voice {
 pub struct GameAudio {
     tx: SyncSender<Voice>,
     volume: f32,
+    /// The world's low-pass cutoff in Hz, as `f32` bits — written by the game
+    /// thread (`set_muffle`), read once per buffer by the audio thread.
+    muffle: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// Kept alive: dropping a cpal stream stops it. It is deliberately not sent
     /// anywhere — cpal's `Stream` is not `Send` on every platform, which is why
     /// the voices travel and the stream does not.
@@ -542,6 +548,14 @@ impl GameAudio {
 
         let (tx, rx): (SyncSender<Voice>, Receiver<Voice>) = std::sync::mpsc::sync_channel(QUEUE);
         let mut voices: Vec<Voice> = Vec::with_capacity(MAX_VOICES);
+        let muffle = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            crate::flashbang::FLASH_OPEN_HZ.to_bits(),
+        ));
+        let muffle_in = muffle.clone();
+        // The muffle's state: a one-pole low-pass per channel. One pole rather
+        // than the browser's biquad — same cutoff, gentler slope, and no
+        // coefficient design on the audio thread.
+        let (mut lp_l, mut lp_r) = (0.0f32, 0.0f32);
 
         let stream = device
             .build_output_stream(
@@ -554,13 +568,31 @@ impl GameAudio {
                             voices.push(voice);
                         }
                     }
+                    let cutoff = f32::from_bits(muffle_in.load(std::sync::atomic::Ordering::Relaxed));
+                    let open = cutoff >= crate::flashbang::FLASH_OPEN_HZ * 0.98;
+                    let k = 1.0 - (-std::f32::consts::TAU * cutoff * dt).exp();
                     for frame in out.chunks_mut(channels) {
                         let (mut l, mut r) = (0.0f32, 0.0f32);
+                        let (mut dl, mut dr) = (0.0f32, 0.0f32);
                         for voice in voices.iter_mut() {
                             let (vl, vr) = voice.sample(dt);
-                            l += vl;
-                            r += vr;
+                            if voice.dry {
+                                dl += vl;
+                                dr += vr;
+                            } else {
+                                l += vl;
+                                r += vr;
+                            }
                         }
+                        // Always run, so switching the muffle in or out does
+                        // not step the filter state; bypassed when open.
+                        lp_l += k * (l - lp_l);
+                        lp_r += k * (r - lp_r);
+                        if !open {
+                            l = lp_l;
+                            r = lp_r;
+                        }
+                        let (l, r) = (l + dl, r + dr);
                         // Clipped rather than normalised: a limiter that ducked
                         // the whole mix when a grenade went off would make every
                         // other cue quieter exactly when they matter most.
@@ -582,6 +614,7 @@ impl GameAudio {
         Some(GameAudio {
             tx,
             volume: 1.0,
+            muffle,
             _stream: stream,
         })
     }
@@ -589,6 +622,31 @@ impl GameAudio {
     /// 0 silences it entirely.
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
+    }
+
+    /// Muffle the world by how white the screen is, 0..1: the flashbang's
+    /// deafness. Per frame, with the flash's current alpha.
+    pub fn set_muffle(&self, alpha: f32) {
+        self.muffle.store(
+            crate::flashbang::muffle_hz(alpha).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// The flashbang's ring, lasting as long as the flash: a narrow band of
+    /// noise with a high sine under it, played round the muffle. The browser's
+    /// `GameAudio.flashRing` is the same voice.
+    pub fn flash_ring(&self, volume: f32, seconds: f32) {
+        use crate::flashbang::{FLASH_RING_BODY, FLASH_RING_GAIN, FLASH_RING_HZ, FLASH_RING_Q};
+        let timbre = Timbre {
+            frequency: FLASH_RING_HZ,
+            q: FLASH_RING_Q,
+            decay: seconds.max(0.1),
+            gain: FLASH_RING_GAIN,
+            body: FLASH_RING_BODY,
+            thump: 0.0,
+        };
+        self.send(timbre, volume * self.volume, 0.0, true);
     }
 
     /// Play one noise.
@@ -629,6 +687,13 @@ impl GameAudio {
             timbre.q *= 1.12;
         }
 
+        self.send(timbre, volume, pan, false);
+    }
+
+    fn send(&self, timbre: Timbre, volume: f32, pan: f32, dry: bool) {
+        if volume < MIN_GAIN {
+            return;
+        }
         let voice = Voice {
             timbre,
             gain: volume * timbre.gain,
@@ -645,6 +710,7 @@ impl GameAudio {
             // which is audible immediately — as a machine gun rather than a
             // person walking.
             rng: 0x2545_f491 ^ (volume.to_bits().rotate_left(7)) ^ timbre.frequency.to_bits(),
+            dry,
         };
         match self.tx.try_send(voice) {
             Ok(()) => {}
@@ -776,6 +842,7 @@ mod tests {
             phase: 0.0,
             sub_phase: 0.0,
             rng: 12345,
+            dry: false,
         };
         let dt = 1.0 / 48_000.0;
         let mut peak_early: f32 = 0.0;
@@ -817,6 +884,7 @@ mod tests {
             phase: 0.0,
             sub_phase: 0.0,
             rng: 99,
+            dry: false,
         };
         let dt = 1.0 / 8_000.0;
         for _ in 0..8_000 {

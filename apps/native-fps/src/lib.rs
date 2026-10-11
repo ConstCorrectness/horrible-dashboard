@@ -33,6 +33,7 @@ pub mod display;
 pub mod divergence;
 pub mod editor;
 pub mod effects;
+pub mod flashbang;
 pub mod geometry;
 pub mod gpu;
 pub mod hands;

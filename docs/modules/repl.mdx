@@ -19,7 +19,11 @@ same browser. It is the programmatic twin of the
 ## Contributions to the layout shell
 
 - **Panels:** `repl.console` (one kernel per instance, default: bottom dock tab
-  group; non-singleton — open as many as you like, tab/split/float them).
+  group; non-singleton — open as many as you like, tab/split/float them). The kernel,
+  transcript and input history belong to the **pane** (`console.ts`, via
+  `usePaneSession`): a tab or desktop switch keeps every variable, and only closing
+  the pane stops the kernel. It used to start a kernel per mount, so switching tabs
+  silently wiped the interpreter.
 - **Commands:** `repl.new` ("Python REPL: New console").
 - **Workflow layout:** the console is part of the built-in **Scripting** layout
   (files · editor · REPL + terminal) in the shell rail — see

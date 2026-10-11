@@ -346,6 +346,9 @@ pub struct App {
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
+    /// The flashbang being drawn: seeded from each snapshot, stepped each
+    /// frame, so the white fades smoothly between 20 Hz ticks.
+    flash: hassault_native::flashbang::FlashState,
     hud: Hud,
     viewmodel: WeaponViewModel,
     /// `None` when the machine has no output device, or refused one. The game
@@ -593,6 +596,7 @@ impl App {
             buy_open: false,
             pending_buy: -1,
             you: None,
+            flash: hassault_native::flashbang::FlashState::default(),
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
             settings,
@@ -1986,10 +1990,14 @@ impl App {
                     if let Some(mode) = &s.mode {
                         self.mode_state = Some(mode.clone());
                     }
+                    // The server's flash numbers, and a ring for each flash that
+                    // just landed — keyed on the landed event rather than on the
+                    // value rising, which could not tell a second flash from a
+                    // late packet.
+                    let rings = self.flash.seed(&s.you);
                     if let Some(audio) = self.audio.as_ref() {
-                        let prev_flash = self.you.as_ref().map(|y| y.flash).unwrap_or(0.0);
-                        if s.you.flash > 0.35 && prev_flash <= 0.15 {
-                            audio.play("tinnitus", s.you.flash.clamp(0.5, 1.0), 0.0, 0.0, 0, None);
+                        for (volume, seconds) in rings {
+                            audio.flash_ring(volume, seconds);
                         }
                     }
                     self.apply_match_recoil(s.you.spray_index, s.you.weapon);
@@ -4098,10 +4106,8 @@ impl ApplicationHandler for App {
                     mode_self: self.you.as_ref().and_then(|y| y.mode.as_ref()),
                     radar,
                     utility: utility.as_ref(),
-                    // Straight off the snapshot. Parsed and then ignored until
-                    // now, which made the flashbang the one grenade with no
-                    // effect on the person it went off in front of.
-                    flash: self.you.as_ref().map(|y| y.flash).unwrap_or(0.0),
+                    // The shared curve, run on the server's numbers this frame.
+                    flash: self.flash.alpha(),
                     crosshair: self.crosshair(),
                     console: self.console.open.then(|| ConsoleView {
                         lines: &console_lines,
@@ -4208,6 +4214,7 @@ impl ApplicationHandler for App {
                 renderer.set_text_layer(chat_image);
                 renderer.set_bodies(&verts);
                 renderer.set_volumes(&self.volume_verts);
+                renderer.set_smoke_channels(&self.nades.tunnels());
                 renderer.set_reveal(self.reveal);
                 if let Some(squad) = self.squad.as_ref() {
                     renderer.set_characters(squad.poses());
@@ -4278,6 +4285,18 @@ impl ApplicationHandler for App {
         // After the input, so the weapon sways to the angles this frame is about
         // to be drawn with rather than to the previous one's.
         self.animate(dt.clamp(0.0, MAX_DT));
+
+        // The flashbang, between snapshots: the white, the world muffled under
+        // it, and the afterimage — taken from the frame about to be drawn when a
+        // flash has just landed.
+        self.flash.step(dt.clamp(0.0, MAX_DT));
+        if let Some(audio) = self.audio.as_ref() {
+            audio.set_muffle(self.flash.alpha());
+        }
+        let capture = std::mem::take(&mut self.flash.capture_wanted);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_flash(self.flash.afterimage(), capture);
+        }
 
         let elapsed = now.duration_since(self.fps_since).as_secs_f32();
         if elapsed >= 0.5 {

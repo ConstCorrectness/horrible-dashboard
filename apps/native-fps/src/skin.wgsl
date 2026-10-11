@@ -102,6 +102,19 @@ fn vs_skin(in: VertexIn) -> VertexOut {
     return out;
 }
 
+// A player's light floor: albedo times this, added under every other light.
+//
+// **A player is lit the same at every quality level**, because how visible
+// somebody standing in a dark corner is decides gunfights. Two things used to
+// break that: Low shaded characters at detail 0, which returns the raw albedo —
+// a fully lit silhouette on the one setting meant to look worse — and the lamps
+// a level drops (Low has none) took a player's light with them. So characters
+// always shade at full detail, and this floor keeps somebody under a lamp that a
+// level does not draw from turning into a black shape. The browser's operator
+// carries the same number as an emissive (`CHARACTER_FLOOR` in `operator.ts`),
+// and `browser_parity.rs` pins the two.
+const CHARACTER_FLOOR: f32 = 0.12;
+
 @fragment
 fn fs_skin(in: VertexOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(base_color_texture, base_color_sampler, in.uv) * material.base_color;
@@ -135,6 +148,8 @@ fn fs_skin(in: VertexOut) -> @location(0) vec4<f32> {
         shadow.params.y,
         shadow.params.z,
     );
-    let lit = tonemap(shade(albedo, in.normal, in.world_position, camera.params.y, occlusion));
+    let lit = tonemap(
+        shade(albedo, in.normal, in.world_position, 2.0, occlusion) + albedo * CHARACTER_FLOOR,
+    );
     return vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);
 }

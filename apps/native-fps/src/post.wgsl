@@ -39,6 +39,8 @@ fn vs_fullscreen(@builtin(vertex_index) index: u32) -> FullscreenOut {
 struct Post {
     // x: bloom intensity. y: sharpening 0..1. z: bloom threshold. w: knee.
     params: vec4<f32>,
+    // x: the flashbang afterimage's strength, 0..1.
+    flash: vec4<f32>,
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -46,6 +48,8 @@ struct Post {
 @group(0) @binding(2) var<uniform> post: Post;
 // The composite's second input: the top of the bloom chain.
 @group(0) @binding(3) var bloom: texture_2d<f32>;
+// The flashbang's ghost, taken by `fs_capture` the frame a flash landed.
+@group(0) @binding(4) var afterimage: texture_2d<f32>;
 
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -69,6 +73,19 @@ fn fs_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
     let soft = clamp(l - threshold + knee, 0.0, 2.0 * knee);
     let contribution = max(soft * soft / (4.0 * knee), l - threshold) / max(l, 1e-4);
     return vec4<f32>(c * max(contribution, 0.0), 1.0);
+}
+
+// The afterimage: the scene at half resolution, softened by its four taps. An
+// afterimage is a ghost, not a screenshot — a sharp copy reads as the game
+// having frozen.
+@fragment
+fn fs_capture(in: FullscreenOut) -> @location(0) vec4<f32> {
+    let texel = 1.0 / vec2<f32>(textureDimensions(source));
+    var c = textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.75, -0.75)).rgb;
+    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.75, -0.75)).rgb;
+    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.75, 0.75)).rgb;
+    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.75, 0.75)).rgb;
+    return vec4<f32>(c * 0.25, 1.0);
 }
 
 @fragment
@@ -150,6 +167,15 @@ fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
         // the glow is strongest, and adding would clip the lamp into a flat disc.
         let g = glow * intensity;
         color = vec3<f32>(1.0) - (vec3<f32>(1.0) - color) * (vec3<f32>(1.0) - g);
+    }
+
+    // The flashbang's ghost, under the HUD's white. Brightened like the
+    // browser's (`brightness(1.35)` on its canvas copy): a burned-in image is
+    // brighter than the scene it came from.
+    let ghost = post.flash.x;
+    if (ghost > 0.001) {
+        let after = min(textureSample(afterimage, source_sampler, in.uv).rgb * 1.35, vec3<f32>(1.0));
+        color = mix(color, after, ghost);
     }
     return vec4<f32>(color, 1.0);
 }

@@ -450,14 +450,13 @@ pub struct HudView<'a> {
     /// no `/tacticals` — and the tray is then absent rather than drawn empty,
     /// because an empty tray is a claim that you are carrying nothing.
     pub utility: Option<&'a UtilityView>,
-    /// How blind a flashbang has left us, 0..1, straight off `you.flash`.
+    /// How white a flashbang has left our screen right now, 0..1 — the shared
+    /// curve (`flashbang.rs`) run on the server's numbers at frame rate.
     ///
     /// **Resolved per player on the server** from where we were looking and
-    /// whether a wall was in the way, so this is a renderer for a number and not
-    /// a client-side effect — a client that computed its own would make not being
-    /// blinded a setting. Parsed and then ignored for as long as flashbangs have
-    /// existed here, which made the flash the one grenade with no effect on the
-    /// person it went off in front of.
+    /// whether a wall or a smoke was in the way, so this is a renderer for a
+    /// number and not a client-side effect — a client that computed its own
+    /// would make not being blinded a setting.
     pub flash: f32,
     /// The console, when it is open. `None` is "closed" — and the panel is
     /// drawn **last and over everything**, including the scoreboard, because a
@@ -506,6 +505,9 @@ pub struct Hud {
     /// Fall damage from the most recent landing, and how long ago.
     fell: f32,
     fell_age: f32,
+    /// Our last flash's result, summed over a snapshot, and how long ago.
+    flash_assist: crate::protocol::FlashAssist,
+    flash_assist_age: f32,
     /// The centre kill notice: what it says, and how old it is.
     ///
     /// Two sources feed it, deliberately. `on_hits` sets the generic form from
@@ -548,6 +550,8 @@ impl Default for Hud {
             noise_rings: true,
             fell: 0.0,
             fell_age: f32::MAX,
+            flash_assist: crate::protocol::FlashAssist::default(),
+            flash_assist_age: f32::MAX,
             kill_notice: String::new(),
             kill_age: f32::MAX,
             kill_badge: None,
@@ -792,6 +796,16 @@ impl Hud {
             self.fell = you.fell;
             self.fell_age = 0.0;
         }
+        if !you.flash_assists.is_empty() {
+            let mut sum = crate::protocol::FlashAssist::default();
+            for a in &you.flash_assists {
+                sum.enemies += a.enemies;
+                sum.allies += a.allies;
+                sum.longest = sum.longest.max(a.longest);
+            }
+            self.flash_assist = sum;
+            self.flash_assist_age = 0.0;
+        }
     }
 
     /// Feed externally heard spatial noises into the crosshair noise ring.
@@ -882,6 +896,7 @@ impl Hud {
         self.objective_age = advance(self.objective_age, dt);
         self.damage_age = advance(self.damage_age, dt);
         self.fell_age = advance(self.fell_age, dt);
+        self.flash_assist_age = advance(self.flash_assist_age, dt);
         self.kill_age = advance(self.kill_age, dt);
         // The trail eases toward the live value, holding first so a single hit
         // is legible before it starts draining. Only ever downward: `on_self`
@@ -1031,12 +1046,11 @@ impl Hud {
         // that hid the console would take the developer's one tool away for the
         // three seconds it is most interesting.
         //
-        // Squared on the way in, exactly as the browser's `FlashOverlay` does, so
-        // the peak is what hurts and the tail clears quickly — a linear fade
-        // spends most of its life at a brightness that is annoying rather than
-        // blinding.
-        if view.flash > 0.01 {
-            let a = (view.flash * view.flash).min(1.0);
+        // Not squared any more: the shaping is in the shared curve
+        // (`flashbang::flash_alpha`), which holds at the peak and then clears,
+        // and both clients draw its output as it is.
+        if view.flash > 0.001 {
+            let a = view.flash.min(1.0);
             let (w, h) = (p.width, p.height);
             p.rect(0.0, 0.0, w, h, [1.0, 1.0, 1.0, a]);
         }
@@ -1516,6 +1530,31 @@ impl Hud {
             // someone you never saw.
             let line = format!("-{} FALL", self.fell.round() as i32);
             p.center_text(p.height * 0.58, scale, [0.98, 0.62, 0.58, 0.9], &line);
+        }
+        if self.flash_assist_age < FLASH_ASSIST_LIFE {
+            // The browser's `FlashAssistToast`: who you blinded, by count only,
+            // and the longest blind rolling up to its value.
+            let a = self.flash_assist;
+            let fade = ((FLASH_ASSIST_LIFE - self.flash_assist_age) / 0.4).clamp(0.0, 1.0);
+            let roll = (self.flash_assist_age / 0.45).clamp(0.0, 1.0);
+            let line = if a.enemies == 0 {
+                format!("TEAM FLASHED {} - {:.1}s", a.allies, a.longest * roll)
+            } else if a.allies > 0 {
+                format!(
+                    "FLASHED {} +{} TEAM - {:.1}s",
+                    a.enemies,
+                    a.allies,
+                    a.longest * roll
+                )
+            } else {
+                format!("FLASHED {} - {:.1}s", a.enemies, a.longest * roll)
+            };
+            let color = if a.enemies == 0 {
+                [0.97, 0.44, 0.44, 0.95 * fade]
+            } else {
+                [0.98, 0.75, 0.14, 0.95 * fade]
+            };
+            p.center_text(p.height * 0.62, scale, color, &line);
         }
         if self.kill_age < KILL_NOTICE_LIFE && !self.kill_notice.is_empty() {
             let fade =
@@ -4016,6 +4055,9 @@ impl<'a> Painter<'a> {
 
 /// Width of a string in pixels — five columns per glyph and one of spacing,
 /// minus the trailing space so right-aligned text ends where it says it does.
+/// Seconds the thrower's flash readout stays up — the browser's `ASSIST_MS`.
+const FLASH_ASSIST_LIFE: f32 = 2.6;
+
 fn text_width(s: &str, scale: f32) -> f32 {
     let n = s.chars().count() as f32;
     if n == 0.0 {

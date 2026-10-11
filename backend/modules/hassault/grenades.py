@@ -286,7 +286,17 @@ class Zone:
     )
     volumetric_nodes: list[dict[str, float]] = field(default_factory=list)
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, now: float | None = None) -> dict[str, Any]:
+        """The wire form.
+
+        Every time in it is **seconds remaining**, never a moment. The room's
+        clock is `time.monotonic()` — seconds since this machine booted — and a
+        client has no way to read it: `cleared` used to go out as that absolute
+        value, the browser compared it with `Date.now()`, and an HE-cleared smoke
+        stayed opaque on screen while the server let everybody see through it.
+        """
+        if now is None:
+            now = time.monotonic()
         data = {
             "id": self.id,
             "kind": self.kind,
@@ -297,13 +307,13 @@ class Zone:
             "left": round(self.remaining, 2),
             "duration": round(self.duration, 2),
         }
-        if self.cleared_until > 0.0:
-            data["cleared"] = round(self.cleared_until, 2)
+        cleared_for = self.cleared_until - now
+        if cleared_for > 0.0:
+            data["clearedFor"] = round(cleared_for, 2)
         if self.volumetric_nodes:
             data["nodes"] = self.volumetric_nodes
-        active_channels = [c for c in self.channels if c[4] > 0]
+        active_channels = [c for c in self.channels if c[4] > now]
         if active_channels:
-            now = time.monotonic()
             data["channels"] = [
                 [
                     round(c[0], 2),
@@ -313,20 +323,32 @@ class Zone:
                     # duration — the wire's `remainingSec` field must be the
                     # time still left, not the moment it runs out.
                     round(max(0.0, c[4] - now), 2),
+                    # The tunnel's radius in cubes, so the hole a client draws
+                    # is the hole `sight_blocked_by` lets a bot see through.
+                    round(c[3], 2),
                 ]
                 for c in active_channels[-8:]
             ]
         return data
 
-    def contains(self, x: float, y: float, z: float) -> bool:
-        if ((x - self.x) ** 2 + (y - self.y) ** 2 + (z - self.z) ** 2) <= self.radius**2:
-            return True
+    def spheres(self) -> list[tuple[float, float, float, float]]:
+        """The cloud's shape as (x, y, z, r) balls: the main one and its lobes.
+
+        **The one shape every reader asks about** — `contains`,
+        `sight_blocked_by` and both clients' renderers. They used to disagree
+        (the lobes were in `contains` only), which meant the edge of a smoke that
+        stopped a flash was not the edge that stopped a bot.
+        """
+        balls = [(self.x, self.y, self.z, self.radius)]
         for node in self.volumetric_nodes:
-            if (
-                (x - node["x"]) ** 2 + (y - node["y"]) ** 2 + (z - node["z"]) ** 2
-            ) <= node["r"] ** 2:
-                return True
-        return False
+            balls.append((node["x"], node["y"], node["z"], node["r"]))
+        return balls
+
+    def contains(self, x: float, y: float, z: float) -> bool:
+        return any(
+            (x - bx) ** 2 + (y - by) ** 2 + (z - bz) ** 2 <= br**2
+            for bx, by, bz, br in self.spheres()
+        )
 
 
 def generate_volumetric_smoke_nodes(
@@ -335,7 +357,14 @@ def generate_volumetric_smoke_nodes(
     """Compute volumetric sub-nodes expanding outwards from detonation point,
     wrapping around corners and stopping at solid geometry walls.
     """
-    nodes = [{"x": round(x, 2), "y": round(y, 2), "z": round(z, 2), "r": round(radius * 0.65, 2)}]
+    nodes = [
+        {
+            "x": round(x, 2),
+            "y": round(y, 2),
+            "z": round(z, 2),
+            "r": round(radius * 0.65, 2),
+        }
+    ]
     angles = [i * (math.pi / 4.0) for i in range(8)]
     offset_dist = radius * 0.55
     for ang in angles:
@@ -349,12 +378,14 @@ def generate_volumetric_smoke_nodes(
             except Exception:
                 pass
         if not blocked:
-            nodes.append({
-                "x": round(nx, 2),
-                "y": round(ny, 2),
-                "z": round(z, 2),
-                "r": round(radius * 0.5, 2),
-            })
+            nodes.append(
+                {
+                    "x": round(nx, 2),
+                    "y": round(ny, 2),
+                    "z": round(z, 2),
+                    "r": round(radius * 0.5, 2),
+                }
+            )
     return nodes
 
 
@@ -546,17 +577,150 @@ def visible(
     return raycast_world(world, origin, direction, distance) >= distance - 0.05
 
 
-#: How long a full flash lasts, in seconds, at the very centre of the effect
-#: looking straight at it. Everything else is a fraction of it.
-FLASH_MAX = 6.0
+#: Seconds of solid white for a flash at your feet with your crosshair on it.
+#: Counter-Strike's measured figure for a full flash is about 1.9 s of hold; this
+#: is a little longer because the radius here is shorter, so a full hold is rarer.
+FLASH_HOLD_MAX = 2.2
 
-#: Fraction of `FLASH_MAX` someone gets with the flash directly behind them.
-#: Not zero: a bang at your heels is disorienting even when it is not blinding,
-#: and a hard zero makes turning away a perfect counter rather than a good one.
-FLASH_BEHIND = 0.25
+#: Seconds the white then takes to clear, after the hold. The fade is where
+#: the afterimage lives, and where most of a flash's real cost is paid: you can
+#: see shapes again before you can see a player.
+FLASH_FADE_MAX = 3.0
+
+#: The longest a flash can take from bang to clear. What a test that waits for
+#: one to wear off waits for.
+FLASH_MAX = FLASH_HOLD_MAX + FLASH_FADE_MAX
+
+#: The facing bands, by angle off the crosshair in degrees: (widest angle, peak
+#: whiteness, fraction of the hold, fraction of the fade).
+#:
+#: **Bands, not a smooth function of the angle**, because that is the counter
+#: players learn: "turn away" has to mean something sharp. The old linear dot
+#: product gave a flash at 90° five eighths of a frontal one and a flash directly
+#: behind a quarter — turning round halved it, which is a nuisance rather than a
+#: counter. These are Counter-Strike's: the screen's own width (~53° off centre
+#: at 16:9) is a full flash, past the edge of the screen is a flicker, and behind
+#: you is a jolt that never reaches white.
+FLASH_BANDS: tuple[tuple[float, float, float, float], ...] = (
+    (53.0, 1.0, 1.0, 1.0),
+    (72.0, 1.0, 0.45, 0.8),
+    (101.0, 0.9, 0.04, 0.45),
+    (180.0, 0.5, 0.0, 0.25),
+)
+
+#: Above this much white a player sees nothing: a bot cannot acquire a target
+#: and an ally paints nothing on the radar. The same threshold for both, because
+#: a radar fed by a blind teammate is a wall hack with a delay.
+FLASH_BLIND = 0.6
+
+#: Below this a flash is a tint, not a handicap: no aim penalty for a bot.
+FLASH_DAZED = 0.15
+
+#: Within this many cubes the bang is too close to turn away from: the band is
+#: never worse than the 53–72° one. Light that bright wraps round your head.
+FLASH_POINT_BLANK = 3.0
+
+#: Where the light is sampled from, around the bang, in cubes. Five rays rather
+#: than one so a flash half round a corner is half a flash: a single ray to the
+#: grenade's centre turns a lip of floor between you and it into a hard zero.
+FLASH_PROBES: tuple[tuple[float, float, float], ...] = (
+    (0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.6),
+    (0.45, 0.0, 0.25),
+    (-0.45, 0.0, 0.25),
+    (0.0, 0.45, 0.25),
+    (0.0, -0.45, 0.25),
+)
 
 
-def flash_strength(
+@dataclass(frozen=True, slots=True)
+class FlashEffect:
+    """What one flashbang did to one player.
+
+    **Three numbers, not one.** The old model had a single 0..1 strength that set
+    both how white the screen went (its square) and how long it lasted, so a flash
+    at medium range was a long pale wash that never actually blinded anybody. How
+    white and for how long are separate questions with separate counters — facing
+    sets the first, distance mostly the second — so they are separate fields.
+    """
+
+    #: How white the screen gets at the effect's height, 0..1.
+    peak: float
+    #: Seconds held at `peak` before the fade begins.
+    hold: float
+    #: Seconds from `peak` to clear.
+    fade: float
+
+    @property
+    def dose(self) -> float:
+        """A single comparable size, for deciding whether a second flash
+        replaces the first. The fade counts half: it is half as blinding."""
+        return self.peak * (self.hold + 0.5 * self.fade)
+
+
+NO_FLASH = FlashEffect(0.0, 0.0, 0.0)
+
+
+def flash_alpha(
+    peak: float, hold_left: float, fade_left: float, fade_total: float
+) -> float:
+    """How white the screen is right now, 0..1.
+
+    **The one curve every client draws**, implemented three times (here,
+    `flashbang.ts` and `flashbang.rs`) and pinned by `flash-vectors.json`. The
+    server sends the three remaining durations and each client runs this at its
+    own frame rate, so the fade is smooth whatever the tick rate — and nobody
+    squares anything on the way in, because the shaping is in here.
+
+    Held flat at `peak`, then a smoothstep down: bright for most of the fade's
+    first half, then clearing quickly, so the tail is not a long pale wash.
+    """
+    if peak <= 0.0:
+        return 0.0
+    if hold_left > 0.0:
+        return min(1.0, peak)
+    if fade_left <= 0.0 or fade_total <= 0.0:
+        return 0.0
+    t = max(0.0, min(1.0, fade_left / fade_total))
+    return min(1.0, peak * t * t * (3.0 - 2.0 * t))
+
+
+def _flash_band(angle_deg: float, distance: float) -> tuple[float, float, float]:
+    """(peak, hold fraction, fade fraction) for an angle off the crosshair."""
+    floor = 1 if distance < FLASH_POINT_BLANK else len(FLASH_BANDS) - 1
+    for i, (widest, peak, hold, fade) in enumerate(FLASH_BANDS):
+        if angle_deg <= widest or i >= floor:
+            return peak, hold, fade
+    _, peak, hold, fade = FLASH_BANDS[-1]
+    return peak, hold, fade
+
+
+def flash_light_fraction(
+    world: World,
+    nade: Grenade,
+    eye: tuple[float, float, float],
+    zones: Iterable[Zone] = (),
+    now: float = 0.0,
+) -> float:
+    """How much of the bang's light reaches an eye, 0..1.
+
+    The fraction of `FLASH_PROBES` rays that arrive. **A smoke between the two
+    stops it** — a cloud dense enough to hide a player is dense enough to hide a
+    flash, which is what makes "smoke, then flash through it" a mistake rather
+    than a combo. The exception is a cloud the eye is *inside*: you are in the
+    light's room then, and the smoke is around you rather than between.
+    """
+    blocking = [z for z in zones if not z.contains(*eye)]
+    if sight_blocked_by(blocking, eye, (nade.x, nade.y, nade.z), now):
+        return 0.0
+    arrived = 0
+    for ox, oy, oz in FLASH_PROBES:
+        if visible(world, eye, (nade.x + ox, nade.y + oy, nade.z + oz)):
+            arrived += 1
+    return arrived / len(FLASH_PROBES)
+
+
+def flash_effect(
     world: World,
     nade: Grenade,
     x: float,
@@ -564,40 +728,53 @@ def flash_strength(
     eye_z: float,
     yaw: float,
     pitch: float,
-) -> float:
-    """How blind a flashbang leaves one player, 0..1.
+    zones: Iterable[Zone] = (),
+    now: float = 0.0,
+) -> FlashEffect:
+    """What a flashbang does to one player.
 
     Resolved **per victim on the server**, which is the only place it can be
     resolved correctly: it depends on where that player was looking, on whether a
-    wall was between them, and on how far away they were. Broadcasting "a flash
-    went off at (x, y)" and letting each client decide how blind it is would make
-    not being blinded a client-side setting.
+    wall or a smoke was between them, and on how far away they were. Broadcasting
+    "a flash went off at (x, y)" and letting each client decide how blind it is
+    would make not being blinded a client-side setting.
 
-    Three terms, and each is a real counter a player can use:
+    The terms, each a counter a player can use:
 
-    - **Distance.** Falls off to nothing at the spec's radius.
-    - **Facing.** Looking away is the counter everybody learns first, and it is
-      the dot product between the view direction and the direction to the bang.
-    - **Line of sight.** A wall between you and it stops the light, because it is
-      light.
+    - **Distance** shortens it, linearly to nothing at the spec's radius. It
+      shortens the hold and the fade; it does not make a frontal flash grey.
+    - **Facing** picks a band (`FLASH_BANDS`): how white, and how much of the
+      hold and fade.
+    - **Line of sight**, sampled from several points round the bang
+      (`flash_light_fraction`), scales both durations.
     """
+    eye = (x, y, eye_z)
     dx, dy, dz = nade.x - x, nade.y - y, nade.z - eye_z
     distance = math.sqrt(dx * dx + dy * dy + dz * dz)
     reach = _falloff(distance, nade.spec.radius)
     if reach <= 0:
-        return 0.0
-    if not visible(world, (x, y, eye_z), (nade.x, nade.y, nade.z)):
-        return 0.0
-    if distance < 1e-4:
-        return 1.0
+        return NO_FLASH
+    light = flash_light_fraction(world, nade, eye, zones, now)
+    if light <= 0:
+        return NO_FLASH
 
-    cp = math.cos(pitch)
-    view = (math.cos(yaw) * cp, math.sin(yaw) * cp, math.sin(pitch))
-    towards = (dx / distance, dy / distance, dz / distance)
-    dot = view[0] * towards[0] + view[1] * towards[1] + view[2] * towards[2]
-    # -1 (behind) → FLASH_BEHIND, +1 (straight at it) → 1.
-    facing = FLASH_BEHIND + (1.0 - FLASH_BEHIND) * (dot + 1.0) / 2.0
-    return max(0.0, min(1.0, reach * facing))
+    if distance < 1e-4:
+        angle = 0.0
+    else:
+        cp = math.cos(pitch)
+        view = (math.cos(yaw) * cp, math.sin(yaw) * cp, math.sin(pitch))
+        dot = (view[0] * dx + view[1] * dy + view[2] * dz) / distance
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+    peak, hold, fade = _flash_band(angle, distance)
+    scale = reach * light
+    effect = FlashEffect(
+        peak=peak,
+        hold=FLASH_HOLD_MAX * hold * scale,
+        fade=FLASH_FADE_MAX * fade * scale,
+    )
+    if effect.hold + effect.fade < 0.05:
+        return NO_FLASH
+    return effect
 
 
 def sight_blocked_by(
@@ -630,14 +807,17 @@ def sight_blocked_by(
             continue
         if zone.cleared_until > now:
             continue
-        # Closest point on the segment to the cloud's centre, clamped to the
-        # segment so a cloud *behind* the viewer never blocks anything.
-        t = ((zone.x - ax) * dx + (zone.y - ay) * dy + (zone.z - az) * dz) / length_sq
-        t = max(0.0, min(1.0, t))
-        cx, cy, cz = ax + dx * t, ay + dy * t, az + dz * t
-        if (cx - zone.x) ** 2 + (cy - zone.y) ** 2 + (
-            cz - zone.z
-        ) ** 2 <= zone.radius**2:
+        crossed = False
+        for sx, sy, sz, sr in zone.spheres():
+            # Closest point on the segment to the ball's centre, clamped to the
+            # segment so a cloud *behind* the viewer never blocks anything.
+            t = ((sx - ax) * dx + (sy - ay) * dy + (sz - az) * dz) / length_sq
+            t = max(0.0, min(1.0, t))
+            cx, cy, cz = ax + dx * t, ay + dy * t, az + dz * t
+            if (cx - sx) ** 2 + (cy - sy) ** 2 + (cz - sz) ** 2 <= sr**2:
+                crossed = True
+                break
+        if crossed:
             # Bullet smoke channel check: if the ray passes through an active bullet hole/channel
             # punched through the smoke cloud, visibility is temporarily unblocked along that tunnel.
             if zone.channels:

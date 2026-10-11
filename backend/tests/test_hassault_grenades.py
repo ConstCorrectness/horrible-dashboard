@@ -274,12 +274,16 @@ def test_looking_away_from_a_flash_is_the_counter_it_is_supposed_to_be():
         fuse=0,
     )
     # Standing in the same place, one facing it and one facing away.
-    at_it = grenades.flash_strength(world, nade, 10, 10, 4.5, 0.0, 0.0)
-    away = grenades.flash_strength(world, nade, 10, 10, 4.5, math.pi, 0.0)
-    assert at_it > away
-    # Not zero: a bang at your heels still rattles you, or turning round would be
-    # a perfect counter rather than a good one.
-    assert away > 0
+    at_it = grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0)
+    away = grenades.flash_effect(world, nade, 10, 10, 4.5, math.pi, 0.0)
+    # Facing it is a white-out held for a while; turned round, it never reaches
+    # white and is never held. That gap is the counter.
+    assert at_it.peak == 1.0 and at_it.hold > 0.5
+    assert away.peak < 0.9 and away.hold == 0.0
+    assert at_it.dose > away.dose * 5
+    # Not nothing: a bang at your heels still rattles you, or turning round would
+    # be a perfect counter rather than a good one.
+    assert away.fade > 0
 
 
 def test_a_wall_stops_a_flash_because_it_is_light():
@@ -297,7 +301,9 @@ def test_a_wall_stops_a_flash_because_it_is_light():
         vz=0,
         fuse=0,
     )
-    assert grenades.flash_strength(world, nade, 10, 10, 4.5, 0.0, 0.0) == 0.0
+    assert (
+        grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0) == grenades.NO_FLASH
+    )
 
 
 def test_a_flash_across_the_map_does_nothing():
@@ -315,7 +321,140 @@ def test_a_flash_across_the_map_does_nothing():
         vz=0,
         fuse=0,
     )
-    assert grenades.flash_strength(world, nade, 10, 10, 4.5, 0.0, 0.0) == 0.0
+    assert (
+        grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0) == grenades.NO_FLASH
+    )
+
+
+def _flash_at(x: float, y: float, z: float = 4.0) -> grenades.Grenade:
+    return grenades.Grenade(
+        id="n",
+        spec=grenades.BY_ID["flash"],
+        owner="a",
+        team=0,
+        x=x,
+        y=y,
+        z=z,
+        vx=0,
+        vy=0,
+        vz=0,
+        fuse=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("degrees", "peak", "held"),
+    [
+        (0, 1.0, True),
+        (45, 1.0, True),
+        (60, 1.0, True),
+        (85, 0.9, True),
+        (135, 0.5, False),
+        (180, 0.5, False),
+    ],
+)
+def test_the_facing_bands_are_sharp_like_counter_strikes(degrees, peak, held):
+    """The counter has to be sharp: on screen is a white-out, off the edge of the
+    screen a flicker, behind you a jolt that never reaches white."""
+    world = flat_world(64, floor=0, ceil=16)
+    nade = _flash_at(20, 10, 4.5)
+    effect = grenades.flash_effect(world, nade, 10, 10, 4.5, math.radians(degrees), 0.0)
+    assert effect.peak == pytest.approx(peak)
+    assert (effect.hold > 0) is held
+
+
+def test_the_side_band_is_a_flicker_not_a_blind():
+    world = flat_world(64, floor=0, ceil=16)
+    nade = _flash_at(20, 10, 4.5)
+    front = grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0)
+    side = grenades.flash_effect(world, nade, 10, 10, 4.5, math.radians(85), 0.0)
+    assert side.hold < front.hold * 0.1
+
+
+def test_distance_shortens_a_flash_but_does_not_grey_it():
+    world = flat_world(64, floor=0, ceil=16)
+    near = grenades.flash_effect(world, _flash_at(14, 10, 4.5), 10, 10, 4.5, 0.0, 0.0)
+    far = grenades.flash_effect(world, _flash_at(34, 10, 4.5), 10, 10, 4.5, 0.0, 0.0)
+    assert near.peak == far.peak == 1.0
+    assert near.hold > far.hold > 0
+
+
+def test_point_blank_cannot_be_turned_away_from():
+    world = flat_world(64, floor=0, ceil=16)
+    effect = grenades.flash_effect(
+        world, _flash_at(11, 10, 4.5), 10, 10, 4.5, math.pi, 0.0
+    )
+    assert effect.peak == 1.0
+    assert effect.hold > 0
+
+
+def test_a_flash_half_round_a_corner_is_half_a_flash():
+    """Light is sampled from several points round the bang. A single ray to its
+    centre made a lip of floor between you and it a hard zero."""
+    world = flat_world(64, floor=0, ceil=16)
+    clear = grenades.flash_light_fraction(world, _flash_at(20, 10, 4.5), (10, 10, 4.5))
+    assert clear == 1.0
+    # Just behind the edge of a pillar: the ray to the centre is blocked, the one
+    # to the side of the bang that clears the edge is not.
+    pillar = walled_world(64, wall_x=15, y0=8, y1=10)
+    edge = grenades.flash_light_fraction(
+        pillar, _flash_at(20, 10.9, 4.5), (10, 10.9, 4.5)
+    )
+    assert 0.0 < edge < 1.0
+
+
+def _smoke(x: float, y: float, z: float, r: float = 3.0) -> grenades.Zone:
+    return grenades.Zone(
+        id="z",
+        kind="smoke",
+        owner="a",
+        team=0,
+        x=x,
+        y=y,
+        z=z,
+        radius=r,
+        remaining=10.0,
+        duration=10.0,
+        damage_per_second=0.0,
+    )
+
+
+def test_a_smoke_between_you_and_a_flash_stops_it():
+    world = flat_world(64, floor=0, ceil=16)
+    nade = _flash_at(20, 10, 4.5)
+    effect = grenades.flash_effect(
+        world, nade, 10, 10, 4.5, 0.0, 0.0, zones=[_smoke(15, 10, 4.5)]
+    )
+    assert effect == grenades.NO_FLASH
+
+
+def test_a_flash_inside_your_own_smoke_still_blinds_you():
+    """You are in the light's room: the cloud is around you, not between."""
+    world = flat_world(64, floor=0, ceil=16)
+    nade = _flash_at(12, 10, 4.5)
+    effect = grenades.flash_effect(
+        world, nade, 10, 10, 4.5, 0.0, 0.0, zones=[_smoke(11, 10, 4.5, r=4.0)]
+    )
+    assert effect.peak == 1.0
+
+
+def test_a_cleared_smoke_lets_the_flash_through():
+    world = flat_world(64, floor=0, ceil=16)
+    zone = _smoke(15, 10, 4.5)
+    zone.cleared_until = 100.0
+    effect = grenades.flash_effect(
+        world, _flash_at(20, 10, 4.5), 10, 10, 4.5, 0.0, 0.0, zones=[zone], now=50.0
+    )
+    assert effect.peak == 1.0
+
+
+def test_the_curve_holds_then_fades_to_nothing():
+    assert grenades.flash_alpha(1.0, 0.5, 2.0, 2.0) == 1.0
+    assert grenades.flash_alpha(1.0, 0.0, 2.0, 2.0) == pytest.approx(1.0)
+    middle = grenades.flash_alpha(1.0, 0.0, 1.0, 2.0)
+    assert 0.0 < middle < 1.0
+    assert grenades.flash_alpha(1.0, 0.0, 0.0, 2.0) == 0.0
+    assert grenades.flash_alpha(0.0, 1.0, 1.0, 1.0) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +656,11 @@ def test_utility_counts_and_blindness_never_reach_the_shared_rows():
     private = player.private_view(0.0)
     assert private["nades"]["smoke"] >= 0
     assert private["flash"] == pytest.approx(0.8)
+    # The durations that let a client run the curve itself, as seconds left.
+    assert private["flashPeak"] == pytest.approx(0.8)
+    assert private["flashFade"] > 0
+    for key in ("flashPeak", "flashHold", "flashFade", "flashFadeTotal"):
+        assert key not in row
 
 
 def test_a_grenade_in_the_air_is_public():
@@ -546,6 +690,81 @@ def test_a_flash_blinds_the_player_who_threw_it_badly():
     for _ in range(140):
         room.simulate(1 / 60)
     assert thrower.flash > 0
+
+
+def test_being_flashed_is_announced_once_and_only_to_you():
+    """The client's trigger for the afterimage and the ringing. Drained by the
+    private view, so it arrives exactly once."""
+    room = make_room()
+    thrower = room.add("@rob", None)
+    place(thrower, 10, 10)
+    thrower.protected_until = 0.0
+    room.enqueue(thrower, throw(1, SLOT["flash"], pitch=-1.35, lob=True))
+    for _ in range(140):
+        room.simulate(1 / 60)
+    first = thrower.private_view(0.0)
+    assert len(first["flashed"]) == 1
+    assert first["flashed"][0]["peak"] > 0
+    assert thrower.private_view(0.0)["flashed"] == []
+
+
+def test_a_second_flash_replaces_a_weaker_one_and_never_adds():
+    player_room = make_room()
+    player = player_room.add("@rob", None)
+    big = grenades.FlashEffect(peak=1.0, hold=2.0, fade=3.0)
+    small = grenades.FlashEffect(peak=0.5, hold=0.0, fade=0.5)
+    assert player.apply_flash(big)
+    assert not player.apply_flash(small)
+    assert player.flash_hold == pytest.approx(2.0)
+    assert player.apply_flash(grenades.FlashEffect(peak=1.0, hold=2.5, fade=3.0))
+    assert player.flash_hold == pytest.approx(2.5)
+
+
+def test_the_hold_runs_out_before_the_fade_starts():
+    room = make_room()
+    player = room.add("@rob", None)
+    player.apply_flash(grenades.FlashEffect(peak=1.0, hold=0.5, fade=1.0))
+    player.step_flash(0.4)
+    assert player.flash == 1.0
+    player.step_flash(0.3)
+    assert player.flash_hold == 0.0
+    assert player.flash_fade == pytest.approx(0.8)
+    assert 0.0 < player.flash < 1.0
+    player.step_flash(5.0)
+    assert player.flash == 0.0 and player.flash_peak == 0.0
+
+
+def test_a_blind_ally_paints_nothing_on_the_radar():
+    world = flat_world(64, floor=0, ceil=16)
+    room = MatchRoom(
+        "r1", "hd_pit", world, [Spawn(8, 8, team=0), Spawn(40, 40, team=1)]
+    )
+    ally = room.add("@ally", None)
+    enemy = room.add("@enemy", None)
+    ally.team, enemy.team = 0, 1
+    place(ally, 10, 10, yaw=0.0)
+    place(enemy, 20, 10)
+    assert enemy.id in room.spotted_for_team(0)
+    ally.apply_flash(grenades.FlashEffect(peak=1.0, hold=2.0, fade=2.0))
+    assert enemy.id not in room.spotted_for_team(0)
+
+
+def test_a_blind_bot_sees_nobody():
+    from backend.modules.hassault.bots import BotBrain
+
+    world = flat_world(64, floor=0, ceil=16)
+    room = MatchRoom(
+        "r1", "hd_pit", world, [Spawn(8, 8, team=0), Spawn(40, 40, team=1)]
+    )
+    bot = room.add("@bot", None)
+    enemy = room.add("@enemy", None)
+    bot.team, enemy.team = 0, 1
+    place(bot, 10, 10, yaw=0.0)
+    place(enemy, 20, 10)
+    brain = BotBrain()
+    assert brain._visible(room, bot, enemy)
+    bot.apply_flash(grenades.FlashEffect(peak=1.0, hold=2.0, fade=2.0))
+    assert not brain._visible(room, bot, enemy)
 
 
 def test_blindness_fades_on_its_own():
@@ -1024,3 +1243,36 @@ def test_smoke_extinguishes_fire_and_fire_in_smoke():
     # No new fire zone was added because it was extinguished on impact with smoke!
     assert not any(z.kind == "fire" for z in m.zones)
 
+
+def test_the_flash_curve_matches_the_shared_fixture():
+    """`flash-vectors.json` binds this curve to `flashbang.ts` and
+    `flashbang.rs`. If this fails, the generator was not re-run after a change
+    to `flash_alpha` or `MatchPlayer.step_flash`."""
+    import json
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "packages/core/src/modules/hassault/__tests__/flash-vectors.json"
+    )
+    vectors = json.loads(path.read_text(encoding="utf-8"))
+    tol = vectors["tolerance"]
+    assert vectors["blind"] == grenades.FLASH_BLIND
+    for case in vectors["alpha"]:
+        got = grenades.flash_alpha(
+            case["peak"], case["hold"], case["fade"], case["fadeTotal"]
+        )
+        assert got == pytest.approx(case["alpha"], abs=tol)
+    room = make_room()
+    player = room.add("@rob", None)
+    for series in vectors["steps"]:
+        player.apply_flash(grenades.NO_FLASH)
+        player.flash_peak = series["peak"]
+        player.flash_hold = series["hold"]
+        player.flash_fade = series["fade"]
+        player.flash_fade_total = series["fade"]
+        for want in series["series"]:
+            player.step_flash(series["dt"])
+            assert player.flash_hold == pytest.approx(want["hold"], abs=tol)
+            assert player.flash_fade == pytest.approx(want["fade"], abs=tol)
+            assert player.flash == pytest.approx(want["alpha"], abs=tol)

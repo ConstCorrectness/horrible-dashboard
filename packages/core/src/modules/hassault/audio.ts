@@ -17,6 +17,13 @@
  * `AudioContext` is created lazily on the first sound and reused, because
  * constructing one per sound leaks a hardware voice each time.
  */
+import {
+  FLASH_RING_BODY,
+  FLASH_RING_GAIN,
+  FLASH_RING_HZ,
+  FLASH_RING_Q,
+  muffleHz,
+} from './flashbang';
 import { mixer } from '../audio/engine';
 import type { StripHandle } from '../audio/types';
 import type { WeaponSpec } from './api';
@@ -179,6 +186,14 @@ export class GameAudio {
   private ctx: AudioContext | null = null;
   private strip: StripHandle | null = null;
   private master: GainNode | null = null;
+  /**
+   * The world's sound goes through this on its way out: open, except while a
+   * flashbang has you (`setMuffle`). The ring itself goes round it — a filter
+   * that muffled the tinnitus too would muffle the one sound a flash adds.
+   */
+  private muffle: BiquadFilterNode | null = null;
+  private dry: GainNode | null = null;
+  private muffleAlpha = 0;
   private noise: AudioBuffer | null = null;
   private voices = 0;
   private volume = 1;
@@ -187,6 +202,68 @@ export class GameAudio {
   setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
     if (this.master) this.master.gain.value = this.volume;
+    if (this.dry) this.dry.gain.value = this.volume;
+  }
+
+  /**
+   * Muffle the world by how white the screen is, 0..1 — the flashbang's
+   * deafness. Called per frame with the flash's current alpha; cheap when it has
+   * not moved, and smoothed so a 20 Hz seed does not zipper the cutoff.
+   */
+  setMuffle(alpha: number): void {
+    const a = Math.max(0, Math.min(1, alpha));
+    if (Math.abs(a - this.muffleAlpha) < 0.005) return;
+    this.muffleAlpha = a;
+    if (!this.ctx || !this.muffle) return;
+    this.muffle.frequency.setTargetAtTime(muffleHz(a), this.ctx.currentTime, 0.03);
+  }
+
+  /**
+   * The flashbang's ring: the native client's `tinnitus` voice, a narrow band of
+   * noise with a high sine under it, lasting as long as the flash. Played dry,
+   * round the muffle.
+   */
+  flashRing(volume: number, seconds: number): void {
+    const ctx = this.ready();
+    if (!ctx || !this.dry || !this.noise) return;
+    const now = ctx.currentTime;
+    const gain = volume * FLASH_RING_GAIN;
+    const source = ctx.createBufferSource();
+    source.buffer = this.noise;
+    source.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = FLASH_RING_HZ;
+    band.Q.value = FLASH_RING_Q;
+    const envelope = ctx.createGain();
+    // The same 4 ms attack into an exponential decay as every other voice, with
+    // the decay reaching silence at `seconds` (e^-6 is the native envelope's
+    // end point).
+    envelope.gain.setValueAtTime(0, now);
+    envelope.gain.linearRampToValueAtTime(gain, now + 0.004);
+    envelope.gain.setTargetAtTime(0, now + 0.004, seconds / 6);
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = FLASH_RING_BODY;
+    const tone = ctx.createGain();
+    tone.gain.value = 0.7;
+    source.connect(band);
+    band.connect(envelope);
+    osc.connect(tone);
+    tone.connect(envelope);
+    envelope.connect(this.dry);
+    source.start(now);
+    osc.start(now);
+    const end = now + seconds + 0.05;
+    source.stop(end);
+    osc.stop(end);
+    osc.onended = () => {
+      source.disconnect();
+      band.disconnect();
+      osc.disconnect();
+      tone.disconnect();
+      envelope.disconnect();
+    };
   }
 
   /**
@@ -208,7 +285,15 @@ export class GameAudio {
       this.ctx = handle.context;
       this.master = this.ctx.createGain();
       this.master.gain.value = this.volume;
-      this.master.connect(handle.input);
+      this.muffle = this.ctx.createBiquadFilter();
+      this.muffle.type = 'lowpass';
+      this.muffle.Q.value = 0.7;
+      this.muffle.frequency.value = muffleHz(this.muffleAlpha);
+      this.master.connect(this.muffle);
+      this.muffle.connect(handle.input);
+      this.dry = this.ctx.createGain();
+      this.dry.gain.value = this.volume;
+      this.dry.connect(handle.input);
       this.noise = noiseBuffer(this.ctx);
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
@@ -456,10 +541,14 @@ export class GameAudio {
     // karaoke, the agent's voice and every other pane the moment a match ended.
     // Releasing the strip drops our audio and leaves the routing intact.
     this.master?.disconnect();
+    this.muffle?.disconnect();
+    this.dry?.disconnect();
     this.strip?.release();
     this.strip = null;
     this.ctx = null;
     this.master = null;
+    this.muffle = null;
+    this.dry = null;
     this.noise = null;
     this.voices = 0;
   }

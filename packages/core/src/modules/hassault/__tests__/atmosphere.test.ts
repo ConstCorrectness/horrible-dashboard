@@ -76,8 +76,19 @@ describe('atmosphere', () => {
 });
 
 describe('graphics tiers', () => {
+  it('no tier can change what a player is able to see', () => {
+    // How far you can see, what smoke and flash hide, and how players are lit
+    // are gameplay. A tier that could thicken the fog would be a setting that
+    // loses gunfights, which is what Low did until it was taken out.
+    const forbidden = /fog|smoke|flash|utility|player|character|avatar|prop|cull|draw.?distance/i;
+    for (const spec of Object.values(TIERS)) {
+      for (const key of Object.keys(spec)) {
+        expect(key).not.toMatch(forbidden);
+      }
+    }
+  });
+
   it('high draws the map the way the native client does at High', () => {
-    expect(TIERS.high.fogScale).toBe(1);
     expect(TIERS.high.shadowSize).toBe(2048);
     // Every tier draws the same sky, fog and lamps — fewer lamps, never others.
     expect(TIERS.low.lights).toBeLessThan(TIERS.medium.lights);

@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 
 import { PaneInstanceContext, useAgentContext } from '../../agent-context';
 import { lockSystemKeys, unlockEscape, useCapture } from '../../keymap';
+import { usePaneSession } from '../../layout/use-pane-session';
 import { setSetting, useSetting } from '../../settings';
 import {
   dismissMatchSummary,
@@ -35,9 +36,10 @@ import {
   type WeaponSpec,
 } from './api';
 import { GameAudio } from './audio';
+import { FlashLayer } from './flash-layer';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
-import { upgradePhotoSurfaces } from './photo-surfaces';
+import { restoreGeneratedSurfaces, upgradePhotoSurfaces } from './photo-surfaces';
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu } from './panels/BuyMenu';
@@ -72,7 +74,8 @@ const BUY_KEYS = [
   'Digit9',
 ];
 import { useNativeLaunch } from './native-launch';
-import { FlashOverlay, NadeTray, Radar } from './panels/Radar';
+import { FlashAssistToast, FlashOverlay, NadeTray, Radar } from './panels/Radar';
+import type { FlashAssist } from './panels/Radar';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
 import {
   EMPTY_PROGRESS,
@@ -106,6 +109,8 @@ import type { LobbyControls } from './LobbyPanel';
 import { lobbyVoice, type VoiceView } from './lobby-voice';
 import { ChatBox, type ChatChannel } from './ChatBox';
 import {
+  BRIGHTNESS_KEY,
+  clampBrightness,
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
   FOV_KEY,
@@ -147,6 +152,7 @@ import {
 import { installReveal, type Reveal } from './reveal';
 import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
+import { createPaneMatch, detachLobbyVoice, disposePaneMatch, resumedMatch } from './pane-match';
 import { createDetailTexture, DETAIL_NEUTRAL } from './surfaces';
 import { createLadders } from './ladders';
 import { ItemPool } from './items';
@@ -163,12 +169,16 @@ import {
   unit,
 } from './atmosphere';
 import {
-  TIERS,
+  MAX_LIGHTS,
+  effectiveSpec,
   rendererName,
   resolveTier,
   configureGraphicsStorage,
+  noteDeviceHints,
   useGraphicsChoice,
-  type GraphicsTier,
+  useGraphicsOverrides,
+  type GraphicsChoice,
+  type GraphicsOverrides,
   type TierSpec,
 } from './graphics';
 import { GrenadeController } from './utility';
@@ -350,9 +360,10 @@ interface SceneHandle {
   /** Vertical field of view in degrees. A setting, so it has to reach the camera
    * after construction rather than only at it. */
   setFov: (degrees: number) => void;
-  /** Apply a graphics tier live: everything but the context's antialias flag,
-   * which three only reads at creation. See `graphics.ts`. */
-  setGraphics: (tier: GraphicsTier) => void;
+  /** Apply a graphics level and the player's per-row overrides live: everything
+   * but the context's antialias flag, which three only reads at creation. See
+   * `graphics.ts`. */
+  setGraphics: (choice: GraphicsChoice, overrides: GraphicsOverrides) => void;
   /** Park the render loop, scheduling nothing. Used while the native client owns
    * the GPU; the scene stays resident so `resume` costs one frame. */
   suspend: () => void;
@@ -406,12 +417,24 @@ export interface HorribleAssaultPanelProps {
 
 export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const standalone = props.standalone === true;
+  /**
+   * The match connection, owned by the pane rather than this mount, so a tab or
+   * desktop switch no longer drops you out of the match — see `pane-match.ts`.
+   *
+   * `null` outside a pane — the standalone assault-web page — where nothing would
+   * ever close it, so that keeps the old per-mount lifetime.
+   */
+  const paneMatch = usePaneSession(createPaneMatch, disposePaneMatch);
+  /** Where a remount finds the session: in, or on the way into, a match. */
+  const resumed = resumedMatch(paneMatch);
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pendingSpawnRef = useRef<MapCoordinates | null>(null);
   const godModeRef = useRef<boolean>(consoleRegistry.getBool('player.god'));
   const [status, setStatus] = useState<CatalogStatus | null>(null);
   const [maps, setMaps] = useState<MapSummary[]>([]);
-  const [mapName, setMapName] = useState<string>(props.initialMap || '');
+  // The resumed match's map before any other: its snapshots are positions in
+  // that world, and rendering them against a default map is nonsense.
+  const [mapName, setMapName] = useState<string>(resumed?.map || props.initialMap || '');
   const [info, setInfo] = useState<MapInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
@@ -427,7 +450,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     total: null,
   });
   const [account, setAccount] = useState<SessionInfo | null>(null);
-  const [deployed, setDeployed] = useState(false);
+  // Back in the world after a remount mid-match, at the click-to-play overlay:
+  // the server never stopped simulating us, so the menu would be a lie.
+  const [deployed, setDeployed] = useState(resumed !== null);
 
   const effectiveAccount = props.guestCallsign
     ? {
@@ -453,7 +478,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     yaw: 0,
     error: 0,
   });
-  const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
+  const [net, setNet] = useState<SessionState>(() => paneMatch?.snapshot() ?? EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
   const [itemTable, setItemTable] = useState<ItemsResponse | null>(null);
@@ -608,6 +633,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   }, [pushToTalk]);
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
   const fov = useSetting<number>(FOV_KEY) ?? 75;
+  // A ref the render loop reads, so moving the slider mid-match applies on the
+  // next frame without rebuilding the scene.
+  const brightnessRef = useRef(1);
+  brightnessRef.current = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
@@ -628,15 +657,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * so it reads the choice through a ref, and a change is pushed to it below. */
   configureGraphicsStorage(standalone);
   const [graphicsChoice] = useGraphicsChoice();
+  const graphicsOverrides = useGraphicsOverrides();
   const graphicsChoiceRef = useRef(graphicsChoice);
   graphicsChoiceRef.current = graphicsChoice;
-  // A changed choice reaches the built scene live. `auto` re-resolves against
-  // the hints the scene took at creation, which is the tier it already has.
+  const graphicsOverridesRef = useRef(graphicsOverrides);
+  graphicsOverridesRef.current = graphicsOverrides;
+  // Keyed by content: the overrides are re-parsed into a new object on every
+  // render, and an effect keyed on identity would re-apply the tier each time.
+  const overridesKey = JSON.stringify(graphicsOverrides);
+  // A changed level or row reaches the built scene live. `auto` re-resolves
+  // against the hints the scene took at creation.
   useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene || graphicsChoice === 'auto') return;
-    scene.setGraphics(graphicsChoice);
-  }, [graphicsChoice]);
+    sceneRef.current?.setGraphics(graphicsChoiceRef.current, graphicsOverridesRef.current);
+  }, [graphicsChoice, overridesKey]);
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
@@ -886,10 +919,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   /** Last zoom step pushed to React, so the loop only pushes transitions. */
   const scopedRef = useRef(0);
   const audioRef = useRef<GameAudio | null>(null);
+  // The flashbang's white and afterimage. A ref, not state: the render loop
+  // moves it every frame and a re-render per frame would cost more than the frame.
+  const flashLayer = useRef(new FlashLayer()).current;
+  const [flashAssist, setFlashAssist] = useState<FlashAssist | null>(null);
   /** Bots the main menu asked for, waiting for the room to exist. `add_bot` needs a
    * room id, and the room is only ours once the welcome lands. */
   const pendingBotsRef = useRef<{ count: number; skill: string } | null>(null);
-  if (sessionRef.current === null) sessionRef.current = new MatchSession();
+  if (sessionRef.current === null) sessionRef.current = paneMatch ?? new MatchSession();
   if (shotsRef.current === null) shotsRef.current = new ShotController();
   if (nadesRef.current === null) nadesRef.current = new GrenadeController();
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
@@ -1020,14 +1057,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     const session = sessionRef.current;
     if (!session) return;
     session.onChange = setNet;
+    // Whatever changed between the first render and now, while nothing listened.
+    setNet(session.snapshot());
     // Invitations may have arrived while this pane was closed, so ask rather
     // than only listening.
     session.refreshInvites();
     // Same for a lobby: it lives on the server and outlives this pane.
     session.refreshLobby();
     return () => {
-      session.disconnect();
+      // Detach, never disconnect, when the pane owns the session: this is a tab
+      // switch, not a close. `disposePaneMatch` is the close.
+      if (paneMatch) session.onChange = () => {};
+      else session.disconnect();
     };
+    // `paneMatch` is fixed for the life of the pane.
   }, []);
 
   /** Re-read who we are. Called on mount and after every sign-in or rename. */
@@ -1270,6 +1313,31 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     }));
   }, [net.you, triggerKillBadge]);
 
+  // The flashbang: the server's numbers seed the layer every snapshot (and a
+  // flash that just landed rings and takes the afterimage); the render loop
+  // runs it down between them.
+  useEffect(() => {
+    const you = net.you;
+    if (!you) return;
+    flashLayer.seed(you, audioRef.current);
+    const assists = you.flashAssists;
+    if (!assists || assists.length === 0) return;
+    const sum = assists.reduce(
+      (acc, a) => ({
+        enemies: acc.enemies + a.enemies,
+        allies: acc.allies + a.allies,
+        longest: Math.max(acc.longest, a.longest),
+      }),
+      { enemies: 0, allies: 0, longest: 0 },
+    );
+    setFlashAssist({ ...sum, at: Date.now() });
+  }, [net.you, flashLayer]);
+  useEffect(() => {
+    if (!flashAssist) return;
+    const done = setTimeout(() => setFlashAssist(null), 2700);
+    return () => clearTimeout(done);
+  }, [flashAssist]);
+
   // Multikill fanfare audio stingers for round clutch moments (Double, Triple, Quad, Ace!)
   const lastRoundKillsCountRef = useRef(0);
   useEffect(() => {
@@ -1493,7 +1561,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // `auto` keeps it on, since the tier it resolves to is only known once
       // this context can be asked what GPU it is on.
       const renderer = new THREE.WebGLRenderer({
-        antialias: graphicsChoiceRef.current !== 'low',
+        antialias: graphicsOverridesRef.current.antialias ?? graphicsChoiceRef.current !== 'low',
         powerPreference: 'high-performance',
       });
       const hints = {
@@ -1501,7 +1569,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         renderer: rendererName(renderer.getContext()),
         cores: navigator.hardwareConcurrency,
       };
-      let tier: TierSpec = TIERS[resolveTier(graphicsChoiceRef.current, hints)];
+      noteDeviceHints(hints);
+      let tier: TierSpec = effectiveSpec(
+        resolveTier(graphicsChoiceRef.current, hints),
+        graphicsOverridesRef.current,
+      );
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
       // ACES rather than the default clip: the sun plus a hemisphere light puts
       // lit floors above 1.0, and `NoToneMapping` flattens everything past that
@@ -1552,7 +1624,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // recompile the world's shaders mid-match. Which lamps fill the pool is
       // re-chosen a few times a second — nearest reach first, as natively.
       const lampPool: import('three').PointLight[] = [];
-      for (let i = 0; i < TIERS.high.lights; i += 1) {
+      for (let i = 0; i < MAX_LIGHTS; i += 1) {
         const lamp = new THREE.PointLight(0xffffff, 0, 1, 2);
         lamp.castShadow = false;
         lamp.visible = i < tier.lights;
@@ -1590,6 +1662,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       let skyOpen = false;
 
       /** Light and surround the scene from a map's served atmosphere. */
+      // The served exposure, before the player's brightness multiplies it.
+      let baseExposure = 1.15;
       const applyAtmosphere = (a: Atmosphere, open: boolean) => {
         atmosphere = a;
         skyOpen = open;
@@ -1602,11 +1676,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         fill.intensity = a.fillIntensity;
         const fd = unit(a.fillDir);
         fill.position.set(fd[0], fd[1], fd[2]);
-        renderer.toneMappingExposure = a.exposure;
+        baseExposure = a.exposure;
+        renderer.toneMappingExposure = a.exposure * brightnessRef.current;
         // Open maps show the horizon behind anything the dome does not cover;
         // sealed ones the fog colour, which is what the distance fades into.
         scene.background = new THREE.Color(open ? a.skyHorizon : a.fogColor);
-        scene.fog = new THREE.FogExp2(a.fogColor, a.fogDensity * tier.fogScale);
+        // The map's own density at every tier: how far you can see is gameplay,
+        // not a graphics setting (see graphics.ts).
+        scene.fog = new THREE.FogExp2(a.fogColor, a.fogDensity);
         if (sky) {
           scene.remove(sky);
           sky.geometry.dispose();
@@ -1673,7 +1750,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
        * or roughness map; it keeps the generated tiles and never fetches them.
        */
       const upgradePhotos = () => {
-        if (tier.lambert || !world3dGroup) return;
+        if (!world3dGroup) return;
+        if (tier.lambert || !tier.photos) {
+          // Turned off live: the generated tiles go back on, and the images stay
+          // cached for when they are turned on again.
+          if (restoreGeneratedSurfaces(world3dGroup) > 0) renderer.shadowMap.needsUpdate = true;
+          return;
+        }
         const aniso = Math.min(tier.anisotropy, renderer.capabilities.getMaxAnisotropy());
         void upgradePhotoSurfaces(THREE, world3dGroup, aniso).then((n) => {
           if (n > 0) renderer.shadowMap.needsUpdate = true;
@@ -1835,8 +1918,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
       /** A new tier, live. Everything but the context's MSAA, which three fixes
        * at creation — that one takes effect the next time the pane opens. */
-      const setGraphics = (next: GraphicsTier) => {
-        tier = TIERS[next];
+      const setGraphics = (choice: GraphicsChoice, overrides: GraphicsOverrides) => {
+        tier = effectiveSpec(resolveTier(choice, hints), overrides);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
         resize();
         const soft = tier.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
@@ -2587,7 +2670,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           lampClock = 0.2;
           placeLamps([camera.position.x, camera.position.y, camera.position.z]);
         }
+        const exposure = baseExposure * brightnessRef.current;
+        if (renderer.toneMappingExposure !== exposure) renderer.toneMappingExposure = exposure;
         renderer.render(scene, camera);
+        // Straight after the render, in the same frame: the afterimage is a copy
+        // of the canvas just drawn, and the drawing buffer is gone by the next task.
+        flashLayer.frame(dt, renderer.domElement);
+        audioRef.current?.setMuffle(flashLayer.state.alpha);
 
         fpsAccum += dt;
         fpsFrames += 1;
@@ -3590,13 +3679,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     const unsubscribe = lobbyVoice.subscribe(setVoice);
     return () => {
       unsubscribe();
-      // Hang up with the pane: without it there is no path for handshakes to
-      // arrive, so a mesh left running would decay one failed link at a time.
-      lobbyVoice.stop();
-      session.onLobbySignal = () => {};
-      lobbyVoice.sendSignal = () => {};
-      lobbyVoice.announce = () => {};
+      // A pane-owned session keeps the signalling path open across a tab switch,
+      // so the voice mesh can stay up with it; `disposePaneMatch` hangs up on the
+      // real close. Without a pane there is no close to wait for, so hang up now:
+      // with no path for handshakes, a mesh left running would decay one failed
+      // link at a time.
+      if (paneMatch) return;
+      detachLobbyVoice(session);
     };
+    // `paneMatch` is fixed for the life of the pane.
   }, []);
   useEffect(() => {
     lobbyVoice.sync(net.lobby);
@@ -4637,7 +4728,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
             {/* Drawn last, over everything including the crosshair — a flash you
                 could aim through would not be a flash. */}
-            <FlashOverlay strength={you?.flash ?? 0} />
+            <FlashAssistToast assist={flashAssist} />
+            <FlashOverlay layer={flashLayer} />
 
             {online && you && (you.fell ?? 0) > 0 && (
               <div

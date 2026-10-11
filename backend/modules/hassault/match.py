@@ -510,9 +510,22 @@ class MatchPlayer:
     #: same reason: commands arrive batched, and a wall clock would let a
     #: stuttering client throw faster than a smooth one.
     last_throw_at: float = -999.0
-    #: How blind this player currently is, 0..1, and how fast it is fading.
-    #: Per-player rather than a broadcast effect — see `grenades.flash_strength`.
-    flash: float = 0.0
+    #: The flashbang this player is under: how white at its height, and how
+    #: much of its hold and fade is left, in seconds of room time. Per-player
+    #: rather than a broadcast effect — see `grenades.flash_effect`. `flash`
+    #: (a property below) is how white the screen is *now*.
+    flash_peak: float = 0.0
+    flash_hold: float = 0.0
+    flash_fade: float = 0.0
+    flash_fade_total: float = 0.0
+    #: Flashes that landed on this player since the last snapshot, drained by
+    #: `private_view` like `pending_hits`. The client's one trigger for the
+    #: afterimage and the ringing — a value that merely rose between two
+    #: snapshots cannot tell a second flash from a late packet.
+    pending_flashed: list[dict[str, float]] = field(default_factory=list)
+    #: What this player's own flashes did, for the thrower's feedback. Counts
+    #: and a duration only — never who or where, by the `noise.py` rule.
+    pending_flash_assists: list[dict[str, Any]] = field(default_factory=list)
     # Set for bot players. Also what distinguishes them from a human whose socket
     # happens to be `None` (which is every player in the unit tests).
     brain: BotBrain | None = None
@@ -529,6 +542,62 @@ class MatchPlayer:
     @property
     def is_bot(self) -> bool:
         return self.brain is not None
+
+    @property
+    def flash(self) -> float:
+        """How white this player's screen is right now, 0..1.
+
+        Derived from the effect's remaining durations by the same curve both
+        clients draw (`grenades.flash_alpha`), so "how blind is the bot" and
+        "how white is my screen" are one answer.
+        """
+        return grenades.flash_alpha(
+            self.flash_peak, self.flash_hold, self.flash_fade, self.flash_fade_total
+        )
+
+    @flash.setter
+    def flash(self, value: float) -> None:
+        """Set a plain fade from `value` to clear, with no hold. For tests and
+        for clearing (`flash = 0`); a real flashbang goes through `apply_flash`."""
+        value = max(0.0, min(1.0, value))
+        self.flash_peak = value
+        self.flash_hold = 0.0
+        self.flash_fade = grenades.FLASH_FADE_MAX * value
+        self.flash_fade_total = self.flash_fade
+
+    def apply_flash(self, effect: grenades.FlashEffect) -> bool:
+        """Put this player under a flash, if it is worse than the one they are
+        already under. Returns whether it took.
+
+        **Replaced, never added.** Two flashes a second apart are the same white
+        screen, not twice as long a one, but the second must not *shorten* the
+        first either, so the bigger dose wins.
+        """
+        if effect.peak <= 0.0:
+            return False
+        current = self.flash * (self.flash_hold + 0.5 * self.flash_fade)
+        if effect.dose <= current:
+            return False
+        self.flash_peak = effect.peak
+        self.flash_hold = effect.hold
+        self.flash_fade = effect.fade
+        self.flash_fade_total = effect.fade
+        return True
+
+    def step_flash(self, dt: float) -> None:
+        """Run the hold, then the fade, down by `dt` of room time."""
+        if self.flash_peak <= 0.0:
+            return
+        if self.flash_hold > 0.0:
+            spill = dt - self.flash_hold
+            self.flash_hold = max(0.0, self.flash_hold - dt)
+            if spill <= 0.0:
+                return
+            dt = spill
+        self.flash_fade = max(0.0, self.flash_fade - dt)
+        if self.flash_fade <= 0.0:
+            self.flash_peak = 0.0
+            self.flash_fade_total = 0.0
 
     def reset_loadout(self) -> None:
         """Full health and full magazines. Called on spawn and on respawn."""
@@ -602,6 +671,10 @@ class MatchPlayer:
         """
         hits = self.pending_hits
         self.pending_hits = []
+        flashed = self.pending_flashed
+        self.pending_flashed = []
+        flash_assists = self.pending_flash_assists
+        self.pending_flash_assists = []
         hurt = self.pending_hurt
         self.pending_hurt = []
         picked = self.pending_pickups
@@ -676,7 +749,17 @@ class MatchPlayer:
             "nades": self.nades.to_dict(),
             # How blind *you* are. Never in the shared rows — a client that was
             # told how blind everyone else is could draw them through the flash.
+            # `flash` is the white right now; the other four are what a client
+            # needs to run `flash_alpha` itself between snapshots, as seconds
+            # *remaining* (the two clocks are unrelated, so only durations
+            # transfer).
             "flash": round(self.flash, 3),
+            "flashPeak": round(self.flash_peak, 3),
+            "flashHold": round(self.flash_hold, 3),
+            "flashFade": round(self.flash_fade, 3),
+            "flashFadeTotal": round(self.flash_fade_total, 3),
+            "flashed": flashed,
+            "flashAssists": flash_assists,
         }
 
 
@@ -1178,8 +1261,16 @@ class MatchRoom:
         # The flash fades on the room's clock too, for the same reason: a blinded
         # player who stops sending input must still recover.
         for player in self.players.values():
-            if player.flash > 0:
-                player.flash = max(0.0, player.flash - dt / grenades.FLASH_MAX)
+            player.step_flash(dt)
+
+    def _flash_counts_as_enemy(
+        self, nade: grenades.Grenade, player: MatchPlayer
+    ) -> bool:
+        """Whether a player a flash caught was the thrower's opponent. In a mode
+        without teams everybody else is."""
+        if not getattr(self.mode, "teams", True) or nade.team < 0:
+            return True
+        return player.team != nade.team
 
     def _detonate(self, nade: grenades.Grenade, now: float) -> None:
         """What a grenade does when its fuse runs out.
@@ -1264,10 +1355,13 @@ class MatchRoom:
 
         thrower = self.players.get(nade.owner)
         if kind == "flash":
+            enemies = 0
+            allies = 0
+            longest = 0.0
             for player in self.players.values():
                 if not player.alive or player.protected:
                     continue
-                strength = grenades.flash_strength(
+                effect = grenades.flash_effect(
                     self.world,
                     nade,
                     player.state.x,
@@ -1275,12 +1369,34 @@ class MatchRoom:
                     player.state.z + physics.eye_height(player.state),
                     player.state.yaw,
                     player.state.pitch,
+                    self.zones,
+                    now,
                 )
                 # Your own flash blinds you. It is the whole reason a flashbang
                 # is a skill rather than a free button, and exempting the thrower
                 # would make throwing one into your own doorway strictly correct.
-                if strength > player.flash:
-                    player.flash = strength
+                if not player.apply_flash(effect):
+                    continue
+                player.pending_flashed.append(
+                    {
+                        "peak": round(effect.peak, 3),
+                        "hold": round(effect.hold, 3),
+                        "fade": round(effect.fade, 3),
+                    }
+                )
+                # Only a real blind counts as an assist: a flicker behind
+                # somebody's back is not something to congratulate.
+                if player.id == nade.owner or effect.peak < 0.9 or effect.hold <= 0:
+                    continue
+                if self._flash_counts_as_enemy(nade, player):
+                    enemies += 1
+                else:
+                    allies += 1
+                longest = max(longest, effect.hold + effect.fade)
+            if thrower is not None and (enemies or allies):
+                thrower.pending_flash_assists.append(
+                    {"enemies": enemies, "allies": allies, "longest": round(longest, 2)}
+                )
             return
 
         # HE. Dispersion clears nearby smoke for 2.5 seconds, matching CS2 mechanic!
@@ -1422,7 +1538,13 @@ class MatchRoom:
         method spends.
         """
         seen: list[str] = []
-        allies = [p for p in self.players.values() if p.team == team and p.alive]
+        # A blind ally paints nothing: a radar fed by somebody staring at a
+        # white screen is a wall hack with a delay.
+        allies = [
+            p
+            for p in self.players.values()
+            if p.team == team and p.alive and p.flash < grenades.FLASH_BLIND
+        ]
         if not allies:
             return seen
         # Hoisted out of the pair loop: an ally's eye does not move between the
