@@ -166,6 +166,34 @@ export function completeCode(params: CompleteParams, signal?: AbortSignal): Prom
   ).then((r) => r.completion);
 }
 
+/** Stream a fill-in completion chunk-by-chunk for live ghost text rendering. */
+export function completeCodeStream(
+  params: CompleteParams,
+  onToken: (token: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { prefix, suffix, language, completions, hover } = params;
+  let full = '';
+  return streamNdjson(
+    '/agent/complete/stream',
+    {
+      prefix,
+      suffix,
+      ...(language ? { language } : {}),
+      ...(completions && completions.length ? { completions } : {}),
+      ...(hover ? { hover } : {}),
+    },
+    (obj) => {
+      if (typeof obj.response === 'string') {
+        full += obj.response;
+        onToken(obj.response);
+      }
+      if (typeof obj.error === 'string') throw new Error(obj.error);
+    },
+    signal,
+  ).then(() => full);
+}
+
 export interface PullProgress {
   status?: string;
   completed?: number;

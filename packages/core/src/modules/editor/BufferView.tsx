@@ -49,6 +49,7 @@ import { dirOf, lspExtension } from './lsp';
 import { readDiagnostics } from './lsp-registry';
 import { dirname, joinPath, loadSource, saveSource, sourceTitle } from './sources';
 import { dbGhostFetch, indexBuffer, indexBufferNow } from './symbolCompletion';
+import { completeCodeStream } from '../agent/api';
 
 const FILE_URI = 'workspace-file:';
 
@@ -871,12 +872,20 @@ export function BufferView() {
     const ext =
       autosuggestOn && !proposing
         ? autosuggest({
-            // Ghost text is a prefix lookup into the DB symbol index — the same
-            // index the dropdown uses — not a model. It returns the tail of the
-            // single best-matching symbol for the token at the cursor, so there's
-            // no round-trip latency and no hallucinated multi-line guesses.
+            // Tier 1: instant prefix lookup into the DB symbol index (0ms latency)
             fetch: (prefix, suffix) =>
               dbGhostFetch(prefix, suffix, languageRef.current.lspId ?? ''),
+            // Tier 2: streaming model infill (FIM)
+            fetchStream: (prefix, suffix, signal, onChunk) =>
+              completeCodeStream(
+                {
+                  prefix,
+                  suffix,
+                  language: languageRef.current.lspId ?? undefined,
+                },
+                onChunk,
+                signal,
+              ),
           })
         : [];
     view.dispatch({ effects: autoRef.current.reconfigure(ext) });

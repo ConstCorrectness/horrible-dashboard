@@ -2756,6 +2756,13 @@ async def run_agent_turn(
             )
         )
         return
+
+    if agent_id == "claude-acp" or (spec and getattr(spec, "id", "") == "claude-acp"):
+        from backend.modules.acp.client import run_acp_turn
+
+        await run_acp_turn(conn, turn_id, agent_id, prompt)
+        return
+
     config = _load_config()
     if config is None:
         await conn.send_json(

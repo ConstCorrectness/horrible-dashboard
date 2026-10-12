@@ -787,11 +787,11 @@
     },
     {
       "name": "Mat_Warehouse_Roof",
-      "kind": "concrete"
+      "kind": "vault_steel"
     },
     {
       "name": "Mat_Warehouse_Wall",
-      "kind": "concrete"
+      "kind": "container"
     },
     {
       "name": "Mat_Warehouse_Wall_Stripe",

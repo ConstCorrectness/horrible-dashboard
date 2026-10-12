@@ -54,6 +54,8 @@ export interface DocsExtensionOptions {
   lang?: string;
   /** Restrict the chain — a notebook cell passes the set without `lsp`. */
   sources?: () => DocSourceId[] | undefined;
+  /** Direct custom resolver evaluated ahead of the global chain (e.g. for REPL sessions). */
+  resolver?: (req: DocLookupRequest) => Promise<DocEntry[] | null>;
 }
 
 /** Render one resolved entry into a popup body. */
@@ -129,6 +131,23 @@ export function docsHover(opts: DocsExtensionOptions = {}): Extension {
       if (!req) return null;
       const { text: symbol, from, to } = symbolAt(view.state.doc.toString(), pos);
       if (!symbol) return null;
+
+      if (opts.resolver) {
+        try {
+          const direct = await opts.resolver(req);
+          if (direct && direct.length) {
+            return {
+              pos: from,
+              end: to,
+              above: true,
+              create: () => ({ dom: renderDocEntry(direct[0]) }),
+            };
+          }
+        } catch {
+          // Fall through to general lookup
+        }
+      }
+
       // The web source is dropped from *hover* unless explicitly allowed. It is
       // the only source that leaves the machine: measured at ~7s for a real
       // lookup, and a billable API call per symbol you happen to rest the pointer
@@ -149,7 +168,7 @@ export function docsHover(opts: DocsExtensionOptions = {}): Extension {
         create: () => ({ dom: renderDocEntry(entry) }),
       };
     },
-    { hoverTime: Math.max(0, Number(getSetting<number>('docs.hoverDelayMs') ?? 400)) },
+    { hoverTime: Math.max(0, Number(getSetting<number>('docs.hoverDelayMs') ?? 200)) },
   );
 }
 
@@ -171,6 +190,20 @@ export function docsKeymap(
         const pos = view.state.selection.main.head;
         const req = requestFor(view.state, pos, opts);
         if (!req) return false;
+        if (opts.resolver) {
+          opts.resolver(req)
+            .then((direct) => {
+              if (direct && direct.length) {
+                opts.show(direct[0]);
+                return;
+              }
+              void lookupDocs(req).then(({ entries }) => opts.show(entries[0] ?? null));
+            })
+            .catch(() => {
+              void lookupDocs(req).then(({ entries }) => opts.show(entries[0] ?? null));
+            });
+          return true;
+        }
         void lookupDocs(req).then(({ entries }) => opts.show(entries[0] ?? null));
         return true;
       },

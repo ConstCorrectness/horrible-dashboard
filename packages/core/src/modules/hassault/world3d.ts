@@ -1233,16 +1233,74 @@ export function createProceduralAssault3D(THREE: typeof import('three'), info: M
   builder.addBox(46.4, 44, 4.1, 48.8, 47, 4.2, 'vault_steel');
   builder.addRamp(46.4, 47, 4.2, 48.8, 54, 9.0, 'vault_steel');
 
-  // Warehouse Roof (z = 9.0m) with Parapets
-  builder.addFloor(8, 22, 46, 56, 9, 'concrete');
+  // Warehouse Roof (z = 9.0m) with Parapets and Vent Drop Cutouts
+  // Cutout 1 (Catwalk Drop): x: 12.2..13.8, y: 30.2..31.8
+  // Cutout 2 (Office Drop): x: 34.2..35.8, y: 45.2..46.8
+  builder.addFloor(8, 22, 46, 30.2, 9, 'vault_steel');
+  builder.addFloor(8, 30.2, 12.2, 31.8, 9, 'vault_steel');
+  builder.addFloor(13.8, 30.2, 46, 31.8, 9, 'vault_steel');
+  builder.addFloor(8, 31.8, 34.2, 56, 9, 'vault_steel');
+  builder.addFloor(35.8, 31.8, 46, 56, 9, 'vault_steel');
+  builder.addFloor(34.2, 31.8, 35.8, 45.2, 9, 'vault_steel');
+  builder.addFloor(34.2, 46.8, 35.8, 56, 9, 'vault_steel');
+
   builder.addBox(7.8, 21.8, 9, 46.2, 22.2, 9.8, 'concrete');
   builder.addBox(7.8, 55.8, 9, 46.2, 56.2, 9.8, 'concrete');
   builder.addBox(7.8, 21.8, 9, 8.2, 56.2, 9.8, 'concrete');
   builder.addBox(45.8, 21.8, 9, 46.2, 56.2, 9.8, 'concrete');
 
-  // 8. Rooftop Ventilation System & Chillers
-  builder.addBox(14, 28, 9, 18, 32, 10.2, 'vault_steel');
-  builder.addBox(28, 44, 9, 32, 48, 10.2, 'vault_steel');
+  // 8. Iconic Crawlable Rooftop Ventilation Duct System
+  // 8a. Rooftop Intake Cowl (Entry point on roof at x=25.0, y=29.5)
+  builder.addBox(23.8, 27.8, 9.0, 26.2, 28.6, 9.15, 'vault_steel'); // Entry curb
+  builder.addBox(23.8, 28.6, 9.0, 26.2, 30.3, 9.06, 'vault_steel'); // Intake floor
+  builder.addBox(23.7, 28.5, 10.22, 26.3, 30.3, 10.30, 'vault_steel'); // Intake cowl roof
+  builder.addBox(23.7, 28.5, 9.06, 23.8, 30.3, 10.22, 'vault_steel'); // West cheek wall
+  builder.addBox(26.2, 28.5, 9.06, 26.3, 30.3, 10.22, 'vault_steel'); // East cheek wall
+
+  // 8b. Central Crawlway Junction
+  builder.addBox(23.5, 30.3, 9.0, 26.5, 31.7, 9.06, 'vault_steel'); // Floor
+  builder.addBox(23.5, 30.3, 10.16, 26.5, 31.7, 10.22, 'vault_steel'); // Ceiling
+  builder.addBox(23.5, 31.7, 9.06, 26.5, 31.76, 10.16, 'vault_steel'); // North wall
+
+  // 8c. West Crawlway Trunk to Catwalk Drop (x=13.8..23.5)
+  builder.addBox(13.8, 30.3, 9.0, 23.5, 31.7, 9.06, 'vault_steel'); // Floor
+  builder.addBox(13.8, 30.3, 10.16, 23.5, 31.7, 10.22, 'vault_steel'); // Ceiling
+  builder.addBox(13.8, 31.7, 9.06, 23.5, 31.76, 10.16, 'vault_steel'); // North wall
+  builder.addBox(13.8, 30.24, 9.06, 23.8, 30.3, 10.16, 'vault_steel'); // South wall
+
+  // 8d. Drop 1: West Catwalk Drop Shaft (x: 12.2..13.8, y: 30.2..31.8)
+  // Shaft drops down from roof (z=10.22) through roof cutout down to z=5.8m over West Catwalk
+  builder.addBox(12.14, 30.24, 10.16, 13.86, 31.76, 10.22, 'vault_steel'); // Ceiling cap
+  builder.addBox(12.14, 30.24, 5.8, 12.20, 31.76, 10.16, 'vault_steel'); // West wall
+  builder.addBox(13.80, 30.24, 5.8, 13.86, 31.76, 9.06, 'vault_steel'); // East wall
+  builder.addBox(12.20, 31.70, 5.8, 13.80, 31.76, 10.16, 'vault_steel'); // North wall
+  builder.addBox(12.20, 30.24, 5.8, 13.80, 30.30, 10.16, 'vault_steel'); // South wall
+  builder.addBox(12.10, 30.15, 5.75, 13.90, 31.85, 5.85, 'vault_steel', false); // Grille rim
+
+  // 8e. East Crawlway Trunk: Central Junction to corner at x=34.2
+  builder.addBox(26.5, 30.3, 9.0, 34.2, 31.7, 9.06, 'vault_steel'); // Floor
+  builder.addBox(26.5, 30.3, 10.16, 34.2, 31.7, 10.22, 'vault_steel'); // Ceiling
+  builder.addBox(26.5, 31.7, 9.06, 34.2, 31.76, 10.16, 'vault_steel'); // North wall
+  builder.addBox(26.2, 30.24, 9.06, 35.8, 30.30, 10.16, 'vault_steel'); // South wall
+
+  // 8f. North Crawlway Trunk: Corner at (x=35.0, y=31.0) North to Hostage Office Drop (y=45.2)
+  builder.addBox(34.2, 30.3, 9.0, 35.8, 31.7, 9.06, 'vault_steel'); // Corner floor
+  builder.addBox(34.2, 30.3, 10.16, 35.8, 31.7, 10.22, 'vault_steel'); // Corner ceiling
+  builder.addBox(35.74, 30.24, 9.06, 35.80, 45.2, 10.16, 'vault_steel'); // East wall
+  builder.addBox(34.3, 31.7, 9.0, 35.7, 45.2, 9.06, 'vault_steel'); // North trunk floor
+  builder.addBox(34.3, 31.7, 10.16, 35.7, 45.2, 10.22, 'vault_steel'); // North trunk ceiling
+  builder.addBox(34.24, 31.7, 9.06, 34.30, 45.2, 10.16, 'vault_steel'); // West wall
+
+  // 8g. Drop 2: Hostage Office Drop Shaft (x: 34.2..35.8, y: 45.2..46.8)
+  // Shaft drops down into 2nd-floor Hostage Office to z=6.2m
+  builder.addBox(34.24, 45.24, 10.16, 35.76, 46.86, 10.22, 'vault_steel'); // Ceiling cap
+  builder.addBox(34.24, 46.80, 6.2, 35.76, 46.86, 10.16, 'vault_steel'); // North wall
+  builder.addBox(34.30, 45.24, 6.2, 35.70, 45.30, 9.06, 'vault_steel'); // South wall
+  builder.addBox(34.24, 45.24, 6.2, 34.30, 46.80, 10.16, 'vault_steel'); // West wall
+  builder.addBox(35.70, 45.24, 6.2, 35.76, 46.80, 10.16, 'vault_steel'); // East wall
+  builder.addBox(34.15, 45.15, 6.15, 35.85, 46.90, 6.25, 'vault_steel', false); // Diffuser rim
+
+  // Rooftop Chiller Unit
   builder.addBox(36, 28, 9, 40, 34, 10.4, 'vault_steel');
 
   // 9. Warehouse Interior Catwalks, Structural Trusses & Columns
@@ -1377,7 +1435,7 @@ export function createProceduralAssault3D(THREE: typeof import('three'), info: M
 }
 
 export function isBreakableWindowNode(name: string): boolean {
-  return /Window.*Glass|Glass.*Window|Breakable.*Glass|Glass.*Breakable|Curtain.*Glass|Window_Glass/i.test(
+  return /Window.*Glass|Glass.*Window|Breakable.*Glass|Glass.*Breakable|Curtain.*Glass|Window_Glass|Panoramic.*Window|Office.*Window/i.test(
     name,
   );
 }

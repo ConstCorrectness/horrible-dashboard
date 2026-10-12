@@ -68,6 +68,7 @@ interface Timbre {
  */
 const TIMBRES: Record<string, Timbre> = {
   step: { frequency: 620, q: 1.1, decay: 0.1, gain: 0.5, body: 90 },
+  step_duct: { frequency: 1850, q: 6.5, decay: 0.22, gain: 0.65, body: 320 },
   land: { frequency: 380, q: 0.9, decay: 0.22, gain: 0.85, body: 62 },
   jump: { frequency: 900, q: 1.6, decay: 0.09, gain: 0.35, body: 0 },
   shot: { frequency: 1500, q: 0.7, decay: 0.3, gain: 1, body: 78 },

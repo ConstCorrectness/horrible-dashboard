@@ -933,6 +933,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   if (audioRef.current === null) audioRef.current = new GameAudio();
   const effectsRef = useRef<EffectsPool | null>(null);
   const wasReloadingRef = useRef(false);
+  const lastHeldWeaponRef = useRef<string>('');
 
   // Tactical Ping & Callouts
   const [showCalloutWheel, setShowCalloutWheel] = useState(false);
@@ -2223,16 +2224,27 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // does not sound like a footstep. Cosmetic only — nothing here is input.
           const audio = audioRef.current;
           if (audio && acceptsGameInput(phaseRef.current) && alive) {
-            if (player.onGround && player.crouch <= 0.5) {
+            const isVent =
+              player.z >= 8.8 &&
+              player.z <= 10.6 &&
+              player.y >= 27.5 &&
+              player.y <= 48.0 &&
+              player.x >= 12.0 &&
+              player.x <= 36.5;
+            // In ventilation duct, even crouch movement scrapes/echoes on sheet metal
+            const audibleMove = isVent ? true : player.crouch <= 0.5;
+            if (player.onGround && audibleMove) {
               strideRef.current += Math.hypot(player.velX, player.velY) * dt;
               if (strideRef.current >= OWN_STRIDE) {
                 strideRef.current = 0;
-                audio.own('step', 0.45);
+                audio.own(isVent ? 'step_duct' : 'step', isVent ? 0.6 : 0.45);
               }
             } else {
               strideRef.current = 0;
             }
-            if (wasOnGround && !player.onGround && player.velZ > 0) audio.own('jump', 0.5);
+            if (wasOnGround && !player.onGround && player.velZ > 0) {
+              audio.own(isVent ? 'step_duct' : 'jump', isVent ? 0.6 : 0.5);
+            }
             // Breaking the surface, in either direction. Synthesised locally like
             // every other sound we make: the server does not send our own noises
             // back, because one arriving half a round trip late does not sound
@@ -2482,7 +2494,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // Cube (x, y, height) → three (x, height, z). The correction offset is
           // visual only: the simulation stays exactly where the server says.
           const c = online && session ? session.predictor.correction : NO_CORRECTION;
-          camera.position.set(player.x + c.x, eyeHeight(player) + c.z, player.y + c.y);
+
+          // Camera landing shock dip (subtle vertical compression on impact)
+          const landPhase =
+            player.landedAt !== undefined && now - player.landedAt < 0.22
+              ? (now - player.landedAt) / 0.22
+              : 1;
+          const camLandDip =
+            landPhase < 1 ? -0.06 * Math.sin(landPhase * Math.PI) * (1.0 - landPhase) : 0;
+
+          camera.position.set(player.x + c.x, eyeHeight(player) + c.z + camLandDip, player.y + c.y);
           const camSmoke = nadePool.smokeDensityAt(
             camera.position.x,
             camera.position.y,
@@ -2493,8 +2514,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             setSmokeBlindness(camSmoke);
           }
           // YXZ so yaw is applied before pitch; the default XYZ order rolls the
-          // camera as you look around.
-          camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
+          // camera as you look around. Include camera view-punch spring angle (GoldSrc v_punchangle)
+          const punch = shots ? shots.updatePunch(dt) : { pitch: 0, yaw: 0 };
+          camera.rotation.set(
+            player.pitch + punch.pitch,
+            -(player.yaw + punch.yaw) - Math.PI / 2,
+            0,
+            'YXZ',
+          );
           // The weapon rides the camera, so it is updated with it: what it needs
           // is what the camera just did (angles) and what the player just did
           if (fired) {
@@ -2574,6 +2601,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           }
           if (shots) (window as any).__SHOTS = shots;
           const heldWeapon = shots?.weapon?.id ?? '';
+          if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
+            if (lastHeldWeaponRef.current !== '') {
+              // Weapon switch deploy audio cues matching CS 1.6
+              if (heldWeapon === 'knife') {
+                audioRef.current?.own('knife_slash', 0.7);
+              } else if (heldWeapon === 'pistol') {
+                audioRef.current?.own('reload_magin', 0.65);
+              } else {
+                audioRef.current?.own('reload_bolt', 0.7);
+              }
+            }
+            lastHeldWeaponRef.current = heldWeapon;
+          }
           viewmodel.setWeapon(heldWeapon, skinsRef.current[heldWeapon] ?? null);
           // The reload's *progress*, from the two served numbers: how long it
           // takes (`reloadTime`, on the weapon) and how much is left
@@ -3068,26 +3108,22 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         });
         return;
       }
-      let dx = e.movementX;
-      let dy = e.movementY;
-      // Fall back to client coordinate deltas if movementX/Y is zero or unavailable (e.g. WebKitGTK without native pointer lock)
-      if ((!dx && !dy) || (dx === 0 && dy === 0)) {
+      // Raw uncapped pointer-lock mouse deltas (matching GoldSrc / Xash3D calculateMouseEvent)
+      let dx = e.movementX ?? 0;
+      let dy = e.movementY ?? 0;
+
+      // Only fall back to clientX/Y deltas when pointer lock is not active (e.g. legacy browsers)
+      if (!document.pointerLockElement && dx === 0 && dy === 0) {
         if (lastMousePosRef.current) {
           dx = e.clientX - lastMousePosRef.current.x;
           dy = e.clientY - lastMousePosRef.current.y;
-        } else {
-          dx = 0;
-          dy = 0;
         }
       }
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
-      dx = Math.max(-120, Math.min(120, dx));
-      dy = Math.max(-120, Math.min(120, dy));
 
-      // Mouse right turns right. The sign lives in `applyLook` with the reasoning
-      // for it and a test — it was inverted here, which is subtle enough to have
-      // shipped: the camera's yaw is about cube +x, but the renderer maps cube y
-      // onto three's z, and that reflection is exactly one sign.
+      if (dx === 0 && dy === 0) return;
+
+      // Apply look with true 1:1 linearity — no artificial clamp wall!
       applyLook(playerRef.current, dx, dy, sensitivityRef.current);
     };
     const onMouseDown = (e: MouseEvent) => {

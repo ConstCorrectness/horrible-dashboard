@@ -408,6 +408,51 @@ async def complete(req: CompleteRequest) -> dict[str, str]:
     return {"completion": completion}
 
 
+@router.post("/complete/stream")
+async def complete_stream(req: CompleteRequest) -> StreamingResponse:
+    """Stream fill-in-the-middle completion tokens for inline autosuggest."""
+    from backend.modules.llamacpp.server import llama_manager
+
+    if llama_manager.running() and llama_manager._ready:
+        endpoint = llama_manager.endpoint
+
+        async def llama_gen():
+            async with instrumented_client(timeout=10) as client:
+                async for chunk in P.infill_stream(
+                    client,
+                    endpoint,
+                    req.prefix,
+                    req.suffix,
+                    dialect="llamacpp",
+                    model=llama_manager.alias,
+                ):
+                    yield chunk
+
+        return StreamingResponse(llama_gen(), media_type="application/x-ndjson")
+
+    config = _load_config()
+    if config is None:
+        raise HTTPException(
+            status_code=409, detail="Agent not configured — finish onboarding"
+        )
+    info = P.provider_for(config.provider)
+    endpoint = config.endpoint or info.default_endpoint
+
+    async def provider_gen():
+        async with instrumented_client(timeout=15) as client:
+            async for chunk in P.infill_stream(
+                client,
+                endpoint,
+                req.prefix,
+                req.suffix,
+                dialect=info.dialect,
+                model=config.model,
+            ):
+                yield chunk
+
+    return StreamingResponse(provider_gen(), media_type="application/x-ndjson")
+
+
 @router.post("/pull")
 async def pull(req: PullRequest) -> StreamingResponse:
     config = _load_config()

@@ -74,6 +74,7 @@ let lspResolver: LspDocResolver | null = null;
  */
 export function setLspDocResolver(resolver: LspDocResolver | null): void {
   lspResolver = resolver;
+  clearDocsCache();
 }
 
 /** Parse `docs.sources` into a validated, deduped order. */
@@ -125,6 +126,13 @@ async function lookupBackend(req: DocLookupRequest, ids: DocSourceId[]): Promise
   return { entries: body.entries ?? [], tried: body.tried ?? ids, notes: body.notes ?? [] };
 }
 
+const DOCS_CACHE_MAX = 500;
+const docsCache = new Map<string, DocLookupResult>();
+
+export function clearDocsCache(): void {
+  docsCache.clear();
+}
+
 /**
  * Walk the chain and return the first source's answer.
  *
@@ -138,6 +146,28 @@ export async function lookupDocs(req: DocLookupRequest): Promise<DocLookupResult
   const notes: string[] = [];
   if (!req.symbol && req.code === undefined) return { entries: [], tried, notes };
 
+  const cacheKey =
+    req.symbol && !req.code
+      ? `${req.lang ?? 'python'}:${req.symbol}:${sources.join(',')}`
+      : null;
+  if (cacheKey && docsCache.has(cacheKey)) {
+    const cached = docsCache.get(cacheKey)!;
+    docsCache.delete(cacheKey);
+    docsCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const remember = (res: DocLookupResult): DocLookupResult => {
+    if (cacheKey && res.entries.length) {
+      if (docsCache.size >= DOCS_CACHE_MAX) {
+        const firstKey = docsCache.keys().next().value;
+        if (firstKey) docsCache.delete(firstKey);
+      }
+      docsCache.set(cacheKey, res);
+    }
+    return res;
+  };
+
   for (const run of runs(sources)) {
     if (!run.backend) {
       tried.push('lsp');
@@ -147,7 +177,7 @@ export async function lookupDocs(req: DocLookupRequest): Promise<DocLookupResult
       }
       try {
         const entries = await lspResolver(req);
-        if (entries.length) return { entries, tried, notes };
+        if (entries.length) return remember({ entries, tried, notes });
       } catch {
         notes.push('lsp failed');
       }
@@ -157,7 +187,7 @@ export async function lookupDocs(req: DocLookupRequest): Promise<DocLookupResult
       const result = await lookupBackend(req, run.ids);
       tried.push(...result.tried);
       notes.push(...result.notes);
-      if (result.entries.length) return { entries: result.entries, tried, notes };
+      if (result.entries.length) return remember({ entries: result.entries, tried, notes });
     } catch {
       tried.push(...run.ids);
       notes.push('lookup failed');

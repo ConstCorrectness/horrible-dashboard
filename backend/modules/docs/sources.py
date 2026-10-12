@@ -149,8 +149,16 @@ async def complete_kernel(notebook_path: str, code: str, cursor_pos: int) -> Any
 # --- index ------------------------------------------------------------------
 
 
+_INDEX_CACHE_MAX = 1000
+_index_cache: dict[tuple[str, str], list[DocEntry]] = {}
+
+
 async def lookup_index(symbol: str, lang: str) -> list[DocEntry]:
     from backend.modules.lsp import symbol_store
+
+    key = (symbol, lang)
+    if key in _index_cache:
+        return _index_cache[key]
 
     # The leaf name is what the index is keyed on; a dotted path narrows it. For
     # `pandas.DataFrame.merge` that means asking for `merge` and preferring a hit
@@ -189,7 +197,7 @@ async def lookup_index(symbol: str, lang: str) -> list[DocEntry]:
     module = str(row.get("module") or "")
     if not doc and not detail:
         return []
-    return [
+    entry = [
         DocEntry(
             source="index",
             title=f"{module}.{row.get('symbol')}" if module else str(row.get("symbol")),
@@ -197,6 +205,10 @@ async def lookup_index(symbol: str, lang: str) -> list[DocEntry]:
             body=_truncate(doc),
         )
     ]
+    if len(_index_cache) >= _INDEX_CACHE_MAX:
+        _index_cache.pop(next(iter(_index_cache)))
+    _index_cache[key] = entry
+    return entry
 
 
 # --- web --------------------------------------------------------------------
@@ -217,7 +229,7 @@ async def lookup_web(symbol: str, lang: str) -> list[DocEntry]:
 
     query = f"{symbol} {lang} documentation"
     try:
-        answer = await quick_search(query, limit=5)
+        answer = await asyncio.wait_for(quick_search(query, limit=5), timeout=2.0)
     except Exception:  # noqa: BLE001 — no search configured is a normal outcome
         logger.debug("docs web lookup: search failed for %r", symbol, exc_info=True)
         return []
@@ -230,7 +242,7 @@ async def lookup_web(symbol: str, lang: str) -> list[DocEntry]:
     if not url:
         return []
     try:
-        article = await fetch_readable(url)
+        article = await asyncio.wait_for(fetch_readable(url), timeout=2.0)
     except Exception:  # noqa: BLE001 — an unreachable or blocked page is not an error
         logger.debug("docs web lookup: fetch failed for %s", url, exc_info=True)
         # The snippet is still better than nothing, and it cost nothing extra.

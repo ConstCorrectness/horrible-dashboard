@@ -57,6 +57,12 @@ class ReplSession:
 class ReplManager:
     """Owns the REPL kernels for one WS connection."""
 
+    _active_sessions: dict[str, ReplSession] = {}
+
+    @classmethod
+    def session_for(cls, session_id: str) -> ReplSession | None:
+        return cls._active_sessions.get(session_id)
+
     def __init__(self, conn: Any) -> None:
         self._conn = conn
         self.sessions: dict[str, ReplSession] = {}
@@ -73,8 +79,14 @@ class ReplManager:
             asyncio.create_task(
                 self._exec(str(data.get("id", "")), str(data.get("code", "")))
             )
+        elif event == "complete":
+            asyncio.create_task(self._complete(data))
+        elif event == "inspect":
+            asyncio.create_task(self._inspect(data))
         elif event == "close":
-            self.sessions.pop(str(data.get("id", "")), None)
+            sid = str(data.get("id", ""))
+            self.sessions.pop(sid, None)
+            ReplManager._active_sessions.pop(sid, None)
         elif event == "tool_result":
             self._resolve_tool(data)
 
@@ -86,7 +98,9 @@ class ReplManager:
             return
         loop = asyncio.get_running_loop()
         namespace = build_namespace(self._make_call(session_id, loop))
-        self.sessions[session_id] = ReplSession(session_id, ReplKernel(namespace))
+        session = ReplSession(session_id, ReplKernel(namespace))
+        self.sessions[session_id] = session
+        ReplManager._active_sessions[session_id] = session
         await self._conn.send_json(
             _evt("started", {"id": session_id, "banner": BANNER})
         )
@@ -116,6 +130,48 @@ class ReplManager:
                     },
                 )
             )
+
+    async def _complete(self, data: dict[str, Any]) -> None:
+        session_id = str(data.get("id", ""))
+        call_id = data.get("callId")
+        code = str(data.get("code", ""))
+        cursor_pos = int(data.get("cursorPos", len(code)))
+        session = self.sessions.get(session_id)
+        if session is None:
+            await self._conn.send_json(
+                _evt(
+                    "complete_result",
+                    {
+                        "id": session_id,
+                        "callId": call_id,
+                        "source": "unavailable",
+                        "matches": [],
+                        "cursor_start": cursor_pos,
+                        "cursor_end": cursor_pos,
+                    },
+                )
+            )
+            return
+        res = await asyncio.to_thread(session.kernel.complete, code, cursor_pos)
+        await self._conn.send_json(
+            _evt("complete_result", {"id": session_id, "callId": call_id, **res})
+        )
+
+    async def _inspect(self, data: dict[str, Any]) -> None:
+        session_id = str(data.get("id", ""))
+        call_id = data.get("callId")
+        code = str(data.get("code", ""))
+        cursor_pos = int(data.get("cursorPos", len(code)))
+        session = self.sessions.get(session_id)
+        if session is None:
+            await self._conn.send_json(
+                _evt("inspect_result", {"id": session_id, "callId": call_id, "entry": None})
+            )
+            return
+        entry = await asyncio.to_thread(session.kernel.inspect, code, cursor_pos)
+        await self._conn.send_json(
+            _evt("inspect_result", {"id": session_id, "callId": call_id, "entry": entry})
+        )
 
     # --- dash.* relay: sync bridge run from the worker thread --------------
 

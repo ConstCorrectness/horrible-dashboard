@@ -139,6 +139,19 @@ describe('lookupDocs', () => {
     expect(res.notes.join(' ')).toContain('500');
   });
 
+  it('serves repeated lookups instantly from the in-memory cache', async () => {
+    const fetchStub = stubBackend({ index: true });
+    vi.stubGlobal('fetch', fetchStub);
+    const res1 = await lookupDocs({ symbol: 'cachedSymbol', sources: ['index'] });
+    expect(res1.entries[0]?.source).toBe('index');
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+
+    const res2 = await lookupDocs({ symbol: 'cachedSymbol', sources: ['index'] });
+    expect(res2.entries[0]?.source).toBe('index');
+    // Fetch should NOT be called a second time
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing without a symbol or code', async () => {
     const fetchSpy = stubBackend({ index: true });
     vi.stubGlobal('fetch', fetchSpy);

@@ -599,6 +599,7 @@ impl WeaponViewModel {
             // has arrived.
             self.stow = 1.0;
             self.holster_hold = 0.0;
+            self.start_action(viewclips::Action::Draw, viewclips::DRAW_DURATION);
         }
     }
 
@@ -730,6 +731,7 @@ impl WeaponViewModel {
             // frame rather than materialising at rest — a spawn is an arrival.
             self.draw_on_return = false;
             self.stow = 1.0;
+            self.start_action(viewclips::Action::Draw, viewclips::DRAW_DURATION);
         }
 
         let target = (frame.speed / frame.move_speed.max(0.001)).clamp(0.0, 1.0);
@@ -920,21 +922,25 @@ impl WeaponViewModel {
                 + sprint_dip,
             cur_home_z + self.kick * 0.28 + reload_impulse_z + inspect_lift_z + stow * 0.22,
         );
+        let draw_pitch = stow * -0.38;
+        let draw_yaw = stow * 0.18;
+        let draw_roll = stow * 0.28;
+
         let rotation = Vec3::new(
             self.kick * -0.16
                 + self.reload_t * 0.7
                 + reload_impulse_pitch
                 + bob_y * 0.4
                 + inspect_pitch
-                + stow * 1.05
+                + draw_pitch
                 + breath_pitch
                 + sprint_pitch,
-            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw + sprint_yaw,
+            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw + draw_yaw + sprint_yaw,
             self.sway_x * 0.5 * ads_damp
                 + bob_x * 0.6
                 + reload_impulse_roll
                 + inspect_roll
-                + stow * 0.35
+                + draw_roll
                 + sprint_roll,
         );
         self.transform = Mat4::from_translation(position)

@@ -145,8 +145,12 @@ export interface MoveInput {
   noclip: boolean;
 }
 
-/** Radians turned per pixel of mouse movement at sensitivity 1. */
-export const LOOK_RADIANS_PER_PIXEL = 0.0022;
+/**
+ * Radians turned per pixel of mouse movement at sensitivity 1.
+ * Matches Counter-Strike standard m_yaw (0.022 degrees per count):
+ * 0.022 * Math.PI / 180 = ~0.0003839724 rad/pixel.
+ */
+export const LOOK_RADIANS_PER_PIXEL = (0.022 * Math.PI) / 180;
 
 export function createPlayer(x: number, y: number, z: number, yaw = 0): PlayerState {
   return {

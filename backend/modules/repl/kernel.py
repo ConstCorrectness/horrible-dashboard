@@ -64,6 +64,109 @@ class ReplKernel:
                 return CellResult(ok=False, error=_format_user_error())
             return CellResult(ok=True)
 
+    def complete(self, code: str, cursor_pos: int) -> dict[str, Any]:
+        """Return completion candidates for `code` at 0-indexed `cursor_pos`."""
+        if not code:
+            return {"source": "kernel", "matches": [], "cursor_start": 0, "cursor_end": 0}
+        pos = max(0, min(cursor_pos, len(code)))
+        line, col = _pos_to_line_col(code, pos)
+        matches: list[dict[str, Any]] = []
+        cursor_start = pos
+        try:
+            import jedi
+
+            interp = jedi.Interpreter(code, namespaces=[self.namespace])
+            comps = interp.complete(line, col)
+            for c in comps:
+                sig = ""
+                try:
+                    sigs = c.get_signatures()
+                    if sigs:
+                        sig = sigs[0].to_string()
+                except Exception:
+                    pass
+                matches.append({
+                    "text": c.name,
+                    "type": c.type or "variable",
+                    "signature": sig,
+                    "doc": c.docstring() or "",
+                })
+                # Reconstruct cursor_start from the first match prefix
+                if cursor_start == pos and hasattr(c, "complete"):
+                    prefix_len = len(c.name) - len(c.complete)
+                    cursor_start = max(0, pos - prefix_len)
+        except Exception:
+            # Fallback: simple prefix match against namespace globals
+            prefix = _token_at(code, pos)
+            cursor_start = pos - len(prefix)
+            for key, val in self.namespace.items():
+                if key.startswith(prefix) and not (key.startswith("_") and not prefix.startswith("_")):
+                    matches.append({
+                        "text": key,
+                        "type": "function" if callable(val) else "variable",
+                        "signature": "",
+                        "doc": getattr(val, "__doc__", "") or "",
+                    })
+        return {
+            "source": "kernel",
+            "matches": matches,
+            "cursor_start": cursor_start,
+            "cursor_end": pos,
+        }
+
+    def inspect(self, code: str, cursor_pos: int) -> dict[str, Any] | None:
+        """Inspect the symbol at `cursor_pos` in `code`, returning docstring and signature."""
+        if not code:
+            return None
+        pos = max(0, min(cursor_pos, len(code)))
+        line, col = _pos_to_line_col(code, pos)
+        symbol = _token_at(code, pos) or _token_around(code, pos)
+        try:
+            import jedi
+
+            interp = jedi.Interpreter(code, namespaces=[self.namespace])
+            helps = interp.help(line, col)
+            if helps:
+                h = helps[0]
+                sig = ""
+                try:
+                    sigs = h.get_signatures()
+                    if sigs:
+                        sig = sigs[0].to_string()
+                except Exception:
+                    pass
+                doc = h.docstring() or ""
+                return {
+                    "source": "kernel",
+                    "title": h.name,
+                    "signature": sig,
+                    "body": doc,
+                }
+            infers = interp.infer(line, col)
+            if infers:
+                inf = infers[0]
+                return {
+                    "source": "kernel",
+                    "title": inf.name,
+                    "signature": f"type: {inf.name}",
+                    "body": inf.docstring() or "",
+                }
+        except Exception:
+            pass
+
+        # Fallback: check namespace directly
+        if symbol and symbol in self.namespace:
+            val = self.namespace[symbol]
+            val_type = type(val).__name__
+            doc = getattr(val, "__doc__", "") or repr(val)
+            return {
+                "source": "kernel",
+                "title": symbol,
+                "signature": f"{symbol}: {val_type}",
+                "body": str(doc),
+            }
+        return None
+
 
 def _format_user_error() -> str:
     """Format the current exception, dropping the kernel's own `exec_cell` frame so
@@ -76,3 +179,32 @@ def _format_user_error() -> str:
 def _format_syntax_error() -> str:
     exc_type, exc, _ = sys.exc_info()
     return "".join(traceback.format_exception_only(exc_type, exc))
+
+
+def _pos_to_line_col(code: str, pos: int) -> tuple[int, int]:
+    """Convert 0-indexed char offset into 1-indexed line and 0-indexed column."""
+    clamped = max(0, min(pos, len(code)))
+    lines = code[:clamped].split("\n")
+    return len(lines), len(lines[-1])
+
+
+def _token_at(code: str, pos: int) -> str:
+    """Return the identifier prefix ending at `pos`."""
+    clamped = max(0, min(pos, len(code)))
+    start = clamped
+    while start > 0 and (code[start - 1].isalnum() or code[start - 1] == "_"):
+        start -= 1
+    return code[start:clamped]
+
+
+def _token_around(code: str, pos: int) -> str:
+    """Return the dotted identifier around `pos`."""
+    clamped = max(0, min(pos, len(code)))
+    start = clamped
+    end = clamped
+    while start > 0 and (code[start - 1].isalnum() or code[start - 1] in "._"):
+        start -= 1
+    while end < len(code) and (code[end].isalnum() or code[end] in "._"):
+        end += 1
+    token = code[start:end].strip(".")
+    return token

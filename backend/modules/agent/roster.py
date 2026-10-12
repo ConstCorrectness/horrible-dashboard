@@ -251,6 +251,13 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             tool_groups=["records", "browser", "research", "library"],
             preload_groups=["records", "research"],
         ),
+        "claude-acp": AgentSpec(
+            id="claude-acp",
+            name="Claude (ACP)",
+            description="External Claude Code agent running via Agent Client Protocol (ACP).",
+            system_prompt="",
+            can_delegate=False,
+        ),
     }
 
 
