@@ -156,6 +156,25 @@ def _dropped_by_budget(
     return sorted(dropped)
 
 
+def _shown_text(turn_messages: list[dict[str, Any]]) -> str:
+    """Every piece of assistant text the turn produced, in order — what the chat
+    shows the user, since text written alongside a tool call streams to them too.
+
+    The judge reads this rather than the final round alone. Found live: kimi-k3
+    explained EAGLE-3 in the round where it also called search tools, then closed
+    with "the explanation above stands…" — and a judge shown only that closing line
+    failed an answer the user had in fact received in full.
+    """
+    parts: list[str] = []
+    for message in turn_messages:
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append(content.strip())
+    return "\n\n".join(parts)
+
+
 async def run_case(
     case: EvalCase,
     agent_tools: list[dict[str, Any]],
@@ -234,6 +253,9 @@ async def run_case(
     started = time.monotonic()
     answer = ""
     error = ""
+    # Where this turn's own messages begin: everything before is the system prompt,
+    # the case's history and its prompt.
+    first_new = len(messages)
     try:
         # Entered before `wait_for`, which copies the context into the task it makes.
         with otel_tracing.labels(eval_case=case.id):
@@ -322,16 +344,23 @@ async def run_case(
                 passed, detail, judge_model = await judge_grader.grade(
                     rubric=case.expect.rubric,
                     question=judge_grader.question_of(case),
-                    answer=answer,
+                    answer=_shown_text(messages[first_new:]) or answer,
                     model=case.expect.judge_model,
                 )
             result.passed = passed
             result.detail = detail
-        except judge_grader.JudgeError as exc:
+        except Exception as exc:  # noqa: BLE001 — JudgeError and anything else
             # An error, never a zero. A judge that could not be reached has said
             # nothing about the answer, and scoring it as a failure is exactly the
-            # "the case was wrong and the model got the blame" mistake.
+            # "the case was wrong and the model got the blame" mistake. Any
+            # exception, not only JudgeError: an unexpected one used to escape and
+            # kill the whole sweep, leaving its run reading "running" forever.
+            message = (
+                str(exc)
+                if isinstance(exc, judge_grader.JudgeError)
+                else f"the judge failed: {type(exc).__name__}: {exc}"
+            )
             result.passed = False
-            result.error = str(exc)
-            result.detail = str(exc)
+            result.error = message
+            result.detail = message
     return result

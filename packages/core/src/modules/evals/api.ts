@@ -92,6 +92,8 @@ export interface EvalSuite {
   /** `bundled` ships with the repo and is read-only; `user` is yours. */
   source: 'user' | 'bundled';
   read_only: boolean;
+  /** The roster agent the cases were written for; blank = the main agent. */
+  agent_id?: string;
 }
 
 export interface CaseResult {

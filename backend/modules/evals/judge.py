@@ -80,12 +80,20 @@ async def grade(
     import httpx
 
     from backend.modules.agent import providers as P
+    from backend.modules.agent.orchestrator import _orchestrator_model
     from backend.modules.agent.roster import resolve_provider
-    from backend.modules.agent.routes import load_config
+    from backend.modules.agent.routes import _load_config
 
-    config = load_config()
+    config = _load_config()
+    if config is None:
+        raise JudgeError("no agent is configured to judge with")
+    # Provider AND model resolved the way a chat turn resolves them. Taking the
+    # provider from the agent's settings but the model from the saved global
+    # config asked one server for another server's model.
     info, endpoint = resolve_provider(config, agent_id)
-    judge_model = model or str(getattr(config, "model", "") or "")
+    judge_model = model or _orchestrator_model(
+        str(getattr(config, "model", "") or ""), agent_id
+    )
     if not judge_model:
         raise JudgeError("no model is configured to judge with")
 

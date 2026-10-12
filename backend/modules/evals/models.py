@@ -294,6 +294,10 @@ class EvalSuite(BaseModel):
     #: Bundled suites are read-only: writing to one would edit a file in the repo,
     #: which you would lose on the next pull. Fork it and own the copy instead.
     read_only: bool = False
+    #: The roster agent the cases were written for, used when a sweep target names
+    #: none. Blank means the main agent. A bundled suite declares it in
+    #: `bundled.AGENT_FOR`; a fork does not inherit it (set `agent_id` on the target).
+    agent_id: str = ""
 
 
 class CaseResult(BaseModel):
@@ -351,6 +355,10 @@ class RunTarget(BaseModel):
     #: that constraint does not apply to somebody else's. N peers means N
     #: processes, which is the whole speedup.
     node: str = ""
+    #: Which roster agent answers: its system prompt and tool groups are what the
+    #: cases see. Blank means the main agent. A suite written for one agent's
+    #: contract (the bundled `ml-expert`) measures something else under another.
+    agent_id: str = ""
     #: What the scoreboard column is called. Defaults to the model name; set it
     #: when you are comparing a base against its own fine-tune, where the model
     #: names are unhelpfully similar.

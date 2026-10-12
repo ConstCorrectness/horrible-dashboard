@@ -39,7 +39,17 @@ CATALOG: dict[str, tuple[str, str]] = {
         "The floor, the negatives, discovery through load_tools, and multi-step "
         "cases. Also the worked example of the case format.",
     ),
+    "ml-expert": (
+        "ML Expert: knowledge-base contract",
+        "Search the user's material first, cite [n] with links, LaTeX math, say when "
+        "the material is silent, and the catalog chores. Answers as the ML Expert.",
+    ),
 }
+
+#: The roster agent a bundled suite grades, when it is not the main agent. A case
+#: written against one agent's prompt measures something else under another, so a
+#: sweep target that names no agent gets this one (see `sweep._run_one_target`).
+AGENT_FOR: dict[str, str] = {"ml-expert": "ml_expert"}
 
 
 def suites_dir() -> Path:
@@ -85,6 +95,7 @@ def list_bundled() -> list[EvalSuite]:
                 tags=["bundled"],
                 source="bundled",
                 read_only=True,
+                agent_id=AGENT_FOR.get(slug, ""),
             )
         )
     return out
@@ -103,4 +114,5 @@ def get_bundled(suite_id: str) -> EvalSuite | None:
         tags=["bundled"],
         source="bundled",
         read_only=True,
+        agent_id=AGENT_FOR.get(slug_of(suite_id), ""),
     )

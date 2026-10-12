@@ -142,6 +142,15 @@ def localtrack_project_for(suite_id: str) -> str:
     return f"evals-{slug}" if slug else "evals"
 
 
+def _require_agent(agent_id: str) -> None:
+    """Refuse an agent the roster doesn't know before any case runs: otherwise every
+    case fails on a missing spec, and that reads as the model being wrong."""
+    from backend.modules.agent.roster import get_agent
+
+    if get_agent(agent_id) is None:
+        raise ValueError(f"no agent {agent_id!r} in the roster")
+
+
 async def _run_one_target(
     suite_id: str,
     cases: list[EvalCase],
@@ -150,12 +159,19 @@ async def _run_one_target(
     localtrack_project: str,
     harness: tuple[str, str] = ("", ""),
     started: list[str] | None = None,
+    suite_agent: str = "",
 ) -> EvalRun:
     from backend.modules.evals.runner_agent import run_case
 
+    # The target's agent, else the one the suite was written for, else main.
+    # `getattr`: targets also arrive duck-typed (see `node` below).
+    agent_id = getattr(target, "agent_id", "") or suite_agent or "main"
     run = store.create_run(
         suite_id=suite_id,
-        label=target.label or target.model,
+        # The same model answering as two agents is two columns, so a non-main
+        # agent is part of the default name.
+        label=target.label
+        or (target.model if agent_id == "main" else f"{target.model} · {agent_id}"),
         provider=target.provider,
         endpoint=target.endpoint,
         model=target.model,
@@ -181,6 +197,7 @@ async def _run_one_target(
 
     try:
         info, endpoint = _resolve_target(target)
+        _require_agent(agent_id)
     except Exception as exc:  # noqa: BLE001
         # A target that cannot even be resolved fails as a *run*, not as N failed
         # cases: "your endpoint is wrong" and "this model gets everything wrong"
@@ -275,6 +292,7 @@ async def _run_one_target(
                         temperature=target.temperature
                         if target.temperature is not None
                         else 0.0,
+                        agent_id=agent_id,
                     )
                 # Stamped here rather than in the runners: both of them produce a
                 # result and neither should have to remember. What it pins is that a
@@ -433,7 +451,14 @@ async def run_sweep(
     runs = await asyncio.gather(
         *(
             _run_one_target(
-                suite_id, cases, t, agent_tools, localtrack_project, harness, started
+                suite_id,
+                cases,
+                t,
+                agent_tools,
+                localtrack_project,
+                harness,
+                started,
+                suite_agent=suite.agent_id,
             )
             for t in targets
         )
@@ -483,6 +508,9 @@ def start_sweep(
             raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("evals: sweep failed")
+            # Same reason as the cancel path: a row left `running` reads as a
+            # sweep still in progress, forever.
+            _close_out(started, status="failed", error=str(exc))
             await _emit("sweep_failed", {"suiteId": suite_id, "error": str(exc)})
         finally:
             _running.pop(key, None)
@@ -498,8 +526,10 @@ def start_sweep(
     return key
 
 
-def _close_out(run_ids: list[str]) -> None:
-    """Mark every run of a cancelled sweep that had not finished.
+def _close_out(
+    run_ids: list[str], *, status: str = "cancelled", error: str = ""
+) -> None:
+    """Mark every run of a cancelled (or crashed) sweep that had not finished.
 
     Only the unfinished ones: a target that completed before the cancel landed has
     real results, and rewriting its status would throw away a measurement that was
@@ -510,7 +540,12 @@ def _close_out(run_ids: list[str]) -> None:
             run = store.get_run(run_id)
             if run is None or run.status not in ("queued", "running"):
                 continue
-            store.update_run(run_id, status="cancelled", finished_at=_now())
+            store.update_run(
+                run_id,
+                status=status,
+                finished_at=_now(),
+                **({"error": error} if error else {}),
+            )
         except Exception:  # noqa: BLE001
             logger.debug("evals: could not close out run %s", run_id, exc_info=True)
 

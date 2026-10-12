@@ -343,9 +343,7 @@ async def test_a_group_loaded_mid_turn_and_then_cut_counts_as_dropped(
 
 
 @pytest.mark.anyio
-async def test_a_group_never_loaded_is_out_of_scope_not_dropped(
-    scripted, tight_budget
-):
+async def test_a_group_never_loaded_is_out_of_scope_not_dropped(scripted, tight_budget):
     """Progressive disclosure keeping a group off the list is the design working;
     only the budget cutting something in scope is a drop."""
     scripted(["done"])
@@ -445,3 +443,108 @@ async def test_a_backend_plugin_tool_is_graded_but_never_executed(scripted):
     # Still graded: the hook is the record, so a simulated call is a call.
     assert result.passed, result.detail
     assert [c.name for c in result.actual] == ["ui.plugin_action"]
+
+
+# --- the judge, live-shaped ---------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_an_unexpected_judge_failure_is_a_case_error_not_a_dead_sweep(
+    scripted, monkeypatch
+):
+    """Found live: the judge's import was broken, the ImportError escaped
+    `run_case`, and the sweep died with its run reading "running" forever."""
+    from backend.modules.evals import judge
+
+    scripted(["An answer for the judge to read."])
+
+    async def broken(**_kw):
+        raise ImportError("cannot import name 'load_config'")
+
+    monkeypatch.setattr(judge, "grade", broken)
+    case = EvalCase(
+        id="judged",
+        prompt="explain something",
+        expose=Expose(mode="explicit", preload=["ui"]),
+        expect=Expect(grade="judge", rubric="says something true"),
+    )
+    result = await run(case, [tool_decl("ui.noop")])
+    assert not result.passed
+    assert "ImportError" in result.error
+
+
+@pytest.mark.anyio
+async def test_the_judge_asks_the_agents_model_on_the_agents_provider(monkeypatch):
+    """The provider came from the agent's settings and the model from the saved
+    global config, so a NIM-configured agent asked NIM for a local GGUF's name."""
+    from backend.modules.agent import orchestrator, routes
+    from backend.modules.evals import judge
+
+    class _Config:
+        provider = "lmstudio"
+        endpoint = "http://localhost:1234"
+        model = "global-model"
+
+    monkeypatch.setattr(routes, "_load_config", lambda: _Config())
+    monkeypatch.setattr(
+        orchestrator,
+        "_agent_setting",
+        lambda _agent, key, default=None: "agent-model" if key == "model" else default,
+    )
+    seen: dict = {}
+
+    async def chat(client, info, endpoint, model, messages, tools, **_kw):
+        seen["model"] = model
+        return P.ChatResult(
+            assistant_message={"role": "assistant", "content": "PASS - cites [1]"},
+            tool_calls=[],
+            content="PASS - cites [1]",
+        )
+
+    monkeypatch.setattr(P, "chat", chat)
+    passed, detail, judge_model = await judge.grade(
+        rubric="cites [1]", question="q", answer="a [1]"
+    )
+    assert passed and judge_model == "agent-model" and seen["model"] == "agent-model"
+    assert "cites [1]" in detail
+
+
+@pytest.mark.anyio
+async def test_the_judge_reads_every_round_the_user_saw(scripted, monkeypatch):
+    """Found live: kimi-k3 explained in the round where it also called a tool, then
+    closed with "the explanation above stands" — and the judge, shown only that
+    closing line, failed an answer the user had received in full."""
+    from backend.modules.evals import judge
+
+    scripted(
+        [
+            {
+                "content": "EAGLE-3 drafts from fused low, mid and high features.",
+                "calls": [("ui.noop", {})],
+            },
+            "The explanation above stands. Want me to save the paper?",
+        ]
+    )
+    seen: dict = {}
+
+    async def grade(**kw):
+        seen["answer"] = kw["answer"]
+        return True, "ok", "judge"
+
+    monkeypatch.setattr(judge, "grade", grade)
+    case = EvalCase(
+        id="judged-rounds",
+        prompt="explain EAGLE-3",
+        history=[
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "AN EARLIER ANSWER"},
+        ],
+        expose=Expose(mode="explicit", preload=["ui"]),
+        expect=Expect(grade="judge", rubric="explains fused features"),
+    )
+    result = await run(case, [tool_decl("ui.noop")])
+    assert result.passed
+    assert "fused low, mid and high features" in seen["answer"]
+    assert "Want me to save the paper?" in seen["answer"]
+    # The case's own history is context, not something this turn said.
+    assert "AN EARLIER ANSWER" not in seen["answer"]

@@ -236,6 +236,37 @@ It names real tools. If a tool is renamed the cases fail loudly, which is correc
 a suite that silently kept grading against a tool nobody ships would be worse than
 no suite.
 
+`suites/ml-expert.jsonl` grades the [knowledge base](kb.mdx)'s **ML Expert** agent
+against its contract, not its ML knowledge. It checks that the agent:
+
+- searches the user's material first;
+- cites `[n]` with links;
+- writes math in LaTeX;
+- says plainly when the material is silent, and labels what came from elsewhere;
+- does the catalog chores (save, mark done, course progress, import) with the right
+  tool.
+- answers the question instead of acting unasked. Found live on `kimi-k3`: told to
+  "offer to save" a source, it saved it and replied "Done — I saved…" with no answer.
+  `mlx-answers-instead-of-saving` gives `kb.save` a fixture so an unasked save
+  succeeds, and the judge reads the reply that follows.
+
+It has three negatives. Every `kb.*` result is a fixture of the shape `kb.search`
+really returns, so it needs no imported content. The judge sees only the prompt and
+the answer, so each judge rubric restates what the fixture passages said. A test
+checks that every tool the suite names is registered and inside the agent's tool
+groups.
+
+### Which agent answers
+
+A case is graded against one agent's prompt and tool groups. `RunTarget.agent_id`
+picks the roster agent for a target. When a target names none, the suite's own
+`agent_id` applies; a bundled suite declares it in `bundled.AGENT_FOR`, and
+`ml-expert` runs as `ml_expert`. Otherwise the main agent answers. An agent the
+roster doesn't know fails the **run**, not every case. A non-main agent is part of
+the run's default label (`model · ml_expert`), so the same model answering as two
+agents gets two columns. A fork does not inherit the suite's agent: set `agent_id`
+on the target.
+
 ## The first thing it measured
 
 Two results from the first sweeps this module ever ran, against
@@ -1191,6 +1222,24 @@ Three rules keep a judge from being worse than no grade:
   unparseable verdict: each is an *error*, never `passed=False`. Scoring a zero because
   the judge could not be reached is exactly the "the case was wrong and the model got
   the blame" failure.
+
+Any exception from the judge is caught, not only `JudgeError`, and becomes an error
+on that one case. An unexpected one (live, an `ImportError` in `judge.py`) used to
+escape `run_case` and kill the whole sweep. A sweep that dies anyway closes its
+unfinished runs as `failed` with the error, the same way a cancel closes them as
+`cancelled`, so no row reads `running` forever.
+
+**What the judge reads.** All the assistant text of the turn, in order, not just
+the final round: text written alongside a tool call streams to the user too. Found
+live: `kimi-k3` explained EAGLE-3 in the round where it also searched, then closed with
+"the explanation above stands", and a judge shown only that closing line failed an
+answer the user had received in full. The case's `history` is excluded.
+
+**Which model judges.** The main agent's, resolved the way a chat turn resolves it:
+the provider from `roster.resolve_provider`, the model from `_orchestrator_model`.
+Taking the model from the saved global config instead paired one server with
+another server's model. A case can still pin `expect.judge_model`. The suggested
+"this node" sweep target (`GET /api/evals/targets`) resolves the same way.
 
 It is routed in `runner_agent`, not in `graders.py` — that module is pure and
 synchronous by design, and giving it a provider client would make every grade a

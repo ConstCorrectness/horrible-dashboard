@@ -464,18 +464,23 @@ async def suggest_targets() -> dict[str, Any]:
     """
     out: list[dict[str, Any]] = []
     try:
+        from backend.modules.agent.orchestrator import _orchestrator_model
         from backend.modules.agent.roster import resolve_provider
         from backend.modules.agent.routes import _load_config
 
         config = _load_config()
         if config is not None:
             info, endpoint = resolve_provider(config, "main")
+            # The model the agent's turns actually use, on that provider — not the
+            # saved global model, which belongs to the global provider. Mixing the
+            # two offered "a local GGUF on NIM", a target no server can answer.
+            model = _orchestrator_model(config.model, "main")
             out.append(
                 {
                     "provider": info.kind,
                     "endpoint": endpoint,
-                    "model": config.model,
-                    "label": f"{config.model} (this node)",
+                    "model": model,
+                    "label": f"{model} (this node)",
                     "source": "agent",
                 }
             )

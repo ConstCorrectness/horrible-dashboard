@@ -1396,7 +1396,10 @@ function Run({
       <div style={S.bar}>
         <span style={S.heading}>Run</span>
         <span style={S.mono}>
-          {suite ? `${suite.name} · ${suite.case_count} cases` : 'no suite selected'}
+          {suite
+            ? `${suite.name} · ${suite.case_count} cases` +
+              (suite.agent_id ? ` · answers as ${suite.agent_id}` : '')
+            : 'no suite selected'}
         </span>
         <span style={{ flex: 1 }} />
         <button
