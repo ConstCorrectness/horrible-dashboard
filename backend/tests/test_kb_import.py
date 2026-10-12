@@ -651,3 +651,21 @@ def test_an_import_crawl_says_what_it_is(harness):
     assert harness["user_agent"] == USER_AGENT
     assert USER_AGENT.startswith("horrible-dashboard-crawler/")
     assert "github.com/ConstCorrectness/horrible-dashboard" in USER_AGENT
+
+
+def test_resuming_an_import_follows_the_current_profile(harness):
+    """An edited profile (here `keep_scripts`, turned off for apxml after 15 MB
+    archives) used to reach only new imports: a resume kept the old recipe."""
+    harness["pages"] = _many_primers(1)
+    first = _import(harness, profile_id="aman-primers")
+    stale = dict(docstore.get_set(first["set_id"])["recipe"])
+    stale["keep_scripts"] = True
+    stale["content_selector"] = "div.stale"
+    docstore.update_set(first["set_id"], recipe=stale)
+
+    second = _import(harness, profile_id="aman-primers")
+    assert second["resumed"] and second["set_id"] == first["set_id"]
+    recipe = docstore.get_set(first["set_id"])["recipe"]
+    assert recipe["content_selector"] == "article.post-content"
+    assert recipe["keep_scripts"] is False
+    assert recipe["kb_root_item_id"] == first["root_item_id"]

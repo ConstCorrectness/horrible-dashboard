@@ -71,7 +71,7 @@
     "sitemap_url": "https://apxml.com/sitemap.xml",
     "max_depth": 3,
     "max_pages": 120,
-    "keep_scripts": true,
+    "keep_scripts": false,
     "content_selector": "div.course-content",
     "hierarchy": "url_path",
     "path_kinds": [

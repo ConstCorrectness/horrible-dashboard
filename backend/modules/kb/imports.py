@@ -123,24 +123,8 @@ async def start_import(
         tags=spec.get("tags") or [],
     )
 
-    existing_set = (
-        docstore.get_set(root_item["docset_id"]) if root_item["docset_id"] else None
-    )
-    if existing_set is not None:
-        if crawl.is_running(existing_set["id"]):
-            raise ImportFailed("this import is already running")
-        docstore.update_set(existing_set["id"], max_pages=pages)
-        crawl.start_crawl(
-            existing_set["id"], int(spec.get("max_depth") or 3), force=force
-        )
-        emit(root_item["id"])
-        return {
-            "root_item_id": root_item["id"],
-            "set_id": existing_set["id"],
-            "resumed": True,
-            "plan": spec,
-        }
-
+    # Built before the resume branch so a resumed import follows the profile as it
+    # is now: an edited profile (a selector, `keep_scripts`) reached only new imports.
     recipe = Recipe(
         start_urls=starts,
         allow_domains=list(spec.get("allow_domains") or []),
@@ -161,6 +145,26 @@ async def start_import(
         structured=True,
         title_strip=list(spec.get("title_strip") or []),
     )
+    existing_set = (
+        docstore.get_set(root_item["docset_id"]) if root_item["docset_id"] else None
+    )
+    if existing_set is not None:
+        if crawl.is_running(existing_set["id"]):
+            raise ImportFailed("this import is already running")
+        docstore.update_set(
+            existing_set["id"], max_pages=pages, recipe=recipe.to_dict()
+        )
+        crawl.start_crawl(
+            existing_set["id"], int(spec.get("max_depth") or 3), force=force
+        )
+        emit(root_item["id"])
+        return {
+            "root_item_id": root_item["id"],
+            "set_id": existing_set["id"],
+            "resumed": True,
+            "plan": spec,
+        }
+
     doc_set = docstore.create_set(
         title=root.get("title") or spec.get("label") or root_url,
         seed_url=starts[0],

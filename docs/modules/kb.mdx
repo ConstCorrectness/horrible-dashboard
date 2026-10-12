@@ -52,9 +52,15 @@ ingest, MathJax wait + TeX stamping, image shrinking, and `Content-Signal: ai-in
 honoured (archived, not indexed). **Re-index** (the site's detail view, or
 `POST /api/kb/imports/{item_id}/reindex`) rebuilds the text from the archives
 without crawling again, after an extraction fix or once the embedder is back.
-Built-ins: `aman-primers`, `apxml-course`,
-`lilian-weng`, `distill-pub`, `karpathy-blog`. Field reference:
-`backend/modules/kb/profile_guide.md`.
+Re-importing the same site resumes it, and takes the profile as it is *now*: the
+stored recipe is replaced from the current profile, so an edited selector or
+`keep_scripts` applies without deleting the import. Pair it with `force` to recapture
+pages already archived under the old settings.
+
+Built-ins: `aman-primers`, `apxml-course` (`keep_scripts: false`: apxml inlines about
+11 MB of app JavaScript into every lesson, and its KaTeX is already rendered in the
+captured DOM, so a lesson archives at about 3.5 MB instead of 15 MB), `lilian-weng`,
+`distill-pub`, `karpathy-blog`. Field reference: `backend/modules/kb/profile_guide.md`.
 
 ## Retrieval
 
