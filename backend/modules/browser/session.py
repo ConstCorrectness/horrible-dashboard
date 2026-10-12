@@ -205,9 +205,14 @@ class BrowserSession:
         profile: str = "default",
         *,
         screencast: bool = True,
+        user_agent: str | None = None,
     ):
         self.ws_conn = ws_conn
         self.profile = profile
+        # Set for a crawl, which must say what it is: a named User-Agent header a
+        # site can recognise (and allow, or refuse), and automation left visible.
+        # None for the user's own browsing in the pane.
+        self._crawler_user_agent = user_agent
         # A crawl renders to nobody, and a screencast it never reads costs a JPEG
         # encode per paint. Off here means `_loop_commands` takes the poll branch,
         # which the idle-frame path already handles.
@@ -320,11 +325,18 @@ class BrowserSession:
         context = None
         try:
             pw = sync_playwright().start()
+            if self._crawler_user_agent:
+                # A crawler identifies itself and does not hide that it is automated.
+                identity: dict[str, Any] = {
+                    "extra_http_headers": {"User-Agent": self._crawler_user_agent}
+                }
+            else:
+                identity = {"args": ["--disable-blink-features=AutomationControlled"]}
             context = pw.chromium.launch_persistent_context(
                 user_data_dir=str(_profile_dir(self.profile)),
                 headless=True,
                 viewport=dict(self._viewport),
-                args=["--disable-blink-features=AutomationControlled"],
+                **identity,
             )
             context.set_default_timeout(_NAV_TIMEOUT_MS)
             context.route("**/*", self._route)
@@ -1167,20 +1179,27 @@ class BrowserManager:
         )
         return await session.submit(op, args)
 
-    async def open_headless(self, key: str, profile: str = "default") -> BrowserSession:
+    async def open_headless(
+        self, key: str, profile: str = "default", *, user_agent: str | None = None
+    ) -> BrowserSession:
         """Start a Chromium session with no viewer, owned by `key`.
 
         Everything that makes the panel's session safe applies unchanged — the
         `_route` egress guard, the per-request I/O records, the capture path — but
         no frames are produced and no events are delivered. Callers **must** pair
         this with `close_headless`; nothing else will notice the session is idle.
+
+        A crawler passes `user_agent` (see `BrowserSession`) so the sites it visits
+        can tell what it is.
         """
         if not server_browser_enabled():
             raise RuntimeError("browser engine not enabled")
         existing = self.headless.get(key)
         if existing is not None and not existing._closing:
             return existing
-        session = BrowserSession(sink_connection(), profile, screencast=False)
+        session = BrowserSession(
+            sink_connection(), profile, screencast=False, user_agent=user_agent
+        )
         self.headless[key] = session
         await session.start()
         return session

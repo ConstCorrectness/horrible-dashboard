@@ -5,6 +5,7 @@ A profile tells `kb.import` how to turn one website into an offline, searchable,
 ## 1. Look before you write
 
 - **robots.txt** (`search.read https://site/robots.txt`): disallowed paths, `Crawl-delay`, `Sitemap:` lines, and any `Content-Signal`. If it says `ai-input=no`, an import archives pages but does not index their text for you — tell the user.
+- **Bot protection.** If the site answers the headless browser with a bot check (Cloudflare's "Just a moment..."), the import stops at the first page and archives nothing. Don't try to get around it: tell the user the site can't be imported, and that they can still save pages they read in the browser.
 - **Where the list of pages is.** A home or archive page that links every article → `frontier: "bfs"` with that page in `start_urls` _and_ in `index_pages` (navigated for links, never kept). A sitemap → `frontier: "sitemap"` (+ `sitemap_url`). Pages only reachable by client-side navigation need the sitemap.
 - **The URL shape of a content page** (`/primers/<slug>/`, `/courses/<course>/<chapter>/<lesson>`) — this becomes `allow_patterns`.
 - **The content element.** Open one page (`browser.open`, then `browser.snapshot` or `browser.scrape`) and find the element holding the article body without navigation and footer — `article.post-content`, `div.course-content`, `main`. That is `content_selector`. Supported syntax: `tag`, `.class`, `#id`, combinations (`div.course-content`) and descendant spaces (`main article`) — nothing else.

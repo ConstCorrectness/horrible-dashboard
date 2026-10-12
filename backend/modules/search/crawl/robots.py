@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # no business honouring robots.txt in the first place.
 USER_AGENT = (
     "horrible-dashboard-crawler/1.0 "
-    "(+https://github.com/horriblecpp/horrible-dashboard; personal index)"
+    "(+https://github.com/ConstCorrectness/horrible-dashboard; personal index)"
 )
 # The token robots.txt rules are matched against.
 ROBOTS_AGENT = "horrible-dashboard-crawler"

@@ -126,7 +126,10 @@ def harness(monkeypatch):
     state: dict[str, Any] = {"pages": {}, "session": None, "robots": _Robots()}
 
     class _Manager:
-        async def open_headless(self, _key: str, profile: str = "default") -> Any:
+        async def open_headless(
+            self, _key: str, profile: str = "default", *, user_agent: str | None = None
+        ) -> Any:
+            state["user_agent"] = user_agent
             state["session"] = _FakeSession(state["pages"])
             return state["session"]
 
@@ -569,3 +572,82 @@ def test_reindex_route_refuses_a_legacy_set_and_a_running_one(harness, monkeypat
     monkeypatch.setattr(crawl, "start_reindex", lambda _set_id: False)
     r = client.post(f"/api/kb/imports/{started['root_item_id']}/reindex")
     assert r.status_code == 409
+
+
+# --- bot checks ---------------------------------------------------------------
+
+CHALLENGE = (
+    "<html><head><title>Just a moment...</title></head><body>"
+    "<script>window._cf_chl_opt={cvId: '3'};</script>"
+    "<noscript>Enable JavaScript and cookies to continue</noscript></body></html>"
+)
+
+
+def test_a_bot_check_stops_the_import_and_archives_nothing(harness):
+    """Found live: apxml.com served Cloudflare's "Just a moment..." page to the
+    headless browser, and 31 lessons were archived and indexed as that page."""
+    pages = _many_primers(3)
+    pages["https://aman.ai/primers/p0"] = CHALLENGE
+    pages["https://aman.ai/primers/p1"] = CHALLENGE
+    harness["pages"] = pages
+    started = _import(harness, profile_id="aman-primers")
+
+    doc_set = docstore.get_set(started["set_id"])
+    assert doc_set["status"] == "failed"
+    assert "Cloudflare bot check" in doc_set["error"]
+    # Stopped at the first challenge rather than asking again for every page.
+    assert harness["session"].captures == ["https://aman.ai/primers/p0"]
+    page = docstore.list_pages(started["set_id"])[0]
+    assert page["status"] == "failed" and "Cloudflare" in page["error"]
+    rows, _ = store.list_items(docset_id=started["set_id"])
+    assert [r["id"] for r in rows] == [started["root_item_id"]]
+    assert library_store.list_sources(library="kb-aman.ai") == []
+
+
+def test_bot_challenge_recognises_interstitials_but_not_ordinary_pages():
+    assert site_crawl.bot_challenge("Just a moment...", CHALLENGE) == "Cloudflare"
+    assert (
+        site_crawl.bot_challenge("Attention Required! | Cloudflare", "<html></html>")
+        == "Cloudflare"
+    )
+    # Cloudflare injects this script into ordinary pages on sites it fronts; a
+    # page carrying it is still the page.
+    ordinary = (
+        "<html><head><title>Attention Is All You Need</title></head><body>"
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
+        "<p>Just a moment of attention.</p></body></html>"
+    )
+    assert site_crawl.bot_challenge("Attention Is All You Need", ordinary) is None
+
+
+def test_a_stop_mid_embed_leaves_no_orphan_source(monkeypatch):
+    """A source created for a page and cancelled before commit is linked to
+    nothing, so it used to sit at "embedding" forever."""
+
+    async def cancelled(_source_id, _req):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("backend.modules.library.ingest.prepare_source", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            site_crawl._prepare(
+                library="kb-test",
+                url="https://t.test/p",
+                title="P",
+                artifact_id="a1",
+                recipe=Recipe(start_urls=["https://t.test/"]),
+            )
+        )
+    assert library_store.list_sources(library="kb-test") == []
+
+
+def test_an_import_crawl_says_what_it_is(harness):
+    """A site asked to allow the importer needs something to recognise it by: the
+    named crawler User-Agent, linking to a repository that exists."""
+    from backend.modules.search.crawl.robots import USER_AGENT
+
+    harness["pages"] = _many_primers(1)
+    _import(harness, profile_id="aman-primers")
+    assert harness["user_agent"] == USER_AGENT
+    assert USER_AGENT.startswith("horrible-dashboard-crawler/")
+    assert "github.com/ConstCorrectness/horrible-dashboard" in USER_AGENT

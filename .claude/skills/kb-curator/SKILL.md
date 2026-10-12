@@ -37,5 +37,5 @@ For a site worth shipping to everyone, add it to `profiles.json` and extend `tes
 
 ## Rules
 
-- Respect the site: robots.txt is honoured automatically, `docviewer.crawlDelay` (≥ 1 s) applies, and `Content-Signal: ai-input=no` stops text indexing. Don't work around any of these.
+- Respect the site: robots.txt is honoured automatically, `docviewer.crawlDelay` (≥ 1 s) applies, and `Content-Signal: ai-input=no` stops text indexing. A site that serves a bot check (Cloudflare "Just a moment...") stops the import at its first page. Don't work around any of these.
 - Imported content is for the user's personal offline reading and RAG — never publish or share it.

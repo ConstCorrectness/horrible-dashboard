@@ -346,7 +346,10 @@ def fake_crawl(monkeypatch) -> _FakeSession:
     session = _FakeSession()
 
     class _Manager:
-        async def open_headless(self, _key: str, profile: str = "default") -> Any:
+        async def open_headless(
+            self, _key: str, profile: str = "default", *, user_agent: str | None = None
+        ) -> Any:
+            session.user_agent = user_agent
             return session
 
         def close_headless(self, _key: str) -> None:

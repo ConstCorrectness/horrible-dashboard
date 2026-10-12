@@ -48,7 +48,7 @@ from backend.modules.docviewer.models import TOTAL_SET_BYTES_CAP
 from backend.modules.docviewer.recipe import Recipe
 from backend.modules.docviewer.sitemap import sitemap_urls
 from backend.modules.search.canonical import canonical_url, host_of
-from backend.modules.search.crawl.robots import HostLimiter, RobotsCache
+from backend.modules.search.crawl.robots import USER_AGENT, HostLimiter, RobotsCache
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,39 @@ logger = logging.getLogger(__name__)
 # but more re-work if the process dies mid-batch; eight pages of a long primer is
 # already a couple of thousand rows.
 INGEST_BATCH_PAGES = 8
+
+#: Interstitial titles bot-protection services serve instead of the page. Matched as
+#: a prefix, lowercased.
+_CHALLENGE_TITLES = (
+    "just a moment",
+    "attention required! | cloudflare",
+    "please wait... | cloudflare",
+    "checking your browser",
+    "ddos-guard",
+)
+#: Script globals that only a Cloudflare challenge interstitial defines. Not
+#: `/cdn-cgi/challenge-platform/`: Cloudflare injects that into ordinary pages too.
+_CHALLENGE_MARKERS = ("window._cf_chl_opt", "_cf_chl_opt={", "_cf_chl_opt = {")
+
+
+def bot_challenge(title: str, html: str) -> str | None:
+    """The vendor whose bot check was served instead of the page, else None.
+
+    Found live: apxml.com answers the headless browser with Cloudflare's "Just a
+    moment..." page. Archived, every lesson became that page and its text was
+    indexed for the agent to cite. A challenge is not content, and getting past one
+    is not the crawler's business: it is reported and the crawl stops.
+    """
+    lowered = (title or "").strip().lower()
+    if any(lowered.startswith(t) for t in _CHALLENGE_TITLES) or any(
+        m in html for m in _CHALLENGE_MARKERS
+    ):
+        cloudflare = (
+            "cloudflare" in lowered or "cloudflare" in html.lower() or "_cf_chl" in html
+        )
+        return "Cloudflare" if cloudflare else "bot protection"
+    return None
+
 
 # MathJax 3/4 renders TeX into <mjx-container> and keeps the source only in its own
 # JS state. Stamp it back onto the element before capture, so text extraction can
@@ -292,7 +325,9 @@ async def run_recipe_crawl(set_id: str, max_depth: int, *, force: bool = False) 
     error: str | None = None
     stopped = False
     try:
-        session = await browser_manager.open_headless(session_key, profile="docviewer")
+        session = await browser_manager.open_headless(
+            session_key, profile="docviewer", user_agent=USER_AGENT
+        )
         while frontier and captured < max_pages:
             url, link_parent, depth = frontier.popleft()
             url = urldefrag(url)[0]
@@ -368,6 +403,19 @@ async def run_recipe_crawl(set_id: str, max_depth: int, *, force: bool = False) 
 
             html = str(result.get("html") or "")
             final_url = urldefrag(str(result.get("url") or url))[0]
+            vendor = bot_challenge(str(result.get("title") or ""), html)
+            if vendor:
+                # Every page would be the same interstitial: stop now rather than
+                # keep asking, and archive nothing.
+                error = (
+                    f"{host_of(final_url)} served a {vendor} bot check to the headless "
+                    "browser instead of the page, so the import stopped. Nothing from "
+                    "it was archived or indexed."
+                )
+                store.mark_failed(row["id"], f"blocked by {vendor} bot protection")
+                failed += 1
+                publish_page(store.get_page(row["id"]) or {})
+                break
             title = recipe.clean_title(str(result.get("title") or url))
             declared = _declared_canonical(html, final_url)
             identity = canonical_url(declared or final_url)
@@ -677,7 +725,14 @@ async def _prepare(
         content_selector=recipe.content_selector,
         strict_embeddings=True,
     )
-    prepared = await prepare_source(source["id"], req)
+    try:
+        prepared = await prepare_source(source["id"], req)
+    except asyncio.CancelledError:
+        # A stop landed mid-embed. A source created here is linked to nothing yet,
+        # so nothing would ever delete it, and it would read "embedding" forever.
+        if source["id"] != source_id:
+            _drop_source(source["id"])
+        raise
     if prepared is not None:
         return prepared, None
     return None, (library_store.get_source(source["id"]) or {}).get("error")

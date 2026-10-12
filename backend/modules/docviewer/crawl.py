@@ -43,7 +43,7 @@ from backend.modules.docviewer.models import (
     TOTAL_SET_BYTES_CAP,
 )
 from backend.modules.search.canonical import canonical_url, host_of
-from backend.modules.search.crawl.robots import HostLimiter, RobotsCache
+from backend.modules.search.crawl.robots import USER_AGENT, HostLimiter, RobotsCache
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
@@ -288,7 +288,9 @@ async def _run_crawl(set_id: str, max_depth: int, force: bool = False) -> None:
     session = None
     error: str | None = None
     try:
-        session = await browser_manager.open_headless(session_key, profile="docviewer")
+        session = await browser_manager.open_headless(
+            session_key, profile="docviewer", user_agent=USER_AGENT
+        )
         while frontier and captured < max_pages:
             url, parent_id, depth = frontier.pop(0)
             key = canonical_url(url)

@@ -194,6 +194,17 @@ instead of the BFS above:
   fonts referenced from inline `<style>` blocks are inlined, so math renders offline.
 - **Content-Signal.** A robots.txt `Content-Signal: ai-input=no` keeps the archive but
   skips embedding, and records why.
+- **The crawl says what it is.** Import and doc set crawls send the search crawler's
+  named User-Agent (`horrible-dashboard-crawler/1.0`, linking to this repository), and
+  do not hide automation the way the interactive browser pane does
+  (`--disable-blink-features=AutomationControlled`). A site owner can then recognise
+  the importer and allow it, or refuse it.
+- **Bot checks stop the crawl.** If a capture is a bot-protection interstitial
+  (Cloudflare's "Just a moment...", matched by title or its challenge-only
+  `_cf_chl_opt` script), that page is marked failed, nothing is archived or indexed,
+  and the crawl stops: every later page would be the same interstitial. Found live on
+  apxml.com, whose lessons were each archived as the challenge page. Getting past a
+  bot check is not the crawler's job.
 
 ## Contributions to the layout shell
 
