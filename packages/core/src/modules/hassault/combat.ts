@@ -140,6 +140,29 @@ export class ShotController {
   private pendingKick = 0;
   private pendingYawKick = 0;
 
+  /** Camera view-punch spring state (GoldSrc v_punchangle equivalent) */
+  punchPitch = 0;
+  punchPitchVel = 0;
+  punchYaw = 0;
+  punchYawVel = 0;
+
+  /** Apply an instantaneous rotational punch impulse to camera */
+  punch(pitchKick: number, yawKick = 0): void {
+    this.punchPitchVel += pitchKick;
+    this.punchYawVel += yawKick;
+  }
+
+  /** Step the view punch damped harmonic oscillator */
+  updatePunch(dt: number): { pitch: number; yaw: number } {
+    const springK = 32.0; // Spring stiffness
+    const damping = 18.0; // Critically damped decay
+    this.punchPitchVel += (-springK * this.punchPitch - damping * this.punchPitchVel) * dt;
+    this.punchPitch += this.punchPitchVel * dt;
+    this.punchYawVel += (-springK * this.punchYaw - damping * this.punchYawVel) * dt;
+    this.punchYaw += this.punchYawVel * dt;
+    return { pitch: this.punchPitch, yaw: this.punchYaw };
+  }
+
   setWeapons(specs: WeaponSpec[], slot: number): void {
     this.weapons = specs;
     this.slot = Math.max(0, Math.min(specs.length - 1, slot));
@@ -365,21 +388,26 @@ export class ShotController {
       const here = sprayOffset(weapon, this.sprayIndex);
       const previous =
         this.sprayIndex > 0 ? sprayOffset(weapon, this.sprayIndex - 1) : ([0, 0] as const);
-      this.pendingYawKick += here[0] - previous[0];
-      this.pendingKick += here[1] - previous[1];
+      const dyaw = here[0] - previous[0];
+      const dpitch = here[1] - previous[1];
+      this.pendingYawKick += dyaw;
+      this.pendingKick += dpitch;
       // Only the climb is owed back. Recovery pulls the view down, and giving
       // back the lateral drift too would drag the crosshair sideways after a
       // burst — the one motion a player cannot anticipate.
       this.owed += Math.max(0, here[1] - previous[1]);
       this.sprayIndex += 1;
+      this.punch(dpitch * 1.5, dyaw * 1.2);
     } else {
       // No pattern — four of the five weapons, and any server too old to send
       // one. A rifle with *no* recoil would be worse than the noise this
       // replaces, so the old behaviour is kept rather than skipped.
       const kick = recoilKick(weapon);
+      const yawKick = (Math.random() - 0.5) * kick * 0.7;
       this.pendingKick += kick;
-      this.pendingYawKick += (Math.random() - 0.5) * kick * 0.7;
+      this.pendingYawKick += yawKick;
       this.owed += kick;
+      this.punch(kick * 1.5, yawKick * 1.2);
     }
     return intent;
   }
@@ -442,5 +470,9 @@ export class ShotController {
     this.scoped = 0;
     this.sprayIndex = 0;
     this.blocked = false;
+    this.punchPitch = 0;
+    this.punchPitchVel = 0;
+    this.punchYaw = 0;
+    this.punchYawVel = 0;
   }
 }

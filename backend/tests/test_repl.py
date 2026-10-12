@@ -63,6 +63,20 @@ def test_empty_cell_is_ok() -> None:
     assert result.ok and result.value_repr is None
 
 
+def test_kernel_complete_and_inspect() -> None:
+    kernel = ReplKernel({"items": [1, 2, 3], "greet": "hello"})
+    res = kernel.complete("items.ap", 8)
+    assert res["source"] == "kernel"
+    match_texts = [m["text"] for m in res["matches"]]
+    assert "append" in match_texts
+
+    insp = kernel.inspect("items.append", 12)
+    assert insp is not None
+    assert insp["source"] == "kernel"
+    assert "append" in insp["title"]
+    assert "append" in insp["signature"] or "append" in insp["body"]
+
+
 # --- manager relay ---------------------------------------------------------
 
 
@@ -114,6 +128,34 @@ def test_exec_streams_stdout_and_result() -> None:
         # stdout streams live, possibly in several chunks — join them.
         out = "".join(d["data"] for ev, d in conn.events() if ev == "stdout")
         assert out == "4\n"
+
+    asyncio.run(go())
+
+
+def test_manager_complete_and_inspect() -> None:
+    async def go() -> None:
+        conn = FakeConn()
+        mgr = ReplManager(conn)
+        await mgr.handle({"event": "start", "data": {"id": "r1"}})
+        await mgr.handle({"event": "exec", "data": {"id": "r1", "code": "numbers = [1, 2, 3]"}})
+        await _wait_for(conn, "result")
+
+        await mgr.handle({
+            "event": "complete",
+            "data": {"id": "r1", "callId": "c1", "code": "numbers.ap", "cursorPos": 10},
+        })
+        comp = await _wait_for(conn, "complete_result")
+        assert comp["id"] == "r1" and comp["callId"] == "c1"
+        assert any(m["text"] == "append" for m in comp.get("matches", []))
+
+        await mgr.handle({
+            "event": "inspect",
+            "data": {"id": "r1", "callId": "c2", "code": "numbers.append", "cursorPos": 14},
+        })
+        insp = await _wait_for(conn, "inspect_result")
+        assert insp["id"] == "r1" and insp["callId"] == "c2"
+        assert insp.get("entry") is not None
+        assert "append" in insp["entry"]["title"]
 
     asyncio.run(go())
 

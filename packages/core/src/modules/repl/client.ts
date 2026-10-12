@@ -22,8 +22,30 @@ export interface ReplCallbacks {
   onResult?: (result: CellResult) => void;
 }
 
+export interface ReplCompleteMatch {
+  text: string;
+  type: string;
+  signature?: string;
+  doc?: string;
+}
+
+export interface ReplCompleteResponse {
+  source: 'kernel' | 'unavailable';
+  matches: ReplCompleteMatch[];
+  cursor_start: number;
+  cursor_end: number;
+}
+
+export interface ReplDocEntry {
+  source: 'kernel';
+  title: string;
+  signature: string;
+  body: string;
+}
+
 export class ReplSession {
   private unsub: () => void;
+  private pendingCalls = new Map<string, (val: any) => void>();
 
   constructor(
     readonly id: string,
@@ -49,6 +71,29 @@ export class ReplSession {
             error: (data.error ?? null) as string | null,
           });
           break;
+        case 'complete_result': {
+          const callId = String(data.callId ?? '');
+          const resolve = this.pendingCalls.get(callId);
+          if (resolve) {
+            this.pendingCalls.delete(callId);
+            resolve({
+              source: (data.source ?? 'kernel') as 'kernel' | 'unavailable',
+              matches: (data.matches ?? []) as ReplCompleteMatch[],
+              cursor_start: Number(data.cursor_start ?? 0),
+              cursor_end: Number(data.cursor_end ?? 0),
+            });
+          }
+          break;
+        }
+        case 'inspect_result': {
+          const callId = String(data.callId ?? '');
+          const resolve = this.pendingCalls.get(callId);
+          if (resolve) {
+            this.pendingCalls.delete(callId);
+            resolve((data.entry ?? null) as ReplDocEntry | null);
+          }
+          break;
+        }
         case 'tool_call':
           void this.runToolCall(data);
           break;
@@ -80,8 +125,38 @@ export class ReplSession {
     sendChannel('repl', 'exec', { id: this.id, code });
   }
 
+  complete(code: string, cursorPos: number): Promise<ReplCompleteResponse> {
+    const callId = Math.random().toString(36).slice(2, 10);
+    return new Promise((resolve) => {
+      this.pendingCalls.set(callId, resolve);
+      sendChannel('repl', 'complete', { id: this.id, callId, code, cursorPos });
+      // Safety timeout in case the backend socket dropped
+      setTimeout(() => {
+        if (this.pendingCalls.has(callId)) {
+          this.pendingCalls.delete(callId);
+          resolve({ source: 'unavailable', matches: [], cursor_start: cursorPos, cursor_end: cursorPos });
+        }
+      }, 3000);
+    });
+  }
+
+  inspect(code: string, cursorPos: number): Promise<ReplDocEntry | null> {
+    const callId = Math.random().toString(36).slice(2, 10);
+    return new Promise((resolve) => {
+      this.pendingCalls.set(callId, resolve);
+      sendChannel('repl', 'inspect', { id: this.id, callId, code, cursorPos });
+      setTimeout(() => {
+        if (this.pendingCalls.has(callId)) {
+          this.pendingCalls.delete(callId);
+          resolve(null);
+        }
+      }, 3000);
+    });
+  }
+
   dispose(): void {
     sendChannel('repl', 'close', { id: this.id });
     this.unsub();
+    this.pendingCalls.clear();
   }
 }

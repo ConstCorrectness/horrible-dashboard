@@ -574,7 +574,7 @@ export class WeaponViewModel {
   /** Current ADS interpolation state, 0 (hipfire) to 1 (full ADS) */
   private adsT = 0;
   /** Active knife melee animation and elapsed seconds */
-  private knifeAction: 'slash' | 'stab' | null = null;
+  private knifeAction: 'slash' | 'stab' | 'draw' | null = null;
   private knifeActionT = 0;
   /** Idle respiratory sway phase */
   private breathPhase = 0;
@@ -666,6 +666,11 @@ export class WeaponViewModel {
       // cleared because the swap it was waiting for has arrived.
       this.stow = 1;
       this.holsterHold = 0;
+      this.startAction('draw', DRAW_DURATION);
+      if (id === 'knife') {
+        this.knifeAction = 'draw';
+        this.knifeActionT = 0;
+      }
     }
 
     // The boxes are already in your hands by this point. The prop, if there is
@@ -1040,9 +1045,9 @@ export class WeaponViewModel {
     this.lastYaw = frame.yaw;
     this.lastPitch = frame.pitch;
     const settle = Math.min(1, dt * 9);
-    this.swayX += (clamp(-yawDelta * 2.2, -0.22, 0.22) - this.swayX) * settle;
-    this.swayY += (clamp(-pitchDelta * 1.6, -0.18, 0.18) - this.swayY) * settle;
-    this.swayRoll += (clamp(-yawDelta * 1.8, -0.15, 0.15) - this.swayRoll) * Math.min(1, dt * 10);
+    this.swayX += (clamp(-yawDelta * 12.0, -0.36, 0.36) - this.swayX) * settle;
+    this.swayY += (clamp(-pitchDelta * 9.0, -0.28, 0.28) - this.swayY) * settle;
+    this.swayRoll += (clamp(-yawDelta * 10.0, -0.24, 0.24) - this.swayRoll) * Math.min(1, dt * 10);
 
     // Lateral strafe inertia: strafing left swings weapon slightly right and rolls outward
     const strafeTarget = (frame.strafe ?? 0) * -0.06;
@@ -1216,7 +1221,7 @@ export class WeaponViewModel {
 
     if (this.knifeAction !== null) {
       this.knifeActionT += dt;
-      const duration = this.knifeAction === 'stab' ? 0.35 : 0.22;
+      const duration = this.knifeAction === 'stab' ? 0.35 : this.knifeAction === 'draw' ? 0.30 : 0.22;
       const progress = Math.min(1.0, this.knifeActionT / duration);
       const arc = Math.sin(progress * Math.PI);
       if (this.knifeAction === 'slash') {
@@ -1227,7 +1232,7 @@ export class WeaponViewModel {
         knifePitch = 0.25 * arc;
         knifeYaw = -0.55 * arc;
         knifeRoll = -0.45 * arc;
-      } else {
+      } else if (this.knifeAction === 'stab') {
         // Heavy stab: powerful forward thrust along -Z
         knifeX = -0.12 * arc;
         knifeY = 0.06 * arc;
@@ -1235,6 +1240,15 @@ export class WeaponViewModel {
         knifePitch = -0.12 * arc;
         knifeYaw = 0.15 * arc;
         knifeRoll = 0.55 * arc;
+      } else if (this.knifeAction === 'draw') {
+        // Quick knife flourish on unsheathe / deploy: smooth rotational spin into combat grip
+        const remain = 1.0 - progress;
+        knifeX = 0.14 * remain * Math.sin(progress * Math.PI);
+        knifeY = -0.22 * remain;
+        knifeZ = -0.08 * remain;
+        knifePitch = -0.45 * remain;
+        knifeYaw = 0.32 * remain;
+        knifeRoll = 1.25 * remain;
       }
       if (this.knifeActionT >= duration) {
         this.knifeAction = null;
@@ -1258,6 +1272,12 @@ export class WeaponViewModel {
     const sprintPitch = this.sprintT * -0.18;
     const sprintYaw = this.sprintT * -0.22;
     const sprintRoll = this.sprintT * 0.15;
+
+    // Weapon deploy rotational tilt: matches CS 1.6 / GoldSrc draw dynamics
+    // Barrel enters from lower right canted downward, sweeping smoothly into level alignment
+    const drawPitch = stow * -0.38;
+    const drawYaw = stow * 0.18;
+    const drawRoll = stow * 0.28;
 
     this.pivot.position.set(
       curHomeX +
@@ -1288,13 +1308,14 @@ export class WeaponViewModel {
         reloadImpulsePitch +
         bobY * 0.4 +
         inspectPitch +
-        stow * 0.9 +
+        drawPitch +
         knifePitch +
         breathPitch +
         sprintPitch,
       (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp +
         this.reloadT * 0.25 +
         inspectYaw +
+        drawYaw +
         knifeYaw +
         sprintYaw,
       (this.swayX * 0.5 + this.swayRoll) * adsDamp +
@@ -1302,7 +1323,7 @@ export class WeaponViewModel {
         boltPullRoll +
         reloadImpulseRoll +
         inspectRoll +
-        stow * 0.35 +
+        drawRoll +
         knifeRoll +
         sprintRoll,
     );

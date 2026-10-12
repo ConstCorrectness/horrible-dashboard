@@ -1822,3 +1822,121 @@ async def generate_stream(
             token = delta.get("content") or ""
             if token:
                 yield json.dumps({"response": token}) + "\n"
+
+
+async def infill_stream(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    prefix: str,
+    suffix: str,
+    dialect: str = "llamacpp",
+    model: str = "",
+    max_tokens: int = 64,
+    temperature: float = 0.2,
+) -> AsyncIterator[str]:
+    """Stream a fill-in-the-middle completion as NDJSON {"response": <token>} lines.
+
+    Uses native `/infill` on llama.cpp, or native `suffix` on Ollama `/api/generate`.
+    """
+    if dialect == "llamacpp":
+        payload = {
+            "prompt": prefix,
+            "input_suffix": suffix,
+            "stream": True,
+            "n_predict": max_tokens,
+            "temperature": temperature,
+        }
+        try:
+            async with client.stream(
+                "POST",
+                f"{endpoint}/infill",
+                json=payload,
+            ) as res:
+                if res.status_code == 200:
+                    async for line in res.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:") :].strip()
+                        if data == "[DONE]":
+                            return
+                        try:
+                            obj = json.loads(data)
+                            token = obj.get("content", "")
+                            if token:
+                                yield json.dumps({"response": token}) + "\n"
+                            if obj.get("stop"):
+                                return
+                        except Exception:
+                            continue
+                    return
+        except Exception:
+            pass
+
+    if dialect == "ollama":
+        payload = {
+            "model": model,
+            "prompt": prefix,
+            "suffix": suffix,
+            "stream": True,
+            "options": {"num_predict": max_tokens, "temperature": temperature},
+        }
+        try:
+            async with client.stream(
+                "POST",
+                f"{endpoint}/api/generate",
+                json=payload,
+            ) as res:
+                if res.status_code == 200:
+                    async for line in res.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                            token = obj.get("response", "")
+                            if token:
+                                yield json.dumps({"response": token}) + "\n"
+                            if obj.get("done"):
+                                return
+                        except Exception:
+                            continue
+                    return
+        except Exception:
+            pass
+
+    # Generic FIM fallback: OpenAI /v1/completions with suffix
+    try:
+        async with client.stream(
+            "POST",
+            f"{endpoint}/v1/completions",
+            json={
+                "model": model,
+                "prompt": prefix,
+                "suffix": suffix,
+                "stream": True,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+        ) as res:
+            if res.status_code == 200:
+                async for line in res.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        choices = json.loads(data).get("choices") or [{}]
+                        token = choices[0].get("text", "")
+                        if token:
+                            yield json.dumps({"response": token}) + "\n"
+                    except Exception:
+                        continue
+                return
+    except Exception:
+        pass
+
+    # Fallback to chat generation with prompt
+    prompt = f"{prefix}<CURSOR>{suffix}"
+    info = provider_for(dialect)
+    async for chunk in generate_stream(client, info, endpoint, model, prompt):
+        yield chunk

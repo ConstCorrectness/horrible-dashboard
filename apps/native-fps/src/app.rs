@@ -82,8 +82,8 @@ use hassault_native::world::World;
 use hassault_native::world3d::{self, World3D};
 
 /// Degrees of view rotation per unit of raw mouse movement, before the user's own
-/// multiplier. Chosen to land near the browser client's feel at sensitivity 1.
-const LOOK_SCALE: f32 = 0.08;
+/// multiplier. Calibrated to match Counter-Strike 1.6 / GoldSrc standard (m_yaw = 0.022 deg/pixel).
+const LOOK_SCALE: f32 = 0.022;
 
 /// The largest `dt` ever sent, in seconds.
 ///
@@ -239,6 +239,7 @@ pub struct App {
     /// Items on the map: placements from `MapInfo`, availability from the
     /// snapshot. A renderer only — the server decides every pickup.
     items: ItemField,
+    last_display_weapon: String,
     /// What each item kind gives and how close you have to get, served rather
     /// than declared. Only Train reads it: in a match the server resolves every
     /// pickup and this client is told the result.
@@ -544,6 +545,7 @@ impl App {
             },
             last_frame: Instant::now(),
             input_accum: 0.0,
+            last_display_weapon: String::new(),
             frames: 0,
             fps_since: Instant::now(),
             fps: 0.0,
@@ -906,6 +908,18 @@ impl App {
         } else {
             weapon.clone()
         };
+        if !display_weapon.is_empty() && display_weapon != self.last_display_weapon {
+            if !self.last_display_weapon.is_empty() {
+                if display_weapon == "knife" {
+                    self.play_own("knife_slash", 0.7, false);
+                } else if display_weapon == "pistol" {
+                    self.play_own("reload", 0.6, false);
+                } else {
+                    self.play_own("reload", 0.65, false);
+                }
+            }
+            self.last_display_weapon = display_weapon.clone();
+        }
         let equipped_skin = self.skins.get(&display_weapon);
         self.viewmodel.set_weapon(&display_weapon, equipped_skin);
         // One rule for which knife a skin is, shared with the inspect that
@@ -1109,7 +1123,9 @@ impl App {
                 }
             }
             "hd_assault" => {
-                if z >= 4.0 {
+                if z >= 8.8 {
+                    "step_duct" // Rooftop ventilation crawlway duct
+                } else if z >= 4.0 {
                     "step_metal" // Elevated industrial gantry
                 } else {
                     "step_asphalt" // Street asphalt

@@ -277,7 +277,15 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 220.0,
             thump: 0.0,
         },
-        // Surface-aware material footsteps:
+        // Knife slash / deploy air whoosh
+        "knife_slash" => Timbre {
+            frequency: 2800.0,
+            q: 2.5,
+            decay: 0.11,
+            gain: 0.5,
+            body: 0.0,
+            thump: 0.0,
+        },
         // High-pitch electronic C4 detonator countdown chirp
         "bomb_beep" => Timbre {
             frequency: 1850.0,
@@ -285,6 +293,15 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.08,
             gain: 0.65,
             body: 350.0,
+            thump: 0.0,
+        },
+        // Ventilation duct hollow sheet-metal reverberation (hd_assault rooftop crawlway)
+        "step_duct" => Timbre {
+            frequency: 1850.0,
+            q: 6.5,
+            decay: 0.22,
+            gain: 0.65,
+            body: 320.0,
             thump: 0.0,
         },
         // Structural steel plates, catwalks, & missile silo hatches (hd_facility, hd_junkflea)

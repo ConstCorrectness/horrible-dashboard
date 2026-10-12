@@ -62,13 +62,20 @@ const ghostDecoration = EditorView.decorations.compute([suggestionField], (state
 export interface AutosuggestOptions {
   /** Request a completion for the text before/after the cursor. Aborts on `signal`. */
   fetch: (prefix: string, suffix: string, signal: AbortSignal) => Promise<string>;
+  /** Optional streaming completion: called concurrently or progressively after initial fetch. */
+  fetchStream?: (
+    prefix: string,
+    suffix: string,
+    signal: AbortSignal,
+    onChunk: (chunk: string) => void,
+  ) => Promise<string>;
   /** Idle delay before requesting, in ms. */
   delayMs?: number;
 }
 
 /** Build the inline-autosuggest extension. */
 export function autosuggest(opts: AutosuggestOptions) {
-  const delay = opts.delayMs ?? 500;
+  const delay = opts.delayMs ?? 350;
 
   const requester = ViewPlugin.fromClass(
     class {
@@ -95,16 +102,42 @@ export function autosuggest(opts: AutosuggestOptions) {
         if (!prefix.trim()) return;
         const controller = new AbortController();
         this.controller = controller;
-        let text: string;
+
+        // Tier 1: Instant local prefix/symbol match
+        let text = '';
         try {
           text = (await opts.fetch(prefix, suffix, controller.signal)).replace(/\s+$/, '');
         } catch {
-          return; // aborted or backend error — stay silent
+          // aborted or backend error
         }
+
         // Apply only if nothing moved under us while the request was in flight.
         const cur = view.state.selection.main;
-        if (!text || cur.head !== head || view.state.doc.sliceString(0, head) !== prefix) return;
-        view.dispatch({ effects: setSuggestion.of({ from: head, text }) });
+        const stillValid = cur.head === head && view.state.doc.sliceString(0, head) === prefix;
+        if (!stillValid) return;
+
+        if (text) {
+          view.dispatch({ effects: setSuggestion.of({ from: head, text }) });
+        }
+
+        // Tier 2: Streaming model FIM if configured
+        if (opts.fetchStream) {
+          let streamed = '';
+          try {
+            await opts.fetchStream(prefix, suffix, controller.signal, (chunk) => {
+              if (controller.signal.aborted) return;
+              const nowCur = view.state.selection.main;
+              if (nowCur.head !== head || view.state.doc.sliceString(0, head) !== prefix) return;
+              streamed += chunk;
+              const cleaned = streamed.replace(/\s+$/, '');
+              if (cleaned) {
+                view.dispatch({ effects: setSuggestion.of({ from: head, text: cleaned }) });
+              }
+            });
+          } catch {
+            // Streaming aborted or unavailable — keep instant suggestion
+          }
+        }
       }
 
       cancel(): void {

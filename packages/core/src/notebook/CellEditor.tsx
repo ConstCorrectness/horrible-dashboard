@@ -8,6 +8,9 @@ import { EditorView, keymap, placeholder } from '@codemirror/view';
 
 import { docsHover, docsKeymap, renderDocEntry } from '../docs/cm-docs';
 import type { DocSourceId } from '../docs/chain';
+import { autosuggest } from '../modules/editor/autosuggest';
+import { dbGhostFetch } from '../modules/editor/symbolCompletion';
+import { completeCodeStream } from '../modules/agent/api';
 
 interface CellEditorProps {
   value: string;
@@ -140,6 +143,16 @@ export function CellEditor({
           docsHover({
             notebookPath: () => pathRef.current,
             sources: docSources,
+          }),
+          autosuggest({
+            fetch: (prefix, suffix) =>
+              language === 'python'
+                ? dbGhostFetch(prefix, suffix, 'python')
+                : Promise.resolve(''),
+            fetchStream: (prefix, suffix, signal, onChunk) =>
+              language === 'python'
+                ? completeCodeStream({ prefix, suffix, language: 'python' }, onChunk, signal)
+                : Promise.resolve(''),
           }),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           langCompartment.current.of(language === 'markdown' ? markdown() : python()),

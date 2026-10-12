@@ -24,6 +24,7 @@
     "assets:check": "node scripts/assets.mjs check",
     "assets:pull": "node scripts/assets.mjs pull",
     "assets:pack": "node scripts/assets.mjs pack",
+    "debug:browser-console": "python3 scripts/attach_browser_console.py",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write ."
