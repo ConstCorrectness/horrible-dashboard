@@ -912,6 +912,25 @@ response body out of the telemetry ring, which is not something a user can do.
 `raise_for_status_with_body` puts the (truncated — some providers echo the whole
 request back) body in the exception message instead.
 
+**A rate limit is waited out, briefly.** A `429 Too Many Requests` or `503` means "not
+now", not "no", and nothing used to retry it. An eval sweep against NVIDIA NIM's free
+tier lost 8 of 15 cases to 429s, and a chat turn that hit the limit simply ended in an
+error. `chat` and `chat_stream` are wrapped in `_retry_rate_limits`, beneath
+`traced_chat` so that one span covers every attempt. It covers all dialects:
+
+- httpx's `HTTPStatusError` and litellm's exceptions, which carry `status_code`;
+- up to **3 retries**, honouring `Retry-After` (seconds or an HTTP date), otherwise
+  exponential backoff with jitter (about 1, 2, 4 s);
+- at most **30 s** of waiting in total (`RETRY_BUDGET_S`). A `Retry-After` asking for
+  more than is left raises at once instead: the user hears about it now rather than
+  after a silent minute.
+
+A stream is retried only while nothing has reached the caller. A 429 is refused before
+the first token, but a stream that emitted text and then failed cannot be replayed
+without showing the same words twice. Cancellation is never swallowed, so a stopped
+turn stops waiting immediately. Each retry is logged at INFO with the provider, the
+status and the wait.
+
 `orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
 without it every OpenRouter call fails as an `APIConnectionError` naming a missing
 module, which reads as a network fault.

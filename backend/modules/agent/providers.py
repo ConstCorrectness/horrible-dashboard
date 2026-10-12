@@ -981,7 +981,146 @@ async def list_models(
     return list(models)
 
 
+# --- rate limits ---------------------------------------------------------------
+#
+# A hosted provider's 429 ("Too Many Requests") or 503 ("overloaded") means "not
+# now", not "no": the same request succeeds after a wait. Nothing used to retry
+# them, so one burst on NVIDIA NIM's free tier failed 8 of 15 eval cases outright,
+# and an ordinary chat turn that hit the limit simply ended in an error.
+#
+# Retried at the two entry points every caller and every dialect goes through
+# (`chat`, `chat_stream`), beneath `traced_chat` so one span covers the attempts.
+# Bounded on both count and total wait: an interactive turn must not hang for
+# minutes on a provider that has said it is out of capacity.
+
+#: Statuses that mean "try again later" rather than "this request is wrong".
+RETRY_STATUSES = frozenset({429, 503})
+#: Retries after the first attempt.
+RETRY_ATTEMPTS = 3
+#: The most time spent waiting across all retries of one call. A `Retry-After`
+#: asking for more than what is left is not honoured by waiting: the error is
+#: raised so the user hears about it now instead of after a silent minute.
+RETRY_BUDGET_S = 30.0
+_RETRY_BASE_S = 1.0
+_RETRY_CAP_S = 16.0
+
+#: The wait, as a module attribute so tests can replace it.
+_retry_sleep = asyncio.sleep
+
+
+def _retryable_status(exc: BaseException) -> int | None:
+    """The HTTP status of a "try again later" failure, else None.
+
+    httpx raises `HTTPStatusError` (the openai and ollama dialects); litellm raises
+    its own exception types, which carry `status_code`."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status: Any = exc.response.status_code
+    else:
+        status = getattr(exc, "status_code", None)
+    return status if isinstance(status, int) and status in RETRY_STATUSES else None
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    """The provider's own `Retry-After`, in seconds: either a number of seconds or
+    an HTTP date. None when absent or unreadable."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    try:
+        value = headers.get("retry-after") if headers is not None else None
+    except Exception:  # noqa: BLE001 — a header we cannot read is no hint
+        return None
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _backoff_s(attempt: int) -> float:
+    """Exponential backoff with jitter: about 1s, 2s, 4s… capped, each scaled by a
+    random factor so concurrent turns that were refused together don't retry in
+    lockstep and get refused together again."""
+    import random
+
+    return min(_RETRY_CAP_S, _RETRY_BASE_S * (2**attempt)) * random.uniform(0.5, 1.0)
+
+
+def _retry_rate_limits(fn: Any) -> Any:
+    """Retry `fn` on a rate-limit or overload response, within the bounds above.
+
+    A streamed call is retried only while nothing has reached the caller: a 429 is
+    refused before the first token, but a stream that has already emitted text and
+    then fails cannot be replayed without showing the user the same words twice.
+    Cancellation is never swallowed — `CancelledError` is not an `Exception`, so a
+    stopped turn stops waiting at once.
+    """
+    import functools
+    import inspect
+    import logging
+
+    signature = inspect.signature(fn)
+    logger = logging.getLogger("backend.agent.providers")
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind_partial(*args, **kwargs)
+        emitted = False
+        sink = bound.arguments.get("on_delta")
+        if sink is not None:
+
+            async def tracking(reasoning: str, content: str) -> None:
+                nonlocal emitted
+                if reasoning or content:
+                    emitted = True
+                await sink(reasoning, content)
+
+            bound.arguments["on_delta"] = tracking
+
+        waited = 0.0
+        attempt = 0
+        while True:
+            try:
+                return await fn(*bound.args, **bound.kwargs)
+            except Exception as exc:
+                status = _retryable_status(exc)
+                if status is None or emitted or attempt >= RETRY_ATTEMPTS:
+                    raise
+                hinted = _retry_after_s(exc)
+                wait = hinted if hinted is not None else _backoff_s(attempt)
+                if waited + wait > RETRY_BUDGET_S:
+                    raise
+                info = bound.arguments.get("info")
+                logger.info(
+                    "%s answered %s for %s; retry %d/%d in %.1fs%s",
+                    getattr(info, "label", "provider"),
+                    status,
+                    bound.arguments.get("model", "?"),
+                    attempt + 1,
+                    RETRY_ATTEMPTS,
+                    wait,
+                    " (Retry-After)" if hinted is not None else "",
+                )
+                await _retry_sleep(wait)
+                waited += wait
+                attempt += 1
+
+    return wrapper
+
+
 @traced_chat
+@_retry_rate_limits
 async def chat(
     client: httpx.AsyncClient,
     info: ProviderInfo,
@@ -1106,6 +1245,7 @@ async def chat(
 
 
 @traced_chat
+@_retry_rate_limits
 async def chat_stream(
     client: httpx.AsyncClient,
     info: ProviderInfo,
