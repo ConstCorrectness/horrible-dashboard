@@ -107,6 +107,9 @@ class AgentSpec:
     default_mode: str = ""
     include_peer_tools: bool = False
     can_delegate: bool = False
+    # Knowledge-base collections this agent searches by default (`kb.search` with no
+    # explicit collection). None = the whole knowledge base.
+    knowledge_scope: list[str] | None = None
 
 
 # --- connectors ------------------------------------------------------------

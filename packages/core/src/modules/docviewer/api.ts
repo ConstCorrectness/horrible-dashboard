@@ -6,7 +6,8 @@
  */
 import { apiDelete, apiGet, apiPost } from '../../api';
 
-export type SetStatus = 'queued' | 'crawling' | 'ready' | 'failed';
+/** `indexing` only appears in progress events: a re-index from the archives. */
+export type SetStatus = 'queued' | 'crawling' | 'indexing' | 'ready' | 'failed';
 export type PageStatus = 'pending' | 'captured' | 'failed';
 
 export interface DocSet {

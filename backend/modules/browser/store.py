@@ -115,37 +115,67 @@ def clear_history() -> None:
         conn.execute("DELETE FROM browser_history")
 
 
+# ---- bookmarks: a façade over the knowledge-base catalog -------------------------
+#
+# A bookmark is a starred `kb_items` row. The browser's routes and response shape are
+# unchanged, so the bookmarks strip keeps working, but "bookmark this page" and "save
+# this page to the knowledge base" are now the same record: a page starred in the
+# browser shows up in the Knowledge pane, and a primer starred there shows up on the
+# strip. `browser_bookmarks` rows were copied over once (ids kept) by
+# `kb.store.init_kb_db`; the table itself is no longer read.
+
+
+def _as_bookmark(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "url": item["url"] or "",
+        "title": item["title"],
+        "tags": item["tags"],
+        "added_at": item["added_at"],
+    }
+
+
 def add_bookmark(url: str, title: str, tags: list[str]) -> dict[str, Any]:
-    """Bookmark `url` (idempotent: an existing bookmark for the URL is returned)."""
-    init_browser_db()
-    with get_db_conn() as conn:
-        existing = conn.execute(
-            "SELECT * FROM browser_bookmarks WHERE url = ?", (url,)
-        ).fetchone()
-        if existing is not None:
-            return _bookmark_row(existing)
-        bookmark_id = uuid.uuid4().hex
-        conn.execute(
-            "INSERT INTO browser_bookmarks (id, url, title, tags) VALUES (?, ?, ?, ?)",
-            (bookmark_id, url, title, json.dumps(tags)),
-        )
-        r = conn.execute(
-            "SELECT * FROM browser_bookmarks WHERE id = ?", (bookmark_id,)
-        ).fetchone()
-    return _bookmark_row(r)
+    """Star `url` (idempotent: an existing item for the URL is starred and returned,
+    keeping its own title and tags)."""
+    from backend.modules.kb import store as kb_store
+
+    existing = kb_store.get_by_url(url)
+    if existing is not None:
+        item = kb_store.update_item(existing["id"], starred=True) or existing
+        return _as_bookmark(item)
+    item = kb_store.create_item(
+        url=url, title=title, tags=tags, kind="bookmark", starred=True
+    )
+    return _as_bookmark(item)
 
 
 def list_bookmarks() -> list[dict[str, Any]]:
-    init_browser_db()
-    with get_db_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM browser_bookmarks ORDER BY added_at DESC, id DESC"
-        ).fetchall()
-    return [_bookmark_row(r) for r in rows]
+    from backend.modules.kb import store as kb_store
+
+    rows, _total = kb_store.list_items(starred=True, limit=1000)
+    return [_as_bookmark(r) for r in rows]
 
 
 def delete_bookmark(bookmark_id: str) -> bool:
-    init_browser_db()
-    with get_db_conn() as conn:
-        cur = conn.execute("DELETE FROM browser_bookmarks WHERE id = ?", (bookmark_id,))
-        return cur.rowcount > 0
+    """Un-star. A plain bookmark with nothing else to it is removed outright; an
+    item the user has invested in (notes, status, indexed content, a place in a
+    course) only loses its star — removing a bookmark must not delete a primer."""
+    from backend.modules.kb import store as kb_store
+
+    item = kb_store.get_item(bookmark_id)
+    if item is None or not item["starred"]:
+        return False
+    disposable = (
+        item["kind"] == "bookmark"
+        and item["index_mode"] == "link"
+        and not item["notes"]
+        and not item["collections"]
+        and item["parent_id"] is None
+        and item["status"] == "to_read"
+    )
+    if disposable:
+        kb_store.delete_item(bookmark_id)
+    else:
+        kb_store.update_item(bookmark_id, starred=False)
+    return True

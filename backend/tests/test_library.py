@@ -47,7 +47,10 @@ def fake_embed(monkeypatch):
     async def _embed(text: str):
         return get_local_fallback_embedding(text), "test-fallback"
 
-    monkeypatch.setattr("backend.modules.library.ingest.get_embedding", _embed)
+    async def _embed_many(texts: list[str]):
+        return [get_local_fallback_embedding(t) for t in texts], "test-fallback"
+
+    monkeypatch.setattr("backend.modules.library.ingest.get_embeddings", _embed_many)
     monkeypatch.setattr("backend.modules.library.routes.get_embedding", _embed)
 
 

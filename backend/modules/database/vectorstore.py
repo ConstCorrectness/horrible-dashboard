@@ -116,6 +116,60 @@ def upsert_documents(
         db.create_table(collection, data=data)
 
 
+def replace_documents(
+    collection: str,
+    id_prefixes: list[str],
+    rows: list[tuple[str, str, dict[str, Any], list[float]]],
+) -> None:
+    """Drop every row under `id_prefixes`, then **append** `rows`.
+
+    The bulk-ingest write. `upsert_documents` is a `merge_insert`, which rewrites
+    data files across the whole table on every call — its cost tracks table size,
+    so a site import that writes page after page into a growing 40k-row table gets
+    slower with every page. Here the rows being replaced are known up front (a
+    source's chunks all share the `<source_id>#` prefix), so a predicate delete plus
+    an append does the same job in time proportional to the batch.
+    """
+    if not rows and not id_prefixes:
+        return
+    db = _get_db()
+    exists = collection in db.table_names()
+    if exists:
+        tbl = db.open_table(collection)
+        for prefix in id_prefixes:
+            tbl.delete(_like_prefix(prefix))
+    if not rows:
+        return
+    widths = {len(embedding) for _i, _t, _m, embedding in rows}
+    if len(widths) > 1:
+        raise DimensionMismatch(
+            f"batch mixes vector widths {sorted(widths)}; a collection holds one width"
+        )
+    width = widths.pop()
+    now = time.time()
+    data = [
+        {
+            "id": doc_id,
+            "text": text,
+            "metadata": json.dumps(metadata),
+            "vector": embedding,
+            "created_at": now,
+        }
+        for doc_id, text, metadata, embedding in rows
+    ]
+    if not exists:
+        db.create_table(collection, data=data)
+        return
+    expected = _table_dim(tbl)
+    if expected is not None and width != expected:
+        raise DimensionMismatch(
+            f"collection {collection!r} holds {expected}-dim vectors but got "
+            f"{width}. A collection's width is fixed when it is created; "
+            "delete and re-ingest it to switch embedding model."
+        )
+    tbl.add(data)
+
+
 def upsert_document(
     doc_id: str,
     collection: str,
@@ -186,9 +240,8 @@ def delete_documents_with_prefix(collection: str, id_prefix: str) -> None:
     db = _get_db()
     if collection not in db.table_names():
         return
-    escaped = id_prefix.replace("'", "''").replace("%", r"\%").replace("_", r"\_")
     try:
-        db.open_table(collection).delete(f"id LIKE '{escaped}%' ESCAPE '\\'")
+        db.open_table(collection).delete(_like_prefix(id_prefix))
     except Exception:  # noqa: BLE001 — dialect quirks; fall back to per-id deletes
         tbl = db.open_table(collection)
         rows = tbl.search().limit(len(tbl)).to_list()
@@ -196,6 +249,42 @@ def delete_documents_with_prefix(collection: str, id_prefix: str) -> None:
             row_id = str(r.get("id", ""))
             if row_id.startswith(id_prefix):
                 tbl.delete("id = '{}'".format(row_id.replace("'", "''")))
+
+
+def _like_prefix(id_prefix: str) -> str:
+    escaped = id_prefix.replace("'", "''").replace("%", r"\%").replace("_", r"\_")
+    return f"id LIKE '{escaped}%' ESCAPE '\\'"
+
+
+def list_documents_with_prefix(collection: str, id_prefix: str) -> list[dict[str, Any]]:
+    """Every document in one collection whose id starts with `id_prefix`.
+
+    A predicate scan on the id column, not "load the table and filter in Python" —
+    the difference matters once a collection is a whole imported site (tens of
+    thousands of rows) and the caller wants one source's few hundred chunks.
+    """
+    db = _get_db()
+    if db is None or collection not in db.table_names():
+        return []
+    tbl = db.open_table(collection)
+    try:
+        rows = tbl.search().where(_like_prefix(id_prefix)).limit(len(tbl)).to_list()
+    except Exception:  # noqa: BLE001 — dialect quirks; fall back to a filtered scan
+        rows = [
+            r
+            for r in tbl.search().limit(len(tbl)).to_list()
+            if str(r.get("id", "")).startswith(id_prefix)
+        ]
+    return [
+        {
+            "id": r["id"],
+            "collection": collection,
+            "text": r["text"],
+            "metadata": json.loads(r["metadata"]),
+            "created_at": r.get("created_at", 0),
+        }
+        for r in rows
+    ]
 
 
 def delete_collection(collection: str) -> int:
@@ -239,6 +328,55 @@ def search_documents(
             }
         )
     return out
+
+
+ANN_MIN_ROWS = 20_000
+
+
+def ensure_ann_index(collection: str, min_rows: int = ANN_MIN_ROWS) -> str:
+    """Build (or refresh) a cosine ANN index once a table is big enough to need one.
+
+    Nothing else in the app ever builds an index, so every search is a flat scan.
+    That is the right call for a few thousand rows and stops being one for a
+    knowledge-base site import — the aman.ai primers alone are ~45k chunks. Below
+    `min_rows` this does nothing: training an index on a small table costs more than
+    it saves and can lower recall.
+
+    IVF_HNSW_SQ rather than LanceDB's IVF_PQ default: PQ's recall loss is what makes
+    the *right* passage miss the top 8, and that is the failure retrieval for an
+    agent can least afford. Rows written after the build are still found — LanceDB
+    scans unindexed fragments flat — and `optimize()` folds them in once they are a
+    meaningful share of the table.
+
+    Returns what happened: `skipped`, `built`, `optimized` or `current`.
+    """
+    db = _get_db()
+    if db is None or collection not in db.table_names():
+        return "skipped"
+    tbl = db.open_table(collection)
+    rows = len(tbl)
+    if rows < min_rows:
+        return "skipped"
+    existing = [
+        idx for idx in tbl.list_indices() if "vector" in list(idx.columns or [])
+    ]
+    if not existing:
+        tbl.create_index(
+            metric="cosine",
+            vector_column_name="vector",
+            index_type="IVF_HNSW_SQ",
+            replace=True,
+        )
+        return "built"
+    try:
+        stats = tbl.index_stats(existing[0].name)
+        unindexed = int(getattr(stats, "num_unindexed_rows", 0) or 0)
+    except Exception:  # noqa: BLE001 — stats shape varies across versions
+        unindexed = 0
+    if unindexed > rows // 10:
+        tbl.optimize()
+        return "optimized"
+    return "current"
 
 
 def list_documents(

@@ -1,0 +1,218 @@
+[
+  {
+    "id": "aman-primers",
+    "label": "Aman's AI Journal — primers",
+    "description": "Long-form ML primers (transformers, RAG, RL, diffusion, …), one page each.",
+    "match": [
+      "^https?://(www\\.)?aman\\.ai/primers/"
+    ],
+    "root": {
+      "title": "Aman's AI Journal — primers",
+      "url": "https://aman.ai/",
+      "kind": "site"
+    },
+    "start_urls": [
+      "https://aman.ai/"
+    ],
+    "allow_domains": [
+      "aman.ai"
+    ],
+    "allow_patterns": [
+      "^/$",
+      "^/primers/(ai/)?[^/]+/?$"
+    ],
+    "deny_patterns": [],
+    "index_pages": [
+      "^/$"
+    ],
+    "frontier": "bfs",
+    "max_depth": 1,
+    "max_pages": 220,
+    "keep_scripts": false,
+    "content_selector": "article.post-content",
+    "hierarchy": "flat",
+    "page_kind": "primer",
+    "collections": [
+      "ml"
+    ],
+    "tags": [
+      "primer",
+      "aman.ai"
+    ],
+    "title_strip": [
+      "^(Aman's AI Journal\\s*•\\s*)?Primers\\s*•\\s*"
+    ]
+  },
+  {
+    "id": "apxml-course",
+    "label": "ApX Machine Learning — one course",
+    "description": "A single apxml.com course: chapters and lessons, as a tree with progress.",
+    "match": [
+      "^https?://(www\\.)?apxml\\.com/courses/(?P<course>(?!roadmap\\b)[a-z0-9-]+)"
+    ],
+    "root": {
+      "title": "{course}",
+      "url": "https://apxml.com/courses/{course}",
+      "kind": "course"
+    },
+    "start_urls": [
+      "https://apxml.com/courses/{course}"
+    ],
+    "allow_domains": [
+      "apxml.com"
+    ],
+    "allow_patterns": [
+      "^/courses/{course}(/[^/]+){0,2}/?$"
+    ],
+    "deny_patterns": [
+      "/quiz/?$"
+    ],
+    "frontier": "sitemap",
+    "sitemap_url": "https://apxml.com/sitemap.xml",
+    "max_depth": 3,
+    "max_pages": 120,
+    "keep_scripts": true,
+    "content_selector": "div.course-content",
+    "hierarchy": "url_path",
+    "path_kinds": [
+      "course",
+      "chapter",
+      "lesson"
+    ],
+    "path_root": "/courses/{course}",
+    "page_kind": "lesson",
+    "collections": [
+      "ml"
+    ],
+    "tags": [
+      "course",
+      "apxml"
+    ],
+    "title_strip": [
+      "\\s*[|–-]\\s*ApX Machine Learning\\s*$"
+    ]
+  },
+  {
+    "id": "lilian-weng",
+    "label": "Lil'Log (Lilian Weng)",
+    "description": "Lilian Weng's long-form posts on RL, LLMs, agents and diffusion.",
+    "match": [
+      "^https?://lilianweng\\.github\\.io/posts/"
+    ],
+    "root": {
+      "title": "Lil'Log",
+      "url": "https://lilianweng.github.io/",
+      "kind": "site"
+    },
+    "start_urls": [
+      "https://lilianweng.github.io/archives/"
+    ],
+    "allow_domains": [
+      "lilianweng.github.io"
+    ],
+    "allow_patterns": [
+      "^/archives/?$",
+      "^/posts/[^/]+/?$"
+    ],
+    "deny_patterns": [],
+    "index_pages": [
+      "^/archives/?$"
+    ],
+    "frontier": "bfs",
+    "max_depth": 1,
+    "max_pages": 120,
+    "keep_scripts": false,
+    "content_selector": "div.post-content",
+    "hierarchy": "flat",
+    "page_kind": "article",
+    "collections": [
+      "ml"
+    ],
+    "tags": [
+      "blog"
+    ],
+    "title_strip": [
+      "\\s*\\|\\s*Lil'Log\\s*$"
+    ]
+  },
+  {
+    "id": "distill-pub",
+    "label": "Distill",
+    "description": "Distill's interactive ML research articles.",
+    "match": [
+      "^https?://distill\\.pub/20"
+    ],
+    "root": {
+      "title": "Distill",
+      "url": "https://distill.pub/",
+      "kind": "site"
+    },
+    "start_urls": [
+      "https://distill.pub/"
+    ],
+    "allow_domains": [
+      "distill.pub"
+    ],
+    "allow_patterns": [
+      "^/$",
+      "^/20[0-9]{2}/[^/]+/?$"
+    ],
+    "deny_patterns": [],
+    "index_pages": [
+      "^/$"
+    ],
+    "frontier": "bfs",
+    "max_depth": 1,
+    "max_pages": 80,
+    "keep_scripts": true,
+    "content_selector": null,
+    "hierarchy": "flat",
+    "page_kind": "article",
+    "collections": [
+      "ml"
+    ],
+    "tags": [
+      "research"
+    ]
+  },
+  {
+    "id": "karpathy-blog",
+    "label": "Andrej Karpathy's blog",
+    "description": "Karpathy's essays (RNN effectiveness, recipe for training NNs, …).",
+    "match": [
+      "^https?://karpathy\\.github\\.io/20"
+    ],
+    "root": {
+      "title": "Karpathy's blog",
+      "url": "https://karpathy.github.io/",
+      "kind": "site"
+    },
+    "start_urls": [
+      "https://karpathy.github.io/"
+    ],
+    "allow_domains": [
+      "karpathy.github.io"
+    ],
+    "allow_patterns": [
+      "^/$",
+      "^/20[0-9]{2}/[0-9]{2}/[0-9]{2}/[^/]+/?$"
+    ],
+    "deny_patterns": [],
+    "index_pages": [
+      "^/$"
+    ],
+    "frontier": "bfs",
+    "max_depth": 1,
+    "max_pages": 60,
+    "keep_scripts": false,
+    "content_selector": null,
+    "hierarchy": "flat",
+    "page_kind": "article",
+    "collections": [
+      "ml"
+    ],
+    "tags": [
+      "blog"
+    ]
+  }
+]

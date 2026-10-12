@@ -42,6 +42,8 @@ STYLESHEET_KIND = "stylesheet"
 # capture). A sanitized capture drops the tags entirely, so fetching their sources
 # would be downloading bytes to throw away.
 SCRIPT_KIND = "script"
+# A `url()` referenced from an inline <style> block (fonts, background images).
+INLINE_CSS_ASSET_KIND = "css-asset"
 
 _CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\"\)]+)\1\s*\)", re.IGNORECASE)
 _ON_ATTR_RE = re.compile(r"^on", re.IGNORECASE)
@@ -98,6 +100,13 @@ def list_resources(
         resolved = _abs(base_url, link.get("href") or "")
         if resolved is not None:
             out.setdefault(resolved, STYLESHEET_KIND)
+    # `url()`s inside inline <style> blocks: fonts, mostly. A page's own CSS is
+    # usually a <link>, but script-injected styles are always inline — MathJax 3/4
+    # writes its CHTML stylesheet (and every math font) into a <style>, so without
+    # this a captured page's equations render in fallback glyphs, or not at all.
+    for style in doc.iter("style"):
+        for resolved in list_css_urls(style.text or "", base_url):
+            out.setdefault(resolved, INLINE_CSS_ASSET_KIND)
     if include_scripts:
         for script in doc.iter("script"):
             resolved = _abs(base_url, script.get("src") or "")
@@ -177,6 +186,41 @@ def _sanitize(doc: Any) -> None:
             value = (attribs.get(name) or "").strip()
             if value.lower().startswith("javascript:"):
                 del attribs[name]
+
+
+_MATHJAX_NOISE = (
+    "data-semantic",
+    "data-speech",
+    "data-braille",
+    "has-speech",
+    "ctxtmenu_counter",
+)
+
+
+def _slim_mathjax(doc: Any) -> None:
+    """Drop MathJax's speech-engine attributes from rendered math.
+
+    MathJax 4 annotates every node of every equation with `data-semantic-*`
+    attributes — spoken-text renderings in several speech styles, as SSML. They
+    drive its live screen-reader explorer, which needs MathJax's own JS running and
+    so never works in an archive anyway. They are also most of the page: an
+    aman.ai primer with ~900 equations carried 11 MB of them in a 14 MB capture.
+    The visual CHTML (the `mjx-*` elements and their classes) is untouched.
+    """
+    for el in doc.iter():
+        tag = el.tag if isinstance(el.tag, str) else ""
+        if not tag.startswith("mjx"):
+            continue
+        attribs = el.attrib
+        # `data-latex` repeats each sub-expression's TeX on every nested node; the
+        # container's own copy (and the crawl's `data-tex` stamp) is the one kept.
+        keep_latex = tag == "mjx-container"
+        for name in [
+            a
+            for a in attribs
+            if a.startswith(_MATHJAX_NOISE) or (a == "data-latex" and not keep_latex)
+        ]:
+            del attribs[name]
 
 
 # Injected as the first thing in <head> of a scripted archive.
@@ -286,6 +330,7 @@ def build_page(
 
     if not keep_scripts:
         _sanitize(doc)
+    _slim_mathjax(doc)
 
     if keep_scripts:
         _inline_scripts(doc, base_url, resources, budget)
@@ -321,6 +366,10 @@ def build_page(
         style.text = _inline_css(css_text, resolved, resources, budget)
         link.getparent().replace(link, style)
 
+    for style in doc.iter("style"):
+        if style.text and "url(" in style.text:
+            style.text = _inline_css(style.text, base_url, resources, budget)
+
     # Absolute links for everything left un-inlined: the archive must not depend
     # on the original base URL, and a fresh <base> keeps relative hrefs working.
     head = doc.find("head")
@@ -340,3 +389,60 @@ def build_page(
     comment = f"<!-- saved from {base_url} at {saved_at} by horrible-dashboard -->\n"
     body = lxml.html.tostring(doc, encoding="unicode", doctype="<!DOCTYPE html>")
     return comment + body
+
+
+# Raster images above this are worth re-encoding; below it the saving is noise.
+SHRINK_MIN_BYTES = 120_000
+# Longest edge kept. An archive is read in a pane, not printed; a 4000px photo
+# displayed at 800px is 25x the pixels anyone sees.
+SHRINK_MAX_EDGE = 1600
+_SHRINK_MAX_PIXELS = 60_000_000
+_SHRINKABLE = (
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
+    "image/gif",
+)
+
+
+def shrink_image(data: bytes, mime: str) -> tuple[bytes, str]:
+    """A smaller copy of a raster image for an archive, or the original.
+
+    Images are ~95% of a captured long-form page — a single aman.ai primer inlined
+    20 MB of full-size JPEGs — and a site import multiplies that by every page. So
+    big rasters are scaled to `SHRINK_MAX_EDGE` and re-encoded as WebP (alpha
+    kept), and the result is used **only if it is actually smaller**. An animated
+    GIF keeps its animation unless it is huge, in which case its first frame stands
+    in: a 5 MB looping diagram in an offline copy is not worth five pages of text.
+
+    Never raises: anything Pillow can't read (SVG, a truncated file, a
+    decompression bomb past `_SHRINK_MAX_PIXELS`) comes back unchanged.
+    """
+    clean = (mime or "").split(";")[0].strip().lower()
+    if len(data) < SHRINK_MIN_BYTES or clean not in _SHRINKABLE:
+        return data, mime
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            if width * height > _SHRINK_MAX_PIXELS:
+                return data, mime
+            animated = getattr(img, "n_frames", 1) > 1
+            if animated and len(data) < 2_000_000:
+                return data, mime
+            img.seek(0)
+            frame = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
+            frame.thumbnail((SHRINK_MAX_EDGE, SHRINK_MAX_EDGE))
+            out = io.BytesIO()
+            frame.save(out, format="WEBP", quality=80, method=4)
+        shrunk = out.getvalue()
+    except Exception:  # noqa: BLE001 — an image we can't re-encode is kept as-is
+        return data, mime
+    if len(shrunk) >= len(data):
+        return data, mime
+    return shrunk, "image/webp"

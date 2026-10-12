@@ -18,6 +18,7 @@ that circle.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -92,6 +93,12 @@ def init_docviewer_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_docviewer_pages_url "
             "ON docviewer_pages(set_id, url)"
         )
+        # Added with the knowledge base's site importer: the crawl recipe (start
+        # URLs, scope patterns, hierarchy …) as JSON. NULL is the original prefix
+        # crawl, so sets created before the column existed behave as they did.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(docviewer_sets)")}
+        if "recipe" not in cols:
+            conn.execute("ALTER TABLE docviewer_sets ADD COLUMN recipe TEXT")
 
 
 # ---- sets ------------------------------------------------------------------
@@ -110,6 +117,7 @@ def _set_row(r: Any) -> dict[str, Any]:
         "max_pages": r["max_pages"],
         "created_at": str(r["created_at"]),
         "last_crawled_at": str(r["last_crawled_at"]) if r["last_crawled_at"] else None,
+        "recipe": json.loads(r["recipe"]) if r["recipe"] else None,
     }
 
 
@@ -120,6 +128,7 @@ def create_set(
     prefix: str,
     library: str,
     max_pages: int,
+    recipe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     init_docviewer_db()
     set_id = uuid.uuid4().hex
@@ -127,10 +136,18 @@ def create_set(
         conn.execute(
             """
             INSERT INTO docviewer_sets
-                (id, title, seed_url, prefix, library, status, max_pages)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?)
+                (id, title, seed_url, prefix, library, status, max_pages, recipe)
+            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
-            (set_id, title, seed_url, prefix, library, max_pages),
+            (
+                set_id,
+                title,
+                seed_url,
+                prefix,
+                library,
+                max_pages,
+                json.dumps(recipe) if recipe is not None else None,
+            ),
         )
     row = get_set(set_id)
     assert row is not None  # just inserted
@@ -169,6 +186,22 @@ def set_status(set_id: str, status: str, *, error: str | None = None) -> None:
                 "UPDATE docviewer_sets SET status = ?, error = ? WHERE id = ?",
                 (status, error, set_id),
             )
+
+
+def update_set(set_id: str, **fields: Any) -> None:
+    """Patch `title`, `max_pages` or `recipe` on an existing set."""
+    allowed = {"title", "max_pages", "recipe"}
+    data = {k: v for k, v in fields.items() if k in allowed}
+    if not data:
+        return
+    if "recipe" in data and data["recipe"] is not None:
+        data["recipe"] = json.dumps(data["recipe"])
+    with get_db_conn() as conn:
+        conn.execute(
+            f"UPDATE docviewer_sets SET {', '.join(f'{k} = ?' for k in data)} "
+            "WHERE id = ?",
+            [*data.values(), set_id],
+        )
 
 
 def refresh_page_count(set_id: str) -> int:
@@ -275,6 +308,15 @@ def mark_captured(
             WHERE id = ?
             """,
             (title, artifact_id, source_id, size, page_key),
+        )
+
+
+def set_page_source(page_key: str, source_id: str | None) -> None:
+    """Attach (or clear) a page's library source once its batched ingest lands."""
+    with get_db_conn() as conn:
+        conn.execute(
+            "UPDATE docviewer_pages SET source_id = ? WHERE id = ?",
+            (source_id, page_key),
         )
 
 

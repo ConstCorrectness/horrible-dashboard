@@ -17,7 +17,7 @@ from backend.modules.database.embeddings import get_embedding
 from backend.modules.database.vectorstore import (
     CLIP_SUFFIX,
     clip_collection,
-    delete_document,
+    delete_documents_with_prefix,
     init_db,
     search_documents,
 )
@@ -157,21 +157,27 @@ def get_chunks(source_id: str) -> ChunksResponse:
     return ChunksResponse(source=SourceModel(**source), chunks=chunks)
 
 
+def delete_source_chunks(source: dict) -> None:
+    """Drop every vector row a source owns, in its library and the CLIP sibling.
+
+    By doc-id prefix, one predicate delete per table. This used to call
+    `delete_document` once per chunk, and each of those sweeps *every* table in the
+    store — fine for a ten-chunk note, a few thousand table operations for one
+    imported primer. The prefix also covers partial ingests (rows beyond
+    `chunk_count`) and a CLIP-only source, whose single row lives only in the
+    sibling.
+    """
+    prefix = f"{source['id']}#"
+    delete_documents_with_prefix(source["library"], prefix)
+    delete_documents_with_prefix(clip_collection(source["library"]), prefix)
+
+
 @router.delete("/sources/{source_id}", response_model=DeleteResult)
 def delete_source(source_id: str) -> DeleteResult:
     source = store.get_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="source not found")
-    # Delete the actual chunk rows (covers partial ingests, not just chunk_count).
-    # `delete_document` sweeps every table by id, so a chunk's CLIP sibling — which
-    # shares its id — goes with it.
-    for chunk in store.chunk_docs_for(source):
-        delete_document(f"{source_id}#{chunk['index']}")
-    # ...but a CLIP-only source (indexed by appearance, no describing text) has *no*
-    # chunk rows to iterate, so its sibling row would survive the loop above and
-    # linger as an orphan hit forever. Sweep its id explicitly; it's a no-op when the
-    # loop already covered it.
-    delete_document(f"{source_id}#0")
+    delete_source_chunks(source)
     store.delete_source(source_id)
     return DeleteResult(deleted=True, id=source_id)
 
@@ -296,6 +302,8 @@ async def search(req: LibrarySearchRequest) -> LibrarySearchResponse:
                 chunk_index=int(row["metadata"].get("chunk_index", 0)),
                 text=row["text"],
                 score=score,
+                section=row["metadata"].get("section"),
+                anchor=row["metadata"].get("anchor"),
             )
         )
         group.top_score = max(group.top_score, score)

@@ -458,6 +458,7 @@ export { karaokeModule } from './modules/karaoke';
 export { audioModule, initAudio } from './modules/audio';
 export { libraryModule } from './modules/library';
 export { docviewerModule } from './modules/docviewer';
+export { kbModule } from './modules/kb';
 export { recordsModule } from './modules/records';
 // Started at boot, not on pane mount: a proposal that arrives while you are looking
 // at something else is the normal case for an unattended extraction.

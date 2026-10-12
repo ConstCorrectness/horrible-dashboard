@@ -76,9 +76,15 @@ async def capture_url(
     library: str = "default",
     title: str | None = None,
     tags: list[str] | None = None,
+    ingest_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fetch `url`, inline its resources, store the page artifact, and file it
-    into the library. Returns `{"artifact": ..., "source": ...}` dicts."""
+    into the library. Returns `{"artifact": ..., "source": ...}` dicts.
+
+    `ingest_options` passes `IngestRequest`'s structured-ingest fields through
+    (`structured`, `chunk_size`, `content_selector`, `strict_embeddings`) — the
+    knowledge base archives a page through here and wants it chunked on headings.
+    """
     cli = str(get_value("research.singleFileCli", "") or "").strip()
     if cli:
         page_html, final_url = await _capture_via_single_file(cli, url)
@@ -104,6 +110,7 @@ async def capture_url(
             title=resolved_title,
             tags=tags or [],
             artifact_id=artifact["id"],
+            **(ingest_options or {}),
         )
     )
     return {"artifact": artifact, "source": source.model_dump()}

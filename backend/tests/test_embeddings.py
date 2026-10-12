@@ -141,6 +141,38 @@ def test_offline_provider_degrades_to_hash_fallback(monkeypatch):
     assert len(vectors) == 2 and len(vectors[0]) == em.FALLBACK_DIMENSION
 
 
+def test_unreachable_provider_is_not_retried_text_by_text(monkeypatch):
+    # A refused batch means nothing is listening, not "no batch endpoint": retrying
+    # each text turned a dead LM Studio into ~90s of refusals for one page.
+    class _Config:
+        provider = "lmstudio"
+        endpoint = "http://test-host:1234"
+        model = "nomic-embed-text-v1.5"
+
+    monkeypatch.setattr(em, "_load_config", lambda: _Config())
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "nomic-embed-text-v1.5")
+    posts: list[str] = []
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request.url.path)
+        raise httpx.ConnectError("connection refused")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        em.httpx,
+        "AsyncClient",
+        lambda *a, **k: real_client(
+            *a, **{**k, "transport": httpx.MockTransport(dead)}
+        ),
+    )
+
+    vectors, method = asyncio.run(em.get_embeddings([f"t{i}" for i in range(50)]))
+    assert method == "local-fallback"
+    assert len(vectors) == 50
+    assert len(posts) == 1  # the batch attempt, and nothing after it
+
+
 def test_no_config_uses_fallback_without_network(monkeypatch):
     monkeypatch.setattr(em, "_load_config", lambda: None)
     vectors, method = asyncio.run(em.get_embeddings(["a"]))

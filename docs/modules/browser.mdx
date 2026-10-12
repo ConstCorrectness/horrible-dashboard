@@ -66,6 +66,15 @@ keeps its **own per-instance back/forward stack**. The URL bar accepts a bare ho
 (prefixed to `https://`) or a search query (routed to a search engine). Bookmarks and
 history persist server-side (see below).
 
+The **star** opens **Save to Knowledge**: a page is saved into the
+[knowledge base](kb.mdx) with a kind, collections, notes, and how much of it to keep
+(the link, its text for search, or text plus an offline copy). Kind and collections
+default from the site's import profile when it has one, and the popover then offers
+to import the whole site or course. On a page that is already saved the star is lit,
+and the popover shows the item's status and index state as they change. It has
+controls to mark it done, pin or unpin it, and change what is kept. Opening a saved
+article, lesson or primer that is still "to read" marks it "reading".
+
 **Escaping a site that refuses framing** — always available, no fragile detection:
 
 - **▤ Reader** — server-side reader mode: the backend fetches the page and returns its
@@ -422,9 +431,13 @@ A normal backend module (`backend/modules/browser`), same shape as `library`:
   pane's live DOM). No fetch, so no SSRF surface.
 - `GET /scripts` — the page scripts both engines evaluate (`snapshot`, `media`), verbatim
   from `scripts/`, so the native engine never carries a stale copy.
-- `GET/POST/DELETE /history` and `GET/POST /bookmarks`, `DELETE /bookmarks/{id}` — a
-  SQLite catalog (`browser_history`, `browser_bookmarks`) in the shared app DB. History
-  is upserted per URL; bookmarks are deduped per URL.
+- `GET/POST/DELETE /history` — a SQLite catalog (`browser_history`) in the shared app
+  DB, upserted per URL.
+- `GET/POST /bookmarks`, `DELETE /bookmarks/{id}` — a façade over the knowledge base:
+  a bookmark is a **starred** `kb_items` row (the old `browser_bookmarks` rows were
+  migrated in once, ids kept). Removing a bookmark only unstars an item the user has
+  put work into (notes, status, collections, indexed content); a bare bookmark is
+  deleted.
 
 ### Security — SSRF
 

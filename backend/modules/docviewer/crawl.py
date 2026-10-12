@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from backend.modules.artifacts.store import store_bytes
@@ -96,13 +96,25 @@ def _links(html: str, base_url: str) -> list[tuple[str, str]]:
     return out
 
 
-def rewrite_links(html: str, base_url: str, set_id: str, prefix: str) -> str:
+def rewrite_links(
+    html: str,
+    base_url: str,
+    set_id: str,
+    prefix: str,
+    keep: Callable[[str], bool] | None = None,
+) -> str:
     """Point in-scope links at their sibling archives; leave the rest alone.
 
     An out-of-scope link keeps its absolute URL, which under the archive's CSP is
     simply inert — the sandbox has no `allow-top-navigation`, so clicking it does
     nothing. That is the intended behaviour: the way out of the archive is the pane's
     "live" button, not a link that silently navigates the frame to the open web.
+
+    `keep` replaces the prefix test for recipe crawls (scope patterns, minus
+    frontier-only index pages). A rewritten link also records its original URL as
+    `data-orig-href`: the archive is then enough to recover the page's links, which
+    is what lets a resumed crawl skip re-capturing a page without losing the pages
+    only it linked to.
     """
     import lxml.html
 
@@ -119,10 +131,13 @@ def rewrite_links(html: str, base_url: str, set_id: str, prefix: str) -> str:
         if urlsplit(absolute).scheme not in ("http", "https"):
             continue
         target, fragment = urldefrag(absolute)
-        if not _in_scope(target, prefix):
+        in_set = keep(target) if keep is not None else _in_scope(target, prefix)
+        if not in_set:
             a.set("href", absolute)  # absolute, and inert under the CSP
             changed = True
             continue
+        if keep is not None:
+            a.set("data-orig-href", target)
         pid = store.page_id(set_id, canonical_url(target))
         rewritten = f"/api/docviewer/pages/{pid}/content"
         if fragment:
@@ -227,11 +242,18 @@ async def _capture_one(
     return title, len(data), links
 
 
-async def _run_crawl(set_id: str, max_depth: int) -> None:
+async def _run_crawl(set_id: str, max_depth: int, force: bool = False) -> None:
     from backend.modules.browser.session import browser_manager
 
     doc_set = store.get_set(set_id)
     if doc_set is None:
+        return
+    if doc_set.get("recipe"):
+        # A knowledge-base site import: separate start and scope, sitemap frontier,
+        # resume, batched ingest. See `site_crawl.py`.
+        from backend.modules.docviewer.site_crawl import run_recipe_crawl
+
+        await run_recipe_crawl(set_id, max_depth, force=force)
         return
     prefix = doc_set["prefix"]
     max_pages = int(doc_set["max_pages"])
@@ -346,20 +368,56 @@ async def _run_crawl(set_id: str, max_depth: int) -> None:
     )
 
 
-async def _guarded(set_id: str, max_depth: int) -> None:
+async def _guarded(set_id: str, max_depth: int, force: bool = False) -> None:
     async with _crawl_slot:
         try:
-            await _run_crawl(set_id, max_depth)
+            await _run_crawl(set_id, max_depth, force)
         finally:
             _running.pop(set_id, None)
 
 
-def start_crawl(set_id: str, max_depth: int = DEFAULT_MAX_DEPTH) -> bool:
-    """Kick a crawl off detached. False if one is already running for this set."""
+def start_crawl(
+    set_id: str, max_depth: int = DEFAULT_MAX_DEPTH, *, force: bool = False
+) -> bool:
+    """Kick a crawl off detached. False if one is already running for this set.
+
+    `force` re-captures pages a recipe crawl already holds; without it a recrawl
+    resumes, capturing only what is missing.
+    """
     existing = _running.get(set_id)
     if existing is not None and not existing.done():
         return False
-    _running[set_id] = asyncio.create_task(_guarded(set_id, max_depth))
+    _running[set_id] = asyncio.create_task(_guarded(set_id, max_depth, force))
+    return True
+
+
+def start_reindex(set_id: str) -> bool:
+    """Re-index a recipe set from its archives, detached. False if a crawl or a
+    re-index is already running for it. Shares the crawl slot: both embed, and the
+    registry is what makes delete and recrawl refuse while it runs."""
+    from backend.modules.docviewer.site_crawl import run_reindex
+
+    existing = _running.get(set_id)
+    if existing is not None and not existing.done():
+        return False
+
+    async def _go() -> None:
+        async with _crawl_slot:
+            try:
+                await run_reindex(set_id)
+            finally:
+                _running.pop(set_id, None)
+
+    _running[set_id] = asyncio.create_task(_go())
+    return True
+
+
+def cancel_crawl(set_id: str) -> bool:
+    """Stop a running crawl. Pages already captured stay; a later recrawl resumes."""
+    task = _running.get(set_id)
+    if task is None or task.done():
+        return False
+    task.cancel()
     return True
 
 

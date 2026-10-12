@@ -135,6 +135,12 @@ async def _resolve_model(client: httpx.AsyncClient) -> tuple[str, str, str, str]
     return _model_cache[2:]
 
 
+class _ProviderUnreachable(Exception):
+    """Nothing is listening at the embedding endpoint. Unlike a missing batch
+    endpoint, retrying text by text cannot help — it only turns one refused
+    connection into hundreds of them."""
+
+
 async def _embed_batch(
     client: httpx.AsyncClient,
     texts: list[str],
@@ -161,6 +167,8 @@ async def _embed_batch(
             out = [d.get("embedding") for d in res.json().get("data", [])]
         if isinstance(out, list) and len(out) == len(texts):
             return [[float(x) for x in vec] for vec in out]
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        raise _ProviderUnreachable(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — fall back to per-text requests
         logger.debug(f"Batch embedding unavailable ({exc}); using per-text requests.")
     return None
@@ -209,7 +217,14 @@ async def get_embeddings(
                 vectors, peer_method = peered
                 return vectors, peer_method
 
-        batched = await _embed_batch(client, texts, model, endpoint, dialect, kind)
+        try:
+            batched = await _embed_batch(client, texts, model, endpoint, dialect, kind)
+        except _ProviderUnreachable as exc:
+            logger.warning(
+                f"Embedding provider {kind} at {endpoint} is unreachable ({exc}); "
+                "using local fallback."
+            )
+            return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
         if batched is not None:
             return batched, method
 

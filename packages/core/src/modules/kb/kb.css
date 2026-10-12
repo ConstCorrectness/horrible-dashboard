@@ -1,0 +1,667 @@
+/* Knowledge pane (`kb.browse`). Theme tokens only — no literal colours — so the
+ * theme switcher moves it with everything else. Structure over decoration: a faint
+ * grid behind the list, 2px accent edges, one clipped corner on the detail header.
+ */
+
+.kb-host {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+}
+
+.kb-pane {
+  position: relative;
+  display: grid;
+  grid-template-columns: 220px minmax(260px, 1fr) minmax(320px, 1.15fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+
+.kb-back {
+  display: none;
+}
+
+/* Too narrow for three columns: the detail stands in for the list while an item is
+   selected, and its back control returns to the list. */
+@container (max-width: 860px) {
+  .kb-pane {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .kb-detail {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .kb-detail-idle,
+  .kb-pane[data-detail='open'] > .kb-list {
+    display: none !important;
+  }
+  .kb-back {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: auto;
+    padding: 0;
+    margin-bottom: var(--space-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .kb-back:hover {
+    color: var(--accent);
+  }
+}
+
+/* Narrower still: one column. The rail keeps its header (counts, search) and import
+   control; the filters give way to the list. */
+@container (max-width: 520px) {
+  .kb-pane {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .kb-rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .kb-rail-scroll {
+    display: none;
+  }
+  .kb-list,
+  .kb-detail {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+
+/* --- left rail ------------------------------------------------------------- */
+
+.kb-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+  border-top: 2px solid var(--accent);
+}
+
+.kb-rail-head {
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-title {
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.kb-label {
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.kb-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-rail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.kb-facet {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  padding: var(--space-2) var(--space-5);
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kb-facet:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.kb-facet[aria-pressed='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.kb-facet .kb-mono {
+  margin-left: auto;
+}
+
+.kb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-5);
+}
+
+.kb-chip {
+  height: 22px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.kb-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.kb-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.kb-rail-foot {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* --- list ------------------------------------------------------------------ */
+
+.kb-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  /* A faint technical grid behind the rows — texture, not decoration. */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--border-dim, var(--border)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim, var(--border)) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+
+.kb-list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.kb-list-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.kb-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--space-4) var(--space-5);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  animation: kb-rise var(--dur-base) var(--ease-entrance) both;
+  animation-delay: var(--kb-delay, 0ms);
+}
+
+.kb-row:hover {
+  background: var(--bg-hover);
+}
+
+.kb-row[aria-selected='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.kb-row-kind {
+  color: var(--text-faint);
+  display: inline-flex;
+}
+
+.kb-row[aria-selected='true'] .kb-row-kind {
+  color: var(--accent);
+}
+
+.kb-row-title {
+  font-size: var(--fs-body);
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-row-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-status {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.kb-status[data-status='reading'] {
+  color: var(--accent);
+}
+
+.kb-status[data-status='done'] {
+  color: var(--success);
+}
+
+/* A 2px track: progress reads as a measurement, not a badge. */
+.kb-progress {
+  grid-column: 2 / 4;
+  height: 2px;
+  margin-top: var(--space-2);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.kb-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform var(--dur-base) var(--ease-standard);
+}
+
+.kb-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  vertical-align: middle;
+}
+
+.kb-dot[data-state='ready'] {
+  background: var(--success);
+}
+
+.kb-dot[data-state='indexing'],
+.kb-dot[data-state='queued'] {
+  background: var(--accent);
+}
+
+.kb-dot[data-state='failed'] {
+  background: var(--danger);
+}
+
+.kb-dot[data-state='skipped'] {
+  background: var(--warn);
+}
+
+.kb-empty {
+  padding: var(--space-6) var(--space-5);
+}
+
+/* --- detail ---------------------------------------------------------------- */
+
+.kb-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-raised);
+}
+
+.kb-detail-head {
+  position: relative;
+  padding: var(--space-5) var(--space-6) var(--space-5);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+  /* One clipped corner: an angular container, not a rounded card. */
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.kb-detail-title {
+  font-size: var(--fs-lead);
+  font-weight: 700;
+  color: var(--text-strong);
+  line-height: 1.3;
+  margin: var(--space-2) 0;
+  word-break: break-word;
+}
+
+.kb-detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: var(--space-6);
+}
+
+.kb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.kb-actions button,
+.kb-rail-foot button,
+.kb-list-head button,
+.kb-empty button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.kb-segment {
+  display: inline-flex;
+  margin: 0 var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.kb-segment-btn {
+  height: 26px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.kb-segment-btn:last-child {
+  border-right: 0;
+}
+
+.kb-segment-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.kb-field {
+  padding: 0 var(--space-6);
+}
+
+.kb-field input[type='text'],
+.kb-field select,
+.kb-list-head input[type='text'],
+.kb-rail-head input[type='text'] {
+  width: 100%;
+  min-width: 0;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+}
+
+.kb-field textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: var(--space-3) 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
+.kb-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: var(--space-5) var(--space-6) 0;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.kb-stat {
+  background: var(--bg-raised);
+  padding: var(--space-3) var(--space-4);
+}
+
+.kb-stat-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-display);
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-error {
+  margin: var(--space-3) var(--space-6) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 2px solid var(--danger);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+}
+
+.kb-note {
+  margin: var(--space-3) var(--space-6) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 2px solid var(--warn);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+}
+
+/* --- course tree ----------------------------------------------------------- */
+
+.kb-tree-row {
+  display: grid;
+  grid-template-columns: auto 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  padding: var(--space-2) var(--space-6);
+  font-size: var(--fs-body);
+  color: var(--text);
+  animation: kb-rise var(--dur-fast) var(--ease-entrance) both;
+  animation-delay: var(--kb-delay, 0ms);
+}
+
+.kb-tree-row:hover {
+  background: var(--bg-hover);
+}
+
+.kb-tree-row[data-depth='1'] {
+  padding-left: calc(var(--space-6) + 18px);
+}
+
+.kb-tree-row[data-depth='2'] {
+  padding-left: calc(var(--space-6) + 36px);
+}
+
+.kb-tree-row[data-done='true'] .kb-tree-title {
+  color: var(--text-faint);
+}
+
+.kb-tree-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-tree-group {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.kb-tree-open {
+  height: 22px;
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.kb-tree-open:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* --- search passages ------------------------------------------------------- */
+
+.kb-passage {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--space-4) var(--space-5);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  animation: kb-rise var(--dur-base) var(--ease-entrance) both;
+  animation-delay: var(--kb-delay, 0ms);
+}
+
+.kb-passage:hover {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.kb-passage-cite {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.kb-passage-text {
+  margin-top: var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-line;
+}
+
+/* --- import sheet ---------------------------------------------------------- */
+
+.kb-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--space-8) var(--space-5);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  animation: kb-rise var(--dur-base) var(--ease-entrance) both;
+}
+
+.kb-sheet-card {
+  width: min(560px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-raised);
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.kb-profile {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: var(--space-4);
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text);
+  padding: var(--space-3) var(--space-6);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kb-profile:hover {
+  background: var(--bg-hover);
+}
+
+.kb-profile[aria-pressed='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+/* --- motion ---------------------------------------------------------------- */
+
+@keyframes kb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-row,
+  .kb-tree-row,
+  .kb-passage,
+  .kb-sheet {
+    animation: none;
+  }
+}

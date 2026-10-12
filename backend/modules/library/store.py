@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from backend.modules.database.app_db import ensure_app_db_dir
-from backend.modules.database.vectorstore import list_documents
+from backend.modules.database.vectorstore import list_documents_with_prefix
 
 from contextlib import contextmanager
 import sqlite3
@@ -228,9 +228,13 @@ def list_libraries() -> list[dict[str, Any]]:
 
 
 def chunk_docs_for(source: dict[str, Any]) -> list[dict[str, Any]]:
-    """The stored chunks for a source (from the shared `documents` table), ordered
-    by chunk index. Chunk counts are small, so a collection scan + filter is fine."""
-    docs, _ = list_documents(source["library"], limit=100_000, offset=0)
+    """The stored chunks for a source, ordered by chunk index.
+
+    Selected by doc-id prefix (`<source_id>#`) rather than by loading the whole
+    library and filtering: a knowledge-base library is an entire imported site, and
+    a 45k-row scan to show one page's chunks is the wrong shape.
+    """
+    docs = list_documents_with_prefix(source["library"], f"{source['id']}#")
     chunks = [
         {"index": int(d["metadata"].get("chunk_index", 0)), "text": d["text"]}
         for d in docs

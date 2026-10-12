@@ -85,6 +85,9 @@ class RobotsCache:
 
     def __init__(self) -> None:
         self._parsers: dict[str, RobotFileParser | None] = {}
+        # The raw text too: `RobotFileParser` drops lines it doesn't know, and
+        # `Content-Signal` is one of them.
+        self._raw: dict[str, str] = {}
 
     async def _load(self, scheme: str, host: str) -> RobotFileParser | None:
         import httpx
@@ -106,8 +109,10 @@ class RobotsCache:
         if res.status_code >= 400:
             return None
 
+        text = res.text[:_ROBOTS_MAX_BYTES]
+        self._raw[host] = text
         parser = RobotFileParser()
-        parser.parse(res.text[:_ROBOTS_MAX_BYTES].splitlines())
+        parser.parse(text.splitlines())
         return parser
 
     async def get(self, url: str) -> RobotFileParser | None:
@@ -137,3 +142,40 @@ class RobotsCache:
         except Exception:  # noqa: BLE001
             return None
         return float(delay) if delay else None
+
+    async def content_signal(self, url: str) -> str | None:
+        """The site's `Content-Signal` line, normalised (`ai-input=yes, ...`).
+
+        The Cloudflare-proposed extension a site uses to say what its content may be
+        used for — apxml.com publishes `ai-train=no, search=yes, ai-input=yes`. The
+        knowledge base honours `ai-input`: putting a page in front of a model to
+        answer a question is exactly that use. Only the `User-agent: *` group is
+        read; None when the site publishes no signal.
+        """
+        await self.get(url)
+        raw = self._raw.get(urlsplit(url).netloc, "")
+        applies = True
+        for line in raw.splitlines():
+            key, _sep, value = line.partition(":")
+            key = key.strip().lower()
+            if key == "user-agent":
+                applies = value.strip() == "*"
+            elif key == "content-signal" and applies and value.strip():
+                parts = [p.strip().lower() for p in value.split(",") if p.strip()]
+                return ", ".join(parts)
+        return None
+
+    async def sitemaps(self, url: str) -> list[str]:
+        """`Sitemap:` URLs the site's robots.txt declares."""
+        parser = await self.get(url)
+        if parser is None:
+            return []
+        try:
+            return list(parser.site_maps() or [])
+        except Exception:  # noqa: BLE001
+            return []
+
+
+def allows_ai_input(signal: str | None) -> bool:
+    """False only when a site explicitly says `ai-input=no`."""
+    return "ai-input=no" not in (signal or "").replace(" ", "")

@@ -753,6 +753,7 @@ class BrowserSession:
                 page,
                 keep_scripts=bool(args.get("keep_scripts")),
                 store=bool(args.get("store", True)),
+                shrink_images=bool(args.get("shrink_images")),
             )
         if op == "snapshot":
             return page.evaluate(_SNAPSHOT_JS)
@@ -807,7 +808,12 @@ class BrowserSession:
         }
 
     def _capture_page(
-        self, page: Any, *, keep_scripts: bool = False, store: bool = True
+        self,
+        page: Any,
+        *,
+        keep_scripts: bool = False,
+        store: bool = True,
+        shrink_images: bool = False,
     ) -> dict[str, Any]:
         """Capture the live page as one self-contained HTML document.
 
@@ -827,15 +833,21 @@ class BrowserSession:
           crawler rewrites intra-set links before the bytes are final and the
           artifact store is content-addressed: storing first would mean storing
           every page twice.
+
+        `shrink_images` re-encodes large rasters before inlining (see
+        `research.capture.shrink_image`) — the knowledge base's site imports set it,
+        since images are most of a long-form page's bytes.
         """
         from backend.modules.artifacts.store import store_bytes
         from backend.modules.library.extract import extract_article
         from backend.modules.research.capture import (
+            IMAGE_KIND,
             STYLESHEET_KIND,
             build_page,
             filename_for_title,
             list_css_urls,
             list_resources,
+            shrink_image,
         )
 
         html = page.content()
@@ -859,6 +871,10 @@ class BrowserSession:
                     if fetched is not None:
                         resources[nested] = fetched
 
+        if shrink_images:
+            for res_url, kind in plan.items():
+                if kind == IMAGE_KIND and res_url in resources:
+                    resources[res_url] = shrink_image(*resources[res_url])
         page_html = build_page(html, url, resources, keep_scripts=keep_scripts)
         article = extract_article(html, url)
         title = article.title or page.title() or url

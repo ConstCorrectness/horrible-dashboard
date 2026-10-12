@@ -34,6 +34,7 @@ import {
   layoutsModule,
   libraryModule,
   docviewerModule,
+  kbModule,
   loadKeymapOverrides,
   loadPlugins,
   loadSettings,
@@ -259,6 +260,7 @@ async function boot(): Promise<void> {
     registry.register(databaseModule);
     registry.register(libraryModule);
     registry.register(docviewerModule);
+    registry.register(kbModule);
     registry.register(karaokeModule);
     registry.register(recordsModule);
     registry.register(researchModule);

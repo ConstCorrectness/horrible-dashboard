@@ -20,14 +20,12 @@ import { useSetting } from '../../../settings';
 import { usePaneSession } from '../../../layout/use-pane-session';
 import { windowControl } from '../../../window';
 import {
-  addBookmark,
   clearHistory,
   engineStatus,
   listBookmarks,
   listHistory,
   readerMode,
   recordHistory,
-  removeBookmark,
   type Bookmark,
   type HistoryEntry,
   type ReaderArticle,
@@ -38,6 +36,14 @@ import { FullBrowserView } from './FullBrowserView';
 import { NativeBrowserView } from './NativeBrowserView';
 
 import { SaveToLibrary } from './SaveToLibrary';
+import { SaveToKnowledge } from './SaveToKnowledge';
+import {
+  lookup as kbLookup,
+  markOpened as kbMarkOpened,
+  matchProfile as kbMatchProfile,
+  type Item as KbItem,
+  type Profile as KbProfile,
+} from '../../kb/api';
 import {
   disposeNativeTabs,
   newNativeTabsHeld,
@@ -211,6 +217,11 @@ export function BrowserPanel() {
   // Both are full-engine-only: saving reads the live DOM for media context, and the
   // network view reflects the backend Chromium's requests. An iframe exposes neither.
   const [showSave, setShowSave] = useState(false);
+  // The knowledge-base record for the current page (null = not saved) and the
+  // import profile its site matches, if any — what the star's popover shows.
+  const [kbItem, setKbItem] = useState<KbItem | null>(null);
+  const [kbProfile, setKbProfile] = useState<KbProfile | null>(null);
+  const [showKb, setShowKb] = useState(false);
 
   // The network inspector is this pane's right region strip, owned by the layout
   // store — so the 📡 button reflects and drives that, not local state, and the
@@ -224,7 +235,7 @@ export function BrowserPanel() {
 
   const urlRef = useRef<HTMLInputElement>(null);
   const canPopOut = hasCapability('browser.nativeWindow');
-  const bookmarked = current !== '' && bookmarks.some((b) => b.url === current);
+  const bookmarked = current !== '' && kbItem !== null;
 
   const go = useCallback(
     (raw: string) => {
@@ -335,14 +346,35 @@ export function BrowserPanel() {
     };
   }, []);
 
-  const toggleBookmark = () => {
-    if (!current) return;
-    const existing = bookmarks.find((b) => b.url === current);
-    const op = existing
-      ? removeBookmark(existing.id)
-      : addBookmark(current, reader?.title || current);
-    op.then(refreshBookmarks).catch(() => {});
-  };
+  // Is this page in the knowledge base, and does its site have an import profile?
+  // Opening a saved article/lesson/primer also moves it from "to read" to
+  // "reading" — the cheapest honest progress signal there is.
+  useEffect(() => {
+    if (!current || !/^https?:/.test(current)) {
+      setKbItem(null);
+      setKbProfile(null);
+      return;
+    }
+    let live = true;
+    kbLookup(current)
+      .then(({ item }) => {
+        if (!live) return;
+        setKbItem(item);
+        const tracked = item && !['bookmark', 'site', 'course', 'chapter'].includes(item.kind);
+        if (item && tracked && item.status === 'to_read') {
+          kbMarkOpened(item.id)
+            .then((next) => live && setKbItem(next))
+            .catch(() => {});
+        }
+      })
+      .catch(() => live && setKbItem(null));
+    kbMatchProfile(current)
+      .then((r) => live && setKbProfile(r.profile))
+      .catch(() => live && setKbProfile(null));
+    return () => {
+      live = false;
+    };
+  }, [current]);
 
   const openHistory = () => {
     const next = !showHistory;
@@ -509,10 +541,11 @@ export function BrowserPanel() {
         </form>
         <button
           type="button"
-          style={{ ...btn, color: bookmarked ? 'var(--accent, #6ea8fe)' : undefined }}
+          style={{ ...btn, color: bookmarked || showKb ? 'var(--accent, #6ea8fe)' : undefined }}
           disabled={!current}
-          title="Bookmark"
-          onClick={toggleBookmark}
+          title={bookmarked ? 'In your knowledge base' : 'Save to Knowledge'}
+          aria-label={bookmarked ? 'In your knowledge base' : 'Save to Knowledge'}
+          onClick={() => setShowKb((v) => !v)}
         >
           {bookmarked ? '★' : '☆'}
         </button>
@@ -812,6 +845,19 @@ export function BrowserPanel() {
           )}
           {showSave && (useFull || (useNative && canCdp)) && current && (
             <SaveToLibrary library={saveLibrary} onClose={() => setShowSave(false)} />
+          )}
+          {showKb && current && (
+            <SaveToKnowledge
+              url={current}
+              title={liveTitle || reader?.title || current}
+              saved={kbItem}
+              profile={kbProfile}
+              onChanged={(item) => {
+                setKbItem(item);
+                refreshBookmarks();
+              }}
+              onClose={() => setShowKb(false)}
+            />
           )}
         </div>
         {/* The network inspector is a region strip of this pane now (declared in

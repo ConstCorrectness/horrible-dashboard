@@ -132,8 +132,8 @@ flowchart LR
   Add["POST /library/sources"] --> Q["queued"]
   Q --> F["fetching (blog: trafilatura)"]
   F --> C["chunking (~1000 chars, overlap)"]
-  C --> E["embedding (get_embedding per chunk)"]
-  E --> U["upsert_document per chunk"]
+  C --> E["embedding (get_embeddings, one batch)"]
+  E --> U["replace_documents (one write per source)"]
   U --> R["ready"]
   F -. error .-> X["failed"]
   C -. no text .-> X
@@ -147,8 +147,25 @@ flowchart LR
 - **Chunking:** `chunking.py` packs paragraphs into ~`library.chunkSize`-char
   windows (hard-splitting over-long paragraphs) and prepends an overlap tail to each
   chunk. Dependency-free.
-- **Embed + store:** reuses `get_embedding` (Ollama / LM Studio / vLLM with a local
-  fallback) and `upsert_document` from the database module.
+- **Embed + store:** one `get_embeddings` call for every chunk of the source (Ollama /
+  LM Studio / vLLM, with a local hash fallback), then one `replace_documents` write —
+  a prefix delete of `"<source_id>#"` plus an append. Not a `merge_insert` per chunk:
+  LanceDB's `merge_insert` costs about 1.5s whatever the row count, which made a
+  300-chunk page a seven-minute ingest. The pipeline is split into `prepare_source`
+  (fetch, extract, chunk, embed) and `commit_prepared` (write, mark ready), so a site
+  crawl can prepare pages one by one and commit them in batches.
+
+### Structured ingest (opt-in)
+
+`IngestRequest` takes four fields that are all off by default. The
+[knowledge base](kb.mdx) sets them; the Library pane does not.
+
+| Field | Effect |
+| --- | --- |
+| `structured` | Extract **markdown** (`extract_structured`) instead of plain text: headings kept, math kept as TeX (MathJax 2/3/4, KaTeX, MathML `alttext`), in-page tables of contents dropped. Chunk on headings (`chunk_markdown`): each chunk carries its section path (`RAG › Retrieval › BM25`) and the heading's anchor in its metadata, and is never split inside a code fence or a `$$` block. |
+| `chunk_size` | Overrides `library.chunkSize` for this source (200–8000). |
+| `content_selector` | A CSS selector (a small subset, translated to XPath) that narrows the page to its article body before extraction. |
+| `strict_embeddings` | Fail the source instead of storing hash-fallback vectors. A fallback vector is 384-wide where the real model is 768, so one stored fallback pins or corrupts the table. |
 
 ## Backend surface
 
@@ -245,11 +262,8 @@ run remotely the result says so — `method` comes back as `peer:<node>/<model>`
 named at the point that knows the node, because `embed_via_peer` sees only a
 `127.0.0.1` tunnel endpoint and a result carrying that would read as local.
 
-This is the batch path (`get_embeddings`), which serves the symdex index, the
-webindex crawler, trajectory search and the search rerank. Library **ingest**
-embeds per chunk through `get_embedding`, so it does not take this route — sending
-single chunks to a peer is exactly the chatty shape the design rejects, and
-batching ingest is a separate change.
+This is the batch path (`get_embeddings`), which serves library ingest, the symdex
+index, the webindex crawler, trajectory search and the search rerank.
 
 A lender with no embedding provider of its own returns 503 rather than serving
 hash-fallback vectors, so the borrower learns about it as an error instead of as a

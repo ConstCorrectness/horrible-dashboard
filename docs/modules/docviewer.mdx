@@ -162,6 +162,39 @@ Chromiums competing for the same cores.
 `ingest_source` never raises, so a page is only reported captured after its library
 row is read back and found to have chunks.
 
+### Recipe crawls (site imports)
+
+A set created by a [knowledge-base import](kb.mdx) carries a **recipe** (the `recipe`
+JSON column, `docviewer/recipe.py`) and is crawled by `site_crawl.run_recipe_crawl`
+instead of the BFS above:
+
+- **Start URLs are separate from scope.** Scope is allowed domains plus allow and deny
+  path patterns, so the crawl can begin at a home page that lists every primer
+  without that home page being in scope. **Index pages** are visited for their links
+  only; they are not archived.
+- **Sitemap frontier** (`sitemap.py`): sitemap and sitemap-index parsing, capped and
+  filtered by scope, for sites whose pages are not all linked from one place.
+- **Resume.** Pages already captured are skipped, and their archived links are re-read
+  from `data-orig-href`, so a stopped or failed import continues where it left off.
+  `force` recaptures. `POST /sets/{id}/stop` stops a running crawl.
+- **Canonical dedupe.** A page that declares a `rel=canonical` already captured under
+  another path is recorded as an alias, not archived twice.
+- **Tree from the URL path** (`hierarchy: url_path`): course › chapter › lesson.
+- **Batched ingest.** Pages are prepared one by one and committed eight at a time.
+- **Re-index from the archives** (`run_reindex`). Each captured page's archive is
+  re-extracted and re-embedded into its existing library source, which keeps
+  answering searches until the batch replaces its chunks. Nothing is crawled again:
+  there is no browser and no page fetch, only robots.txt for its Content-Signal. A
+  page whose ingest failed (for example, the embedder was down) gets a source now.
+  It shares the crawl slot and registry, so delete and recrawl refuse while it
+  runs, and progress events report it as status `indexing`.
+- **Math and size.** The crawl waits for MathJax to finish and stamps each formula's
+  TeX before capture. Images over 120 KB are re-encoded as WebP (1600 px long edge,
+  kept only when smaller). MathJax's speech and braille attributes are stripped, and
+  fonts referenced from inline `<style>` blocks are inlined, so math renders offline.
+- **Content-Signal.** A robots.txt `Content-Signal: ai-input=no` keeps the archive but
+  skips embedding, and records why.
+
 ## Contributions to the layout shell
 
 | Kind | Id | Notes |
@@ -179,8 +212,10 @@ row is read back and found to have chunks.
 | `GET /api/docviewer/sets` | List doc sets. |
 | `POST /api/docviewer/sets` | Create a set and start crawling. Returns immediately. |
 | `GET /api/docviewer/sets/{id}` | One set. |
-| `POST /api/docviewer/sets/{id}/recrawl` | Capture the set again. 409 if one is running. |
-| `DELETE /api/docviewer/sets/{id}` | Delete the set, its archives and its library sources. 409 while crawling. |
+| `POST /api/docviewer/sets/{id}/recrawl` | Capture the set again (a recipe set resumes, skipping captured pages). 409 if one is running. |
+| `POST /api/docviewer/sets/{id}/stop` | Stop a running crawl. |
+| `POST /api/docviewer/sets/{id}/reindex` | Re-extract and re-embed every captured page from its archive, without crawling. 400 for a set that isn't an import; 409 while a crawl or re-index runs. |
+| `DELETE /api/docviewer/sets/{id}` | Delete the set, its archives and its library sources, and detach its knowledge-base items. 409 while crawling. |
 | `GET /api/docviewer/sets/{id}/pages` | The page tree. |
 | `POST /api/docviewer/sets/{id}/search` | Semantic search scoped to this set. |
 | `GET /api/docviewer/pages/{id}` | One page row. |

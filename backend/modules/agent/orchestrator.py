@@ -910,6 +910,15 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "Personal knowledge libraries: semantic-search a library, list its sources, "
         "and add new ones."
     ),
+    "kb": (
+        "The user's knowledge base — saved articles, imported ML primers and courses "
+        "with reading progress: search it with citations, list and save items, track "
+        "status, and import whole sites for offline reading."
+    ),
+    "docviewer": (
+        "Documentation sets captured for offline reading: list them, search one, and "
+        "open a page."
+    ),
     "model": (
         "Neural-network designs in the interpretability pane: list and read saved "
         "designs, fork the model currently being inspected into an editable one, "
@@ -1032,6 +1041,23 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "npm",
         "pip",
         "git",
+    ),
+    # The knowledge base. Phrases, not topics: "transformer" or "RAG" would preload
+    # it on every ML question, and the system-prompt nudge already covers those —
+    # these are the words people use when they mean *their* material. "course" is
+    # absent because "of course" is in every other sentence.
+    "kb": (
+        "knowledge base",
+        "my notes",
+        "my primers",
+        "primer",
+        "my course",
+        "lesson",
+        "bookmark",
+        "reading list",
+        "saved page",
+        "i saved",
+        "import the site",
     ),
     # Deliberately excludes "find", "read", "docs" and "documentation": those already
     # belong to `files`/`symbols`, and an overlapping keyword preloads both groups,
@@ -2725,6 +2751,69 @@ async def run_agent_turn(
     session_id: str | None = None,
     source: str | None = None,
 ) -> None:
+    """Drive one user turn as `agent_id` (see `_drive_agent_turn`).
+
+    The wrapper only marks whose turn this is (`agent.current`), so tool handlers
+    that depend on the calling agent — `kb.search` and its knowledge scope — can
+    read it from the context they run in.
+    """
+    from backend.modules.agent.current import agent_context
+
+    with agent_context(agent_id):
+        await _drive_agent_turn(
+            conn,
+            turn_id,
+            prompt,
+            history,
+            context,
+            remote=remote,
+            agent_id=agent_id,
+            session_id=session_id,
+            source=source,
+        )
+
+
+def _kb_nudge(spec: AgentSpec, remote: bool) -> str:
+    """One line telling the model the user keeps a knowledge base, when they do.
+
+    Retrieval is tool-first: nothing is fetched before the turn, so a turn that
+    has nothing to do with the user's material pays only this sentence. It is
+    omitted when the agent can't load `kb`, on a remote turn (no tools), and when
+    the knowledge base has nothing indexed — advertising an empty KB just invites a
+    wasted `load_tools` round.
+    """
+    if remote or (spec.tool_groups is not None and "kb" not in spec.tool_groups):
+        return ""
+    try:
+        from backend.modules.kb.store import summary
+
+        stats = summary()
+    except Exception:  # noqa: BLE001 — the nudge is optional; never fail a turn on it
+        return ""
+    if not stats.get("indexed"):
+        return ""
+    collections = ", ".join(stats.get("collections", [])[:4])
+    where = f" (collections: {collections})" if collections else ""
+    return (
+        f"\n\nThe user keeps a curated knowledge base{where}: {stats['items']} saved "
+        "items — primers, course lessons, articles. For conceptual or technical "
+        "questions it may cover, load the `kb` tools, search it first, and cite the "
+        "passages you use as [n] Title › Section."
+    )
+
+
+async def _drive_agent_turn(
+    conn: WsConnection,
+    turn_id: str,
+    prompt: str,
+    history: list[Any] | None = None,
+    context: dict[str, Any] | None = None,
+    *,
+    remote: bool = False,
+    agent_id: str = "main",
+    session_id: str | None = None,
+    source: str | None = None,
+) -> None:
     """Drive one user turn: assemble the conversation, run the shared tool-calling
     loop, and send the authoritative answer. The provider dialect (Ollama vs
     OpenAI-compatible) is hidden behind providers. `history` carries prior
@@ -2815,7 +2904,13 @@ async def run_agent_turn(
     skills_msg = None if remote else _skills_message()
     messages, sources = assemble_prompt(
         [
-            ("system", {"role": "system", "content": spec.system_prompt}),
+            (
+                "system",
+                {
+                    "role": "system",
+                    "content": spec.system_prompt + _kb_nudge(spec, remote),
+                },
+            ),
             ("skills", skills_msg),
             ("guides", guides_msg),
             *(("history", m) for m in _history_messages(history)),

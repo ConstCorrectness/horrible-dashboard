@@ -12,23 +12,29 @@ library's own table (the app embedder), and a CLIP image vector into the
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from backend.modules.artifacts.pdftext import extract_pdf_text_from_path
 from backend.modules.artifacts.store import artifact_path
-from backend.modules.browser.fetch import fetch_readable, safe_fetch_bytes
-from backend.modules.database.embeddings import get_embedding
+from backend.modules.browser.fetch import (
+    fetch_readable,
+    safe_fetch_bytes,
+    safe_fetch_html,
+)
+from backend.modules.database.embeddings import get_embeddings
 from backend.modules.database.vectorstore import (
     clip_collection,
     init_db,
+    replace_documents,
     upsert_document,
 )
 from backend.modules.library import store
 from backend.modules.library.broadcast import publish_source
-from backend.modules.library.chunking import chunk_text
+from backend.modules.library.chunking import chunk_markdown, chunk_text
 from backend.modules.library.clip import MODEL_REPO as CLIP_MODEL_REPO
 from backend.modules.library.clip import clip_enabled, encode_image
-from backend.modules.library.extract import extract_article
+from backend.modules.library.extract import extract_article, extract_structured
 from backend.modules.library.models import MEDIA_TYPES, IngestRequest
 from backend.modules.settings.routes import get_value
 
@@ -117,9 +123,80 @@ async def clip_embed(req: IngestRequest) -> list[float] | None:
         return None
 
 
+def _is_fallback(method: str) -> bool:
+    # Same prefix `search/crawl/index.is_fallback` checks; kept local so library
+    # ingest does not import the crawler.
+    return method.startswith("local-fallback")
+
+
+Row = tuple[str, str, dict[str, Any], list[float]]
+
+
+@dataclass
+class Prepared:
+    """A source that has been extracted, chunked and embedded but not yet written.
+
+    The split exists for bulk producers. A site import files pages one after
+    another into one library, and writing each page as it lands means one table
+    write per page; holding a few prepared pages and committing them together turns
+    that into one write per batch.
+    """
+
+    source_id: str
+    library: str
+    rows: list[Row]
+    clip: Row | None = None
+
+
 async def ingest_source(source_id: str, req: IngestRequest) -> None:
     """Drive one source from `queued` to `ready` (or `failed`). Never raises —
     failures are recorded on the source and broadcast."""
+    prepared = await prepare_source(source_id, req)
+    if prepared is not None:
+        commit_prepared([prepared])
+
+
+def commit_prepared(batch: list[Prepared]) -> None:
+    """Write prepared sources, one table write per library, and mark them ready.
+
+    Never raises. A failed write fails every source in the batch — their rows went
+    in one call, so none of them can be claimed as stored.
+    """
+    by_library: dict[str, list[Prepared]] = {}
+    for prepared in batch:
+        by_library.setdefault(prepared.library, []).append(prepared)
+    for library, group in by_library.items():
+        try:
+            # A predicate delete of each source's old rows plus an append — cost in
+            # proportion to the batch. See `vectorstore.replace_documents`.
+            replace_documents(
+                library,
+                [f"{p.source_id}#" for p in group],
+                [row for p in group for row in p.rows],
+            )
+            for p in group:
+                if p.clip is not None:
+                    # Same doc id as chunk 0, in the sibling table. Sharing the id is
+                    # what makes deletes cascade. `text` here is only for display;
+                    # nothing searches it in this space.
+                    doc_id, text, meta, vector = p.clip
+                    upsert_document(
+                        doc_id, clip_collection(library), text, meta, vector
+                    )
+        except Exception as exc:  # noqa: BLE001 — surface any failure on the sources
+            logger.exception("library write failed for %s", library)
+            for p in group:
+                store.set_status(p.source_id, "failed", error=str(exc))
+                _emit(p.source_id)
+            continue
+        for p in group:
+            store.set_status(p.source_id, "ready", chunk_count=len(p.rows))
+            _emit(p.source_id)
+
+
+async def prepare_source(source_id: str, req: IngestRequest) -> Prepared | None:
+    """Extract, chunk and embed one source. Returns None when it failed — the
+    failure is already recorded on the source row and broadcast."""
     try:
         init_db()  # ensure the shared `documents` table exists
         # Fall back to the catalog row's title, not just `req.title`: the route
@@ -130,6 +207,9 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
         row = store.get_source(source_id)
         title = req.title or (row["title"] if row else None)
         author = req.author
+        # Structured sources keep markdown + heading anchors; the rest stay plain.
+        anchors: dict[str, str] = {}
+        canonical: str | None = None
 
         if req.type == "blog":
             store.set_status(source_id, "fetching")
@@ -137,10 +217,18 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
             # Through the browser module's SSRF guard — blog ingest fetches an
             # arbitrary user-supplied URL server-side, exactly the sink the guard
             # exists for.
-            article = await fetch_readable(req.url or "")
-            title = req.title or article.title
-            author = req.author or article.author
-            text = article.text
+            if req.structured:
+                final_url, html = await safe_fetch_html(req.url or "")
+                structured = extract_structured(html, final_url, req.content_selector)
+                title = req.title or structured.title
+                author = req.author or structured.author
+                text, anchors = structured.markdown, structured.anchors
+                canonical = structured.canonical
+            else:
+                article = await fetch_readable(req.url or "")
+                title = req.title or article.title
+                author = req.author or article.author
+                text = article.text
             store.update_meta(source_id, title=title, author=author)
         elif req.type == "pdf":
             store.set_status(source_id, "fetching")
@@ -149,12 +237,12 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
             if path is None or not path.is_file():
                 store.set_status(source_id, "failed", error="artifact blob missing")
                 _emit(source_id)
-                return
+                return None
             extracted = extract_pdf_text_from_path(path, name=title or "")
             if isinstance(extracted, dict):
                 store.set_status(source_id, "failed", error=extracted["error"])
                 _emit(source_id)
-                return
+                return None
             text = extracted
         elif req.type == "page":
             store.set_status(source_id, "fetching")
@@ -163,12 +251,21 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
             if path is None or not path.is_file():
                 store.set_status(source_id, "failed", error="artifact blob missing")
                 _emit(source_id)
-                return
+                return None
             html = path.read_text(encoding="utf-8", errors="replace")
-            article = extract_article(html, req.url or "")
-            title = req.title or article.title
-            author = req.author or article.author
-            text = article.text
+            if req.structured:
+                structured = extract_structured(
+                    html, req.url or "", req.content_selector
+                )
+                title = req.title or structured.title
+                author = req.author or structured.author
+                text, anchors = structured.markdown, structured.anchors
+                canonical = structured.canonical
+            else:
+                article = extract_article(html, req.url or "")
+                title = req.title or article.title
+                author = req.author or article.author
+                text = article.text
             store.update_meta(source_id, title=title, author=author)
         elif req.type in MEDIA_TYPES:
             # `req.title`, deliberately — not the resolved `title` above, which may be
@@ -179,13 +276,23 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
 
         store.set_status(source_id, "chunking")
         _emit(source_id)
-        size = int(get_value("library.chunkSize", 1000) or 1000)
-        # A media source is one indivisible unit — its proxy text is a handful of
-        # phrases about one asset, and splitting it would scatter an image across
-        # chunks that each point back at the same `src`.
-        chunks = (
-            [text] if req.type in MEDIA_TYPES and text else chunk_text(text, size=size)
-        )
+        size = req.chunk_size or int(get_value("library.chunkSize", 1000) or 1000)
+        # (text, section, anchor) per chunk; section/anchor only for structured.
+        pieces: list[tuple[str, str | None, str | None]]
+        if req.type in MEDIA_TYPES:
+            # A media source is one indivisible unit — its proxy text is a handful of
+            # phrases about one asset, and splitting it would scatter an image across
+            # chunks that each point back at the same `src`.
+            pieces = [(text, None, None)] if text else []
+        elif req.structured:
+            pieces = [
+                (c.text, c.section or None, c.anchor)
+                for c in chunk_markdown(
+                    text, title=title or "", size=size, anchors=anchors
+                )
+            ]
+        else:
+            pieces = [(c, None, None) for c in chunk_text(text, size=size)]
 
         store.set_status(source_id, "embedding")
         _emit(source_id)
@@ -199,7 +306,7 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
             else None
         )
 
-        if not chunks and clip_vector is None:
+        if not pieces and clip_vector is None:
             store.set_status(
                 source_id,
                 "failed",
@@ -212,12 +319,14 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
                 ),
             )
             _emit(source_id)
-            return
+            return None
 
         source = store.get_source(source_id)
         assert source is not None  # in-flight source can't vanish mid-ingest
 
         def meta(index: int, embed_model: str) -> dict[str, Any]:
+            section = pieces[index][1] if index < len(pieces) else None
+            anchor = pieces[index][2] if index < len(pieces) else None
             return {
                 "source_id": source_id,
                 "title": title,
@@ -232,38 +341,56 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
                 "asset": req.asset.model_dump() if req.asset else None,
                 # page/pdf hits open their stored blob in a viewer directly.
                 "artifact_id": req.artifact_id,
-                # Which model actually produced this vector. `get_embedding`
+                # Which model actually produced this vector. `get_embeddings`
                 # auto-selects one and silently falls back to a hash when the provider
                 # is offline, so without this there's no way to tell a real embedding
                 # from a placeholder after the fact.
                 "embed_model": embed_model,
+                "section": section,
+                "anchor": anchor,
+                "canonical": canonical,
             }
 
-        for index, chunk in enumerate(chunks):
-            embedding, embed_model = await get_embedding(chunk)
-            upsert_document(
-                _doc_id(source_id, index),
-                source["library"],
-                chunk,
-                meta(index, embed_model),
-                embedding,
-            )
+        rows: list[Row] = []
+        if pieces:
+            # One batched embed; the write happens once per batch in
+            # `commit_prepared`. `upsert_document` per chunk was a whole-table
+            # `merge_insert` each — ~1.5s apiece, so a 300-chunk primer spent seven
+            # minutes in Arrow.
+            texts = [p[0] for p in pieces]
+            vectors, embed_model = await get_embeddings(texts)
+            if _is_fallback(embed_model) and req.strict_embeddings:
+                store.set_status(
+                    source_id,
+                    "failed",
+                    error=(
+                        "the embedding provider is unavailable — refusing to store "
+                        "hash-fallback vectors, which would pin this library's vector "
+                        "width. Start the embedder and re-index."
+                    ),
+                )
+                _emit(source_id)
+                return None
+            if len(vectors) != len(texts):
+                raise RuntimeError("embedding returned the wrong number of vectors")
+            rows = [
+                (_doc_id(source_id, i), texts[i], meta(i, embed_model), vectors[i])
+                for i in range(len(texts))
+            ]
 
+        clip_row: Row | None = None
         if clip_vector is not None:
-            # Same doc id as chunk 0, in the sibling table. Sharing the id is what
-            # makes deletes cascade — `delete_document` sweeps every table by id.
-            # `text` here is only for display; nothing searches it in this space.
-            upsert_document(
+            clip_row = (
                 _doc_id(source_id, 0),
-                clip_collection(source["library"]),
                 text or title or "",
                 meta(0, CLIP_MODEL_REPO),
                 clip_vector,
             )
-
-        store.set_status(source_id, "ready", chunk_count=len(chunks))
-        _emit(source_id)
+        return Prepared(
+            source_id=source_id, library=source["library"], rows=rows, clip=clip_row
+        )
     except Exception as exc:  # noqa: BLE001 — surface any failure on the source
         logger.exception("library ingest failed for %s", source_id)
         store.set_status(source_id, "failed", error=str(exc))
         _emit(source_id)
+        return None

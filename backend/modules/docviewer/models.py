@@ -9,11 +9,12 @@ set semantically searchable.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SetStatus = Literal["queued", "crawling", "ready", "failed"]
+# `indexing` is only ever reported in progress events (a re-index from the archives).
+SetStatus = Literal["queued", "crawling", "indexing", "ready", "failed"]
 PageStatus = Literal["pending", "captured", "failed"]
 
 # Bounds on one crawl. `max_pages` is the knob users reach for; the byte cap is the
@@ -54,6 +55,9 @@ class DocSet(BaseModel):
     max_pages: int = DEFAULT_MAX_PAGES
     created_at: str
     last_crawled_at: str | None = None
+    # The crawl recipe for sets made by the knowledge base's site importer (start
+    # URLs, scope patterns, hierarchy …); None for a plain prefix crawl.
+    recipe: dict[str, Any] | None = None
 
 
 class CreateSetRequest(BaseModel):

@@ -1,0 +1,101 @@
+---
+sidebar_position: 17
+sidebar_label: Knowledge base
+---
+
+# Module: knowledge base
+
+A catalog of saved learning material — bookmarks, articles, imported ML primers and
+courses — with reading status, notes and course progress, offline archives, and
+retrieval the agent cites. Built on the [library](library.mdx) (text + vectors) and
+the [doc viewer](docviewer.mdx) (offline archives + page tree); it owns only the
+catalog.
+
+**Status:** backend implemented and tested. The Knowledge pane and the browser's
+Save to Knowledge popover have been verified in the running app: live updates, course
+progress, narrow layouts, and the popover following the index state. Retrieval was
+verified over ten real aman.ai primers (2,572 → 3,241 passages after the MathJax 3
+fix), and the ML Expert answered from them with section-level citations.
+
+## Data model
+
+`kb_items` in `app.db`: `kind` (bookmark, article, primer, course, chapter, lesson,
+paper, video, site, note), `url` + `canonical_url` (unique) + `alias_url` (the
+canonical a page *declared*), `status` (to_read, reading, done, archived), notes,
+rating, tags, `parent_id`/`ordinal` (course tree), `starred`, and links to content:
+`library`/`source_id`, `docset_id`/`docpage_id`, `artifact_id`. Collections are
+`kb_collections` + `kb_item_collections`.
+
+`index_mode` is how much is kept — `link`, `text` (a structured `blog` source in
+`kb-pages`), `archive` (text + an offline copy) or `site` (an import). `index_status`
+is **not stored**: it is read off the linked library source on every request.
+
+Browser bookmarks were migrated in once (ids kept); `/api/browser/bookmarks` is now a
+façade showing **starred** items.
+
+## Structured ingest
+
+Knowledge-base ingests set `structured`, `chunk_size` (`kb.chunkSize`, default 1200),
+`content_selector` and `strict_embeddings` on the library's `IngestRequest`:
+markdown extraction with headings, math kept as TeX (MathJax 2/3/4, KaTeX), in-page
+tables of contents dropped, heading-aware chunks that carry a section path and an
+anchor, one batched embed, and refusal of hash-fallback vectors.
+
+## Site imports
+
+`POST /api/kb/imports` resolves a **profile** (`backend/modules/kb/profiles.json`, or
+user profiles in `kb_profiles`), creates a root item and a doc set with a *recipe*,
+and crawls in headless Chromium (`docviewer/site_crawl.py`): separate start URLs and
+scope patterns, frontier-only index pages, sitemap frontiers, resume (captured pages
+are skipped; `force` recaptures), canonical dedupe, `url_path` course trees, batched
+ingest, MathJax wait + TeX stamping, image shrinking, and `Content-Signal: ai-input=no`
+honoured (archived, not indexed). **Re-index** (the site's detail view, or
+`POST /api/kb/imports/{item_id}/reindex`) rebuilds the text from the archives
+without crawling again, after an extraction fix or once the embedder is back.
+Built-ins: `aman-primers`, `apxml-course`,
+`lilian-weng`, `distill-pub`, `karpathy-blog`. Field reference:
+`backend/modules/kb/profile_guide.md`.
+
+## Retrieval
+
+`POST /api/kb/search` fans out over every library a KB item has content in, merges by
+cosine score when all vectors share one model (rank fusion otherwise), scopes by
+collection or item, and caps three passages per source.
+
+## Contributions to the layout shell
+
+| Kind | Id | Notes |
+| --- | --- | --- |
+| Pane | `kb.browse` ("Knowledge") | Params `{ itemId?, import? }`. Rail filters, item list / search passages, detail with course tree. Under 860px the detail replaces the list (with a back control); under 520px the rail shrinks to its header. |
+| Command | `kb.open` | Opens the pane. Keybinding `mod+alt+k`. |
+| Command | `kb.importSite` | Opens the import sheet. |
+| Setting | `kb.chunkSize` | Passage size for KB ingests. |
+| Browser | star button | Opens Save to Knowledge (save, index mode, pin, import this site). |
+
+## Agent
+
+Backend group `kb`: `kb.search` (numbered passages with `[n] Title › Section`
+citations and links), `kb.list`, `kb.get`, `kb.save`*, `kb.setStatus`*, `kb.import`*,
+`kb.profiles` (`howToWrite` returns the profile guide), `kb.saveProfile`* (* = gated).
+Browser tool `kb.open`. The main agent gets a one-line nudge when the KB has indexed
+content. The **ML Expert** agent (`ml_expert`) preloads `kb` and searches the `ml`
+collection by default (`AgentSpec.knowledge_scope`, read via `agent/current.py`).
+Its behaviour is graded by the bundled `ml-expert` eval suite (see [evals](evals.mdx)).
+
+## Backend surface
+
+`/api/kb`: `GET/POST /items`, `GET/PATCH/DELETE /items/{id}`, `POST /items/{id}/opened`,
+`GET /items/{id}/tree`, `POST /items/{id}/index`, `GET /lookup`, `GET /summary`,
+`GET/POST/DELETE /collections`, `POST /search`, `POST /imports`,
+`POST /imports/{item_id}/stop`, `POST /imports/{item_id}/reindex`, `GET/POST/DELETE /profiles`, `GET /profiles/match`.
+Doc viewer gains `POST /api/docviewer/sets/{id}/stop`. `/ws` channel `kb` (`item`,
+`removed`).
+
+## Browser vs desktop
+
+| Capability | Browser | Desktop |
+| --- | --- | --- |
+| Catalog, search, notes, progress | ✅ | ✅ |
+| Site import | Needs the server browser engine on the node | Same |
+
+Imported content is for personal offline reading and RAG; it is not shared.

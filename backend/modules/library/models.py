@@ -91,6 +91,23 @@ class IngestRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     asset: MediaAsset | None = None
     artifact_id: str | None = None
+    # --- structured ingest (the knowledge base's path; all default off) -------------
+    # `structured` extracts markdown instead of plain text and chunks on headings, so
+    # every chunk carries its section path and a deep-link anchor. Needed for long,
+    # sectioned documents — a 300K-char primer as flat paragraphs cites as "somewhere
+    # in this page".
+    structured: bool = False
+    # Overrides `library.chunkSize` for this source. A knowledge-base import sizes
+    # its chunks for long technical prose regardless of what the global setting is
+    # tuned for.
+    chunk_size: int | None = Field(default=None, ge=200, le=8000)
+    # Names the content element for sites whose layout defeats trafilatura (see
+    # `extract.extract_structured`).
+    content_selector: str | None = None
+    # Refuse hash-fallback vectors instead of storing them. Off for ad-hoc notes,
+    # which still save when no embedder is running; on for anything bulk, where the
+    # first fallback row would pin a new table to 384 dims for good.
+    strict_embeddings: bool = False
 
 
 class SourcesListResponse(BaseModel):
@@ -127,6 +144,9 @@ class SearchChunk(BaseModel):
     chunk_index: int
     text: str
     score: float
+    # Heading path and anchor, for sources ingested `structured` (empty otherwise).
+    section: str | None = None
+    anchor: str | None = None
 
 
 class SearchGroup(BaseModel):

@@ -124,18 +124,28 @@ def _delete_library_source(source_id: str) -> None:
     """Drop a source *and its chunk rows*, the way the library's own delete route
     does. Deleting only the catalog row leaves the vectors behind, and an orphaned
     chunk keeps answering searches for a page that no longer exists."""
-    from backend.modules.database.vectorstore import delete_document
     from backend.modules.library import store as library_store
+    from backend.modules.library.routes import delete_source_chunks
 
     source = library_store.get_source(source_id)
     if source is None:
         return
-    for chunk in library_store.chunk_docs_for(source):
-        delete_document(f"{source_id}#{chunk['index']}")
-    # A CLIP-only source has no chunk rows to iterate; sweeping `#0` explicitly is a
-    # no-op when the loop already covered it. Same reasoning as `library/routes.py`.
-    delete_document(f"{source_id}#0")
+    delete_source_chunks(source)
     library_store.delete_source(source_id)
+
+
+@router.post("/sets/{set_id}/reindex", response_model=CrawlProgress)
+async def reindex(set_id: str) -> CrawlProgress:
+    """Re-extract and re-embed every captured page from its archive, without
+    crawling the site again. Only for import (recipe) sets."""
+    row = _set_or_404(set_id)
+    if not row.get("recipe"):
+        raise HTTPException(
+            status_code=400, detail="only imported sites can be re-indexed; recrawl it"
+        )
+    if not crawl.start_reindex(set_id):
+        raise HTTPException(status_code=409, detail="a crawl is already running")
+    return CrawlProgress(set_id=row["id"], status="indexing")
 
 
 @router.delete("/sets/{set_id}", response_model=OkResponse)
@@ -145,6 +155,32 @@ def delete_set(set_id: str) -> OkResponse:
         raise HTTPException(
             status_code=409, detail="stop the crawl before deleting the set"
         )
+    remove_set_content(set_id)
+    return OkResponse()
+
+
+@router.post("/sets/{set_id}/stop", response_model=OkResponse)
+def stop_crawl(set_id: str) -> OkResponse:
+    """Stop a running crawl. Captured pages stay; a recrawl resumes from them."""
+    _set_or_404(set_id)
+    if not crawl.cancel_crawl(set_id):
+        raise HTTPException(status_code=409, detail="no crawl is running")
+    return OkResponse()
+
+
+def remove_set_content(set_id: str) -> None:
+    """Delete a set's archives, library sources and catalog rows.
+
+    Knowledge-base items that point into the set are *detached* (back to plain
+    links), not deleted: the user's status, notes and progress on a lesson are
+    theirs, and deleting an offline copy shouldn't take them.
+    """
+    try:
+        from backend.modules.kb.sitesync import detach_set
+
+        detach_set(set_id)
+    except Exception:  # noqa: BLE001 — the catalog must not block a delete
+        logger.exception("docviewer: detaching kb items from %s failed", set_id)
     for page in store.list_pages(set_id):
         if page["artifact_id"]:
             try:
@@ -157,7 +193,6 @@ def delete_set(set_id: str) -> OkResponse:
             except Exception:  # noqa: BLE001
                 logger.info("docviewer: source %s already gone", page["source_id"])
     store.delete_set(set_id)
-    return OkResponse()
 
 
 # ---- pages -----------------------------------------------------------------

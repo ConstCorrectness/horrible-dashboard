@@ -205,7 +205,7 @@ def test_create_set_really_schedules_the_crawl(client: TestClient, monkeypatch) 
     monkeypatch.setattr(docviewer_routes, "_check_host_public", lambda _host: None)
     ran: list[str] = []
 
-    async def _fake_run(set_id: str, max_depth: int) -> None:
+    async def _fake_run(set_id: str, max_depth: int, force: bool = False) -> None:
         ran.append(set_id)
 
     monkeypatch.setattr(crawl, "_run_crawl", _fake_run)
