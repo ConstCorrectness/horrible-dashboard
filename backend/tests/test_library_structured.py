@@ -92,6 +92,27 @@ def test_mathjax3_containers_keep_their_stamped_tex():
         assert "$$\\frac{QK^\\top}{\\sqrt{d_k}}$$" in md, selector
 
 
+def test_inline_math_flush_against_words_gets_its_space_back():
+    # Captured from aman.ai: "Where<mjx-container …>" with no space in the markup;
+    # MathJax's own spacing made the gap on the page.
+    html = (
+        '<html><body><article class="post-content"><ul><li>Where'
+        '<mjx-container class="MathJax" data-tex="L"><mjx-math>L</mjx-math>'
+        "</mjx-container>is the loss,"
+        '<mjx-container class="MathJax" data-tex="M"><mjx-math>M</mjx-math>'
+        "</mjx-container>is the model and "
+        '(<mjx-container class="MathJax" data-tex="N"><mjx-math>N</mjx-math>'
+        "</mjx-container>) the parameters; <em>with</em>"
+        '<mjx-container class="MathJax" data-tex="d_k"><mjx-math>d</mjx-math>'
+        "</mjx-container>, done.</li></ul></article></body></html>"
+    )
+    for selector in (None, "article.post-content"):
+        md = extract_structured(html, "https://aman.ai/x/", selector).markdown
+        assert "Where $L$ is the loss, $M$ is the model" in md, md
+        assert "($N$)" in md, md  # brackets keep their math tight
+        assert "$d_k$," in md, md  # and punctuation stays attached
+
+
 def test_canonical_link_and_heading_anchors_are_harvested():
     article = extract_structured(PRIMER, "https://aman.ai/primers/RAG/")
     assert article.canonical == "https://aman.ai/primers/ai/RAG/"

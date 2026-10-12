@@ -178,11 +178,31 @@ def _canonical_link(doc: Any, url: str) -> str | None:
 # query like "softmax temperature formula" can actually match.
 
 
+def _text_before(el: Any) -> str:
+    """The text that renders immediately before `el`."""
+    prev = el.getprevious()
+    if prev is None:
+        parent = el.getparent()
+        return (parent.text or "") if parent is not None else ""
+    return prev.tail or "".join(prev.itertext())
+
+
 def _replace_with_text(el: Any, text: str) -> None:
     parent = el.getparent()
     if parent is None:
         return
     tail = el.tail or ""
+    if text.startswith("$") and not text.startswith("$$"):
+        # Inline math is often set flush against its words in the markup
+        # (`Where<mjx-container>`): the renderer's own spacing made the gap on the
+        # page. As text that reads "Where$L$is the loss,$N$is", so restore the
+        # space after a word or after punctuation that is followed by one, and
+        # before a word; an opening bracket keeps its math tight.
+        before = _text_before(el)
+        if before[-1:].isalnum() or before[-1:] in {",", ";", ":", ".", "!", "?"}:
+            text = " " + text
+        if tail[:1].isalnum():
+            text = text + " "
     prev = el.getprevious()
     if prev is not None:
         prev.tail = (prev.tail or "") + text + tail
