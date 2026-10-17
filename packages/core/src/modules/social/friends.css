@@ -1,0 +1,511 @@
+/* The Friends list and its chat dock. See FriendsPanel.tsx.
+ *
+ * Persona colours ride `data-persona` and resolve through the status vocabulary,
+ * so every theme gets them for free: online is the accent (Steam's blue), in-game
+ * is success (Steam's green), away is warn, do-not-disturb is danger, offline is
+ * faint. One token per tone, set once, read by the name, the dot and the tab. */
+
+.fl-wrap {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+}
+
+.fl {
+  --fl-list-w: 260px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+[data-persona='online'] {
+  --tone: var(--accent);
+}
+[data-persona='ingame'] {
+  --tone: var(--success);
+}
+[data-persona='away'] {
+  --tone: color-mix(in srgb, var(--warn) 85%, var(--text-dim));
+}
+[data-persona='busy'] {
+  --tone: var(--danger);
+}
+[data-persona='offline'] {
+  --tone: var(--text-faint);
+}
+
+/* The presence dot takes the tone, not the shared avatar's single green. One class
+   more specific than people.css's `[data-online='true']` rule, which loads later. */
+.fl [data-persona] .people-avatar .people-avatar-dot {
+  background: var(--tone);
+}
+
+/* ---- the list column --------------------------------------------------------- */
+
+.fl-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  /* A faint technical grid behind the list, never a gradient. */
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 35%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 35%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+
+/* Narrow: an open chat takes the pane; the back arrow brings the list back. */
+.fl[data-chat='open'] .fl-list {
+  display: none;
+}
+
+@container (min-width: 560px) {
+  .fl[data-chat='open'] {
+    grid-template-columns: minmax(0, 1fr) var(--fl-list-w);
+  }
+  .fl[data-chat='open'] .fl-list {
+    display: flex;
+    border-left: 1px solid var(--border);
+  }
+  /* `.fl` first: `.fl-icon-btn` sets display later in this file. */
+  .fl .fl-chat-back {
+    display: none;
+  }
+}
+
+/* ---- you --------------------------------------------------------------------- */
+
+.fl-me {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  /* The one accent edge in the pane: a 2px top rule in your own tone. */
+  border-top: 2px solid var(--tone);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+}
+.fl-me-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex: 1;
+}
+.fl-me-name {
+  font-weight: 700;
+  color: var(--text-strong);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fl-me-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--tone);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.fl-me-status:hover {
+  color: var(--text-strong);
+}
+.fl-me-caret {
+  transform: rotate(90deg);
+  --icon-size: 10px;
+}
+.fl-me-activity {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- search + add ------------------------------------------------------------ */
+
+.fl-tools {
+  display: flex;
+  gap: var(--space-2);
+}
+.fl-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+.fl-search .hd-icon {
+  position: absolute;
+  left: 9px;
+  pointer-events: none;
+}
+.fl-search input {
+  width: 100%;
+  padding: 0 0.6rem 0 1.9rem;
+}
+.fl-add-toggle {
+  gap: 1px;
+  width: auto;
+  padding: 0 var(--space-3);
+  font-weight: 700;
+}
+.fl-add-toggle[aria-expanded='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.fl-add {
+  display: flex;
+  gap: var(--space-2);
+}
+.fl-add input {
+  flex: 1;
+  min-width: 0;
+}
+.fl-error,
+.fl-notice {
+  margin: 0;
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
+}
+.fl-error {
+  color: var(--danger);
+}
+.fl-notice {
+  color: var(--success);
+}
+
+/* ---- groups ------------------------------------------------------------------ */
+
+.fl-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.fl-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.fl-group-head:hover {
+  color: var(--text);
+}
+.fl-group-label {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.fl-group-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+.fl-chevron {
+  --icon-size: 10px;
+  transform: rotate(90deg);
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+.fl-chevron[data-collapsed='true'] {
+  transform: rotate(0deg);
+}
+/* What needs you gets the accent on its header, and nothing else does. */
+.fl-group[data-group='requests'] .fl-group-head {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.fl-group[data-group='ingame'] .fl-group-label {
+  color: var(--success);
+}
+.fl-empty {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* ---- rows -------------------------------------------------------------------- */
+
+.fl-rows {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fl-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  animation: hd-row-in var(--dur-base) var(--ease-entrance) both;
+  animation-delay: calc(var(--hd-i, 0) * var(--stagger-step));
+}
+/* Offline friends stay legible but recede — Steam's trick, and why the list reads
+   at a glance instead of being scanned. */
+.fl-row[data-persona='offline'] {
+  opacity: 0.6;
+}
+.fl-row-hit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
+}
+.fl-row-hit:disabled {
+  cursor: default;
+}
+.fl-row-hit:not(:disabled):hover {
+  background: var(--bg-hover);
+  transform: translateX(2px);
+}
+.fl-row[data-active='true'] .fl-row-hit {
+  background: var(--bg-elevated);
+}
+/* The selected row's leading rail, as an inset edge rather than a border-left. */
+.fl-row[data-active='true']::before,
+.fl-row[data-request='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--tone);
+}
+.fl-row[data-request='true']::before {
+  background: var(--accent);
+}
+.fl-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.fl-row-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.fl-row-display {
+  font-weight: 600;
+  color: var(--tone, var(--text));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fl-tag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+}
+.fl-row-sub {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--fs-meta);
+}
+.fl-row-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.fl-row[data-persona='ingame'] .fl-row-status {
+  color: color-mix(in srgb, var(--success) 75%, var(--text-dim));
+}
+.fl-row-since {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+.fl-unread {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-radius: calc(var(--radius-sm) * 4);
+}
+.fl-row-decide {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+/* Square ghost buttons for glyph actions: the overflow, close, back. */
+.fl-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.fl-icon-btn:hover {
+  color: var(--text-strong);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+.fl-row-more {
+  opacity: 0;
+}
+.fl-row:hover .fl-row-more,
+.fl-row:focus-within .fl-row-more,
+.fl-row-more:focus-visible {
+  opacity: 1;
+}
+
+/* ---- the chat dock ----------------------------------------------------------- */
+
+.fl-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.fl-chat-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  scrollbar-width: thin;
+}
+.fl-chat-back {
+  height: auto;
+}
+.fl-back-chevron {
+  transform: rotate(180deg);
+}
+.fl-chat-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 180px;
+  border-top: 2px solid transparent;
+  color: var(--text-dim);
+}
+.fl-chat-tab[data-active='true'] {
+  background: var(--bg);
+  border-top-color: var(--tone);
+  color: var(--text-strong);
+}
+.fl-chat-tab-hit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+.fl-tab-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.fl-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-body);
+}
+.fl-tab-close {
+  width: 22px;
+  height: 22px;
+  --icon-size: 10px;
+}
+.fl-chat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.fl-chat-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-meta);
+}
+.fl-chat-who .fl-row-display {
+  font-size: var(--fs-body);
+}
+.fl-chat .chat-thread {
+  flex: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-row {
+    animation: none;
+  }
+  .fl-row-hit,
+  .fl-chevron {
+    transition: none;
+  }
+  .fl-row-hit:not(:disabled):hover {
+    transform: none;
+  }
+}

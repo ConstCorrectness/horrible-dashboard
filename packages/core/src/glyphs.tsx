@@ -383,7 +383,11 @@ export function IconVolume({ muted, ...props }: SVGProps<SVGSVGElement> & { mute
   return (
     <Glyph {...props}>
       <path d="M2.5 6.25h2.25L8 3.5v9L4.75 9.75H2.5z" />
-      {muted ? <path d="M10.5 6l3 4M13.5 6l-3 4" /> : <path d="M10.5 5.75a3 3 0 0 1 0 4.5M12.25 4a5.5 5.5 0 0 1 0 8" />}
+      {muted ? (
+        <path d="M10.5 6l3 4M13.5 6l-3 4" />
+      ) : (
+        <path d="M10.5 5.75a3 3 0 0 1 0 4.5M12.25 4a5.5 5.5 0 0 1 0 8" />
+      )}
     </Glyph>
   );
 }
@@ -415,6 +419,27 @@ export function IconList(props: SVGProps<SVGSVGElement>) {
     <Glyph {...props}>
       <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
       <path d="M2.5 4h.01M2.5 8h.01M2.5 12h.01" strokeWidth="2" />
+    </Glyph>
+  );
+}
+
+/** More actions — the row's overflow menu. Dots, filled: they are targets, not lines. */
+export function IconMore(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="3.5" cy="8" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="8" r="1.1" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** A person — add a friend, someone's profile. */
+export function IconPerson(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="8" cy="5.25" r="2.5" />
+      <path d="M3 13.25c.6-2.5 2.6-4 5-4s4.4 1.5 5 4" />
     </Glyph>
   );
 }

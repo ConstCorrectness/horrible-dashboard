@@ -20,6 +20,7 @@ from backend.modules.social.models import (
     RespondRequest,
     RosterSnapshot,
     SelfProfile,
+    StatusRequest,
     UpdateProfileRequest,
 )
 
@@ -42,6 +43,18 @@ async def update_me(request: UpdateProfileRequest) -> SelfProfile:
         display_name=request.display_name, avatar=request.avatar
     )
     roster.broadcast_roster()
+    return roster.self_profile()
+
+
+@router.post("/status", response_model=SelfProfile)
+async def set_status(request: StatusRequest) -> SelfProfile:
+    """Set your persona (online/away/busy/invisible), activity, or idle flag."""
+    await roster.update_status(
+        persona=request.persona,
+        activity=request.activity,
+        clear_activity=request.clear_activity,
+        idle=request.idle,
+    )
     return roster.self_profile()
 
 

@@ -82,6 +82,10 @@ async def list_friends(_args: dict[str, Any]) -> dict[str, Any]:
                 "friend_code": f.friend_code,
                 "status": f.status,
                 "presence": f.presence,
+                # "busy" is a request not to be bothered — worth knowing before
+                # the agent messages someone on the user's behalf.
+                "persona": f.persona,
+                "activity": f.activity.model_dump() if f.activity else None,
                 "is_self": f.is_self,
                 "devices": [
                     {"label": d.label, "node_id": d.node_id, "online": d.online}

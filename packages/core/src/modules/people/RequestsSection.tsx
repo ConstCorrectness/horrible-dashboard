@@ -1,13 +1,14 @@
 /**
- * One inbox for everything waiting on your decision.
+ * Requests to meet from the commons — strangers, not friends.
  *
- * There used to be two, in the same pane: an incoming *friend request* appeared as
- * a row inside the Friends list, while a *commons meet request* had its own
- * Requests section. Two inboxes a click apart is how you end up ignoring both —
- * neither one is where you look, because neither one is "the" place.
+ * Friend requests used to live here too, on the theory that one inbox beats two.
+ * They moved back to the top of the Friends list (Steam's place for them), because
+ * that is where people actually look: an inbox a section away from the list it
+ * feeds was the one nobody opened. This section still *mentions* them, with a link,
+ * so arriving here for a friend request is not a dead end.
  *
- * The two kinds stay visibly distinct, because they mean genuinely different
- * things and grant genuinely different access:
+ * The two kinds mean genuinely different things and grant genuinely different
+ * access:
  *
  * - **A friend request** is from someone who already has your friend code. Accepting
  *   grants every one of their machines fabric trust, which is what makes chat,
@@ -20,6 +21,8 @@
  */
 import { useEffect, useSyncExternalStore } from 'react';
 
+import { revealSection } from '../../layout/controller';
+
 import {
   commonsRefresh,
   commonsRespond,
@@ -27,20 +30,8 @@ import {
   initCommons,
   subscribeCommons,
 } from '../commons/commons';
-import {
-  getSocialState,
-  initSocial,
-  requestRoster,
-  respondViaChannel,
-  subscribeSocial,
-} from '../social/ws';
+import { getSocialState, initSocial, requestRoster, subscribeSocial } from '../social/ws';
 import { Avatar } from './Avatar';
-import {
-  ensureProfileCards,
-  getProfileCard,
-  getProfileCards,
-  subscribeProfileCards,
-} from './profile-cards';
 
 function useCommons() {
   return useSyncExternalStore(subscribeCommons, getCommonsState, getCommonsState);
@@ -50,14 +41,9 @@ function useSocial() {
   return useSyncExternalStore(subscribeSocial, getSocialState, getSocialState);
 }
 
-function useCards() {
-  return useSyncExternalStore(subscribeProfileCards, getProfileCards, getProfileCards);
-}
-
 export function RequestsSection() {
   const { requests } = useCommons();
   const { roster } = useSocial();
-  useCards();
 
   useEffect(() => {
     initCommons();
@@ -68,52 +54,29 @@ export function RequestsSection() {
 
   const friendRequests = (roster?.friends ?? []).filter((f) => f.status === 'pending_in');
 
-  useEffect(() => {
-    void ensureProfileCards(friendRequests.map((f) => f.handle));
-    // Handles only; a changed presence must not re-fetch.
-  }, [friendRequests.map((f) => f.handle).join(',')]);
-
-  const total = friendRequests.length + requests.length;
-
   return (
     <div className="people-section">
-      {total === 0 && (
+      {requests.length === 0 && (
         <p className="people-hint">
-          Nothing waiting. Friend requests and requests to meet from the commons both land here.
+          Nothing waiting. Requests to meet from people who found you through the commons land here.
         </p>
       )}
 
       {friendRequests.length > 0 && (
-        <section>
-          <h4 className="people-label">Friend requests ({friendRequests.length})</h4>
-          <ul className="people-list">
-            {friendRequests.map((f) => {
-              const card = getProfileCard(f.handle);
-              return (
-                <li key={f.person_id} className="people-row">
-                  <Avatar
-                    name={f.display_name}
-                    emoji={card?.avatar}
-                    imageRef={card?.avatar_url}
-                    size={30}
-                  />
-                  <div className="people-row-main">
-                    <strong>{f.display_name}</strong>
-                    <span className="people-dim">
-                      {f.handle ? `@${f.handle}` : 'wants to be friends'}
-                    </span>
-                  </div>
-                  <button onClick={() => respondViaChannel(f.person_id, true)}>Accept</button>
-                  <button onClick={() => respondViaChannel(f.person_id, false)}>Decline</button>
-                </li>
-              );
-            })}
-          </ul>
-          <p className="people-hint">
-            Accepting grants every machine they own access to this node’s fabric — chat, shared
-            panes, and letting their agent ask yours things.
-          </p>
-        </section>
+        <p className="people-hint">
+          {friendRequests.length === 1
+            ? '1 friend request is waiting'
+            : `${friendRequests.length} friend requests are waiting`}{' '}
+          at the top of{' '}
+          <button
+            type="button"
+            className="people-link"
+            onClick={() => revealSection('friends', 'people.home')}
+          >
+            Friends
+          </button>
+          .
+        </p>
       )}
 
       {requests.length > 0 && (

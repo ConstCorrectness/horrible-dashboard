@@ -10,7 +10,7 @@
  * With no index connected the section says so and points at the setting, rather than
  * rendering an empty list that reads as "nobody has published anything".
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { DataList, DataRow } from '../../../DataList';
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
@@ -34,7 +34,7 @@ export function toolSequence(digest: Pick<CommonsDigest, 'steps'>, limit = 6): s
   return runs.length > limit ? `${shown} → +${runs.length - limit} more` : shown;
 }
 
-export function CommonsSection() {
+export function CommonsSection({ switcher }: { switcher?: ReactNode } = {}) {
   const [mine, setMine] = useState(false);
   const [state, setState] = useState<Awaited<ReturnType<typeof listCommons>> | null>(null);
   const [error, setError] = useState('');
@@ -72,10 +72,11 @@ export function CommonsSection() {
       error={error}
       header={
         <PaneHeader
-          title="Commons"
+          title="Shared"
           meta={state?.connected ? [`${state.digests.length} digests`] : ['not connected']}
           actions={
             <>
+              {switcher}
               <Button size="sm" intent={mine ? 'ghost' : 'primary'} onClick={() => setMine(false)}>
                 Everyone
               </Button>

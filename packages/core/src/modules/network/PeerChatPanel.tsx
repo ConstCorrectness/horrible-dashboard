@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { Avatar } from '../people/Avatar';
 import { getConversation, openConversation, subscribeConversation } from '../people/conversation';
@@ -10,14 +10,8 @@ import {
 } from '../people/profile-cards';
 import { getSocialState, initSocial, requestRoster, subscribeSocial } from '../social/ws';
 import type { Friend } from '../social/api';
-import {
-  chatClose,
-  chatOpen,
-  chatRequestUnread,
-  chatSend,
-  subscribeChat,
-  type ChatMessage,
-} from './peerchat';
+import { ChatThread } from './ChatThread';
+import { chatRequestUnread, subscribeChat } from './peerchat';
 import { initNetwork } from './ws';
 
 function useSocial() {
@@ -30,15 +24,6 @@ function useSelected() {
 
 function useCards() {
   return useSyncExternalStore(subscribeProfileCards, getProfileCards, getProfileCards);
-}
-
-function dayStamp(ts: number): string {
-  const date = new Date(ts * 1000);
-  const today = new Date();
-  if (date.toDateString() === today.toDateString()) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  return date.toLocaleDateString();
 }
 
 /**
@@ -57,23 +42,24 @@ function dayStamp(ts: number): string {
  * machine a message travels over is chosen at send time and shown nowhere.
  *
  * An offline friend can still be selected and read — you just cannot send, which
- * is stated rather than hidden. See docs/modules/social.mdx.
+ * is stated rather than hidden. The thread itself is `ChatThread`, shared with the
+ * chat dock beside the Friends list, so the two are one chat in two places.
+ * See docs/modules/social.mdx.
  */
 export function PeerChatPanel() {
   const { roster } = useSocial();
   useCards();
   const selected = useSelected();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [unread, setUnread] = useState<Record<string, number>>({});
-  const [draft, setDraft] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     initSocial();
     initNetwork();
     requestRoster();
     chatRequestUnread();
+    return subscribeChat((event) => {
+      if (event.kind === 'unread') setUnread(event.counts ?? {});
+    });
   }, []);
 
   // People you can hold a conversation with: accepted friends, and your own linked
@@ -87,53 +73,9 @@ export function PeerChatPanel() {
     void ensureProfileCards(people.map((p) => p.handle));
   }, [people]);
 
+  // No auto-select: picking someone here opens a tab in the Friends chat dock
+  // too, and a tab nobody asked for is clutter.
   const active: Friend | undefined = people.find((p) => p.person_id === selected);
-  const online = active?.presence === 'online';
-
-  useEffect(() => {
-    if (!selected && people.length > 0) openConversation(people[0].person_id);
-  }, [selected, people]);
-
-  // One subscription for the whole panel: the badge counts arrive whether or not a
-  // conversation is open, and a message for *another* thread must still bump its
-  // badge rather than being dropped because the pane is showing someone else.
-  useEffect(() => {
-    return subscribeChat((event) => {
-      if (event.kind === 'unread') {
-        setUnread(event.counts ?? {});
-      } else if (event.kind === 'history') {
-        if (event.personId === selected) setMessages(event.messages ?? []);
-      } else if (event.kind === 'message' && event.message) {
-        if (event.message.personId === selected) {
-          setMessages((prev) => [...prev, event.message as ChatMessage]);
-        }
-      } else if (event.kind === 'error' && event.personId === selected) {
-        setError(event.error ?? 'send failed');
-      }
-    });
-  }, [selected]);
-
-  useEffect(() => {
-    if (!selected) {
-      setMessages([]);
-      return;
-    }
-    setMessages([]);
-    setError(null);
-    chatOpen(selected);
-    return () => chatClose(selected);
-  }, [selected]);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages]);
-
-  const send = () => {
-    const text = draft.trim();
-    if (!text || !selected) return;
-    chatSend(selected, text);
-    setDraft('');
-  };
 
   return (
     <div className="chat-pane">
@@ -166,52 +108,7 @@ export function PeerChatPanel() {
         })}
       </ul>
 
-      <div className="chat-thread">
-        <div ref={scrollRef} className="chat-log">
-          {messages.length === 0 ? (
-            <p className="people-dim">
-              {!active
-                ? 'Add a friend to start a conversation.'
-                : online
-                  ? 'No messages yet — say hello.'
-                  : `${active.display_name} is offline. You can read the history; sending needs one of their machines up.`}
-            </p>
-          ) : (
-            messages.map((m) => (
-              <div key={m.id} className="chat-msg" data-dir={m.direction}>
-                <span title={new Date(m.ts * 1000).toLocaleString()}>{m.text}</span>
-                <em>{dayStamp(m.ts)}</em>
-              </div>
-            ))
-          )}
-        </div>
-
-        {error && <div className="chat-error">{error}</div>}
-
-        <form
-          className="chat-compose"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send();
-          }}
-        >
-          <input
-            value={draft}
-            placeholder={
-              !active
-                ? 'No one selected'
-                : online
-                  ? 'Message…'
-                  : `${active.display_name} is offline`
-            }
-            disabled={!online}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <button type="submit" disabled={!online || !draft.trim()}>
-            Send
-          </button>
-        </form>
-      </div>
+      <ChatThread friend={active} />
     </div>
   );
 }

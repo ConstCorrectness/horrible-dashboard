@@ -51,12 +51,12 @@ export const trajectoriesModule: ModuleManifest = {
         { id: 'follow', label: 'Agent', icon: '◈', key: 'a' },
         { id: 'datasets', label: 'Datasets', icon: '▦', key: 'd' },
         { id: 'harness', label: 'Harness', icon: '⚖', key: 'h' },
-        // Friends' shared runs. A section, not a pane: a pulled run *is* a run, and it
-        // lands in Runs beside this node's own with the same detail view.
-        { id: 'peers', label: 'Friends', icon: '⇄', key: 'p' },
-        // Strangers, not friends: digests of runs — their shape, never their payloads —
-        // on the agent commons index. Publishing happens from a run's detail view.
-        { id: 'commons', label: 'Commons', icon: '◎', key: 'c' },
+        // Runs from elsewhere, one section with a Friends/Public switch: whole runs a
+        // friend shares (pulled in, they land in Runs beside this node's own), and
+        // digests on the agent commons index — a run's shape, never its payloads.
+        // Two tabs named "Friends" and "Commons" read as a second social network
+        // inside a trace viewer. Publishing still happens from a run's detail view.
+        { id: 'shared', label: 'Shared', icon: '⇄', key: 's' },
         // Agents you wrote, reporting in over OTLP: the endpoint, the token for other
         // machines, and a snippet per framework. Their runs land in Runs.
         { id: 'connect', label: 'Connect', icon: '⊕', key: 'o' },

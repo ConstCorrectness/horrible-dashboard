@@ -8,7 +8,7 @@
  * A pulled run lands in a `peer-…` dataset, keyed by the friend's authenticated device,
  * and cannot be shared onward — they shared it with you, not with your friends.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { DataList, DataRow } from '../../../DataList';
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
@@ -30,7 +30,14 @@ interface Selection {
   person: string;
 }
 
-export function PeersSection({ onPulled }: { onPulled: () => void }) {
+export function PeersSection({
+  onPulled,
+  switcher,
+}: {
+  onPulled: () => void;
+  /** The Friends/Public switch, from `SharedSection`. */
+  switcher?: ReactNode;
+}) {
   const [people, setPeople] = useState<PeerPerson[] | null>(null);
   const [device, setDevice] = useState<Selection | null>(null);
   const [datasets, setDatasets] = useState<PeerDataset[] | null>(null);
@@ -98,17 +105,20 @@ export function PeersSection({ onPulled }: { onPulled: () => void }) {
       error={error}
       header={
         <PaneHeader
-          title="Friends"
-          meta={people ? [`${people.length} online`] : []}
+          title="Shared"
+          meta={people ? [`${people.length} friends online`] : []}
           actions={
-            <Button
-              size="sm"
-              intent="ghost"
-              icon={<RefreshIcon />}
-              onClick={() => void loadPeople()}
-            >
-              Refresh
-            </Button>
+            <>
+              {switcher}
+              <Button
+                size="sm"
+                intent="ghost"
+                icon={<RefreshIcon />}
+                onClick={() => void loadPeople()}
+              >
+                Refresh
+              </Button>
+            </>
           }
         />
       }

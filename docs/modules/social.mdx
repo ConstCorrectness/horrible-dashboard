@@ -116,6 +116,7 @@ Two parsing details are load-bearing:
 | `POST /api/social/friends/respond` | Accept or decline a pending request |
 | `DELETE /api/social/friends/{person_id}` | Remove a friend (revokes trust) |
 | `POST /api/social/friends/{person_id}/block` | Block |
+| `POST /api/social/status` | Set your persona (`online`/`away`/`busy`/`invisible`), activity, or idle flag |
 | `POST /api/social/handle/bind` | Enroll this machine in the signed-in account now (it also runs on every sign-in) |
 
 The person private key never crosses this boundary — only the public half and the
@@ -132,6 +133,7 @@ extends the fabric without the fabric knowing it exists — the same way
 | `social_hello` | who I am: device certificate + display name, sent on every connect |
 | `social_friend_request` | please add me |
 | `social_friend_response` | accepted / declined |
+| `social_status` | my persona and activity — **trusted sessions only**, never opened to strangers |
 
 ### `/ws` `social` channel
 
@@ -139,7 +141,33 @@ Pushes `roster` snapshots and `friend_request` notifications. Presence is
 **derived, never stored**: a person is online exactly when one of their machines
 has a live session, which is a fact about the hub's connection table rather than
 about the database. Mutating events are dispatched with `create_task` so a dial
-never stalls the shared receive loop.
+never stalls the shared receive loop. A `status` event (`persona`, `activity`,
+`clearActivity`, `idle`) sets your status; see [Status and activity](#status-and-activity).
+
+## Status and activity
+
+Steam's persona states, layered **over** derived presence rather than replacing it
+(`backend/modules/social/status.py`):
+
+- **Persona** is chosen — Online, Away, Do Not Disturb (`busy`), Invisible — and
+  persisted per machine in the local profile. **Invisible is never sent**: friends
+  are told `offline`, their roster masks your machines' online flags and
+  `last_seen` too, and the result is indistinguishable from your machines being
+  down. You can still chat; a friend can answer an invisible person for 15 minutes
+  after their last message (`ChatThread.REPLY_WINDOW_S`).
+- **Activity** is reported — "HorribleAssault — de_dust2 · Ranked · 7–5" — and held
+  in memory only, because an activity that survives a restart is a lie. `kind:
+  "game"` puts someone in the **In-Game** group. HorribleAssault reports it from
+  `MatchSession` (`hassault/activity.ts`); anything else can call `setActivity`.
+  Re-reporting the same title keeps the original start time.
+- **Idle** is the browser's report of ten minutes without input. It turns a chosen
+  Online into a shared Away without overwriting the choice, and leaves Busy and
+  Invisible alone.
+
+A person with several machines shows the most available persona among those
+online (online > busy > away), and the newest activity. A machine on an older build
+never sends `social_status` and reads as Online, exactly as before. A status goes
+out only when what friends *see* changed — going idle while busy sends nothing.
 
 ### Storage
 
@@ -223,18 +251,20 @@ layer existed) is still delivered — just unfiled, in memory, with a null
 | `unread` | → | subscribe to badges only, for a friends list |
 | `history` / `message` / `unread` / `error` | ← | backlog, one message, badge counts, failure |
 
-## Requests: one inbox
+## Requests
 
-Incoming **friend requests** and commons **meet requests** both land in the
-People pane's Requests section. They used to be a click apart — friend requests
-rendered inside the Friends list, meet requests had their own section — which is
-how you end up ignoring both.
+Incoming **friend requests** sit at the top of the Friends list, in their own
+group, with Accept and Decline on the row — Steam's place for them. They spent a
+while in the Requests section alongside commons meet requests, on the theory that
+one inbox beats two; in practice an inbox a section away from the list it feeds was
+the one nobody opened. Requests still says how many friend requests are waiting and
+links to them.
 
-They stay visibly distinct, because they grant genuinely different access: a
-friend request is from someone who already has your friend code and accepting
-grants their machines fabric trust, while a meet request is from a *stranger*
-found through the [commons](commons.mdx) and keeps its own consent handshake and
-trust tiers.
+Commons **meet requests** stay in Requests, because they grant genuinely different
+access: a friend request is from someone who already has your friend code and
+accepting grants their machines fabric trust, while a meet request is from a
+*stranger* found through the [commons](commons.mdx) and keeps its own consent
+handshake and trust tiers.
 
 ## Adding someone anywhere, by username
 

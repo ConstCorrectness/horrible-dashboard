@@ -8,6 +8,7 @@ fabric having to know it exists.
     social_friend_request   please add me
     social_friend_response  accepted / declined
     social_device_cert      a certificate minted for a machine being linked
+    social_status           my persona and activity (trusted sessions only)
 
 The one design point worth stating plainly: **accepting a friend grants fabric
 trust**. Every device of an accepted friend is written into the network module's
@@ -28,6 +29,7 @@ from backend.modules.network import trust
 from backend.modules.network.hub import peer_hub
 from backend.modules.social import identity as person_identity
 from backend.modules.social import directory, handles, store
+from backend.modules.social import status as social_status
 from backend.modules.social.friendcode import format_friend_code, resolve_person_id
 from backend.modules.social.models import (
     Friend,
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 SOCIAL_HELLO = "social_hello"
 SOCIAL_FRIEND_REQUEST = "social_friend_request"
 SOCIAL_FRIEND_RESPONSE = "social_friend_response"
+SOCIAL_STATUS = "social_status"
 
 # Callbacks the `/ws` social channel registers to push roster updates to browsers.
 _subscribers: set[Any] = set()
@@ -134,6 +137,9 @@ def self_profile() -> SelfProfile:
         person_public_key=str(cert["person_public_key"]),
         holds_person_key=not person_identity.is_linked_device(),
         handle=directory._signed_in_handle(),
+        persona=social_status.own_persona(),
+        idle=social_status.own_idle(),
+        activity=social_status.own_activity(),
         # Assembled through the same helper the roster uses, so "online" means the
         # same thing for your own machines as for a friend's.
         devices=[store.device_info(d, online) for d in store.list_devices(person_id)],
@@ -185,6 +191,8 @@ def _on_accepted(person_id: str) -> None:
     It is also allowed to fail — see `ladder.mirror_accept` on why a missing ladder
     half is not a failed friendship.
     """
+    # Upgrading the session emits `peer_update`, which is also what sends the new
+    # friend our persona (see `_on_peer_event`) — no separate send here.
     _grant_trust(person_id)
 
     from backend.modules.social import ladder
@@ -392,6 +400,62 @@ async def handle_friend_response(
     else:
         store.remove_friend(person_id)
     broadcast_roster()
+
+
+async def handle_status(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
+    """A friend's machine announcing its persona and activity.
+
+    Not opened to strangers (see `register`), so the hub only delivers this from a
+    trusted session — a friend's machine or one of our own.
+    """
+    if social_status.record_remote(env.src, env.data or {}):
+        broadcast_roster()
+
+
+async def send_status(node_id: str) -> None:
+    """Tell one machine our persona. Best-effort: a dropped session just misses it."""
+    try:
+        await peer_hub.send_to(node_id, SOCIAL_STATUS, social_status.wire_payload())
+    except KeyError:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.debug("social status to %s failed", node_id, exc_info=True)
+
+
+async def announce_status() -> None:
+    """Send our persona to every trusted session: friends' machines and our own.
+
+    `peer_hub.peers` holds only trusted sessions — strangers live in a separate table
+    — so this cannot leak what you are doing to someone you have not friended.
+    """
+    for node_id in list(online_nodes()):
+        await send_status(node_id)
+
+
+async def update_status(
+    *,
+    persona: str | None = None,
+    activity: Any = None,
+    clear_activity: bool = False,
+    idle: bool | None = None,
+) -> None:
+    """Apply a browser's status change, then tell friends only if it changed what
+    *they* see. Going idle while busy, say, changes nothing on the wire."""
+    before = social_status.wire_payload()
+    changed = False
+    if persona is not None:
+        changed |= social_status.set_persona(persona)
+    if clear_activity:
+        changed |= social_status.set_activity(None)
+    elif activity is not None:
+        changed |= social_status.set_activity(activity)
+    if idle is not None:
+        changed |= social_status.set_idle(idle)
+    if not changed:
+        return
+    broadcast_roster()
+    if social_status.wire_payload() != before:
+        await announce_status()
 
 
 async def _send_response(person_id: str, accept: bool) -> None:
@@ -720,6 +784,10 @@ def _on_peer_event(event: str, data: dict[str, Any]) -> None:
     node_id = str(peer.get("node_id") or "")
     if node_id and peer.get("status") == "connected":
         asyncio.ensure_future(say_hello(node_id))
+        asyncio.ensure_future(send_status(node_id))
+    elif node_id and peer.get("status") == "disconnected":
+        # Gone: whatever it last announced no longer describes anyone.
+        social_status.forget_remote(node_id)
     broadcast_roster()
 
 
@@ -729,6 +797,8 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(SOCIAL_HELLO, handle_hello)
     hub.register_handler(SOCIAL_FRIEND_REQUEST, handle_friend_request)
     hub.register_handler(SOCIAL_FRIEND_RESPONSE, handle_friend_response)
+    # Deliberately *not* in `allow_from_strangers` below: personas are for friends.
+    hub.register_handler(SOCIAL_STATUS, handle_status)
     # The friend handshake is the one conversation a stranger may have: each of these
     # verifies a device certificate before believing anything, and trust is granted
     # only when a person accepts.
