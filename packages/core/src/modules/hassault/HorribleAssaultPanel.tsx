@@ -2059,11 +2059,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // the server refused puts the number back on the HUD rather than
             // leaving it one short until the next respawn.
             const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
-            if (thrown && audioRef.current) {
+            if (thrown?.throw && audioRef.current) {
+              const nadeId = nadesRef.current?.catalogue[thrown.nade]?.id;
               audioRef.current.callout(
-                thrown.nade === 'flash'
+                nadeId === 'flash'
                   ? 'flashbang'
-                  : thrown.nade === 'smoke'
+                  : nadeId === 'smoke'
                     ? 'smoke_out'
                     : 'fire_in_the_hole',
               );
@@ -2124,11 +2125,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // queued and the grenade comes out on the frame you deploy into a
             // real match.
             const offlineThrown = nadesRef.current?.frame(now, self);
-            if (offlineThrown && audioRef.current) {
+            if (offlineThrown?.throw && audioRef.current) {
+              const nadeId = nadesRef.current?.catalogue[offlineThrown.nade]?.id;
               audioRef.current.callout(
-                offlineThrown.nade === 'flash'
+                nadeId === 'flash'
                   ? 'flashbang'
-                  : offlineThrown.nade === 'smoke'
+                  : nadeId === 'smoke'
                     ? 'smoke_out'
                     : 'fire_in_the_hole',
               );
