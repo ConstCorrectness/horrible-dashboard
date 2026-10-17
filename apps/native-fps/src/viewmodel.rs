@@ -524,6 +524,12 @@ pub struct WeaponViewModel {
     breath_phase: f32,
     /// Sprint weapon tuck transition (0.0 idle/walk to 1.0 tucked sprint).
     sprint_t: f32,
+    /// Whether the grenade pin is currently pulled and held.
+    pin_pulled: bool,
+    /// Whether the held pin is for an underhand lob rather than overhand throw.
+    throw_lob: bool,
+    /// Smooth interpolation (0.0..1.0) for pin-pull and cocked grenade pose.
+    pin_pull_t: f32,
 }
 
 impl Default for WeaponViewModel {
@@ -563,6 +569,9 @@ impl Default for WeaponViewModel {
             ads_t: 0.0,
             breath_phase: 0.0,
             sprint_t: 0.0,
+            pin_pulled: false,
+            throw_lob: false,
+            pin_pull_t: 0.0,
         }
     }
 }
@@ -599,8 +608,16 @@ impl WeaponViewModel {
             // has arrived.
             self.stow = 1.0;
             self.holster_hold = 0.0;
+            self.pin_pulled = false;
+            self.pin_pull_t = 0.0;
             self.start_action(viewclips::Action::Draw, viewclips::DRAW_DURATION);
         }
+    }
+
+    /// Update whether the grenade pin is pulled and held cocked for throwing.
+    pub fn set_pin_pulled(&mut self, pin_pulled: bool, lob: bool) {
+        self.pin_pulled = pin_pulled;
+        self.throw_lob = lob;
     }
 
     /// A switch was asked for: take the weapon down while we wait to hear.
@@ -912,15 +929,29 @@ impl WeaponViewModel {
         // floor — far enough that the model is genuinely clear of the frame,
         // since a weapon that stops just short of gone reads as a bug.
         let stow = ease(self.stow);
+        if self.pin_pulled {
+            self.pin_pull_t = (self.pin_pull_t + dt * 4.2).min(1.0);
+        } else {
+            self.pin_pull_t = (self.pin_pull_t - dt * 10.0).max(0.0);
+        }
+        let pin_pull = ease(self.pin_pull_t);
+        let cock_x = pin_pull * if self.throw_lob { -0.06 } else { 0.06 };
+        let cock_y = pin_pull * if self.throw_lob { -0.08 } else { 0.11 };
+        let cock_z = pin_pull * if self.throw_lob { 0.08 } else { 0.14 };
+        let cock_pitch = pin_pull * if self.throw_lob { 0.28 } else { -0.32 };
+        let cock_yaw = pin_pull * if self.throw_lob { 0.12 } else { 0.16 };
+        let cock_roll = pin_pull * if self.throw_lob { 0.35 } else { -0.22 };
+
         let position = Vec3::new(
-            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x + breath_x,
+            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x + breath_x + cock_x,
             cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55
                 + reload_impulse_y
                 + inspect_lift_y
                 - stow * 1.15
                 + breath_y
-                + sprint_dip,
-            cur_home_z + self.kick * 0.28 + reload_impulse_z + inspect_lift_z + stow * 0.22,
+                + sprint_dip
+                + cock_y,
+            cur_home_z + self.kick * 0.28 + reload_impulse_z + inspect_lift_z + stow * 0.22 + cock_z,
         );
         let draw_pitch = stow * -0.38;
         let draw_yaw = stow * 0.18;
@@ -934,14 +965,21 @@ impl WeaponViewModel {
                 + inspect_pitch
                 + draw_pitch
                 + breath_pitch
-                + sprint_pitch,
-            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw + draw_yaw + sprint_yaw,
+                + sprint_pitch
+                + cock_pitch,
+            self.sway_x * 0.7 * ads_damp
+                + self.reload_t * 0.25
+                + inspect_yaw
+                + draw_yaw
+                + sprint_yaw
+                + cock_yaw,
             self.sway_x * 0.5 * ads_damp
                 + bob_x * 0.6
                 + reload_impulse_roll
                 + inspect_roll
                 + draw_roll
-                + sprint_roll,
+                + sprint_roll
+                + cock_roll,
         );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
@@ -1015,11 +1053,30 @@ impl WeaponViewModel {
                 glam::Quat::from_axis_angle(aim.normalize_or(Vec3::NEG_Z), angle) * up
             }
         };
+        let mut resolved_support = g
+            .support
+            .map(|s| s + pose.support.unwrap_or(Vec3::ZERO) + inspect.support);
+        let mut resolved_support_curl = Fingers::over(
+            inspect.support_fingers,
+            viewclips::curl_over(g.support_curl, pose.support_fingers),
+        );
+        if g.support.is_none()
+            && self.pin_pull_t > 0.02
+            && self.pin_pull_t < 0.88
+            && self.weapon != "nade_molotov"
+            && self.weapon != "grenade_molotov"
+        {
+            let pull_phase = (self.pin_pull_t / 0.85).min(1.0);
+            resolved_support = Some(Vec3::new(
+                -0.07 - pull_phase * 0.25,
+                0.28 - pull_phase * 0.08,
+                -0.09 + pull_phase * 0.06,
+            ));
+            resolved_support_curl = [1.15, 1.15, 1.3, 1.3, 1.3];
+        }
         GripAnchors {
             primary: g.primary + pose.primary.unwrap_or(Vec3::ZERO) + inspect.primary,
-            support: g
-                .support
-                .map(|s| s + pose.support.unwrap_or(Vec3::ZERO) + inspect.support),
+            support: resolved_support,
             primary_roll: g.primary_roll + primary_roll,
             support_roll: g.support_roll + support_roll,
             primary_up: roll(g.primary_up, g.primary_aim, primary_roll),
@@ -1028,10 +1085,7 @@ impl WeaponViewModel {
                 inspect.primary_fingers,
                 viewclips::curl_over(g.primary_curl, pose.primary_fingers),
             ),
-            support_curl: Fingers::over(
-                inspect.support_fingers,
-                viewclips::curl_over(g.support_curl, pose.support_fingers),
-            ),
+            support_curl: resolved_support_curl,
             ..g
         }
     }
@@ -2123,45 +2177,93 @@ fn build(id: &str, skin: Option<&Skin>) -> Shape {
         "sniper" => build_tactical_sniper(metal, dark, grip, accent),
         "nade_he" | "grenade_he" => (
             vec![
-                tube(0.14, 0.30, [0.0, 0.0, 0.0], [0.24, 0.33, 0.18]),
-                tube(0.06, 0.10, [0.0, 0.0, 0.18], [0.35, 0.35, 0.38]),
-                tube(0.045, 0.06, [0.0, 0.0, 0.24], [0.45, 0.45, 0.48]),
-                part([0.03, 0.02, 0.28], [0.08, 0.0, 0.08], [0.65, 0.65, 0.68]),
-                tube(0.04, 0.02, [0.07, 0.0, 0.21], [0.85, 0.75, 0.20]),
+                upright_tube(0.135, 0.22, [0.0, 0.08, -0.10], [0.24, 0.33, 0.18]),
+                upright_tube(0.112, 0.28, [0.0, 0.08, -0.10], [0.24, 0.33, 0.18]),
+                upright_tube(0.082, 0.32, [0.0, 0.08, -0.10], [0.24, 0.33, 0.18]),
+                upright_tube(0.138, 0.032, [0.0, 0.14, -0.10], [0.83, 0.69, 0.22]),
+                upright_tube(0.055, 0.09, [0.0, 0.25, -0.10], [0.35, 0.37, 0.40]),
+                part([0.11, 0.06, 0.12], [0.0, 0.30, -0.10], [0.35, 0.37, 0.40]),
+                part([0.045, 0.03, 0.14], [0.0, 0.32, -0.14], [0.55, 0.57, 0.61]),
+                rotated(
+                    [0.042, 0.24, 0.025],
+                    [0.0, 0.16, -0.23],
+                    [0.55, 0.57, 0.61],
+                    [-0.14, 0.0, 0.0],
+                ),
+                tube(0.042, 0.018, [-0.07, 0.28, -0.09], [0.85, 0.75, 0.22]),
             ],
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.08, -0.26, 0.22),
+            Vec3::new(0.0, 0.08, -0.10),
+            Vec3::new(0.08, -0.22, 0.12),
         ),
         "nade_flash" | "grenade_flash" => (
             vec![
-                tube(0.12, 0.34, [0.0, 0.0, 0.0], [0.72, 0.74, 0.78]),
-                tube(0.125, 0.08, [0.0, 0.0, 0.06], [0.15, 0.35, 0.85]),
-                tube(0.06, 0.09, [0.0, 0.0, 0.20], [0.35, 0.35, 0.38]),
-                part([0.03, 0.02, 0.26], [0.07, 0.0, 0.08], [0.65, 0.65, 0.68]),
+                upright_tube(0.112, 0.34, [0.0, 0.08, -0.10], [0.72, 0.74, 0.78]),
+                upright_tube(0.116, 0.045, [0.0, 0.02, -0.10], [0.13, 0.15, 0.17]),
+                upright_tube(0.116, 0.045, [0.0, 0.12, -0.10], [0.13, 0.15, 0.17]),
+                upright_tube(0.117, 0.038, [0.0, 0.19, -0.10], [0.15, 0.39, 0.92]),
+                upright_tube(0.12, 0.04, [0.0, 0.24, -0.10], [0.41, 0.43, 0.47]),
+                upright_tube(0.12, 0.04, [0.0, -0.08, -0.10], [0.41, 0.43, 0.47]),
+                upright_tube(0.052, 0.08, [0.0, 0.29, -0.10], [0.41, 0.43, 0.47]),
+                part([0.10, 0.055, 0.11], [0.0, 0.33, -0.10], [0.41, 0.43, 0.47]),
+                rotated(
+                    [0.04, 0.25, 0.024],
+                    [0.0, 0.18, -0.21],
+                    [0.55, 0.57, 0.61],
+                    [-0.10, 0.0, 0.0],
+                ),
+                tube(0.042, 0.018, [-0.07, 0.31, -0.09], [0.85, 0.75, 0.22]),
             ],
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.08, -0.26, 0.22),
+            Vec3::new(0.0, 0.08, -0.10),
+            Vec3::new(0.08, -0.22, 0.12),
         ),
         "nade_smoke" | "grenade_smoke" => (
             vec![
-                tube(0.14, 0.40, [0.0, 0.0, 0.0], [0.55, 0.58, 0.62]),
-                tube(0.145, 0.08, [0.0, 0.0, 0.12], [0.20, 0.60, 0.28]),
-                tube(0.06, 0.09, [0.0, 0.0, 0.23], [0.35, 0.35, 0.38]),
-                part([0.03, 0.02, 0.30], [0.08, 0.0, 0.08], [0.65, 0.65, 0.68]),
+                upright_tube(0.128, 0.38, [0.0, 0.08, -0.10], [0.49, 0.52, 0.55]),
+                upright_tube(0.132, 0.075, [0.0, 0.16, -0.10], [0.18, 0.55, 0.34]),
+                upright_tube(0.135, 0.026, [0.0, 0.26, -0.10], [0.32, 0.35, 0.38]),
+                upright_tube(0.135, 0.026, [0.0, -0.10, -0.10], [0.32, 0.35, 0.38]),
+                upright_tube(0.055, 0.08, [0.0, 0.30, -0.10], [0.32, 0.35, 0.38]),
+                part([0.105, 0.055, 0.115], [0.0, 0.34, -0.10], [0.32, 0.35, 0.38]),
+                rotated(
+                    [0.042, 0.27, 0.025],
+                    [0.0, 0.18, -0.225],
+                    [0.55, 0.57, 0.61],
+                    [-0.08, 0.0, 0.0],
+                ),
+                tube(0.042, 0.018, [-0.07, 0.32, -0.09], [0.85, 0.75, 0.22]),
             ],
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.08, -0.26, 0.22),
+            Vec3::new(0.0, 0.08, -0.10),
+            Vec3::new(0.08, -0.22, 0.12),
         ),
-        "nade_molotov" | "grenade_molotov" => (
+        "nade_molotov" | "grenade_molotov" | "nade_fire" | "grenade_fire" => (
             vec![
-                tube(0.12, 0.34, [0.0, 0.0, -0.06], [0.62, 0.32, 0.10]),
-                tube(0.05, 0.16, [0.0, 0.0, 0.17], [0.62, 0.32, 0.10]),
-                tube(0.065, 0.04, [0.0, 0.0, 0.25], [0.58, 0.30, 0.08]),
-                part([0.07, 0.07, 0.14], [0.0, 0.0, 0.31], [0.88, 0.84, 0.74]),
-                part([0.04, 0.04, 0.06], [0.0, 0.0, 0.38], [0.98, 0.45, 0.10]),
+                upright_tube(0.124, 0.28, [0.0, 0.02, -0.10], [0.62, 0.32, 0.10]),
+                upright_tube(0.127, 0.11, [0.0, 0.01, -0.10], [0.85, 0.47, 0.14]),
+                upright_tube(0.092, 0.08, [0.0, 0.18, -0.10], [0.62, 0.32, 0.10]),
+                upright_tube(0.048, 0.14, [0.0, 0.27, -0.10], [0.62, 0.32, 0.10]),
+                upright_tube(0.058, 0.03, [0.0, 0.34, -0.10], [0.58, 0.30, 0.08]),
+                part([0.07, 0.11, 0.07], [0.0, 0.38, -0.10], [0.88, 0.84, 0.74]),
+                rotated(
+                    [0.05, 0.12, 0.04],
+                    [-0.05, 0.33, -0.08],
+                    [0.88, 0.84, 0.74],
+                    [0.0, 0.0, 0.45],
+                ),
+                rotated(
+                    [0.065, 0.075, 0.065],
+                    [0.0, 0.44, -0.10],
+                    [0.98, 0.45, 0.09],
+                    [0.2, 0.4, 0.2],
+                ),
+                rotated(
+                    [0.042, 0.055, 0.042],
+                    [0.0, 0.48, -0.10],
+                    [1.0, 0.94, 0.54],
+                    [0.4, 0.2, 0.3],
+                ),
             ],
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.08, -0.26, 0.22),
+            Vec3::new(0.0, 0.45, -0.10),
+            Vec3::new(0.08, -0.22, 0.12),
         ),
         // Assault rifle, and the fallback for anything new.
         _ => build_tactical_assault(metal, dark, grip, accent),
@@ -2207,6 +2309,17 @@ fn tube(radius: f32, length: f32, at: [f32; 3], color: [f32; 3]) -> Part {
         size: [radius, radius, length],
         at,
         rot: [0.0, 0.0, 0.0],
+        color,
+        round: true,
+    }
+}
+
+/// A cylinder standing upright along +Y, used for handheld grenades and bottles.
+fn upright_tube(radius: f32, height: f32, at: [f32; 3], color: [f32; 3]) -> Part {
+    Part {
+        size: [radius, radius, height],
+        at,
+        rot: [std::f32::consts::FRAC_PI_2, 0.0, 0.0],
         color,
         round: true,
     }

@@ -952,7 +952,7 @@ impl App {
                     arc::throw_velocity(
                         yaw,
                         pitch,
-                        false,
+                        self.utility.pull_lob(),
                         [state.vel_x, state.vel_y, state.vel_z],
                         physics,
                     ),
@@ -964,10 +964,11 @@ impl App {
         };
         if holding_nade != self.nade_held {
             self.nade_held = holding_nade;
-            if holding_nade {
-                self.viewmodel.holster();
-            }
         }
+        self.viewmodel.set_pin_pulled(
+            holding_nade && self.utility.pin_pulled(),
+            self.utility.pull_lob(),
+        );
         // Alive unless the server says otherwise. **Not** gated on the pointer
         // being captured: releasing it here is not a menu, it is a mouse you can
         // move — the world is still drawn behind it, so a world with no weapon
@@ -975,11 +976,15 @@ impl App {
         // client draws its weapon on `alive` alone for the same reason.
         let alive = self.you.as_ref().map(|y| y.alive).unwrap_or(true);
         let frame = viewmodel::Frame {
-            ads: if self.scoped > 0 { 1.0 } else { 0.0 },
+            ads: if holding_nade || self.scoped <= 0 {
+                0.0
+            } else {
+                1.0
+            },
             speed: self.ground_speed(),
             sprint: self.keys.sprint,
             on_ground: self.prediction.state.on_ground,
-            reloading: self.you.as_ref().is_some_and(|y| y.reloading),
+            reloading: !holding_nade && self.you.as_ref().is_some_and(|y| y.reloading),
             yaw: self.camera.yaw.to_radians(),
             pitch: self.camera.pitch.to_radians(),
             visible: self.joined && alive,
@@ -3680,10 +3685,22 @@ impl ApplicationHandler for App {
                 if self.focused && !self.editing() && self.utility.equipped() {
                     if state == ElementState::Pressed {
                         match button {
-                            MouseButton::Left => self.utility.press(false),
-                            MouseButton::Right => self.utility.press(true),
+                            MouseButton::Left => {
+                                if self.utility.pull_pin(false) {
+                                    self.play_own("reload_magout", 0.55, false);
+                                }
+                            }
+                            MouseButton::Right => {
+                                if self.utility.pull_pin(true) {
+                                    self.play_own("reload_magout", 0.55, false);
+                                }
+                            }
                             _ => {}
                         }
+                    } else if matches!(button, MouseButton::Left | MouseButton::Right)
+                        && self.utility.pin_pulled()
+                    {
+                        self.utility.release_pin();
                     }
                 } else if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {

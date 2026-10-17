@@ -77,6 +77,10 @@ export class GrenadeController {
   private equippedSlot = -1;
   /** True for exactly the frame after a throw left the hand. */
   private threw = false;
+  /** True while the mouse button is held down with the grenade pin pulled. */
+  private pinPulledState = false;
+  private pullLobState = false;
+  private pullPowerState: number | undefined = undefined;
 
   setSpecs(specs: TacticalSpec[]): void {
     this.specs = specs;
@@ -123,6 +127,16 @@ export class GrenadeController {
     return this.equippedSlot >= 0;
   }
 
+  /** Whether the equipped grenade's pin is currently pulled and held. */
+  get pinPulled(): boolean {
+    return this.pinPulledState;
+  }
+
+  /** Whether the currently held pin-pull is an underhand lob (`true`) or overhand throw (`false`). */
+  get pullLob(): boolean {
+    return this.pullLobState;
+  }
+
   /**
    * Take a grenade in hand: ready it *and* put the weapon away.
    *
@@ -131,6 +145,11 @@ export class GrenadeController {
    */
   equip(slot: number): void {
     if (slot < 0 || slot >= this.specs.length) return;
+    if (this.slot !== slot) {
+      this.pinPulledState = false;
+      this.pullLobState = false;
+      this.pullPowerState = undefined;
+    }
     this.slot = slot;
     this.equippedSlot = slot;
   }
@@ -143,6 +162,35 @@ export class GrenadeController {
     this.wantThrow = false;
     this.wantLob = false;
     this.throwPower = undefined;
+    this.pinPulledState = false;
+    this.pullLobState = false;
+    this.pullPowerState = undefined;
+  }
+
+  /**
+   * Pull the grenade pin and hold it ready until `releasePin()` is called.
+   *
+   * Returns `true` if a grenade is equipped and has carry count remaining.
+   */
+  pullPin(lob = false, power?: number): boolean {
+    if (this.equippedSlot < 0 || this.countOf(this.slot) <= 0) return false;
+    this.pinPulledState = true;
+    this.pullLobState = lob;
+    this.pullPowerState = power;
+    return true;
+  }
+
+  /**
+   * Release the held grenade, queueing the throw for the current frame.
+   */
+  releasePin(): void {
+    if (!this.pinPulledState) return;
+    this.wantThrow = true;
+    this.wantLob = this.pullLobState;
+    this.throwPower = this.pullPowerState;
+    this.pinPulledState = false;
+    this.pullLobState = false;
+    this.pullPowerState = undefined;
   }
 
   /**
@@ -173,6 +221,9 @@ export class GrenadeController {
    * A throw key went down this frame. Edge, not level — see the class docstring.
    */
   press(lob = false, power?: number): void {
+    this.pinPulledState = false;
+    this.pullLobState = false;
+    this.pullPowerState = undefined;
     this.wantThrow = true;
     this.wantLob = lob;
     this.throwPower = power;
@@ -199,7 +250,12 @@ export class GrenadeController {
 
     // Dying puts the grenade away. Coming back holding one you readied in a
     // previous life, with the weapon stowed, is a spawn you cannot shoot from.
-    if (you && !you.alive) this.equippedSlot = -1;
+    if (you && !you.alive) {
+      this.equippedSlot = -1;
+      this.pinPulledState = false;
+      this.pullLobState = false;
+      this.pullPowerState = undefined;
+    }
 
     if (!wanted) return NO_THROW;
     // Dead men throw nothing. Checked here rather than at the key, because the
@@ -246,5 +302,8 @@ export class GrenadeController {
     this.throwPower = undefined;
     this.equippedSlot = -1;
     this.threw = false;
+    this.pinPulledState = false;
+    this.pullLobState = false;
+    this.pullPowerState = undefined;
   }
 }

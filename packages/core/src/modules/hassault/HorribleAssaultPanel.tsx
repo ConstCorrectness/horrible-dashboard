@@ -2563,7 +2563,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           if (holdingNade !== nadeHeldRef.current) {
             nadeHeldRef.current = holdingNade;
             shots?.setBlocked(holdingNade);
-            if (holdingNade) viewmodel.holster();
           }
           // Pull the pin, wind up, release. Played on the frame the grenade
           // actually left — `justThrew` rather than the key press, so a throw
@@ -2598,11 +2597,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               throwVelocity(
                 player.yaw,
                 player.pitch,
-                // The right button is the lob, and the preview has to show the
-                // one the button under your finger would throw — but nothing is
-                // held down while aiming, so the arc shows the full throw and
-                // the lob is read off it as "much shorter than that".
-                false,
+                nades?.pullLob ?? false,
                 [player.velX ?? 0, player.velY ?? 0, player.velZ ?? 0],
                 throwPhysics,
               ),
@@ -2613,13 +2608,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             arcLine.hide();
           }
           if (shots) (window as any).__SHOTS = shots;
-          const heldWeapon = shots?.weapon?.id ?? '';
+          const baseWeapon = shots?.weapon?.id ?? '';
+          const heldWeapon = holdingNade
+            ? `nade_${nades?.selectedSpec?.id ?? 'he'}`
+            : baseWeapon;
           if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
             if (lastHeldWeaponRef.current !== '') {
               // Weapon switch deploy audio cues matching CS 1.6
               if (heldWeapon === 'knife') {
                 audioRef.current?.own('knife_slash', 0.7);
-              } else if (heldWeapon === 'pistol') {
+              } else if (heldWeapon === 'pistol' || heldWeapon.startsWith('nade_')) {
                 audioRef.current?.own('reload_magin', 0.65);
               } else {
                 audioRef.current?.own('reload_bolt', 0.7);
@@ -2679,15 +2677,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
-            reloading: isReloading,
-            reloadingEmpty: isReloadingEmpty,
-            reloadProgress,
+            reloading: !holdingNade && isReloading,
+            reloadingEmpty: !holdingNade && isReloadingEmpty,
+            reloadProgress: holdingNade ? null : reloadProgress,
             yaw: player.yaw,
             pitch: player.pitch,
             strafe,
             visible: alive,
             sinceLanded: Math.max(0, player.t - player.landedAt),
-            ads: scopedRef.current > 0 ? 1 : 0,
+            ads: holdingNade ? 0 : scopedRef.current > 0 ? 1 : 0,
+            pinPulled: holdingNade && (nades?.pinPulled ?? false),
+            throwLob: holdingNade && (nades?.pullLob ?? false),
           });
         } else {
           // Before you deploy the camera flies the map rather than standing in
@@ -3172,7 +3172,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         e.preventDefault();
         const power = e.button === 0 ? 1.0 : e.button === 2 ? 0.42 : 0.72;
         const lob = e.button !== 0;
-        nadesRef.current.press(lob, power);
+        if (nadesRef.current.pullPin(lob, power)) {
+          audioRef.current?.own('reload_magout', 0.55);
+        }
         return;
       }
       // Right is the scope for firearms, and heavy stab for the knife!
@@ -3190,6 +3192,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       shotsRef.current?.press();
     };
     const onMouseUp = (e: MouseEvent) => {
+      if (
+        (e.button === 0 || e.button === 1 || e.button === 2) &&
+        nadesRef.current?.pinPulled
+      ) {
+        nadesRef.current.releasePin();
+      }
       if (e.button === 0) shotsRef.current?.release();
       if (e.button === 2 && shotsRef.current?.isKnife) shotsRef.current?.releaseAlt();
     };
@@ -3206,6 +3214,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         });
         return;
       }
+      nadesRef.current?.holster();
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {

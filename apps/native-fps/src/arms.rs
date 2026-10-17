@@ -156,9 +156,13 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
     let Some(listed) = file["weapons"].get(weapon_id) else {
         if weapon_id.starts_with("nade_") || weapon_id.starts_with("grenade_") {
             return GripAnchors {
-                primary: Vec3::new(0.08, -0.24, 0.20),
+                primary: Vec3::new(0.0, 0.08, -0.10),
                 support: None,
-                primary_roll: 0.1,
+                primary_roll: 0.15,
+                primary_aim: Vec3::new(-0.18, 0.25, -0.95),
+                primary_up: Vec3::new(0.0, 1.0, 0.12),
+                primary_curl: [1.05, 0.90, 0.95, 1.0, 1.0],
+                primary_radius: 0.105,
                 ..out
             };
         }

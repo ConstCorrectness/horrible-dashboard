@@ -426,7 +426,9 @@ impl ArmPose {
             (up, hand_delta, wrist, shoulder, elbow, stretched)
         };
         let mut aim = aim;
-        let (mut up, mut hand_delta, mut wrist, mut shoulder, mut elbow, mut stretched) = arm(aim);
+        let true_shoulder = shoulder;
+        let (mut up, mut hand_delta, mut wrist, mut _slid_shoulder, mut elbow, mut stretched) =
+            arm(aim);
         for _ in 0..WRIST_PASSES {
             let forearm = (wrist - elbow).normalize_or(aim);
             let limited = limit_wrist_aim(forearm, wanted_aim);
@@ -434,7 +436,7 @@ impl ArmPose {
                 break;
             }
             aim = limited;
-            (up, hand_delta, wrist, shoulder, elbow, stretched) = arm(aim);
+            (up, hand_delta, wrist, _slid_shoulder, elbow, stretched) = arm(aim);
         }
 
         let rest_dir =
@@ -446,7 +448,7 @@ impl ArmPose {
             let up1 = perpendicular(up, dir1);
             frame_rotation(dir0, up0, dir1, up1) * rest.world_rot[from]
         };
-        let upper_world = segment("upper", "fore", shoulder, elbow);
+        let upper_world = segment("upper", "fore", true_shoulder, elbow);
         let wrist_reached = elbow + (wrist - elbow).normalize_or(aim) * rest.lower_len;
         let fore_world = segment("fore", "hand", elbow, wrist_reached);
         let hand_world = hand_delta * rest.world_rot["hand"];
@@ -455,12 +457,12 @@ impl ArmPose {
         self.pose.set_local(
             rest.node["upper"],
             (parent_inv * upper_world).normalize(),
-            Some(parent_inv * (shoulder - rest.armature_pos)),
+            Some(parent_inv * (true_shoulder - rest.armature_pos)),
         );
         self.pose.set_local(
             rest.node["fore"],
             (upper_world.inverse() * fore_world).normalize(),
-            None,
+            Some(upper_world.inverse() * (elbow - true_shoulder)),
         );
         self.pose.set_local(
             rest.node["hand"],

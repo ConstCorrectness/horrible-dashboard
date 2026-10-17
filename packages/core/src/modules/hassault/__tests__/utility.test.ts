@@ -328,4 +328,52 @@ describe('equipping', () => {
     nades.holster();
     expect(nades.frame(1000, you()).throw).toBe(false);
   });
+
+  it('pulls the pin and holds the grenade until the mouse button is released', () => {
+    const nades = controller();
+    nades.equip(0);
+    expect(nades.pullPin(false, 1.0)).toBe(true);
+    expect(nades.pinPulled).toBe(true);
+    expect(nades.pullLob).toBe(false);
+
+    // Holding across multiple frames keeps the grenade in hand without throwing
+    expect(nades.frame(1000, you()).throw).toBe(false);
+    expect(nades.frame(1200, you()).throw).toBe(false);
+    expect(nades.equipped).toBe(true);
+    expect(nades.pinPulled).toBe(true);
+
+    // Releasing the mouse button throws the grenade on the next frame
+    nades.releasePin();
+    expect(nades.pinPulled).toBe(false);
+    const intent = nades.frame(1250, you());
+    expect(intent.throw).toBe(true);
+    expect(intent.lob).toBe(false);
+    expect(intent.power).toBe(1.0);
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('supports right-click underhand throw via pullPin and releasePin', () => {
+    const nades = controller();
+    nades.equip(1);
+    expect(nades.pullPin(true, 0.42)).toBe(true);
+    expect(nades.pinPulled).toBe(true);
+    expect(nades.pullLob).toBe(true);
+    nades.releasePin();
+    const intent = nades.frame(1000, you());
+    expect(intent.throw).toBe(true);
+    expect(intent.nade).toBe(1);
+    expect(intent.lob).toBe(true);
+    expect(intent.power).toBeCloseTo(0.42);
+  });
+
+  it('cancels a held pin cleanly when holstered', () => {
+    const nades = controller();
+    nades.equip(0);
+    nades.pullPin(false, 1.0);
+    expect(nades.pinPulled).toBe(true);
+    nades.holster();
+    expect(nades.pinPulled).toBe(false);
+    nades.releasePin();
+    expect(nades.frame(1000, you()).throw).toBe(false);
+  });
 });
