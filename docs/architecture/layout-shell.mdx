@@ -284,6 +284,14 @@ and gate the feature on `hasCapability(...)` so the browser degrades cleanly.
 The desktop build claims `DESKTOP_CAPABILITIES` (vs the browser's
 `BROWSER_CAPABILITIES`) via the `isTauri()` branch in `apps/web/src/main.tsx`.
 
+The commands take **`tauri::Window`** (or `tauri::Webview` for page zoom), never
+`WebviewWindow`. Tauri resolves a `WebviewWindow` argument only while the window
+holds a single webview, and every native browser pane adds a child webview — so
+with a Browser pane open, a `WebviewWindow` command is rejected ("current webview is
+not a WebviewWindow") and the titlebar buttons and F11 silently do nothing. For the
+same reason, look a window up with `app.get_window(label)`, not
+`get_webview_window`, which returns `None` for such a window.
+
 ## Backend connection
 
 Both layouts talk to the same FastAPI backend over HTTP + WebSocket, through one

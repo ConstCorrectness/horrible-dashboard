@@ -15,12 +15,18 @@
 //! The frontend gates each behind its capability and drives them through the
 //! core `WindowControl` seam; the shell stays a thin pass-through to tao's
 //! window API.
+//!
+//! **Commands take `Window` (or `Webview`), never `WebviewWindow`.** Tauri only
+//! resolves a `WebviewWindow` argument while the window holds a single webview;
+//! a native browser pane (src/webview.rs) adds a child webview, after which every
+//! such command is rejected with "current webview is not a WebviewWindow" — the
+//! titlebar buttons and F11 went dead whenever a Browser pane was open.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder, Window};
 use tauri_runtime::ResizeDirection;
 
 /// Monotonic counter for unique `browser-<n>` pop-out window labels.
@@ -43,7 +49,7 @@ static MAXIMIZED_BEFORE_FULLSCREEN: Mutex<Option<HashSet<String>>> = Mutex::new(
 /// apply, so the webview gets the whole monitor. The previous state is
 /// remembered per window and re-applied on the way out, so a user who
 /// fullscreened a maximized window does not get a small one back.
-fn enter_fullscreen(window: &WebviewWindow) -> Result<(), String> {
+fn enter_fullscreen(window: &Window) -> Result<(), String> {
     let was_maximized = window.is_maximized().map_err(|e| e.to_string())?;
     if was_maximized {
         window.unmaximize().map_err(|e| e.to_string())?;
@@ -57,7 +63,7 @@ fn enter_fullscreen(window: &WebviewWindow) -> Result<(), String> {
 }
 
 /// Leave OS-fullscreen, restoring the maximized state [`enter_fullscreen`] took away.
-fn leave_fullscreen(window: &WebviewWindow) -> Result<(), String> {
+fn leave_fullscreen(window: &Window) -> Result<(), String> {
     window.set_fullscreen(false).map_err(|e| e.to_string())?;
     let restore = MAXIMIZED_BEFORE_FULLSCREEN
         .lock()
@@ -72,13 +78,13 @@ fn leave_fullscreen(window: &WebviewWindow) -> Result<(), String> {
 
 /// Whether the calling window is currently OS-fullscreen.
 #[tauri::command]
-pub fn window_is_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+pub fn window_is_fullscreen(window: Window) -> Result<bool, String> {
     window.is_fullscreen().map_err(|e| e.to_string())
 }
 
 /// Set the calling window's OS-fullscreen state; returns the value applied.
 #[tauri::command]
-pub fn window_set_fullscreen(window: WebviewWindow, value: bool) -> Result<bool, String> {
+pub fn window_set_fullscreen(window: Window, value: bool) -> Result<bool, String> {
     if value {
         enter_fullscreen(&window)?;
     } else {
@@ -90,7 +96,7 @@ pub fn window_set_fullscreen(window: WebviewWindow, value: bool) -> Result<bool,
 /// Flip the calling window's OS-fullscreen state; returns the new state.
 /// Done in one command so the read/write can't race a concurrent toggle.
 #[tauri::command]
-pub fn window_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+pub fn window_toggle_fullscreen(window: Window) -> Result<bool, String> {
     let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
     if next {
         enter_fullscreen(&window)?;
@@ -104,13 +110,13 @@ pub fn window_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
 
 /// Minimize the calling window (titlebar minimize button).
 #[tauri::command]
-pub fn window_minimize(window: WebviewWindow) -> Result<(), String> {
+pub fn window_minimize(window: Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
 
 /// Whether the calling window is currently maximized (for the restore icon).
 #[tauri::command]
-pub fn window_is_maximized(window: WebviewWindow) -> Result<bool, String> {
+pub fn window_is_maximized(window: Window) -> Result<bool, String> {
     window.is_maximized().map_err(|e| e.to_string())
 }
 
@@ -129,7 +135,7 @@ pub fn window_is_maximized(window: WebviewWindow) -> Result<bool, String> {
 /// drawn in fullscreen — so "restore" is what it does, the same thing the
 /// gesture means on a maximized window.
 #[tauri::command]
-pub fn window_toggle_maximize(window: WebviewWindow) -> Result<bool, String> {
+pub fn window_toggle_maximize(window: Window) -> Result<bool, String> {
     if window.is_fullscreen().map_err(|e| e.to_string())? {
         leave_fullscreen(&window)?;
         return window.is_maximized().map_err(|e| e.to_string());
@@ -149,18 +155,18 @@ pub fn window_toggle_maximize(window: WebviewWindow) -> Result<bool, String> {
 /// applied. Native browser-pane children are separate webviews and keep their own
 /// zoom; the frontend scales their bounds by this factor (apps/web/src/tauriWindow.ts).
 #[tauri::command]
-pub fn window_set_zoom(window: WebviewWindow, factor: f64) -> Result<f64, String> {
+pub fn window_set_zoom(webview: Webview, factor: f64) -> Result<f64, String> {
     if !factor.is_finite() {
         return Err("zoom factor must be a number".into());
     }
     let factor = factor.clamp(0.25, 5.0);
-    window.set_zoom(factor).map_err(|e| e.to_string())?;
+    webview.set_zoom(factor).map_err(|e| e.to_string())?;
     Ok(factor)
 }
 
 /// Close the calling window (titlebar close button) — exits the app.
 #[tauri::command]
-pub fn window_close(window: WebviewWindow) -> Result<(), String> {
+pub fn window_close(window: Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
 
@@ -230,7 +236,9 @@ fn workspace_window_label(workspace_id: &str) -> String {
 #[tauri::command]
 pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
     let label = workspace_window_label(&workspace_id);
-    if let Some(existing) = app.get_webview_window(&label) {
+    // `get_window`, not `get_webview_window`: the latter returns None once the
+    // window hosts a native browser pane, and the duplicate label would then fail.
+    if let Some(existing) = app.get_window(&label) {
         return existing.set_focus().map_err(|e| e.to_string());
     }
     let target = match app.config().build.dev_url.clone() {
