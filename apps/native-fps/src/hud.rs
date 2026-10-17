@@ -4682,6 +4682,7 @@ mod tests {
                 origin: [0.0; 3],
                 ends: Vec::new(),
                 faces: Vec::new(),
+                alt: false,
             },
             "me",
         );

@@ -17,6 +17,8 @@ import {
   MATERIAL_TINTS,
   decalOpacity,
   drawImpactTile,
+  drawSlashTile,
+  drawStabTile,
   surfaceMaterial,
 } from '../decals';
 import {
@@ -211,3 +213,62 @@ describe('MATERIAL_TINTS', () => {
     expect(MATERIAL_TINTS.metal).not.toBe(MATERIAL_TINTS.concrete);
   });
 });
+
+describe('the knife slash tile', () => {
+  it('is empty at the borders', () => {
+    const tile = drawSlashTile(SIZE);
+    const alpha = (px: number, py: number) => tile[(py * SIZE + px) * 4 + 3];
+    expect(alpha(0, 0)).toBe(0);
+    expect(alpha(SIZE - 1, 0)).toBe(0);
+    expect(alpha(0, SIZE - 1)).toBe(0);
+    expect(alpha(SIZE - 1, SIZE - 1)).toBe(0);
+  });
+
+  it('has an elongated aspect ratio with opaque core along the central vertical axis', () => {
+    const tile = drawSlashTile(SIZE);
+    const half = SIZE / 2;
+    const alpha = (px: number, py: number) => tile[(py * SIZE + px) * 4 + 3];
+    // Center of slash is opaque
+    expect(alpha(half, half)).toBeGreaterThan(200);
+    // Across the width, falls off rapidly
+    expect(alpha(half + 8, half)).toBe(0);
+    // Along the length, remains visible further out
+    expect(alpha(half, half + 8)).toBeGreaterThan(0);
+  });
+
+  it('is deterministic', () => {
+    expect(Array.from(drawSlashTile(SIZE))).toEqual(Array.from(drawSlashTile(SIZE)));
+  });
+});
+
+describe('the knife stab tile', () => {
+  it('is empty at the corners', () => {
+    const tile = drawStabTile(SIZE);
+    const alpha = (px: number, py: number) => tile[(py * SIZE + px) * 4 + 3];
+    expect(alpha(0, 0)).toBe(0);
+    expect(alpha(SIZE - 1, 0)).toBe(0);
+    expect(alpha(0, SIZE - 1)).toBe(0);
+    expect(alpha(SIZE - 1, SIZE - 1)).toBe(0);
+  });
+
+  it('is opaque at the puncture point', () => {
+    const tile = drawStabTile(SIZE);
+    const half = SIZE / 2;
+    const alpha = (px: number, py: number) => tile[(py * SIZE + px) * 4 + 3];
+    expect(alpha(half, half)).toBe(255);
+  });
+
+  it('is darkest at the center with a paler chipped rim', () => {
+    const tile = drawStabTile(SIZE);
+    const half = SIZE / 2;
+    const value = (px: number, py: number) => tile[(py * SIZE + px) * 4];
+    const center = value(half, half);
+    const rim = value(half + 5, half);
+    expect(rim).toBeGreaterThan(center);
+  });
+
+  it('is deterministic', () => {
+    expect(Array.from(drawStabTile(SIZE))).toEqual(Array.from(drawStabTile(SIZE)));
+  });
+});
+

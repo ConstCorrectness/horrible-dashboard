@@ -19,6 +19,7 @@ import type { Ladder } from './world';
 import type { ItemRow } from './net';
 import {
   createPBRMaterialLibrary,
+  glbSurfacePbrMaps,
   glbSurfaceTexture,
   type MaterialKind,
   type PBRMaterialLibrary,
@@ -27,6 +28,7 @@ import {
   classifySurface,
   DETAIL_GAIN,
   DETAIL_MEAN,
+  isPhotoKind,
   planarUv,
   surfaceTileScale,
 } from './glb-surfaces';
@@ -1748,10 +1750,10 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
     },
     spawns: {
       cla: [
-        { x: 181.5, y: 115.5, z: 0, yaw: 270, team: 0 },
-        { x: 181.5, y: 106.5, z: 0, yaw: 270, team: 0 },
-        { x: 184.5, y: 133.5, z: 0, yaw: 270, team: 0 },
-        { x: 163.5, y: 76.5, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 114, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 87, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 138, z: 0, yaw: 270, team: 0 },
+        { x: 136.5, y: 87, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
         { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
@@ -1760,10 +1762,10 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
         { x: 114, y: 40.5, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 181.5, y: 115.5, z: 0, yaw: 270, team: 0 },
-        { x: 181.5, y: 106.5, z: 0, yaw: 270, team: 0 },
-        { x: 184.5, y: 133.5, z: 0, yaw: 270, team: 0 },
-        { x: 163.5, y: 76.5, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 114, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 87, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 138, z: 0, yaw: 270, team: 0 },
+        { x: 136.5, y: 87, z: 0, yaw: 270, team: 0 },
         { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
         { x: 114, y: 30, z: 0, yaw: 90, team: 1 },
         { x: 106.5, y: 58.5, z: 0, yaw: 90, team: 1 },
@@ -1773,11 +1775,11 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
     items: [
       { id: 1, kind: 'health', x: 21, y: 171, z: 0 },
       { id: 2, kind: 'health', x: 36, y: 22.5, z: 0 },
-      { id: 3, kind: 'health', x: 190.5, y: 112.5, z: 0 },
+      { id: 3, kind: 'health', x: 157.5, y: 114, z: 0 },
       { id: 4, kind: 'armour', x: 60, y: 171, z: 0 },
       { id: 5, kind: 'armour', x: 70.5, y: 60, z: 0 },
       { id: 6, kind: 'ammo_assault', x: 75, y: 120, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 163.5, y: 67.5, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 157.5, y: 60, z: 0 },
       { id: 8, kind: 'ammo_sniper', x: 160.5, y: 172.5, z: 0 },
       { id: 9, kind: 'clips', x: 108, y: 106.5, z: 0 },
       { id: 10, kind: 'grenade', x: 108, y: 133.5, z: 0 },
@@ -1882,18 +1884,36 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
 const surfacedMaterials = new WeakSet<THREE.Material>();
 
 /**
- * Give a GLB material its detail tile. The GLB's colour stays the colour: the
- * tile is normalised grey, and `DETAIL_GAIN` undoes its mean, which is what the
- * native shader's `* 1.5` does on the other side. Once per material, because
- * materials are shared across meshes and scaling the colour twice would not be.
+ * Give a GLB material its detail tile and procedural PBR normal/roughness maps.
+ * The GLB's colour stays the colour: the tile is normalised grey, and `DETAIL_GAIN`
+ * undoes its mean, which is what the native shader's `* 1.5` does on the other side.
+ * Once per material, because materials are shared across meshes and scaling the colour
+ * twice would not be.
  */
 function applyGlbSurface(three: typeof import('three'), m: THREE.Material): void {
   if (surfacedMaterials.has(m) || !(m instanceof three.MeshStandardMaterial)) return;
   surfacedMaterials.add(m);
-  const tex = glbSurfaceTexture(three, classifySurface(m.name || ''), DETAIL_MEAN);
-  if (!tex) return;
-  m.map = tex;
+  const kind = classifySurface(m.name || '');
+  const pbr = glbSurfacePbrMaps(three, kind, DETAIL_MEAN);
+  if (!pbr) {
+    const tex = glbSurfaceTexture(three, kind, DETAIL_MEAN);
+    if (!tex) return;
+    m.map = tex;
+    m.color.multiplyScalar(DETAIL_GAIN);
+    m.needsUpdate = true;
+    return;
+  }
+  m.map = pbr.map;
   m.color.multiplyScalar(DETAIL_GAIN);
+  // Attach procedural Sobel normal and micro-roughness maps on generated surfaces;
+  // photo-kind materials receive their photographed WebP normal/roughness maps via
+  // upgradePhotoSurfaces (and restoreGeneratedSurfaces expects their stand-in normalMap to be null).
+  if (!isPhotoKind(kind)) {
+    m.normalMap = pbr.normalMap;
+    m.normalScale.set(pbr.spec.normalScale, pbr.spec.normalScale);
+    m.roughnessMap = pbr.roughnessMap;
+    m.roughness = 1.0;
+  }
   m.needsUpdate = true;
 }
 
@@ -1934,6 +1954,17 @@ function withPlanarUvs(
   return flat;
 }
 
+interface StaticBatchEntry {
+  nodeName: string;
+  geom: THREE.BufferGeometry;
+}
+
+interface StaticMaterialBatch {
+  material: THREE.Material;
+  castShadow: boolean;
+  entries: StaticBatchEntry[];
+}
+
 export function buildWorld3DFromGLTF(
   THREE: typeof import('three'),
   info: MapInfo,
@@ -1947,6 +1978,9 @@ export function buildWorld3DFromGLTF(
   const materials: THREE.Material[] = [];
   const geometries: THREE.BufferGeometry[] = [];
   const windowsMap = new Map<string, BreakableWindow>();
+  const staticBatches = new Map<string, StaticMaterialBatch>();
+  let matUidCounter = 0;
+  const matUids = new WeakMap<THREE.Material, number>();
 
   // Matrix to flip Z: glTF -Z is North, Three.js +Z is North
   const zFlip = new THREE.Matrix4().makeScale(1, 1, -1);
@@ -1997,87 +2031,111 @@ export function buildWorld3DFromGLTF(
     // `ColOnly`/`Invisible` nodes are hidden, not intangible: they exist to be
     // collided with (the bank's balcony rails), so invisibility does not opt out.
     const collides = glbNodeCollides(nodeName, matNames, size);
+    const surfaceKind = classifySurface(matList[0]?.name ?? '');
 
-    geom = withPlanarUvs(THREE, geom, surfaceTileScale(classifySurface(matList[0]?.name ?? '')));
-    geometries.push(geom);
+    geom = withPlanarUvs(THREE, geom, surfaceTileScale(surfaceKind));
 
-    const worldMesh = new THREE.Mesh(geom, obj.material);
-    worldMesh.name = nodeName;
-    worldMesh.visible = !isInv;
-    worldMesh.castShadow = true;
-    worldMesh.receiveShadow = true;
-    root.add(worldMesh);
+    // Only structural colliders cast shadows; tiny decorative trim/LEDs/foliage skip the shadow pass
+    const castShadow = collides && surfaceKind !== 'glass' && surfaceKind !== 'none';
 
-    if (isWin) {
-      const winVertices: number[] = [];
-      const winIndices: number[] = [];
-      const posAttr = geom.attributes.position;
-      if (posAttr) {
-        if (geom.index) {
-          const idx = geom.index.array;
-          for (let i = 0; i < idx.length; i += 3) {
-            const i0 = idx[i];
-            const i1 = idx[i + 1];
-            const i2 = idx[i + 2];
-            const base = winVertices.length / 3;
-            winVertices.push(posAttr.getX(i0), posAttr.getZ(i0), posAttr.getY(i0));
-            winVertices.push(posAttr.getX(i2), posAttr.getZ(i2), posAttr.getY(i2));
-            winVertices.push(posAttr.getX(i1), posAttr.getZ(i1), posAttr.getY(i1));
-            winIndices.push(base, base + 1, base + 2);
-          }
-        } else {
-          const count = posAttr.count;
-          for (let i = 0; i < count; i += 3) {
-            const base = winVertices.length / 3;
-            winVertices.push(posAttr.getX(i), posAttr.getZ(i), posAttr.getY(i));
-            winVertices.push(posAttr.getX(i + 2), posAttr.getZ(i + 2), posAttr.getY(i + 2));
-            winVertices.push(posAttr.getX(i + 1), posAttr.getZ(i + 1), posAttr.getY(i + 1));
-            winIndices.push(base, base + 1, base + 2);
+    if (isWin || isInv || Array.isArray(obj.material) || !obj.material) {
+      geometries.push(geom);
+      const worldMesh = new THREE.Mesh(geom, obj.material);
+      worldMesh.name = nodeName;
+      worldMesh.visible = !isInv;
+      worldMesh.castShadow = !isWin && !isInv && castShadow;
+      worldMesh.receiveShadow = true;
+      root.add(worldMesh);
+
+      if (isWin) {
+        const winVertices: number[] = [];
+        const winIndices: number[] = [];
+        const posAttr = geom.attributes.position;
+        if (posAttr) {
+          if (geom.index) {
+            const idx = geom.index.array;
+            for (let i = 0; i < idx.length; i += 3) {
+              const i0 = idx[i];
+              const i1 = idx[i + 1];
+              const i2 = idx[i + 2];
+              const base = winVertices.length / 3;
+              winVertices.push(posAttr.getX(i0), posAttr.getZ(i0), posAttr.getY(i0));
+              winVertices.push(posAttr.getX(i2), posAttr.getZ(i2), posAttr.getY(i2));
+              winVertices.push(posAttr.getX(i1), posAttr.getZ(i1), posAttr.getY(i1));
+              winIndices.push(base, base + 1, base + 2);
+            }
+          } else {
+            const count = posAttr.count;
+            for (let i = 0; i < count; i += 3) {
+              const base = winVertices.length / 3;
+              winVertices.push(posAttr.getX(i), posAttr.getZ(i), posAttr.getY(i));
+              winVertices.push(posAttr.getX(i + 2), posAttr.getZ(i + 2), posAttr.getY(i + 2));
+              winVertices.push(posAttr.getX(i + 1), posAttr.getZ(i + 1), posAttr.getY(i + 1));
+              winIndices.push(base, base + 1, base + 2);
+            }
           }
         }
-      }
 
-      let cx = 0,
-        cy = 0,
-        cz = 0;
-      const numV = winVertices.length / 3;
-      if (numV > 0) {
-        for (let i = 0; i < winVertices.length; i += 3) {
-          cx += winVertices[i];
-          cy += winVertices[i + 1];
-          cz += winVertices[i + 2];
+        let cx = 0,
+          cy = 0,
+          cz = 0;
+        const numV = winVertices.length / 3;
+        if (numV > 0) {
+          for (let i = 0; i < winVertices.length; i += 3) {
+            cx += winVertices[i];
+            cy += winVertices[i + 1];
+            cz += winVertices[i + 2];
+          }
+          cx /= numV;
+          cy /= numV;
+          cz /= numV;
         }
-        cx /= numV;
-        cy /= numV;
-        cz /= numV;
-      }
 
-      const normAttr = geom.attributes.normal;
-      let nx = 0,
-        ny = 1,
-        nz = 0;
-      if (normAttr && normAttr.count > 0) {
-        nx = normAttr.getX(0);
-        ny = normAttr.getZ(0);
-        nz = normAttr.getY(0);
-      }
+        const normAttr = geom.attributes.normal;
+        let nx = 0,
+          ny = 1,
+          nz = 0;
+        if (normAttr && normAttr.count > 0) {
+          nx = normAttr.getX(0);
+          ny = normAttr.getZ(0);
+          nz = normAttr.getY(0);
+        }
 
-      windowsMap.set(nodeName, {
-        id: nodeName,
-        name: nodeName,
-        mesh: worldMesh,
-        center: [cx, cy, cz],
-        normal: [nx, ny, nz],
-        shattered: false,
-        vertices: new Float32Array(winVertices),
-        indices: new Uint32Array(winIndices),
-        shatter() {
-          if (this.shattered) return;
-          this.shattered = true;
-          this.mesh.visible = false;
-        },
-      });
-    } else if (collides) {
+        windowsMap.set(nodeName, {
+          id: nodeName,
+          name: nodeName,
+          mesh: worldMesh,
+          center: [cx, cy, cz],
+          normal: [nx, ny, nz],
+          shattered: false,
+          vertices: new Float32Array(winVertices),
+          indices: new Uint32Array(winIndices),
+          shatter() {
+            if (this.shattered) return;
+            this.shattered = true;
+            this.mesh.visible = false;
+          },
+        });
+      }
+    } else {
+      // Group static visible single-material meshes by (material, castShadow) to collapse
+      // thousands of GLB node draw calls (e.g., 3,529 on hd_bank) into ~30-50 batched meshes.
+      const singleMat = obj.material as THREE.Material;
+      let uid = matUids.get(singleMat);
+      if (uid === undefined) {
+        uid = ++matUidCounter;
+        matUids.set(singleMat, uid);
+      }
+      const key = `${uid}:${castShadow ? 1 : 0}`;
+      let batch = staticBatches.get(key);
+      if (!batch) {
+        batch = { material: singleMat, castShadow, entries: [] };
+        staticBatches.set(key, batch);
+      }
+      batch.entries.push({ nodeName, geom });
+    }
+
+    if (!isWin && collides) {
       // Extract collision geometry for Rapier (game coords: x=East, y=North, z=Elevation)
       const posAttr = geom.attributes.position;
       if (posAttr) {
@@ -2110,6 +2168,61 @@ export function buildWorld3DFromGLTF(
       }
     }
   });
+
+  // Emit static batches: keep 1-mesh buckets with their original nodeName, merge multi-mesh buckets
+  for (const batch of staticBatches.values()) {
+    if (batch.entries.length === 1) {
+      const only = batch.entries[0]!;
+      geometries.push(only.geom);
+      const mesh = new THREE.Mesh(only.geom, batch.material);
+      mesh.name = only.nodeName;
+      mesh.castShadow = batch.castShadow;
+      mesh.receiveShadow = true;
+      root.add(mesh);
+      continue;
+    }
+
+    let totalVerts = 0;
+    for (const e of batch.entries) {
+      const flat = e.geom.index ? e.geom.toNonIndexed() : e.geom;
+      if (flat !== e.geom) {
+        e.geom.dispose();
+        e.geom = flat;
+      }
+      totalVerts += e.geom.attributes.position?.count ?? 0;
+    }
+
+    const posMerged = new Float32Array(totalVerts * 3);
+    const normMerged = new Float32Array(totalVerts * 3);
+    const uvMerged = new Float32Array(totalVerts * 2);
+    let vOffset = 0;
+
+    for (const e of batch.entries) {
+      const pos = e.geom.attributes.position;
+      const norm = e.geom.attributes.normal;
+      const uv = e.geom.attributes.uv;
+      const count = pos?.count ?? 0;
+      if (pos) posMerged.set(pos.array as Float32Array, vOffset * 3);
+      if (norm) normMerged.set(norm.array as Float32Array, vOffset * 3);
+      if (uv) uvMerged.set(uv.array as Float32Array, vOffset * 2);
+      vOffset += count;
+      e.geom.dispose();
+    }
+
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(posMerged, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(normMerged, 3));
+    merged.setAttribute('uv', new THREE.BufferAttribute(uvMerged, 2));
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+    geometries.push(merged);
+
+    const mesh = new THREE.Mesh(merged, batch.material);
+    mesh.name = `Batched_${batch.material.name || 'Mat'}_${batch.castShadow ? 'Col' : 'Dec'}`;
+    mesh.castShadow = batch.castShadow;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+  }
 
   const cfg = MAP_CONFIGS[info.name] ?? MAP_CONFIGS.hd_facility;
 

@@ -189,6 +189,10 @@ export interface ViewModelFrame {
   sinceLanded?: number;
   /** Aim-down-sights weight (0 hipfire to 1 ADS). Lerps weapon model towards sight-line. */
   ads?: number;
+  /** Whether the grenade pin is pulled and held cocked waiting for release. */
+  pinPulled?: boolean;
+  /** Whether the held pin is for an underhand lob (RMB) rather than an overhand throw (LMB). */
+  throwLob?: boolean;
 }
 
 /**
@@ -479,6 +483,8 @@ export class WeaponViewModel {
   private currentSkin: WeaponSkin | null = null;
   /** Geometries created by the build in progress, collected by `box`/`tube`. */
   private building: THREE.BufferGeometry[] = [];
+  /** Extra per-model materials created by grenade builders, freed by `release`. */
+  private buildingMaterials: THREE.Material[] = [];
 
   /**
    * Which weapon+skin the in-flight prop load belongs to.
@@ -580,6 +586,10 @@ export class WeaponViewModel {
   private breathPhase = 0;
   /** Sprint weapon tuck transition (0 = idle/walk, 1 = tucked sprint) */
   private sprintT = 0;
+  /** Grenade pin-pull and cocked hold transition (0 = idle, 1 = pin pulled and cocked) */
+  private pinPullT = 0;
+  /** Most recently evaluated grip anchors */
+  private lastAnchors: GripAnchors | null = null;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -644,6 +654,7 @@ export class WeaponViewModel {
     this.setPalette(skin);
 
     this.building = [];
+    this.buildingMaterials = [];
     const shape = this.build(id, skin);
     this.grips = gripsFor(id);
     this.pivot.add(shape.group);
@@ -655,9 +666,10 @@ export class WeaponViewModel {
     this.built = {
       ...shape,
       geometries: this.building,
-      materials: flashMats,
+      materials: [...this.buildingMaterials, ...flashMats],
     };
     this.building = [];
+    this.buildingMaterials = [];
 
     if (swapped) {
       // Snapped fully stowed rather than eased there: the model has *already*
@@ -666,6 +678,7 @@ export class WeaponViewModel {
       // cleared because the swap it was waiting for has arrived.
       this.stow = 1;
       this.holsterHold = 0;
+      this.pinPullT = 0;
       this.startAction('draw', DRAW_DURATION);
       if (id === 'knife') {
         this.knifeAction = 'draw';
@@ -991,6 +1004,16 @@ export class WeaponViewModel {
     return this.inspectT !== null;
   }
 
+  /** The current grenade pin-pull progress (0 to 1). */
+  get pinPull(): number {
+    return this.pinPullT;
+  }
+
+  /** The most recently resolved grip anchors for testing hand positioning. */
+  get lastGripAnchors(): GripAnchors | null {
+    return this.lastAnchors;
+  }
+
   /**
    * Advance the animation.
    *
@@ -1279,12 +1302,47 @@ export class WeaponViewModel {
     const drawYaw = stow * 0.18;
     const drawRoll = stow * 0.28;
 
+    // Grenade pin-pull & cocked hold pose when holding mouse button
+    if (frame.pinPulled) {
+      this.pinPullT = Math.min(1.0, this.pinPullT + dt * 4.2);
+    } else {
+      this.pinPullT = 0.0;
+    }
+    const pinPull = ease(this.pinPullT);
+    const isUnderhand = Boolean(frame.throwLob);
+    const cockX = pinPull * (isUnderhand ? -0.06 : 0.06);
+    const cockY = pinPull * (isUnderhand ? -0.08 : 0.11);
+    const cockZ = pinPull * (isUnderhand ? 0.08 : 0.14);
+    const cockPitch = pinPull * (isUnderhand ? 0.28 : -0.32);
+    const cockYaw = pinPull * (isUnderhand ? 0.12 : 0.16);
+    const cockRoll = pinPull * (isUnderhand ? 0.35 : -0.22);
+
+    if (this.built) {
+      const pinRing = this.built.group.getObjectByName('pin_ring');
+      if (pinRing) {
+        const baseY = ((pinRing.userData as Record<string, number>).baseY ??= pinRing.position.y);
+        if (this.pinPullT < 0.40) {
+          pinRing.position.set(-0.07, baseY, -0.09);
+          pinRing.visible = true;
+        } else if (this.pinPullT < 0.72) {
+          const pullPhase = (this.pinPullT - 0.40) / 0.32;
+          pinRing.position.x = -0.07 - pullPhase * 0.25;
+          pinRing.position.y = baseY - pullPhase * 0.08;
+          pinRing.position.z = -0.09 + pullPhase * 0.05;
+          pinRing.visible = true;
+        } else {
+          pinRing.visible = false;
+        }
+      }
+    }
+
     this.pivot.position.set(
       curHomeX +
         (bobX + (this.swayX + this.strafeSway) * adsDamp) -
         inspectLiftX +
         knifeX +
-        breathX,
+        breathX +
+        cockX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
@@ -1297,9 +1355,10 @@ export class WeaponViewModel {
         stow * 1.15 +
         knifeY +
         breathY +
-        sprintDip,
+        sprintDip +
+        cockY,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      curHomeZ + this.kick * 0.28 + boltPullZ + reloadImpulseZ + inspectLiftZ + knifeZ,
+      curHomeZ + this.kick * 0.28 + boltPullZ + reloadImpulseZ + inspectLiftZ + knifeZ + cockZ,
     );
     this.pivot.rotation.set(
       this.kick * -0.16 +
@@ -1311,13 +1370,15 @@ export class WeaponViewModel {
         drawPitch +
         knifePitch +
         breathPitch +
-        sprintPitch,
+        sprintPitch +
+        cockPitch,
       (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp +
         this.reloadT * 0.25 +
         inspectYaw +
         drawYaw +
         knifeYaw +
-        sprintYaw,
+        sprintYaw +
+        cockYaw,
       (this.swayX * 0.5 + this.swayRoll) * adsDamp +
         bobX * 0.6 +
         boltPullRoll +
@@ -1325,7 +1386,8 @@ export class WeaponViewModel {
         inspectRoll +
         drawRoll +
         knifeRoll +
-        sprintRoll,
+        sprintRoll +
+        cockRoll,
     );
 
     this.flashAge += dt;
@@ -1395,10 +1457,54 @@ export class WeaponViewModel {
     const supportOffset = addVec(pose.support, inspect?.support);
     const primaryRoll = pose.primaryRoll ?? 0;
     const supportRoll = pose.supportRoll ?? 0;
+    let resolvedSupport =
+      grips.support === null ? null : offsetBy(grips.support, supportOffset);
+    let resolvedSupportCurl = supportCurl;
+    // When pulling the pin on a grenade, animate the left hand along a smooth 3-phase trajectory:
+    // 1. Reach: moves from off-screen lower-left up to the pin ring.
+    // 2. Yank: grips the ring and pulls it free to the left.
+    // 3. Retract: drops the ring and sweeps smoothly down off-screen.
+    // Once complete (t >= 0.98) or during indefinite LMB holding, the left hand stays cleanly off-screen.
+    if (
+      grips.support === null &&
+      frame.pinPulled &&
+      this.pinPullT > 0.01 &&
+      this.pinPullT < 0.98 &&
+      this.weaponId !== 'nade_molotov' &&
+      this.weaponId !== 'grenade_molotov'
+    ) {
+      if (this.pinPullT < 0.40) {
+        const reach = ease(this.pinPullT / 0.40);
+        resolvedSupport = [
+          -0.26 + reach * 0.19,
+          -0.25 + reach * 0.53,
+          -0.12 + reach * 0.03,
+        ];
+        const curl = 0.4 + reach * 0.8;
+        resolvedSupportCurl = [curl, curl, 0.4 + reach * 0.9, 0.4 + reach * 0.9, 0.4 + reach * 0.9];
+      } else if (this.pinPullT < 0.72) {
+        const pull = ease((this.pinPullT - 0.40) / 0.32);
+        resolvedSupport = [
+          -0.07 - pull * 0.25,
+          0.28 - pull * 0.08,
+          -0.09 + pull * 0.05,
+        ];
+        resolvedSupportCurl = [1.2, 1.2, 1.3, 1.3, 1.3];
+      } else {
+        const drop = ease((this.pinPullT - 0.72) / 0.26);
+        resolvedSupport = [
+          -0.32 - drop * 0.13,
+          0.20 - drop * 0.95,
+          -0.04 + drop * 0.14,
+        ];
+        const curl = 1.2 - drop * 0.7;
+        resolvedSupportCurl = [curl, curl, curl, curl, curl];
+      }
+    }
     const anchors: GripAnchors = {
       ...grips,
       primary: offsetBy(grips.primary, primaryOffset),
-      support: grips.support === null ? null : offsetBy(grips.support, supportOffset),
+      support: resolvedSupport,
       primaryRoll: grips.primaryRoll + primaryRoll,
       supportRoll: grips.supportRoll + supportRoll,
       // A pose's roll turns the hand about its own aim — the same channel the
@@ -1406,8 +1512,9 @@ export class WeaponViewModel {
       primaryUp: rollAbout(grips.primaryUp, grips.primaryAim, primaryRoll),
       supportUp: rollAbout(grips.supportUp, grips.supportAim, supportRoll),
       primaryCurl,
-      supportCurl,
+      supportCurl: resolvedSupportCurl,
     };
+    this.lastAnchors = anchors;
 
     // The weapon's model space into camera space, through the same two matrices
     // the flash's distance uses. Recomputed here rather than cached, because the
@@ -2116,12 +2223,144 @@ export class WeaponViewModel {
     return { group, muzzle: [0, 0.04, -2.92], rest: [0, -0.04, 0] };
   }
 
+  private coloredMat(color: number, shininess = 28, specular = 0x525866): THREE.MeshPhongMaterial {
+    const mat = new this.three.MeshPhongMaterial({
+      color,
+      specular: new this.three.Color(specular),
+      shininess,
+      map: this.grain,
+    });
+    this.buildingMaterials.push(mat);
+    return mat;
+  }
+
+  private uprightTube(
+    radius: number,
+    height: number,
+    at: [number, number, number],
+    material: THREE.Material,
+  ): THREE.Mesh {
+    const geo = new this.three.CylinderGeometry(radius, radius, height, 16);
+    this.building.push(geo);
+    const mesh = new this.three.Mesh(geo, material);
+    mesh.position.set(at[0], at[1], at[2]);
+    return mesh;
+  }
+
+  private buildNadeHe(): Shape {
+    const group = new this.three.Group();
+    const olive = this.coloredMat(0x3d542e, 24, 0x4b5d3b);
+    const yellowBand = this.coloredMat(0xd4af37, 45, 0xfef08a);
+    const fuzeSteel = this.coloredMat(0x5a5e66, 52, 0x9ca3af);
+    const spoonMetal = this.coloredMat(0x8c929c, 60, 0xcbd5e1);
+    const brassPin = this.coloredMat(0xd9bf38, 70, 0xfef08a);
+
+    // M67 olive-drab fragmentation body with beveled upper/lower shoulders
+    group.add(this.uprightTube(0.135, 0.22, [0, 0.08, -0.1], olive));
+    group.add(this.uprightTube(0.112, 0.28, [0, 0.08, -0.1], olive));
+    group.add(this.uprightTube(0.082, 0.32, [0, 0.08, -0.1], olive));
+    // Yellow high-explosive identification band
+    group.add(this.uprightTube(0.138, 0.032, [0, 0.14, -0.1], yellowBand));
+    // M213 fuze collar and striker head
+    group.add(this.uprightTube(0.055, 0.09, [0, 0.25, -0.1], fuzeSteel));
+    group.add(this.box([0.11, 0.06, 0.12], [0, 0.3, -0.1], fuzeSteel));
+    // Safety spoon lever curving down the front/side of the shell
+    group.add(this.box([0.045, 0.03, 0.14], [0, 0.32, -0.14], spoonMetal));
+    group.add(this.box([0.042, 0.24, 0.025], [0, 0.16, -0.23], spoonMetal, [-0.14, 0, 0]));
+    // Pull-pin ring assembly (animated on pin-pull)
+    const pinRing = this.tube(0.042, 0.018, [-0.07, 0.28, -0.09], brassPin);
+    pinRing.name = 'pin_ring';
+    group.add(pinRing);
+
+    return { group, muzzle: [0, 0.08, -0.1], rest: [0.08, -0.22, 0.12] };
+  }
+
+  private buildNadeFlash(): Shape {
+    const group = new this.three.Group();
+    const steelBody = this.coloredMat(0xb8bcc4, 62, 0xe2e8f0);
+    const ventCore = this.coloredMat(0x22262c, 16, 0x334155);
+    const blueBand = this.coloredMat(0x2563eb, 48, 0x93c5fd);
+    const endCap = this.coloredMat(0x686e78, 45, 0x94a3b8);
+    const spoonMetal = this.coloredMat(0x8c929c, 60, 0xcbd5e1);
+    const brassPin = this.coloredMat(0xd9bf38, 70, 0xfef08a);
+
+    // M84 perforated stun cylinder body with dark blast-venting cutouts
+    group.add(this.uprightTube(0.112, 0.34, [0, 0.08, -0.1], steelBody));
+    group.add(this.uprightTube(0.116, 0.045, [0, 0.02, -0.1], ventCore));
+    group.add(this.uprightTube(0.116, 0.045, [0, 0.12, -0.1], ventCore));
+    // Tactical blue flashbang band
+    group.add(this.uprightTube(0.117, 0.038, [0, 0.19, -0.1], blueBand));
+    // Top and bottom machined caps
+    group.add(this.uprightTube(0.12, 0.04, [0, 0.24, -0.1], endCap));
+    group.add(this.uprightTube(0.12, 0.04, [0, -0.08, -0.1], endCap));
+    // Fuze head & safety lever
+    group.add(this.uprightTube(0.052, 0.08, [0, 0.29, -0.1], endCap));
+    group.add(this.box([0.1, 0.055, 0.11], [0, 0.33, -0.1], endCap));
+    group.add(this.box([0.04, 0.25, 0.024], [0, 0.18, -0.21], spoonMetal, [-0.1, 0, 0]));
+    // Pull-pin ring
+    const pinRing = this.tube(0.042, 0.018, [-0.07, 0.31, -0.09], brassPin);
+    pinRing.name = 'pin_ring';
+    group.add(pinRing);
+
+    return { group, muzzle: [0, 0.08, -0.1], rest: [0.08, -0.22, 0.12] };
+  }
+
+  private buildNadeSmoke(): Shape {
+    const group = new this.three.Group();
+    const canisterGrey = this.coloredMat(0x7d848c, 32, 0x94a3b8);
+    const smokeGreen = this.coloredMat(0x2e8b57, 36, 0x6ee7b7);
+    const rimMetal = this.coloredMat(0x525862, 50, 0x9ca3af);
+    const spoonMetal = this.coloredMat(0x8c929c, 60, 0xcbd5e1);
+    const brassPin = this.coloredMat(0xd9bf38, 70, 0xfef08a);
+
+    // M18 smoke canister body with rolled top/bottom crimp rims
+    group.add(this.uprightTube(0.128, 0.38, [0, 0.08, -0.1], canisterGrey));
+    group.add(this.uprightTube(0.132, 0.075, [0, 0.16, -0.1], smokeGreen));
+    group.add(this.uprightTube(0.135, 0.026, [0, 0.26, -0.1], rimMetal));
+    group.add(this.uprightTube(0.135, 0.026, [0, -0.1, -0.1], rimMetal));
+    // M201A1 fuze head & safety spoon
+    group.add(this.uprightTube(0.055, 0.08, [0, 0.3, -0.1], rimMetal));
+    group.add(this.box([0.105, 0.055, 0.115], [0, 0.34, -0.1], rimMetal));
+    group.add(this.box([0.042, 0.27, 0.025], [0, 0.18, -0.225], spoonMetal, [-0.08, 0, 0]));
+    // Pull-pin ring
+    const pinRing = this.tube(0.042, 0.018, [-0.07, 0.32, -0.09], brassPin);
+    pinRing.name = 'pin_ring';
+    group.add(pinRing);
+
+    return { group, muzzle: [0, 0.08, -0.1], rest: [0.08, -0.22, 0.12] };
+  }
+
+  private buildNadeMolotov(): Shape {
+    const group = new this.three.Group();
+    const amberGlass = this.coloredMat(0x9e5219, 78, 0xfdba74);
+    const fuelBand = this.coloredMat(0xd97724, 42, 0xfed7aa);
+    const clothRag = this.coloredMat(0xe0d6bd, 8, 0x44403c);
+    const flameCore = this.coloredMat(0xf97316, 85, 0xfef08a);
+    const flameTip = this.coloredMat(0xfef08a, 95, 0xffffff);
+
+    // Incendiary glass bottle body, shoulder taper, neck, and lip
+    group.add(this.uprightTube(0.124, 0.28, [0, 0.02, -0.1], amberGlass));
+    group.add(this.uprightTube(0.127, 0.11, [0, 0.01, -0.1], fuelBand));
+    group.add(this.uprightTube(0.092, 0.08, [0, 0.18, -0.1], amberGlass));
+    group.add(this.uprightTube(0.048, 0.14, [0, 0.27, -0.1], amberGlass));
+    group.add(this.uprightTube(0.058, 0.03, [0, 0.34, -0.1], amberGlass));
+    // Cloth rag wick stuffed into neck + trailing cloth tail
+    group.add(this.box([0.07, 0.11, 0.07], [0, 0.38, -0.1], clothRag));
+    group.add(this.box([0.05, 0.12, 0.04], [-0.05, 0.33, -0.08], clothRag, [0, 0, 0.45]));
+    // Ignited flame crown at the top of the wick
+    group.add(this.box([0.065, 0.075, 0.065], [0, 0.44, -0.1], flameCore, [0.2, 0.4, 0.2]));
+    group.add(this.box([0.042, 0.055, 0.042], [0, 0.48, -0.1], flameTip, [0.4, 0.2, 0.3]));
+
+    return { group, muzzle: [0, 0.45, -0.1], rest: [0.08, -0.22, 0.12] };
+  }
+
   /**
    * The weapon, by id.
    *
-   * Ids are the backend's (`weapons.py`): knife, pistol, assault, shotgun,
-   * sniper. An unknown id gets the rifle rather than nothing — a new weapon
-   * should look wrong, not invisible.
+   * Ids are the backend's (`weapons.py` and `grenades.py`): knife, pistol,
+   * assault, shotgun, sniper, plus utility grenades (`nade_he`, `nade_flash`,
+   * `nade_smoke`, `nade_molotov`). An unknown id gets the rifle rather than
+   * nothing — a new weapon should look wrong, not invisible.
    */
   private build(id: string, skin: WeaponSkin | null = null): Shape {
     switch (id) {
@@ -2150,6 +2389,24 @@ export class WeaponViewModel {
 
       case 'sniper':
         return this.buildTacticalSniper();
+
+      case 'nade_he':
+      case 'grenade_he':
+        return this.buildNadeHe();
+
+      case 'nade_flash':
+      case 'grenade_flash':
+        return this.buildNadeFlash();
+
+      case 'nade_smoke':
+      case 'grenade_smoke':
+        return this.buildNadeSmoke();
+
+      case 'nade_molotov':
+      case 'grenade_molotov':
+      case 'nade_fire':
+      case 'grenade_fire':
+        return this.buildNadeMolotov();
 
       default:
         // Assault rifle, and the fallback for anything new.

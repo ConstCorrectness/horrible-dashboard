@@ -163,7 +163,21 @@ export function gripsFor(
     primary: [d.primary[0], d.primary[1] * height, d.primary[2] * length],
     support: [d.support[0], d.support[1] * height, d.support[2] * length],
   };
-  if (!listed) return fallback;
+  if (!listed) {
+    if (weaponId.startsWith('nade_') || weaponId.startsWith('grenade_')) {
+      return {
+        ...fallback,
+        primary: [0.0, 0.08, -0.1],
+        support: null,
+        primaryRoll: 0.15,
+        primaryAim: [-0.18, 0.25, -0.95],
+        primaryUp: [0.0, 1.0, 0.12],
+        primaryCurl: [1.05, 0.9, 0.95, 1.0, 1.0],
+        primaryRadius: 0.105,
+      };
+    }
+    return fallback;
+  }
   return {
     primary: listed.primary ?? fallback.primary,
     // `undefined` means "not listed, use the default"; an explicit `null` means

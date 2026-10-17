@@ -229,7 +229,7 @@ async def lookup_web(symbol: str, lang: str) -> list[DocEntry]:
 
     query = f"{symbol} {lang} documentation"
     try:
-        answer = await asyncio.wait_for(quick_search(query, limit=5), timeout=2.0)
+        answer = await asyncio.wait_for(quick_search(query, limit=5), timeout=1.5)
     except Exception:  # noqa: BLE001 — no search configured is a normal outcome
         logger.debug("docs web lookup: search failed for %r", symbol, exc_info=True)
         return []
@@ -242,7 +242,7 @@ async def lookup_web(symbol: str, lang: str) -> list[DocEntry]:
     if not url:
         return []
     try:
-        article = await asyncio.wait_for(fetch_readable(url), timeout=2.0)
+        article = await asyncio.wait_for(fetch_readable(url), timeout=1.5)
     except Exception:  # noqa: BLE001 — an unreachable or blocked page is not an error
         logger.debug("docs web lookup: fetch failed for %s", url, exc_info=True)
         # The snippet is still better than nothing, and it cost nothing extra.

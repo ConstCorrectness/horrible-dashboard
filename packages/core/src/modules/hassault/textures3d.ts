@@ -809,7 +809,127 @@ export function drawGlbSurfaceTile(kind: string, width = SIZE, height = SIZE): U
   }
 }
 
+export interface GeneratedSurfaceSpec {
+  normalScale: number;
+  baseRoughness: number;
+  roughnessContrast: number;
+  metalness: number;
+  bumpStrength: number;
+}
+
+export const GENERATED_SURFACE_SPECS: Record<string, GeneratedSurfaceSpec> = {
+  asphalt: { normalScale: 0.85, baseRoughness: 0.86, roughnessContrast: 0.22, metalness: 0.04, bumpStrength: 3.2 },
+  marble: { normalScale: 0.35, baseRoughness: 0.18, roughnessContrast: -0.35, metalness: 0.06, bumpStrength: 2.0 },
+  concrete: { normalScale: 0.75, baseRoughness: 0.76, roughnessContrast: -0.25, metalness: 0.06, bumpStrength: 2.8 },
+  vault_steel: { normalScale: 0.55, baseRoughness: 0.30, roughnessContrast: -0.20, metalness: 0.88, bumpStrength: 2.4 },
+  hazard: { normalScale: 0.45, baseRoughness: 0.46, roughnessContrast: -0.18, metalness: 0.12, bumpStrength: 2.0 },
+  wood: { normalScale: 0.60, baseRoughness: 0.38, roughnessContrast: -0.24, metalness: 0.04, bumpStrength: 2.5 },
+  crate: { normalScale: 0.80, baseRoughness: 0.64, roughnessContrast: -0.26, metalness: 0.18, bumpStrength: 3.0 },
+  container: { normalScale: 0.90, baseRoughness: 0.54, roughnessContrast: -0.28, metalness: 0.48, bumpStrength: 3.4 },
+  gold: { normalScale: 0.40, baseRoughness: 0.22, roughnessContrast: -0.15, metalness: 0.94, bumpStrength: 1.8 },
+  masonry: { normalScale: 0.95, baseRoughness: 0.78, roughnessContrast: -0.30, metalness: 0.04, bumpStrength: 3.5 },
+  plaster: { normalScale: 0.55, baseRoughness: 0.72, roughnessContrast: -0.20, metalness: 0.03, bumpStrength: 2.2 },
+  cobblestone: { normalScale: 1.10, baseRoughness: 0.74, roughnessContrast: -0.34, metalness: 0.05, bumpStrength: 4.0 },
+  roof_tile: { normalScale: 0.95, baseRoughness: 0.62, roughnessContrast: -0.26, metalness: 0.05, bumpStrength: 3.4 },
+  carpet: { normalScale: 0.65, baseRoughness: 0.90, roughnessContrast: -0.16, metalness: 0.02, bumpStrength: 2.6 },
+  brick: { normalScale: 1.00, baseRoughness: 0.80, roughnessContrast: -0.30, metalness: 0.04, bumpStrength: 3.6 },
+};
+
+/** Helper to create a linear (NoColorSpace) repeatable DataTexture for normal/roughness maps */
+function makeLinearDataTexture(
+  three: typeof THREE,
+  data: Uint8Array,
+  width = SIZE,
+  height = SIZE,
+): THREE.DataTexture {
+  const tex = new three.DataTexture(data, width, height, three.RGBAFormat);
+  tex.wrapS = three.RepeatWrapping;
+  tex.wrapT = three.RepeatWrapping;
+  tex.magFilter = three.LinearFilter;
+  tex.minFilter = three.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.colorSpace = three.NoColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Generates wrap-around tangent-space normal map and micro-roughness map from a procedural tile.
+ * Uses a 3x3 Sobel operator across tile boundaries so normal maps tile seamlessly.
+ */
+export function generateDetailNormalAndRoughness(
+  tile: Uint8Array,
+  width = SIZE,
+  height = SIZE,
+  spec: GeneratedSurfaceSpec = GENERATED_SURFACE_SPECS.concrete,
+): { normalData: Uint8Array; roughnessData: Uint8Array } {
+  const count = width * height;
+  const hMap = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const idx = i * 4;
+    hMap[i] = (0.299 * tile[idx] + 0.587 * tile[idx + 1] + 0.114 * tile[idx + 2]) / 255;
+  }
+
+  const normalData = new Uint8Array(count * 4);
+  const roughnessData = new Uint8Array(count * 4);
+  const strength = spec.bumpStrength;
+
+  const sampleH = (x: number, y: number): number => {
+    const wx = ((x % width) + width) % width;
+    const wy = ((y % height) + height) % height;
+    return hMap[wy * width + wx];
+  };
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const tl = sampleH(x - 1, y - 1);
+      const tc = sampleH(x, y - 1);
+      const tr = sampleH(x + 1, y - 1);
+      const ml = sampleH(x - 1, y);
+      const mc = sampleH(x, y);
+      const mr = sampleH(x + 1, y);
+      const bl = sampleH(x - 1, y + 1);
+      const bc = sampleH(x, y + 1);
+      const br = sampleH(x + 1, y + 1);
+
+      const dx = (tr + 2 * mr + br - (tl + 2 * ml + bl)) * strength;
+      const dy = (bl + 2 * bc + br - (tl + 2 * tc + tr)) * strength;
+      const nx = -dx;
+      const ny = -dy;
+      const nz = 1.0;
+      const invLen = 1.0 / Math.hypot(nx, ny, nz);
+
+      const idx = (y * width + x) * 4;
+      normalData[idx] = Math.min(255, Math.max(0, Math.round((nx * invLen * 0.5 + 0.5) * 255)));
+      normalData[idx + 1] = Math.min(255, Math.max(0, Math.round((ny * invLen * 0.5 + 0.5) * 255)));
+      normalData[idx + 2] = Math.min(255, Math.max(0, Math.round((nz * invLen * 0.5 + 0.5) * 255)));
+      normalData[idx + 3] = 255;
+
+      // Micro-roughness: recessed joints/grout are rougher, raised facets are smoother
+      const rVal = Math.min(
+        1,
+        Math.max(0.04, spec.baseRoughness + (mc - 0.65) * spec.roughnessContrast),
+      );
+      const rByte = Math.round(rVal * 255);
+      roughnessData[idx] = rByte;
+      roughnessData[idx + 1] = rByte;
+      roughnessData[idx + 2] = rByte;
+      roughnessData[idx + 3] = 255;
+    }
+  }
+
+  return { normalData, roughnessData };
+}
+
+export interface GlbSurfacePbrBundle {
+  map: THREE.DataTexture;
+  normalMap: THREE.DataTexture;
+  roughnessMap: THREE.DataTexture;
+  spec: GeneratedSurfaceSpec;
+}
+
 const glbTextureCache = new WeakMap<typeof THREE, Map<string, THREE.DataTexture | null>>();
+const glbPbrCache = new WeakMap<typeof THREE, Map<string, GlbSurfacePbrBundle | null>>();
 
 /** A normalised detail texture for a GLB surface kind, built once per three instance. */
 export function glbSurfaceTexture(
@@ -829,6 +949,40 @@ export function glbSurfaceTexture(
   return tex;
 }
 
+/**
+ * Full procedural PBR map bundle (normalised detail map + Sobel tangent-space normalMap
+ * + micro-surface roughnessMap) for generated GLB surface kinds, built once per three instance.
+ */
+export function glbSurfacePbrMaps(
+  three: typeof THREE,
+  kind: string,
+  mean: number,
+): GlbSurfacePbrBundle | null {
+  let cache = glbPbrCache.get(three);
+  if (!cache) {
+    cache = new Map();
+    glbPbrCache.set(three, cache);
+  }
+  if (cache.has(kind)) return cache.get(kind) ?? null;
+  const map = glbSurfaceTexture(three, kind, mean);
+  const rawTile = drawGlbSurfaceTile(kind);
+  if (!map || !rawTile) {
+    cache.set(kind, null);
+    return null;
+  }
+  const effectiveKind = isPhotoKind(kind) ? PHOTO_FALLBACK[kind] : kind;
+  const spec = GENERATED_SURFACE_SPECS[effectiveKind] ?? GENERATED_SURFACE_SPECS.concrete;
+  const { normalData, roughnessData } = generateDetailNormalAndRoughness(rawTile, SIZE, SIZE, spec);
+  const bundle: GlbSurfacePbrBundle = {
+    map,
+    normalMap: makeLinearDataTexture(three, normalData),
+    roughnessMap: makeLinearDataTexture(three, roughnessData),
+    spec,
+  };
+  cache.set(kind, bundle);
+  return bundle;
+}
+
 /** Supported surface types for 3D worlds */
 export type MaterialKind =
   | 'asphalt'
@@ -846,91 +1000,114 @@ export type MaterialKind =
   | 'site_b';
 
 export interface PBRMaterialLibrary {
-  materials: Record<MaterialKind, THREE.Material>;
+  materials: Record<MaterialKind, THREE.MeshStandardMaterial>;
   dispose(): void;
 }
 
 /**
- * Builds the complete Crossfire PBR Material Library.
+ * Builds the complete Crossfire PBR Material Library with albedo, normal, and roughness maps.
  */
 export function createPBRMaterialLibrary(three: typeof THREE): PBRMaterialLibrary {
-  const asphaltTex = makeDataTexture(three, drawAsphaltTile());
-  const marbleTex = makeDataTexture(three, drawMarbleTile());
-  const concreteTex = makeDataTexture(three, drawConcreteTile());
-  const vaultSteelTex = makeDataTexture(three, drawVaultSteelTile());
-  const hazardTex = makeDataTexture(three, drawHazardTile());
-  const woodTex = makeDataTexture(three, drawWoodTile());
-  const crateTex = makeDataTexture(three, drawTacticalCrateTile());
-  const containerTex = makeDataTexture(three, drawContainerTile());
+  const textures: THREE.Texture[] = [];
+  const buildPbr = (tile: Uint8Array, kind: string) => {
+    const spec = GENERATED_SURFACE_SPECS[kind] ?? GENERATED_SURFACE_SPECS.concrete;
+    const map = makeDataTexture(three, tile);
+    const { normalData, roughnessData } = generateDetailNormalAndRoughness(tile, SIZE, SIZE, spec);
+    const normalMap = makeLinearDataTexture(three, normalData);
+    const roughnessMap = makeLinearDataTexture(three, roughnessData);
+    textures.push(map, normalMap, roughnessMap);
+    return { map, normalMap, roughnessMap, spec };
+  };
+
+  const asphalt = buildPbr(drawAsphaltTile(), 'asphalt');
+  const marble = buildPbr(drawMarbleTile(), 'marble');
+  const concrete = buildPbr(drawConcreteTile(), 'concrete');
+  const vaultSteel = buildPbr(drawVaultSteelTile(), 'vault_steel');
+  const hazard = buildPbr(drawHazardTile(), 'hazard');
+  const wood = buildPbr(drawWoodTile(), 'wood');
+  const crate = buildPbr(drawTacticalCrateTile(), 'crate');
+  const container = buildPbr(drawContainerTile(), 'container');
   const siteATex = makeDataTexture(three, drawSiteDecalTile('A'));
   const siteBTex = makeDataTexture(three, drawSiteDecalTile('B'));
+  textures.push(siteATex, siteBTex);
 
-  const textures: THREE.Texture[] = [
-    asphaltTex,
-    marbleTex,
-    concreteTex,
-    vaultSteelTex,
-    hazardTex,
-    woodTex,
-    crateTex,
-    containerTex,
-    siteATex,
-    siteBTex,
-  ];
-
-  const materials: Record<MaterialKind, THREE.Material> = {
+  const materials: Record<MaterialKind, THREE.MeshStandardMaterial> = {
     asphalt: new three.MeshStandardMaterial({
-      map: asphaltTex,
-      roughness: 0.88,
+      map: asphalt.map,
+      normalMap: asphalt.normalMap,
+      normalScale: new three.Vector2(asphalt.spec.normalScale, asphalt.spec.normalScale),
+      roughnessMap: asphalt.roughnessMap,
+      roughness: 1.0,
       metalness: 0.05,
       side: three.DoubleSide,
       name: 'mat_asphalt',
     }),
     marble: new three.MeshStandardMaterial({
-      map: marbleTex,
-      roughness: 0.16, // High gloss polished marble!
+      map: marble.map,
+      normalMap: marble.normalMap,
+      normalScale: new three.Vector2(marble.spec.normalScale, marble.spec.normalScale),
+      roughnessMap: marble.roughnessMap,
+      roughness: 1.0, // Driven by roughnessMap (0.16 on tiles, matte in grout lines)
       metalness: 0.06,
       side: three.DoubleSide,
       name: 'mat_marble',
     }),
     concrete: new three.MeshStandardMaterial({
-      map: concreteTex,
-      roughness: 0.75,
+      map: concrete.map,
+      normalMap: concrete.normalMap,
+      normalScale: new three.Vector2(concrete.spec.normalScale, concrete.spec.normalScale),
+      roughnessMap: concrete.roughnessMap,
+      roughness: 1.0,
       metalness: 0.08,
       side: three.DoubleSide,
       name: 'mat_concrete',
     }),
     vault_steel: new three.MeshStandardMaterial({
-      map: vaultSteelTex,
-      roughness: 0.32,
-      metalness: 0.88, // Highly metallic brushed steel!
+      map: vaultSteel.map,
+      normalMap: vaultSteel.normalMap,
+      normalScale: new three.Vector2(vaultSteel.spec.normalScale, vaultSteel.spec.normalScale),
+      roughnessMap: vaultSteel.roughnessMap,
+      roughness: 1.0,
+      metalness: 0.88,
       side: three.DoubleSide,
       name: 'mat_vault_steel',
     }),
     hazard: new three.MeshStandardMaterial({
-      map: hazardTex,
-      roughness: 0.45,
+      map: hazard.map,
+      normalMap: hazard.normalMap,
+      normalScale: new three.Vector2(hazard.spec.normalScale, hazard.spec.normalScale),
+      roughnessMap: hazard.roughnessMap,
+      roughness: 1.0,
       metalness: 0.12,
       side: three.DoubleSide,
       name: 'mat_hazard',
     }),
     wood: new three.MeshStandardMaterial({
-      map: woodTex,
-      roughness: 0.32,
+      map: wood.map,
+      normalMap: wood.normalMap,
+      normalScale: new three.Vector2(wood.spec.normalScale, wood.spec.normalScale),
+      roughnessMap: wood.roughnessMap,
+      roughness: 1.0,
       metalness: 0.04,
       side: three.DoubleSide,
       name: 'mat_wood',
     }),
     crate: new three.MeshStandardMaterial({
-      map: crateTex,
-      roughness: 0.65,
+      map: crate.map,
+      normalMap: crate.normalMap,
+      normalScale: new three.Vector2(crate.spec.normalScale, crate.spec.normalScale),
+      roughnessMap: crate.roughnessMap,
+      roughness: 1.0,
       metalness: 0.2,
       side: three.DoubleSide,
       name: 'mat_crate',
     }),
     container: new three.MeshStandardMaterial({
-      map: containerTex,
-      roughness: 0.58,
+      map: container.map,
+      normalMap: container.normalMap,
+      normalScale: new three.Vector2(container.spec.normalScale, container.spec.normalScale),
+      roughnessMap: container.roughnessMap,
+      roughness: 1.0,
       metalness: 0.45,
       side: three.DoubleSide,
       name: 'mat_container',
@@ -991,3 +1168,4 @@ export function createPBRMaterialLibrary(three: typeof THREE): PBRMaterialLibrar
     },
   };
 }
+

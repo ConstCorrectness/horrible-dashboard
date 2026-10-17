@@ -24,10 +24,12 @@ pub const TEXTURE_SIZE: u32 = 256;
 pub const GENERATED_LAYERS: u32 = 18;
 /// Surfaces backed by photographed CC0 maps (`apps/web/public/maps/textures/`).
 pub const PHOTO_COUNT: u32 = 9;
-/// Every layer of the array: 18 generated, 9 photo albedos, 9 photo details. The
-/// photo layers are appended so no existing layer index (the shader hardcodes a
-/// few) moves.
-pub const LAYER_COUNT: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
+/// Base layer index for the 18 procedural normal + micro-roughness detail layers.
+pub const GENERATED_DETAIL_BASE: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
+/// Every layer of the array: 18 generated albedos, 9 photo albedos, 9 photo details,
+/// and 18 generated normal+roughness detail layers. Appended so no existing layer
+/// index moves.
+pub const LAYER_COUNT: u32 = GENERATED_LAYERS * 2 + PHOTO_COUNT * 2;
 
 /// Fast deterministic pseudo-random hash.
 fn hash(x: f32, y: f32, seed: f32) -> f32 {
@@ -1011,32 +1013,122 @@ impl MaterialKind {
 /// carry their own colour, and the tile's job is the joints and grain, not a
 /// second opinion about the hue. Glass (8) and the site decals (10, 11) are
 /// blended by their own colour and alpha instead, so they stay as drawn.
+/// Synthesizes a packed tangent-space normal + micro-roughness detail layer from a
+/// procedural tile's luminance using a wrap-around 3x3 Sobel operator, encoded into
+/// sRGB channels identically to `photo_layers` (`R = nx`, `G = ny`, `B = roughness`).
+pub fn generate_detail_normal_roughness_tile(
+    albedo_data: &[u8],
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    base_roughness: f32,
+    roughness_contrast: f32,
+    invert_roughness: bool,
+) -> Vec<u8> {
+    let w = width as usize;
+    let h = height as usize;
+    let mut luma = vec![0.0f32; w * h];
+    for i in 0..(w * h) {
+        let r = albedo_data[i * 4] as f32;
+        let g = albedo_data[i * 4 + 1] as f32;
+        let b = albedo_data[i * 4 + 2] as f32;
+        luma[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+    }
+
+    let sample = |x: isize, y: isize| -> f32 {
+        let wx = ((x % w as isize) + w as isize) as usize % w;
+        let wy = ((y % h as isize) + h as isize) as usize % h;
+        luma[wy * w + wx]
+    };
+
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let ix = x as isize;
+            let iy = y as isize;
+            let tl = sample(ix - 1, iy - 1);
+            let tc = sample(ix, iy - 1);
+            let tr = sample(ix + 1, iy - 1);
+            let ml = sample(ix - 1, iy);
+            let mc = sample(ix, iy);
+            let mr = sample(ix + 1, iy);
+            let bl = sample(ix - 1, iy + 1);
+            let bc = sample(ix, iy + 1);
+            let br = sample(ix + 1, iy + 1);
+
+            let dx = (tr + 2.0 * mr + br - (tl + 2.0 * ml + bl)) * normal_strength;
+            let dy = (bl + 2.0 * bc + br - (tl + 2.0 * tc + tr)) * normal_strength;
+            let inv_len = 1.0 / (dx * dx + dy * dy + 1.0).sqrt();
+            let mut nx = -dx * inv_len;
+            let mut ny = -dy * inv_len;
+            let len_xy = (nx * nx + ny * ny).sqrt();
+            if len_xy > 0.98 {
+                let k = 0.98 / len_xy;
+                nx *= k;
+                ny *= k;
+            }
+
+            let delta = if invert_roughness {
+                0.5 - mc
+            } else {
+                mc - 0.5
+            };
+            let rough = (base_roughness + delta * roughness_contrast).clamp(0.04, 1.0);
+
+            let idx = (y * w + x) * 4;
+            out[idx] = (linear_to_srgb(nx * 0.5 + 0.5) * 255.0 + 0.5) as u8;
+            out[idx + 1] = (linear_to_srgb(ny * 0.5 + 0.5) * 255.0 + 0.5) as u8;
+            out[idx + 2] = (linear_to_srgb(rough) * 255.0 + 0.5) as u8;
+            out[idx + 3] = 255;
+        }
+    }
+    out
+}
+
 pub fn texture_layers(size: u32) -> Vec<Vec<u8>> {
     let mean = detail_mean();
-    let detail = |tile: Vec<u8>| normalize_detail_tile(&tile, mean);
-    vec![
-        detail(draw_asphalt_tile(size, size)),
-        detail(draw_marble_tile(size, size)),
-        detail(draw_concrete_tile(size, size)),
-        detail(draw_vault_steel_tile(size, size)),
-        detail(draw_hazard_tile(size, size)),
-        detail(draw_wood_tile(size, size)),
-        detail(draw_tactical_crate_tile(size, size)),
-        detail(draw_container_tile(size, size)),
-        draw_glass_tile(size, size),
-        detail(draw_gold_tile(size, size)),
-        draw_site_decal_tile('A', size, size),
-        draw_site_decal_tile('B', size, size),
-        detail(draw_masonry_tile(size, size)),
-        detail(draw_plaster_tile(size, size)),
-        detail(draw_cobblestone_tile(size, size)),
-        detail(draw_roof_tile_tile(size, size)),
-        detail(draw_carpet_tile(size, size)),
-        detail(draw_brick_tile(size, size)),
-    ]
-    .into_iter()
-    .chain(photo_layers(size))
-    .collect()
+    let detail = |tile: &[u8]| normalize_detail_tile(tile, mean);
+
+    // Raw procedural tiles alongside their normal/roughness generation parameters:
+    // (raw_tile, is_normalised_albedo, normal_strength, base_roughness, roughness_contrast, invert_roughness)
+    let raw_specs: Vec<(Vec<u8>, bool, f32, f32, f32, bool)> = vec![
+        (draw_asphalt_tile(size, size), true, 3.2, 0.88, 0.22, true),
+        (draw_marble_tile(size, size), true, 1.8, 0.16, 0.35, true),
+        (draw_concrete_tile(size, size), true, 2.8, 0.75, 0.25, true),
+        (draw_vault_steel_tile(size, size), true, 2.4, 0.32, 0.20, true),
+        (draw_hazard_tile(size, size), true, 1.6, 0.45, 0.18, true),
+        (draw_wood_tile(size, size), true, 2.5, 0.32, 0.22, true),
+        (draw_tactical_crate_tile(size, size), true, 3.0, 0.65, 0.25, true),
+        (draw_container_tile(size, size), true, 3.8, 0.58, 0.28, true),
+        (draw_glass_tile(size, size), false, 0.4, 0.06, 0.04, false),
+        (draw_gold_tile(size, size), true, 1.8, 0.20, 0.14, true),
+        (draw_site_decal_tile('A', size, size), false, 0.5, 0.70, 0.10, false),
+        (draw_site_decal_tile('B', size, size), false, 0.5, 0.70, 0.10, false),
+        (draw_masonry_tile(size, size), true, 3.4, 0.85, 0.26, true),
+        (draw_plaster_tile(size, size), true, 2.0, 0.90, 0.18, true),
+        (draw_cobblestone_tile(size, size), true, 4.0, 0.80, 0.30, true),
+        (draw_roof_tile_tile(size, size), true, 3.6, 0.70, 0.24, true),
+        (draw_carpet_tile(size, size), true, 2.6, 0.95, 0.12, true),
+        (draw_brick_tile(size, size), true, 3.5, 0.85, 0.25, false),
+    ];
+
+    let albedos: Vec<Vec<u8>> = raw_specs
+        .iter()
+        .map(|(raw, norm, _, _, _, _)| if *norm { detail(raw) } else { raw.clone() })
+        .collect();
+
+    let gen_details: Vec<Vec<u8>> = raw_specs
+        .iter()
+        .map(|(raw, _, strength, base_r, contrast, inv)| {
+            generate_detail_normal_roughness_tile(raw, size, size, *strength, *base_r, *contrast, *inv)
+        })
+        .collect();
+
+    albedos
+        .into_iter()
+        .chain(photo_layers(size))
+        .chain(gen_details)
+        .collect()
 }
 
 /// One photographed surface's three maps, embedded: the client has no asset
@@ -1594,8 +1686,29 @@ mod tests {
                 }
             }
         }
-        // They are real relief, not flat fallbacks.
         assert!(moved > 1000, "only {moved} texels have any slope");
+    }
+
+    #[test]
+    fn generated_details_decode_to_unit_normals_and_roughness() {
+        let layers = texture_layers(64);
+        let first = GENERATED_DETAIL_BASE as usize;
+        let mut moved = 0;
+        for i in first..first + GENERATED_LAYERS as usize {
+            let layer = &layers[i];
+            for p in layer.chunks(4) {
+                let nx = srgb_to_linear(p[0] as f32 / 255.0) * 2.0 - 1.0;
+                let ny = srgb_to_linear(p[1] as f32 / 255.0) * 2.0 - 1.0;
+                let rough = srgb_to_linear(p[2] as f32 / 255.0);
+                assert!(nx * nx + ny * ny < 1.05, "layer {i}: ({nx}, {ny})");
+                assert!((0.0..=1.0).contains(&rough), "layer {i} roughness {rough}");
+                assert_eq!(p[3], 255);
+                if nx.abs() > 0.05 || ny.abs() > 0.05 {
+                    moved += 1;
+                }
+            }
+        }
+        assert!(moved > 1000, "only {moved} generated texels have any slope");
     }
 
     #[test]

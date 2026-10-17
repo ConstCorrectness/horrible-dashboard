@@ -80,6 +80,9 @@ pub struct GrenadeController {
     equipped: Option<usize>,
     /// True for exactly the frame after a throw left the hand.
     threw: bool,
+    /// True while the mouse button is held down with the grenade pin pulled.
+    pin_pulled: bool,
+    pull_lob: bool,
 }
 
 impl GrenadeController {
@@ -150,6 +153,16 @@ impl GrenadeController {
         self.equipped.is_some()
     }
 
+    /// Whether the equipped grenade's pin is currently pulled and held.
+    pub fn pin_pulled(&self) -> bool {
+        self.pin_pulled
+    }
+
+    /// Whether the currently held pin-pull is an underhand lob (`true`) or overhand (`false`).
+    pub fn pull_lob(&self) -> bool {
+        self.pull_lob
+    }
+
     /// Take a grenade in hand: ready it *and* put the weapon away.
     ///
     /// What the number keys now do. Empty slots still equip — `select`'s
@@ -157,6 +170,10 @@ impl GrenadeController {
     /// nothing.
     pub fn equip(&mut self, slot: usize) {
         if slot < self.specs.len() {
+            if self.slot != slot {
+                self.pin_pulled = false;
+                self.pull_lob = false;
+            }
             self.slot = slot;
             self.equipped = Some(slot);
         }
@@ -169,6 +186,29 @@ impl GrenadeController {
         // on the next one.
         self.want_throw = false;
         self.want_lob = false;
+        self.pin_pulled = false;
+        self.pull_lob = false;
+    }
+
+    /// Pull the grenade pin and hold it ready until `release_pin()` is called.
+    pub fn pull_pin(&mut self, lob: bool) -> bool {
+        if self.equipped.is_none() || self.count_of(self.slot) <= 0 {
+            return false;
+        }
+        self.pin_pulled = true;
+        self.pull_lob = lob;
+        true
+    }
+
+    /// Release the held grenade, queueing the throw for the current frame.
+    pub fn release_pin(&mut self) {
+        if !self.pin_pulled {
+            return;
+        }
+        self.want_throw = true;
+        self.want_lob = self.pull_lob;
+        self.pin_pulled = false;
+        self.pull_lob = false;
     }
 
     /// Whether a throw left the hand on the frame just resolved.
@@ -180,6 +220,8 @@ impl GrenadeController {
 
     /// A throw key went down this frame. Edge, not level — see the module docs.
     pub fn press(&mut self, lob: bool) {
+        self.pin_pulled = false;
+        self.pull_lob = false;
         self.want_throw = true;
         self.want_lob = lob;
     }
@@ -205,6 +247,8 @@ impl GrenadeController {
         // from.
         if you.is_some_and(|y| !y.alive) {
             self.equipped = None;
+            self.pin_pulled = false;
+            self.pull_lob = false;
         }
 
         let wanted = std::mem::take(&mut self.want_throw);
@@ -263,6 +307,8 @@ impl GrenadeController {
     pub fn reset(&mut self) {
         self.equipped = None;
         self.threw = false;
+        self.pin_pulled = false;
+        self.pull_lob = false;
         self.counts.clear();
         for spec in &self.specs {
             self.counts.insert(spec.id.clone(), spec.carried);

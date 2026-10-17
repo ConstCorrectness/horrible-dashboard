@@ -46,6 +46,22 @@ function gameAssetsOnly(): Plugin {
       for (const name of copied) {
         copyFileSync(resolve(SHARED_PUBLIC, name), resolve(outDir, name));
       }
+      // Copy photographed PBR map textures (maps/textures/*.webp) and game audio (sounds/hassault/*.wav)
+      for (const [subDir, ext] of [
+        ['maps/textures', '.webp'],
+        ['sounds/hassault', '.wav'],
+      ] as const) {
+        const srcSub = resolve(SHARED_PUBLIC, subDir);
+        if (existsSync(srcSub)) {
+          const dstSub = resolve(outDir, subDir);
+          mkdirSync(dstSub, { recursive: true });
+          for (const file of readdirSync(srcSub)) {
+            if (file.endsWith(ext)) {
+              copyFileSync(resolve(srcSub, file), resolve(dstSub, file));
+            }
+          }
+        }
+      }
       // A build with no models renders every map as its procedural fallback and
       // every weapon as nothing — and nothing about that fails. Fail here instead.
       if (!copied.some((name) => name.startsWith('hassault-'))) {

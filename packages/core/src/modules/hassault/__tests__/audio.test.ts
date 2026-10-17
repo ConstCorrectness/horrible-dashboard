@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WeaponSpec } from '../api';
-import { weaponVoice } from '../audio';
+import { WAV_SOUNDS, footstepKindForMap, weaponVoice } from '../audio';
 
 function weapon(overrides: Partial<WeaponSpec>): WeaponSpec {
   return {
@@ -72,5 +72,35 @@ describe('weaponVoice', () => {
     const unknown = weaponVoice(undefined);
     expect(unknown.gain).toBeGreaterThan(0);
     expect(unknown.decay).toBeGreaterThan(0);
+  });
+
+  it('maps footsteps, reloads, and callouts to .wav assets and resolves map surfaces', () => {
+    expect(WAV_SOUNDS).toHaveLength(26);
+    expect(WAV_SOUNDS).toContain('step_concrete_1');
+    expect(WAV_SOUNDS).toContain('reload_magout');
+    expect(WAV_SOUNDS).toContain('callout_fire_in_the_hole');
+    expect(footstepKindForMap('hd_dust2', 0, 0, 1)).toBe('step_sand');
+    expect(footstepKindForMap('hd_dust2', 0, 0, 6)).toBe('step_wood');
+    expect(footstepKindForMap('hd_bank', 20, 30, 1)).toBe('step_tile');
+    expect(footstepKindForMap('hd_bank', 45, 52, 1)).toBe('step_metal');
+    expect(footstepKindForMap('hd_nuke', 0, 0, 10)).toBe('step_metal');
+    expect(footstepKindForMap('hd_nuke', 0, 0, 0)).toBe('step_concrete');
+  });
+
+  it('throttles rapid-fire footsteps, reloads, and callouts so .wav buffers do not loop multiple times per second', async () => {
+    const { GameAudio } = await import('../audio');
+    const audio = new GameAudio();
+    const lastPlayed = (audio as unknown as { lastPlayedAt: Map<string, number> }).lastPlayedAt;
+    const cooldownFor = (
+      audio as unknown as { cooldownForKind: (k: string) => [string, number] | null }
+    ).cooldownForKind.bind(audio);
+
+    expect(cooldownFor('step')).toEqual(['heard_step', 220]);
+    expect(cooldownFor('step_concrete')).toEqual(['own_step', 260]);
+    expect(cooldownFor('land')).toEqual(['land', 280]);
+    expect(cooldownFor('reload_magout')).toEqual(['reload_magout', 350]);
+    expect(cooldownFor('callout_reloading')).toEqual(['callout', 900]);
+    expect(cooldownFor('ping_spotted')).toEqual(['callout', 900]);
+    expect(lastPlayed).toBeInstanceOf(Map);
   });
 });

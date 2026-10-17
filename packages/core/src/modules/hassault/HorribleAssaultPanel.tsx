@@ -35,7 +35,7 @@ import {
   type SessionInfo,
   type WeaponSpec,
 } from './api';
-import { GameAudio } from './audio';
+import { footstepKindForMap, GameAudio } from './audio';
 import { FlashLayer } from './flash-layer';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
@@ -277,7 +277,7 @@ const NO_KICK: Vec3 = { x: 0, y: 0, z: 0 };
  * how others hear them, which is inaudible — whereas a drift in anything the server
  * judges would not be.
  */
-const OWN_STRIDE = 4.2;
+const OWN_STRIDE = 7.2;
 
 /** How long a heard noise stays on the direction ring. */
 const NOISE_TTL_MS = 900;
@@ -932,7 +932,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
   const effectsRef = useRef<EffectsPool | null>(null);
-  const wasReloadingRef = useRef(false);
   const lastHeldWeaponRef = useRef<string>('');
 
   // Tactical Ping & Callouts
@@ -1803,6 +1802,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const dropPool = new DropPool(THREE, scene);
       let lastBombBeepTime = 0;
       let lastHeartbeatTime = 0;
+      let lastBombState: string | undefined;
       let placedForRoom = '';
       // Whether we were in water last frame, so *entering* can be told from
       // *being in*: only the crossing makes a sound.
@@ -2011,7 +2011,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
           };
-          const wasOnGround = player.onGround;
+          let wasOnGround = player.onGround;
+          let prevX = player.x;
+          let prevY = player.y;
 
           if (online && session && shots) {
             // Correct against the newest snapshot *before* predicting this
@@ -2027,6 +2029,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 correction.ack,
               );
               session.pendingCorrection = null;
+              wasOnGround = player.onGround;
+              prevX = player.x;
+              prevY = player.y;
             }
             // Recoil is a local move on the camera, exactly like the mouse: the
             // server reads whatever angles the resulting command carries.
@@ -2054,6 +2059,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // the server refused puts the number back on the HUD rather than
             // leaving it one short until the next respawn.
             const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
+            if (thrown?.throw && audioRef.current) {
+              const nadeId = nadesRef.current?.catalogue[thrown.nade]?.id;
+              audioRef.current.callout(
+                nadeId === 'flash'
+                  ? 'flashbang'
+                  : nadeId === 'smoke'
+                    ? 'smoke_out'
+                    : 'fire_in_the_hole',
+              );
+            }
             const trade = tradeFor(pendingBuyRef.current, session.state.you?.mode);
             pendingBuyRef.current = -1;
             // Held rather than edge-triggered, unlike `thrown` above: the
@@ -2109,7 +2124,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // dropped. Draining it matters anyway: without it the press stays
             // queued and the grenade comes out on the frame you deploy into a
             // real match.
-            nadesRef.current?.frame(now, self);
+            const offlineThrown = nadesRef.current?.frame(now, self);
+            if (offlineThrown?.throw && audioRef.current) {
+              const nadeId = nadesRef.current?.catalogue[offlineThrown.nade]?.id;
+              audioRef.current.callout(
+                nadeId === 'flash'
+                  ? 'flashbang'
+                  : nadeId === 'smoke'
+                    ? 'smoke_out'
+                    : 'fire_in_the_hole',
+              );
+            }
             if (intent.reload) range?.requestReload();
             if (intent.weapon >= 0) range?.select(intent.weapon);
             fired = intent.fire;
@@ -2233,17 +2258,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               player.x <= 36.5;
             // In ventilation duct, even crouch movement scrapes/echoes on sheet metal
             const audibleMove = isVent ? true : player.crouch <= 0.5;
-            if (player.onGround && audibleMove) {
-              strideRef.current += Math.hypot(player.velX, player.velY) * dt;
+            const stepDist = Math.hypot(player.x - prevX, player.y - prevY);
+            if (player.onGround && audibleMove && moving && stepDist > 0.001) {
+              strideRef.current += stepDist;
               if (strideRef.current >= OWN_STRIDE) {
                 strideRef.current = 0;
-                audio.own(isVent ? 'step_duct' : 'step', isVent ? 0.6 : 0.45);
+                const activeMap = world3dRef.current?.info.name ?? world.info.name ?? '';
+                const stepKind = footstepKindForMap(activeMap, player.x, player.y, player.z, isVent);
+                audio.own(stepKind, isVent ? 0.65 : 0.52);
               }
-            } else {
+            } else if (!player.onGround || !moving) {
               strideRef.current = 0;
             }
             if (wasOnGround && !player.onGround && player.velZ > 0) {
-              audio.own(isVent ? 'step_duct' : 'jump', isVent ? 0.6 : 0.5);
+              audio.own(isVent ? 'step_metal' : 'jump', isVent ? 0.6 : 0.5);
             }
             // Breaking the surface, in either direction. Synthesised locally like
             // every other sound we make: the server does not send our own noises
@@ -2262,29 +2290,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
             }
             if (fired) audio.own('shot', 0.55, shotsRef.current?.weapon);
-
-            const isReloading = online
-              ? (session?.state.you?.reloading ?? false)
-              : localReloadingRef.current;
-            if (isReloading && !wasReloadingRef.current) {
-              wasReloadingRef.current = true;
-              audio.own('reload_magout', 0.65);
-              const rTime = (shotsRef.current?.weapon?.reloadTime ?? 1.8) * 1000;
-              setTimeout(
-                () => {
-                  if (wasReloadingRef.current) audio.own('reload_magin', 0.7);
-                },
-                Math.round(rTime * 0.45),
-              );
-              setTimeout(
-                () => {
-                  if (wasReloadingRef.current) audio.own('reload_bolt', 0.75);
-                },
-                Math.round(rTime * 0.8),
-              );
-            } else if (!isReloading && wasReloadingRef.current) {
-              wasReloadingRef.current = false;
-            }
           }
         }
 
@@ -2351,16 +2356,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                   TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
                   own,
                 );
-                // One mark per pellet that stopped on a surface — for other
-                // players' shots only. Your own hole lands dead on the crosshair
-                // and reads as a mark on the screen, not the wall. `faces` is
-                // optional on the wire — a fabric peer may be running an older
-                // backend — and an absent list means "no marks", never "mark
-                // everything": `-1` is refused by `mark` itself.
+                // One mark per pellet that stopped on a surface. Both your own
+                // and other players' shots leave durable 3D decals on the wall.
                 for (let i = 0; i < fx.ends.length; i++) {
                   const face = fx.faces?.[i] ?? -1;
                   const mat = surfaceMaterial(world, fx.ends[i], face);
-                  if (!own) decals.mark(fx.ends[i], face, mat);
+                  decals.mark(fx.ends[i], face, mat, 'bullet');
                   if (face >= 0 && face < FACE_NORMALS.length) {
                     effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
                     const dx = fx.ends[i][0] - player.x;
@@ -2371,6 +2372,30 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                   // CS2 bullet smoke channel: punch a sightline through any
                   // smoke the round penetrated.
                   nadePool.punchSmoke(fx.origin, fx.ends[i]);
+                }
+              } else {
+                // Knife attacks leave a scratch (slash) or puncture (heavy stab) on surfaces
+                for (let i = 0; i < fx.ends.length; i++) {
+                  const face = fx.faces?.[i] ?? -1;
+                  if (face >= 0 && face < FACE_NORMALS.length) {
+                    const mat = surfaceMaterial(world, fx.ends[i], face);
+                    const isStab = Boolean(fx.alt);
+                    const slashAngle =
+                      Math.PI * 0.25 +
+                      Math.sin(fx.ends[i][0] * 17.1 + fx.ends[i][1] * 31.3) * 0.35;
+                    decals.mark(
+                      fx.ends[i],
+                      face,
+                      mat,
+                      isStab ? 'knife_stab' : 'knife_slash',
+                      slashAngle,
+                    );
+                    effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
+                    const dx = fx.ends[i][0] - player.x;
+                    const dy = fx.ends[i][1] - player.y;
+                    const bearing = Math.atan2(dx, dy);
+                    audioRef.current?.surfaceImpact(mat, bearing, player.yaw);
+                  }
                 }
               }
               // Flash and kick the shooter's own avatar. Our body is not drawn
@@ -2435,6 +2460,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
           const bomb = session.state.modeState?.bomb;
           if (bomb?.state === 'planted' && typeof bomb.fuseIn === 'number') {
+            if (lastBombState !== 'planted') {
+              lastBombState = 'planted';
+              audioRef.current?.callout('bomb_planted', undefined, 0, 0.9);
+            }
             const fuse = bomb.fuseIn;
             const beepInterval = fuse > 20 ? 1.0 : fuse > 10 ? 0.5 : fuse > 5 ? 0.25 : 0.125;
             if (now - lastBombBeepTime >= beepInterval * 1000) {
@@ -2457,6 +2486,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               }
             }
           } else {
+            if (bomb?.state === 'defused' && lastBombState === 'planted') {
+              audioRef.current?.callout('bomb_defused', undefined, 0, 0.95);
+            }
+            lastBombState = bomb?.state;
             lastBombBeepTime = 0;
             lastHeartbeatTime = 0;
           }
@@ -2550,7 +2583,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           if (holdingNade !== nadeHeldRef.current) {
             nadeHeldRef.current = holdingNade;
             shots?.setBlocked(holdingNade);
-            if (holdingNade) viewmodel.holster();
           }
           // Pull the pin, wind up, release. Played on the frame the grenade
           // actually left — `justThrew` rather than the key press, so a throw
@@ -2585,11 +2617,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               throwVelocity(
                 player.yaw,
                 player.pitch,
-                // The right button is the lob, and the preview has to show the
-                // one the button under your finger would throw — but nothing is
-                // held down while aiming, so the arc shows the full throw and
-                // the lob is read off it as "much shorter than that".
-                false,
+                nades?.pullLob ?? false,
                 [player.velX ?? 0, player.velY ?? 0, player.velZ ?? 0],
                 throwPhysics,
               ),
@@ -2600,13 +2628,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             arcLine.hide();
           }
           if (shots) (window as any).__SHOTS = shots;
-          const heldWeapon = shots?.weapon?.id ?? '';
+          const baseWeapon = shots?.weapon?.id ?? '';
+          const heldWeapon = holdingNade
+            ? `nade_${nades?.selectedSpec?.id ?? 'he'}`
+            : baseWeapon;
           if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
             if (lastHeldWeaponRef.current !== '') {
               // Weapon switch deploy audio cues matching CS 1.6
               if (heldWeapon === 'knife') {
                 audioRef.current?.own('knife_slash', 0.7);
-              } else if (heldWeapon === 'pistol') {
+              } else if (heldWeapon === 'pistol' || heldWeapon.startsWith('nade_')) {
                 audioRef.current?.own('reload_magin', 0.65);
               } else {
                 audioRef.current?.own('reload_bolt', 0.7);
@@ -2638,13 +2669,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               ? Math.max(0, Math.min(1, 1 - reloadLeft / effectiveReloadTime))
               : null;
 
-          // Tactical & Dry Reload multi-stage synthesized audio cues
+          // Tactical & Dry Reload multi-stage audio cues
           if (isReloading) {
             if (!reloadStageRef.current.wasReloading) {
               reloadStageRef.current.wasReloading = true;
               reloadStageRef.current.magInFired = false;
               reloadStageRef.current.boltFired = false;
-              audioRef.current?.own('reload_magout', 0.65);
+              audioRef.current?.own('reload_magout', 0.68);
+              audioRef.current?.callout('reloading', undefined, 0, 0.68);
             }
             if (reloadProgress !== null) {
               if (reloadProgress >= 0.44 && !reloadStageRef.current.magInFired) {
@@ -2665,15 +2697,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
-            reloading: isReloading,
-            reloadingEmpty: isReloadingEmpty,
-            reloadProgress,
+            reloading: !holdingNade && isReloading,
+            reloadingEmpty: !holdingNade && isReloadingEmpty,
+            reloadProgress: holdingNade ? null : reloadProgress,
             yaw: player.yaw,
             pitch: player.pitch,
             strafe,
             visible: alive,
             sinceLanded: Math.max(0, player.t - player.landedAt),
-            ads: scopedRef.current > 0 ? 1 : 0,
+            ads: holdingNade ? 0 : scopedRef.current > 0 ? 1 : 0,
+            pinPulled: holdingNade && (nades?.pinPulled ?? false),
+            throwLob: holdingNade && (nades?.pullLob ?? false),
           });
         } else {
           // Before you deploy the camera flies the map rather than standing in
@@ -3158,7 +3192,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         e.preventDefault();
         const power = e.button === 0 ? 1.0 : e.button === 2 ? 0.42 : 0.72;
         const lob = e.button !== 0;
-        nadesRef.current.press(lob, power);
+        if (nadesRef.current.pullPin(lob, power)) {
+          audioRef.current?.own('reload_magout', 0.55);
+        }
         return;
       }
       // Right is the scope for firearms, and heavy stab for the knife!
@@ -3176,6 +3212,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       shotsRef.current?.press();
     };
     const onMouseUp = (e: MouseEvent) => {
+      if (
+        (e.button === 0 || e.button === 1 || e.button === 2) &&
+        nadesRef.current?.pinPulled
+      ) {
+        nadesRef.current.releasePin();
+      }
       if (e.button === 0) shotsRef.current?.release();
       if (e.button === 2 && shotsRef.current?.isKnife) shotsRef.current?.releaseAlt();
     };
@@ -3192,6 +3234,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         });
         return;
       }
+      nadesRef.current?.holster();
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {

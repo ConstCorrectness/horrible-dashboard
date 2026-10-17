@@ -49,7 +49,7 @@ use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, 
 use hassault_native::chat::{ChatChannel, ChatState};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
-use hassault_native::decals::DecalPool;
+use hassault_native::decals::{DecalPool, MarkKind, MARK_COLOR};
 use hassault_native::editor::{self, EditRequest, Editor, Selection};
 use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::{build_world_mesh, MeshData};
@@ -74,7 +74,7 @@ use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
-use hassault_native::trace::kick_vector;
+use hassault_native::trace::{kick_vector, FACE_NONE, FACE_NORMALS};
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
@@ -952,7 +952,7 @@ impl App {
                     arc::throw_velocity(
                         yaw,
                         pitch,
-                        false,
+                        self.utility.pull_lob(),
                         [state.vel_x, state.vel_y, state.vel_z],
                         physics,
                     ),
@@ -964,10 +964,11 @@ impl App {
         };
         if holding_nade != self.nade_held {
             self.nade_held = holding_nade;
-            if holding_nade {
-                self.viewmodel.holster();
-            }
         }
+        self.viewmodel.set_pin_pulled(
+            holding_nade && self.utility.pin_pulled(),
+            self.utility.pull_lob(),
+        );
         // Alive unless the server says otherwise. **Not** gated on the pointer
         // being captured: releasing it here is not a menu, it is a mouse you can
         // move — the world is still drawn behind it, so a world with no weapon
@@ -975,11 +976,15 @@ impl App {
         // client draws its weapon on `alive` alone for the same reason.
         let alive = self.you.as_ref().map(|y| y.alive).unwrap_or(true);
         let frame = viewmodel::Frame {
-            ads: if self.scoped > 0 { 1.0 } else { 0.0 },
+            ads: if holding_nade || self.scoped <= 0 {
+                0.0
+            } else {
+                1.0
+            },
             speed: self.ground_speed(),
             sprint: self.keys.sprint,
             on_ground: self.prediction.state.on_ground,
-            reloading: self.you.as_ref().is_some_and(|y| y.reloading),
+            reloading: !holding_nade && self.you.as_ref().is_some_and(|y| y.reloading),
             yaw: self.camera.yaw.to_radians(),
             pitch: self.camera.pitch.to_radians(),
             visible: self.joined && alive,
@@ -1097,42 +1102,8 @@ impl App {
     }
 
     /// Determine acoustic surface material tag for footsteps and landings.
-    fn surface_footstep_kind(&self, _x: f32, _y: f32, z: f32) -> &'static str {
-        match self.map_name.as_str() {
-            "hd_bank" => {
-                if z >= 3.8 {
-                    "step_metal" // Mezzanine catwalk & executive balcony
-                } else {
-                    "step_marble" // Grand banking floor
-                }
-            }
-            "hd_facility" => {
-                if z >= 4.0 {
-                    "step_metal" // High catwalk bridge
-                } else {
-                    "step_tile" // Containment lab floor
-                }
-            }
-            "hd_junkflea" => {
-                if z >= 3.5 {
-                    "step_metal" // Catwalk bridge & container roofs
-                } else if z < -0.5 {
-                    "step_dirt" // Subterranean trenches
-                } else {
-                    "step_gravel" // Scrap yard gravel
-                }
-            }
-            "hd_assault" => {
-                if z >= 8.8 {
-                    "step_duct" // Rooftop ventilation crawlway duct
-                } else if z >= 4.0 {
-                    "step_metal" // Elevated industrial gantry
-                } else {
-                    "step_asphalt" // Street asphalt
-                }
-            }
-            _ => "step",
-        }
+    fn surface_footstep_kind(&self, x: f32, y: f32, z: f32) -> &'static str {
+        hassault_native::audio::footstep_kind_for_map(&self.map_name, x, y, z)
     }
 
     /// Say goodbye and stop.
@@ -1863,12 +1834,13 @@ impl App {
                             faces,
                             hit,
                             weapon,
+                            alt,
                             ..
                         } = fx
                         {
                             let is_knife = *weapon == 0;
+                            let is_mine = id == &self.self_id;
                             if !is_knife {
-                                let is_mine = id == &self.self_id;
                                 let draw_beam = if is_mine {
                                     self.cvars
                                         .boolean("draw.tracers_firstperson")
@@ -1878,12 +1850,8 @@ impl App {
                                 };
                                 self.effects
                                     .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
-                                // No bullet holes from your own shots: they land
-                                // dead on the crosshair and read as a mark on the
-                                // screen rather than on the wall.
-                                if !is_mine {
-                                    self.decals.shot(ends, faces);
-                                }
+                                // All shots leave bullet holes on walls, including your own:
+                                self.decals.shot(ends, faces);
                                 // Brass and the smoke wisp are world effects at the
                                 // shot's origin, which for your own shot is your
                                 // *eye*: the casing and the puff landed on the
@@ -1928,6 +1896,23 @@ impl App {
                                         }
                                     }
                                 }
+                            } else {
+                                // Knife attack wall scratch or puncture
+                                self.effects
+                                    .shot_ex(*origin, ends, faces, is_mine, *hit, false);
+                                let is_stab = *alt;
+                                for (i, end) in ends.iter().enumerate() {
+                                    let face = faces.get(i).copied().unwrap_or(FACE_NONE);
+                                    if face != FACE_NONE && face >= 0 && (face as usize) < FACE_NORMALS.len() {
+                                        let slash_angle = 0.785 + (end[0] * 17.1 + end[1] * 31.3).sin() * 0.35;
+                                        let kind = if is_stab {
+                                            MarkKind::KnifeStab
+                                        } else {
+                                            MarkKind::KnifeSlash
+                                        };
+                                        self.decals.mark_kind(*end, face, kind, slash_angle, MARK_COLOR);
+                                    }
+                                }
                             }
                         }
                         if let Fx::Detonate {
@@ -1954,6 +1939,12 @@ impl App {
                         if let Fx::Pickup { item, .. } = fx {
                             self.items.take(*item);
                         }
+                        if matches!(fx, Fx::BombPlanted { .. }) {
+                            self.play_own("callout_bomb_planted", 0.72, false);
+                        }
+                        if matches!(fx, Fx::BombDefused) {
+                            self.play_own("callout_bomb_defused", 0.72, false);
+                        }
                         if let Fx::Shot { id, .. } = fx {
                             // Every shooter's upper body kicks, not just ours —
                             // the animation is how a shot reads from the outside.
@@ -1977,6 +1968,11 @@ impl App {
                                 self.play_own("shot", 0.55, true);
                             }
                         }
+                    }
+                    let was_reloading = self.you.as_ref().is_some_and(|y| y.reloading);
+                    if s.you.reloading && !was_reloading {
+                        self.play_own("reload", 0.55, false);
+                        self.play_own("callout_reloading", 0.65, false);
                     }
                     // What we can hear. The list is already only what is audible
                     // from where we are standing — resolved server-side, because
@@ -2301,6 +2297,16 @@ impl App {
         // a cooldown measured against it would never elapse.
         let intent = self.utility.frame(Self::clock_ms(), self.you.as_ref());
         if intent.throwing {
+            let nade_id = self
+                .utility
+                .selected_spec()
+                .map(|s| s.id.as_str())
+                .unwrap_or("he");
+            let callout_kind = match nade_id {
+                "flash" => "callout_flashbang",
+                "smoke" => "callout_smoke_out",
+                _ => "callout_fire_in_the_hole",
+            };
             cmd.r#throw = true;
             cmd.nade = intent.nade;
             cmd.lob = intent.lob;
@@ -2310,6 +2316,7 @@ impl App {
             // the thrower would be the one person in the room who could not hear
             // it leave their hand.
             self.play_own("throw", 0.4, false);
+            self.play_own(callout_kind, 0.68, false);
         }
         // **Radians on the wire, not degrees**, and from the same expression the
         // prediction uses — see `view_angles`. This line read `self.camera.yaw`
@@ -2556,7 +2563,8 @@ impl App {
             return;
         }
         if self.range.request_reload_started() {
-            self.play_own("reload", 0.5, false);
+            self.play_own("reload", 0.55, false);
+            self.play_own("callout_reloading", 0.65, false);
         }
     }
 
@@ -3691,10 +3699,22 @@ impl ApplicationHandler for App {
                 if self.focused && !self.editing() && self.utility.equipped() {
                     if state == ElementState::Pressed {
                         match button {
-                            MouseButton::Left => self.utility.press(false),
-                            MouseButton::Right => self.utility.press(true),
+                            MouseButton::Left => {
+                                if self.utility.pull_pin(false) {
+                                    self.play_own("reload_magout", 0.55, false);
+                                }
+                            }
+                            MouseButton::Right => {
+                                if self.utility.pull_pin(true) {
+                                    self.play_own("reload_magout", 0.55, false);
+                                }
+                            }
                             _ => {}
                         }
+                    } else if matches!(button, MouseButton::Left | MouseButton::Right)
+                        && self.utility.pin_pulled()
+                    {
+                        self.utility.release_pin();
                     }
                 } else if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {

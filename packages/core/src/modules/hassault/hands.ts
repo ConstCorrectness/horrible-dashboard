@@ -462,7 +462,8 @@ export function poseArm(
     const up1 = perpendicular(three, up, dir1);
     return frameRotation(three, dir0, up0, dir1, up1).multiply(rest.world.get(from)!.quat.clone());
   };
-  const upperWorld = segment('upper', 'fore', s, elbow);
+  const trueShoulder = V(shoulder);
+  const upperWorld = segment('upper', 'fore', trueShoulder, elbow);
   // Where the forearm actually ends: the wrist, or short of it when the target
   // was out of reach and the arm is straight.
   const wristReached = elbow
@@ -474,12 +475,16 @@ export function poseArm(
   // World (rig space) to local: each parent's posed world rotation is known,
   // because the chain is walked from the shoulder down.
   // `upper`'s parent is the armature node, which never moves, so its rest
-  // transform is its posed one.
+  // transform is its posed one. Keep `upper` anchored at the off-screen
+  // shoulder and place `fore` at `elbow` so the open shoulder cap never slides
+  // into the viewport on long-reach rifles.
   const upper = bones.get('upper')!;
   const parentInv = rest.armature.quat.clone().invert();
   upper.quaternion.copy(parentInv.clone().multiply(upperWorld));
-  upper.position.copy(s.clone().sub(rest.armature.pos).applyQuaternion(parentInv));
-  bones.get('fore')!.quaternion.copy(upperWorld.clone().invert().multiply(foreWorld));
+  upper.position.copy(trueShoulder.clone().sub(rest.armature.pos).applyQuaternion(parentInv));
+  const fore = bones.get('fore')!;
+  fore.quaternion.copy(upperWorld.clone().invert().multiply(foreWorld));
+  fore.position.copy(elbow.clone().sub(trueShoulder).applyQuaternion(upperWorld.clone().invert()));
   bones.get('hand')!.quaternion.copy(foreWorld.clone().invert().multiply(handWorld));
 
   // The fingers are children of the hand, so a curl is local and needs nothing
