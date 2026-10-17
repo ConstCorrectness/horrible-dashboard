@@ -533,6 +533,84 @@ describe('Knife archetypes and PBR skin materials', () => {
     expect(dropY).not.toBe(0);
     expect(seatY).not.toBe(0);
   });
+
+  describe('grenade pin-pull kinematics and LMB hold stability', () => {
+    it('ramps pinPull smoothly and remains rock-solid at 1.0 with no oscillation while holding LMB', () => {
+      const { vm } = stand();
+      vm.setWeapon('grenade_he');
+
+      // Update with pinPulled for 0.3s (long enough to reach 1.0)
+      for (let i = 0; i < 20; i++) {
+        vm.update(0.016, { ...frame, pinPulled: true });
+      }
+      expect(vm.pinPull).toBe(1.0);
+
+      // Now continue holding LMB for 60 consecutive frames:
+      // In the buggy implementation, 1.0 > 1.0 was false, causing pinPullT to drop to 0.83 every 4 frames!
+      // Here, verify it stays strictly at 1.0 with zero oscillation and support hand remains null (clean off-screen).
+      for (let i = 0; i < 60; i++) {
+        vm.update(0.016, { ...frame, pinPulled: true });
+        expect(vm.pinPull).toBe(1.0);
+        expect(vm.lastGripAnchors?.support).toBeNull();
+      }
+    });
+
+    it('animates left hand along smooth 3-phase trajectory and drops cleanly off-screen', () => {
+      const { vm } = stand();
+      vm.setWeapon('grenade_he');
+
+      // Phase 1: Reach (~0.25 progress)
+      // dt = 0.25 / 4.2 ~= 0.06s
+      vm.update(0.06, { ...frame, pinPulled: true });
+      expect(vm.pinPull).toBeGreaterThan(0.2);
+      expect(vm.pinPull).toBeLessThan(0.35);
+      const phase1Support = vm.lastGripAnchors?.support;
+      expect(phase1Support).not.toBeNull();
+      // Moving up towards pin ring (y increasing from -0.25 towards 0.28)
+      expect(phase1Support![1]).toBeGreaterThan(-0.25);
+
+      // Phase 2: Yank ring (~0.55 progress)
+      vm.update(0.075, { ...frame, pinPulled: true });
+      expect(vm.pinPull).toBeGreaterThan(0.5);
+      expect(vm.pinPull).toBeLessThan(0.65);
+      const phase2Support = vm.lastGripAnchors?.support;
+      expect(phase2Support).not.toBeNull();
+      // Yanks ring out to the left (x < -0.15, y ~ 0.24)
+      expect(phase2Support![0]).toBeLessThan(-0.10);
+      expect(phase2Support![1]).toBeGreaterThan(0.20);
+
+      // Phase 3: Retract / Drop (~0.85 progress)
+      vm.update(0.075, { ...frame, pinPulled: true });
+      expect(vm.pinPull).toBeGreaterThan(0.80);
+      expect(vm.pinPull).toBeLessThan(0.95);
+      const phase3Support = vm.lastGripAnchors?.support;
+      expect(phase3Support).not.toBeNull();
+      // Sweeps downward off-screen (y dropping sharply)
+      expect(phase3Support![1]).toBeLessThan(0.10);
+
+      // Phase 4: Fully pulled hold (t >= 0.98)
+      vm.update(0.05, { ...frame, pinPulled: true });
+      expect(vm.pinPull).toBe(1.0);
+      expect(vm.lastGripAnchors?.support).toBeNull();
+    });
+
+    it('resets pinPull and keeps support hand null on release without playing in reverse', () => {
+      const { vm } = stand();
+      vm.setWeapon('grenade_he');
+
+      // Pull pin to 1.0
+      for (let i = 0; i < 20; i++) {
+        vm.update(0.016, { ...frame, pinPulled: true });
+      }
+      expect(vm.pinPull).toBe(1.0);
+
+      // Release mouse button to throw (pinPulled: false)
+      vm.update(0.016, { ...frame, pinPulled: false });
+      expect(vm.pinPull).toBe(0.0);
+      // Support hand must NOT pop back into view!
+      expect(vm.lastGripAnchors?.support).toBeNull();
+    });
+  });
 });
 
 

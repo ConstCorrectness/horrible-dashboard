@@ -932,7 +932,7 @@ impl WeaponViewModel {
         if self.pin_pulled {
             self.pin_pull_t = (self.pin_pull_t + dt * 4.2).min(1.0);
         } else {
-            self.pin_pull_t = (self.pin_pull_t - dt * 10.0).max(0.0);
+            self.pin_pull_t = 0.0;
         }
         let pin_pull = ease(self.pin_pull_t);
         let cock_x = pin_pull * if self.throw_lob { -0.06 } else { 0.06 };
@@ -1061,18 +1061,39 @@ impl WeaponViewModel {
             viewclips::curl_over(g.support_curl, pose.support_fingers),
         );
         if g.support.is_none()
-            && self.pin_pull_t > 0.02
-            && self.pin_pull_t < 0.88
+            && self.pin_pulled
+            && self.pin_pull_t > 0.01
+            && self.pin_pull_t < 0.98
             && self.weapon != "nade_molotov"
             && self.weapon != "grenade_molotov"
         {
-            let pull_phase = (self.pin_pull_t / 0.85).min(1.0);
-            resolved_support = Some(Vec3::new(
-                -0.07 - pull_phase * 0.25,
-                0.28 - pull_phase * 0.08,
-                -0.09 + pull_phase * 0.06,
-            ));
-            resolved_support_curl = [1.15, 1.15, 1.3, 1.3, 1.3];
+            if self.pin_pull_t < 0.40 {
+                let reach = ease(self.pin_pull_t / 0.40);
+                resolved_support = Some(Vec3::new(
+                    -0.26 + reach * 0.19,
+                    -0.25 + reach * 0.53,
+                    -0.12 + reach * 0.03,
+                ));
+                let curl = 0.4 + reach * 0.8;
+                resolved_support_curl = [curl, curl, 0.4 + reach * 0.9, 0.4 + reach * 0.9, 0.4 + reach * 0.9];
+            } else if self.pin_pull_t < 0.72 {
+                let pull = ease((self.pin_pull_t - 0.40) / 0.32);
+                resolved_support = Some(Vec3::new(
+                    -0.07 - pull * 0.25,
+                    0.28 - pull * 0.08,
+                    -0.09 + pull * 0.05,
+                ));
+                resolved_support_curl = [1.2, 1.2, 1.3, 1.3, 1.3];
+            } else {
+                let drop = ease((self.pin_pull_t - 0.72) / 0.26);
+                resolved_support = Some(Vec3::new(
+                    -0.32 - drop * 0.13,
+                    0.20 - drop * 0.95,
+                    -0.04 + drop * 0.14,
+                ));
+                let curl = 1.2 - drop * 0.7;
+                resolved_support_curl = [curl, curl, curl, curl, curl];
+            }
         }
         GripAnchors {
             primary: g.primary + pose.primary.unwrap_or(Vec3::ZERO) + inspect.primary,
@@ -3414,5 +3435,36 @@ mod tests {
             vm.update(0.5, &frame(true));
             assert!(vm.inspecting());
         }
+    }
+
+    #[test]
+    fn grenade_pin_pull_is_stable_and_pegged_at_one_without_oscillation() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("grenade_he", None);
+        settle(&mut vm);
+
+        let f = frame(true);
+        vm.set_pin_pulled(true, false);
+
+        // Advance to 1.0
+        for _ in 0..20 {
+            vm.update(0.016, &f);
+        }
+        assert!((vm.pin_pull_t - 1.0).abs() < 1e-5);
+
+        // Advance 60 frames while holding LMB: must remain rock-solid at 1.0 and support must be None
+        for _ in 0..60 {
+            vm.update(0.016, &f);
+            assert_eq!(vm.pin_pull_t, 1.0);
+            let g = vm.posed_grips();
+            assert!(g.support.is_none());
+        }
+
+        // Release LMB (pin_pulled = false)
+        vm.set_pin_pulled(false, false);
+        vm.update(0.016, &f);
+        assert_eq!(vm.pin_pull_t, 0.0);
+        let g = vm.posed_grips();
+        assert!(g.support.is_none());
     }
 }

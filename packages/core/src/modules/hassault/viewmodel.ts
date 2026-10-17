@@ -588,6 +588,8 @@ export class WeaponViewModel {
   private sprintT = 0;
   /** Grenade pin-pull and cocked hold transition (0 = idle, 1 = pin pulled and cocked) */
   private pinPullT = 0;
+  /** Most recently evaluated grip anchors */
+  private lastAnchors: GripAnchors | null = null;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -1002,6 +1004,16 @@ export class WeaponViewModel {
     return this.inspectT !== null;
   }
 
+  /** The current grenade pin-pull progress (0 to 1). */
+  get pinPull(): number {
+    return this.pinPullT;
+  }
+
+  /** The most recently resolved grip anchors for testing hand positioning. */
+  get lastGripAnchors(): GripAnchors | null {
+    return this.lastAnchors;
+  }
+
   /**
    * Advance the animation.
    *
@@ -1291,11 +1303,11 @@ export class WeaponViewModel {
     const drawRoll = stow * 0.28;
 
     // Grenade pin-pull & cocked hold pose when holding mouse button
-    const targetPinPull = frame.pinPulled ? 1.0 : 0.0;
-    this.pinPullT =
-      targetPinPull > this.pinPullT
-        ? Math.min(1.0, this.pinPullT + dt * 4.2)
-        : Math.max(0.0, this.pinPullT - dt * 10.0);
+    if (frame.pinPulled) {
+      this.pinPullT = Math.min(1.0, this.pinPullT + dt * 4.2);
+    } else {
+      this.pinPullT = 0.0;
+    }
     const pinPull = ease(this.pinPullT);
     const isUnderhand = Boolean(frame.throwLob);
     const cockX = pinPull * (isUnderhand ? -0.06 : 0.06);
@@ -1308,10 +1320,19 @@ export class WeaponViewModel {
     if (this.built) {
       const pinRing = this.built.group.getObjectByName('pin_ring');
       if (pinRing) {
-        const pullAmount = Math.max(0, (this.pinPullT - 0.18) / 0.82);
-        pinRing.position.x = -0.07 - pullAmount * 0.28;
-        pinRing.position.y = 0.28 - pullAmount * 0.12;
-        pinRing.visible = pullAmount < 0.85;
+        const baseY = ((pinRing.userData as Record<string, number>).baseY ??= pinRing.position.y);
+        if (this.pinPullT < 0.40) {
+          pinRing.position.set(-0.07, baseY, -0.09);
+          pinRing.visible = true;
+        } else if (this.pinPullT < 0.72) {
+          const pullPhase = (this.pinPullT - 0.40) / 0.32;
+          pinRing.position.x = -0.07 - pullPhase * 0.25;
+          pinRing.position.y = baseY - pullPhase * 0.08;
+          pinRing.position.z = -0.09 + pullPhase * 0.05;
+          pinRing.visible = true;
+        } else {
+          pinRing.visible = false;
+        }
       }
     }
 
@@ -1439,21 +1460,46 @@ export class WeaponViewModel {
     let resolvedSupport =
       grips.support === null ? null : offsetBy(grips.support, supportOffset);
     let resolvedSupportCurl = supportCurl;
-    // When pulling the pin on a grenade, bring the left hand up to yank the pull-ring out
+    // When pulling the pin on a grenade, animate the left hand along a smooth 3-phase trajectory:
+    // 1. Reach: moves from off-screen lower-left up to the pin ring.
+    // 2. Yank: grips the ring and pulls it free to the left.
+    // 3. Retract: drops the ring and sweeps smoothly down off-screen.
+    // Once complete (t >= 0.98) or during indefinite LMB holding, the left hand stays cleanly off-screen.
     if (
       grips.support === null &&
-      this.pinPullT > 0.02 &&
-      this.pinPullT < 0.88 &&
+      frame.pinPulled &&
+      this.pinPullT > 0.01 &&
+      this.pinPullT < 0.98 &&
       this.weaponId !== 'nade_molotov' &&
       this.weaponId !== 'grenade_molotov'
     ) {
-      const pullPhase = Math.min(1, this.pinPullT / 0.85);
-      resolvedSupport = [
-        -0.07 - pullPhase * 0.25,
-        0.28 - pullPhase * 0.08,
-        -0.09 + pullPhase * 0.06,
-      ];
-      resolvedSupportCurl = [1.15, 1.15, 1.3, 1.3, 1.3];
+      if (this.pinPullT < 0.40) {
+        const reach = ease(this.pinPullT / 0.40);
+        resolvedSupport = [
+          -0.26 + reach * 0.19,
+          -0.25 + reach * 0.53,
+          -0.12 + reach * 0.03,
+        ];
+        const curl = 0.4 + reach * 0.8;
+        resolvedSupportCurl = [curl, curl, 0.4 + reach * 0.9, 0.4 + reach * 0.9, 0.4 + reach * 0.9];
+      } else if (this.pinPullT < 0.72) {
+        const pull = ease((this.pinPullT - 0.40) / 0.32);
+        resolvedSupport = [
+          -0.07 - pull * 0.25,
+          0.28 - pull * 0.08,
+          -0.09 + pull * 0.05,
+        ];
+        resolvedSupportCurl = [1.2, 1.2, 1.3, 1.3, 1.3];
+      } else {
+        const drop = ease((this.pinPullT - 0.72) / 0.26);
+        resolvedSupport = [
+          -0.32 - drop * 0.13,
+          0.20 - drop * 0.95,
+          -0.04 + drop * 0.14,
+        ];
+        const curl = 1.2 - drop * 0.7;
+        resolvedSupportCurl = [curl, curl, curl, curl, curl];
+      }
     }
     const anchors: GripAnchors = {
       ...grips,
@@ -1468,6 +1514,7 @@ export class WeaponViewModel {
       primaryCurl,
       supportCurl: resolvedSupportCurl,
     };
+    this.lastAnchors = anchors;
 
     // The weapon's model space into camera space, through the same two matrices
     // the flash's distance uses. Recomputed here rather than cached, because the
