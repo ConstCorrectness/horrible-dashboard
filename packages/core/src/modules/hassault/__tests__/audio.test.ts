@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WeaponSpec } from '../api';
-import { weaponVoice } from '../audio';
+import { WAV_SOUNDS, footstepKindForMap, weaponVoice } from '../audio';
 
 function weapon(overrides: Partial<WeaponSpec>): WeaponSpec {
   return {
@@ -72,5 +72,18 @@ describe('weaponVoice', () => {
     const unknown = weaponVoice(undefined);
     expect(unknown.gain).toBeGreaterThan(0);
     expect(unknown.decay).toBeGreaterThan(0);
+  });
+
+  it('maps footsteps, reloads, and callouts to .wav assets and resolves map surfaces', () => {
+    expect(WAV_SOUNDS).toHaveLength(26);
+    expect(WAV_SOUNDS).toContain('step_concrete_1');
+    expect(WAV_SOUNDS).toContain('reload_magout');
+    expect(WAV_SOUNDS).toContain('callout_fire_in_the_hole');
+    expect(footstepKindForMap('hd_dust2', 0, 0, 1)).toBe('step_sand');
+    expect(footstepKindForMap('hd_dust2', 0, 0, 6)).toBe('step_wood');
+    expect(footstepKindForMap('hd_bank', 20, 30, 1)).toBe('step_tile');
+    expect(footstepKindForMap('hd_bank', 45, 52, 1)).toBe('step_metal');
+    expect(footstepKindForMap('hd_nuke', 0, 0, 10)).toBe('step_metal');
+    expect(footstepKindForMap('hd_nuke', 0, 0, 0)).toBe('step_concrete');
   });
 });

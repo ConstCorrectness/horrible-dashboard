@@ -66,9 +66,110 @@ interface Timbre {
  * is the longest sound in the game. Being able to tell a reload from a footstep
  * behind you is a real piece of information, so they are deliberately far apart.
  */
+import { getCachedAssetUrl } from './models/assetCache';
+
+export type CalloutKind =
+  | 'spotted'
+  | 'watch'
+  | 'danger'
+  | 'utility'
+  | 'reloading'
+  | 'fire_in_the_hole'
+  | 'flashbang'
+  | 'smoke_out'
+  | 'bomb_planted'
+  | 'bomb_defused';
+
+/** All 26 deterministic .wav assets shipped in `/sounds/hassault/<name>.wav`. */
+export const WAV_SOUNDS = [
+  'step_concrete_1',
+  'step_concrete_2',
+  'step_metal_1',
+  'step_metal_2',
+  'step_wood_1',
+  'step_wood_2',
+  'step_sand_1',
+  'step_sand_2',
+  'step_tile_1',
+  'step_tile_2',
+  'land',
+  'jump',
+  'reload_magout',
+  'reload_magin',
+  'reload_bolt',
+  'reload',
+  'callout_spotted',
+  'callout_watch',
+  'callout_danger',
+  'callout_utility',
+  'callout_reloading',
+  'callout_fire_in_the_hole',
+  'callout_flashbang',
+  'callout_smoke_out',
+  'callout_bomb_planted',
+  'callout_bomb_defused',
+] as const;
+
+export type WavSoundName = (typeof WAV_SOUNDS)[number];
+
+/**
+ * Resolves the surface-appropriate footstep sound kind (`step_concrete`, `step_metal`,
+ * `step_wood`, `step_sand`, `step_tile`) from the active map and player coordinates.
+ */
+export function footstepKindForMap(
+  mapName: string,
+  x: number,
+  y: number,
+  z: number,
+  isVent = false,
+): 'step_concrete' | 'step_metal' | 'step_wood' | 'step_sand' | 'step_tile' {
+  if (isVent) return 'step_metal';
+  if (mapName === 'hd_dust2' || mapName === 'hd_mirage') {
+    // Elevated wooden palace / catwalk / crate platforms vs desert sand & sandstone
+    if (z > 3.5) return 'step_wood';
+    return 'step_sand';
+  }
+  if (mapName === 'hd_bank') {
+    // Bank interior lobby (x: 4..60, y: 18..60 or scaled 12..180, 54..180) has polished marble tile
+    const scale = x > 64 || y > 64 ? 3 : 1;
+    const mx = x / scale;
+    const my = y / scale;
+    const mz = z / scale;
+    if (mz >= 4.5 && (mx < 21 || mx > 43)) return 'step_wood'; // Executive mahogany mezzanine
+    if (mx >= 40 && my >= 48) return 'step_metal'; // Steel bank vault floor
+    if (my >= 18) return 'step_tile'; // Grand marble lobby
+    return 'step_concrete'; // Exterior asphalt street
+  }
+  if (mapName === 'hd_office') {
+    return 'step_tile';
+  }
+  if (mapName === 'hd_nuke') {
+    if (z < -2.0 || z > 9.0) return 'step_metal'; // Lower B reactor grate & upper catwalk
+    return 'step_concrete';
+  }
+  if (mapName === 'hd_facility' || mapName === 'hd_assault') {
+    if (z > 3.5) return 'step_metal'; // Elevated steel catwalks & overpass
+    return 'step_concrete';
+  }
+  if (mapName === 'hd_junkflea') {
+    if (z > 2.5) return 'step_metal'; // Shipping container roofs & steel bridges
+    return 'step_sand';
+  }
+  if (mapName === 'hd_inferno') {
+    if (z > 2.8) return 'step_wood'; // Apartments & balcony wood floors
+    return 'step_tile';
+  }
+  return 'step_concrete';
+}
+
 const TIMBRES: Record<string, Timbre> = {
   step: { frequency: 620, q: 1.1, decay: 0.1, gain: 0.5, body: 90 },
+  step_concrete: { frequency: 620, q: 1.1, decay: 0.1, gain: 0.5, body: 90 },
   step_duct: { frequency: 1850, q: 6.5, decay: 0.22, gain: 0.65, body: 320 },
+  step_metal: { frequency: 1850, q: 6.5, decay: 0.22, gain: 0.65, body: 320 },
+  step_wood: { frequency: 480, q: 2.2, decay: 0.13, gain: 0.55, body: 135 },
+  step_sand: { frequency: 2400, q: 1.2, decay: 0.14, gain: 0.48, body: 75 },
+  step_tile: { frequency: 2800, q: 2.4, decay: 0.11, gain: 0.52, body: 105 },
   land: { frequency: 380, q: 0.9, decay: 0.22, gain: 0.85, body: 62 },
   jump: { frequency: 900, q: 1.6, decay: 0.09, gain: 0.35, body: 0 },
   shot: { frequency: 1500, q: 0.7, decay: 0.3, gain: 1, body: 78 },
@@ -113,6 +214,16 @@ const TIMBRES: Record<string, Timbre> = {
   ping_watch: { frequency: 780, q: 3.2, decay: 0.16, gain: 0.7, body: 650 },
   ping_utility: { frequency: 540, q: 2.8, decay: 0.18, gain: 0.75, body: 440 },
   ping_danger: { frequency: 460, q: 2.5, decay: 0.28, gain: 0.9, body: 320 },
+  callout_spotted: { frequency: 1350, q: 4.5, decay: 0.25, gain: 0.9, body: 950 },
+  callout_watch: { frequency: 780, q: 3.2, decay: 0.22, gain: 0.85, body: 650 },
+  callout_danger: { frequency: 460, q: 2.5, decay: 0.28, gain: 0.9, body: 320 },
+  callout_utility: { frequency: 540, q: 2.8, decay: 0.22, gain: 0.85, body: 440 },
+  callout_reloading: { frequency: 1150, q: 3.0, decay: 0.22, gain: 0.75, body: 520 },
+  callout_fire_in_the_hole: { frequency: 1420, q: 3.5, decay: 0.26, gain: 0.9, body: 680 },
+  callout_flashbang: { frequency: 1650, q: 3.8, decay: 0.24, gain: 0.88, body: 740 },
+  callout_smoke_out: { frequency: 980, q: 2.6, decay: 0.22, gain: 0.85, body: 480 },
+  callout_bomb_planted: { frequency: 620, q: 3.0, decay: 0.35, gain: 0.95, body: 380 },
+  callout_bomb_defused: { frequency: 880, q: 3.2, decay: 0.35, gain: 0.95, body: 520 },
   // Competitive Bomb Defuse & Clutch Audio
   heartbeat: { frequency: 65, q: 1.5, decay: 0.18, gain: 0.85, body: 55 },
   defuse_wire_cut: { frequency: 1800, q: 4.5, decay: 0.08, gain: 0.9, body: 240 },
@@ -196,6 +307,10 @@ export class GameAudio {
   private dry: GainNode | null = null;
   private muffleAlpha = 0;
   private noise: AudioBuffer | null = null;
+  private wavBuffers = new Map<string, AudioBuffer>();
+  private wavPreloaded = false;
+  private stepToggle = 0;
+  private lastCalloutAt = 0;
   private voices = 0;
   private volume = 1;
 
@@ -267,6 +382,69 @@ export class GameAudio {
     };
   }
 
+  private preloadWavBuffers(ctx: AudioContext): void {
+    if (this.wavPreloaded || typeof fetch !== 'function' || typeof ctx.decodeAudioData !== 'function') {
+      return;
+    }
+    this.wavPreloaded = true;
+    for (const name of WAV_SOUNDS) {
+      void (async () => {
+        try {
+          const url = await getCachedAssetUrl(`/sounds/hassault/${name}.wav`);
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const ab = await res.arrayBuffer();
+          const decoded = await ctx.decodeAudioData(ab);
+          this.wavBuffers.set(name, decoded);
+        } catch {
+          // Headless / offline test environments silently fall back to procedural synthesis
+        }
+      })();
+    }
+  }
+
+  private resolveWavBuffer(kind: string): AudioBuffer | undefined {
+    const variant = (this.stepToggle = 1 - this.stepToggle) + 1;
+    switch (kind) {
+      case 'step':
+      case 'step_concrete':
+        return this.wavBuffers.get(`step_concrete_${variant}`);
+      case 'step_duct':
+      case 'step_metal':
+        return this.wavBuffers.get(`step_metal_${variant}`);
+      case 'step_wood':
+        return this.wavBuffers.get(`step_wood_${variant}`);
+      case 'step_sand':
+        return this.wavBuffers.get(`step_sand_${variant}`);
+      case 'step_tile':
+        return this.wavBuffers.get(`step_tile_${variant}`);
+      case 'land':
+      case 'jump':
+      case 'reload':
+      case 'reload_magout':
+      case 'reload_magin':
+      case 'reload_bolt':
+        return this.wavBuffers.get(kind);
+      case 'ping_spotted':
+      case 'callout_spotted':
+        return this.wavBuffers.get('callout_spotted');
+      case 'ping_watch':
+      case 'callout_watch':
+        return this.wavBuffers.get('callout_watch');
+      case 'ping_danger':
+      case 'callout_danger':
+        return this.wavBuffers.get('callout_danger');
+      case 'ping_utility':
+      case 'callout_utility':
+        return this.wavBuffers.get('callout_utility');
+      default:
+        if (kind.startsWith('callout_')) {
+          return this.wavBuffers.get(kind);
+        }
+        return undefined;
+    }
+  }
+
   /**
    * Ensure a context exists, resuming one the browser suspended.
    *
@@ -296,6 +474,7 @@ export class GameAudio {
       this.dry.gain.value = this.volume;
       this.dry.connect(handle.input);
       this.noise = noiseBuffer(this.ctx);
+      this.preloadWavBuffers(this.ctx);
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
     return this.ctx;
@@ -329,6 +508,48 @@ export class GameAudio {
     const now = ctx.currentTime;
     let gain = volume * timbre.gain;
     if (occluded) gain *= 0.65;
+
+    // Prefer high-definition .wav sample buffer when loaded for footsteps, reloads & callouts
+    const wavBuf = !voice ? this.resolveWavBuffer(kind) : undefined;
+    if (wavBuf) {
+      const source = ctx.createBufferSource();
+      source.buffer = wavBuf;
+      const isCallout = kind.startsWith('callout_') || kind.startsWith('ping_');
+      const jitter = isCallout ? 1.0 : 0.96 + Math.random() * 0.08;
+      const elevTilt = up > 0 ? 1.05 : up < 0 ? 0.95 : 1.0;
+      source.playbackRate.value = jitter * elevTilt;
+
+      let nodeOut: AudioNode = source;
+      let occludeFilter: BiquadFilterNode | null = null;
+      if (occluded) {
+        occludeFilter = ctx.createBiquadFilter();
+        occludeFilter.type = 'lowpass';
+        occludeFilter.frequency.value = 750;
+        source.connect(occludeFilter);
+        nodeOut = occludeFilter;
+      }
+
+      const gainNode = ctx.createGain();
+      gainNode.gain.setValueAtTime(gain, now);
+
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = Math.max(-1, Math.min(1, Math.sin(bearing - listenerYaw)));
+
+      nodeOut.connect(gainNode);
+      gainNode.connect(panner);
+      panner.connect(this.master);
+
+      this.voices += 1;
+      source.onended = () => {
+        this.voices = Math.max(0, this.voices - 1);
+        source.disconnect();
+        if (occludeFilter) occludeFilter.disconnect();
+        gainNode.disconnect();
+        panner.disconnect();
+      };
+      source.start(now);
+      return;
+    }
 
     const source = ctx.createBufferSource();
     source.buffer = this.noise;
@@ -436,10 +657,26 @@ export class GameAudio {
   }
 
   /**
+   * Play a tactical radio voice callout (`callout_<kind>.wav`).
+   * Rate-limited so overlapping events don't talk over each other.
+   */
+  callout(kind: CalloutKind, bearing?: number, listenerYaw = 0, volume = 0.85): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - this.lastCalloutAt < 350) return;
+    this.lastCalloutAt = now;
+    const calloutKind = `callout_${kind}`;
+    if (bearing !== undefined) {
+      this.play(calloutKind, volume, bearing, listenerYaw);
+    } else {
+      this.own(calloutKind, volume);
+    }
+  }
+
+  /**
    * Play a tactical ping / callout audio cue.
    *
-   * If bearing and listenerYaw are provided, the chirp is positioned stereophonically;
-   * otherwise it plays front-and-centre.
+   * If bearing and listenerYaw are provided, the radio voice callout is positioned
+   * stereophonically; otherwise it plays front-and-centre.
    */
   ping(kind: string, bearing?: number, listenerYaw = 0): void {
     const pingKind = `ping_${kind}`;

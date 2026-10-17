@@ -1097,42 +1097,8 @@ impl App {
     }
 
     /// Determine acoustic surface material tag for footsteps and landings.
-    fn surface_footstep_kind(&self, _x: f32, _y: f32, z: f32) -> &'static str {
-        match self.map_name.as_str() {
-            "hd_bank" => {
-                if z >= 3.8 {
-                    "step_metal" // Mezzanine catwalk & executive balcony
-                } else {
-                    "step_marble" // Grand banking floor
-                }
-            }
-            "hd_facility" => {
-                if z >= 4.0 {
-                    "step_metal" // High catwalk bridge
-                } else {
-                    "step_tile" // Containment lab floor
-                }
-            }
-            "hd_junkflea" => {
-                if z >= 3.5 {
-                    "step_metal" // Catwalk bridge & container roofs
-                } else if z < -0.5 {
-                    "step_dirt" // Subterranean trenches
-                } else {
-                    "step_gravel" // Scrap yard gravel
-                }
-            }
-            "hd_assault" => {
-                if z >= 8.8 {
-                    "step_duct" // Rooftop ventilation crawlway duct
-                } else if z >= 4.0 {
-                    "step_metal" // Elevated industrial gantry
-                } else {
-                    "step_asphalt" // Street asphalt
-                }
-            }
-            _ => "step",
-        }
+    fn surface_footstep_kind(&self, x: f32, y: f32, z: f32) -> &'static str {
+        hassault_native::audio::footstep_kind_for_map(&self.map_name, x, y, z)
     }
 
     /// Say goodbye and stop.
@@ -1954,6 +1920,12 @@ impl App {
                         if let Fx::Pickup { item, .. } = fx {
                             self.items.take(*item);
                         }
+                        if matches!(fx, Fx::BombPlanted { .. }) {
+                            self.play_own("callout_bomb_planted", 0.72, false);
+                        }
+                        if matches!(fx, Fx::BombDefused) {
+                            self.play_own("callout_bomb_defused", 0.72, false);
+                        }
                         if let Fx::Shot { id, .. } = fx {
                             // Every shooter's upper body kicks, not just ours —
                             // the animation is how a shot reads from the outside.
@@ -1977,6 +1949,11 @@ impl App {
                                 self.play_own("shot", 0.55, true);
                             }
                         }
+                    }
+                    let was_reloading = self.you.as_ref().is_some_and(|y| y.reloading);
+                    if s.you.reloading && !was_reloading {
+                        self.play_own("reload", 0.55, false);
+                        self.play_own("callout_reloading", 0.65, false);
                     }
                     // What we can hear. The list is already only what is audible
                     // from where we are standing — resolved server-side, because
@@ -2301,6 +2278,16 @@ impl App {
         // a cooldown measured against it would never elapse.
         let intent = self.utility.frame(Self::clock_ms(), self.you.as_ref());
         if intent.throwing {
+            let nade_id = self
+                .utility
+                .selected_spec()
+                .map(|s| s.id.as_str())
+                .unwrap_or("he");
+            let callout_kind = match nade_id {
+                "flash" => "callout_flashbang",
+                "smoke" => "callout_smoke_out",
+                _ => "callout_fire_in_the_hole",
+            };
             cmd.r#throw = true;
             cmd.nade = intent.nade;
             cmd.lob = intent.lob;
@@ -2310,6 +2297,7 @@ impl App {
             // the thrower would be the one person in the room who could not hear
             // it leave their hand.
             self.play_own("throw", 0.4, false);
+            self.play_own(callout_kind, 0.68, false);
         }
         // **Radians on the wire, not degrees**, and from the same expression the
         // prediction uses — see `view_angles`. This line read `self.camera.yaw`
@@ -2556,7 +2544,8 @@ impl App {
             return;
         }
         if self.range.request_reload_started() {
-            self.play_own("reload", 0.5, false);
+            self.play_own("reload", 0.55, false);
+            self.play_own("callout_reloading", 0.65, false);
         }
     }
 

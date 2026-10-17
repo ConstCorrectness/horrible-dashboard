@@ -349,6 +349,38 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 65.0,
             thump: 0.0,
         },
+        "step_wood" => Timbre {
+            frequency: 540.0,
+            q: 2.0,
+            decay: 0.13,
+            gain: 0.52,
+            body: 145.0,
+            thump: 0.0,
+        },
+        "reload_magout" => Timbre {
+            frequency: 1950.0,
+            q: 3.8,
+            decay: 0.12,
+            gain: 0.45,
+            body: 320.0,
+            thump: 0.0,
+        },
+        "reload_magin" => Timbre {
+            frequency: 1650.0,
+            q: 3.2,
+            decay: 0.14,
+            gain: 0.50,
+            body: 210.0,
+            thump: 0.0,
+        },
+        "reload_bolt" => Timbre {
+            frequency: 2650.0,
+            q: 4.0,
+            decay: 0.13,
+            gain: 0.52,
+            body: 380.0,
+            thump: 0.0,
+        },
         // Flashbang high-frequency acoustic tinnitus ringing
         "tinnitus" => Timbre {
             frequency: 4100.0,
@@ -369,6 +401,174 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 90.0,
             thump: 0.0,
         },
+    }
+}
+
+/// Sample rate of the embedded `.wav` sound effects (`tools/hassault_generate_sounds.py`).
+const WAV_SAMPLE_RATE: f32 = 24_000.0;
+
+macro_rules! include_wav {
+    ($name:literal) => {
+        (
+            $name,
+            include_bytes!(concat!(
+                "../../web/public/sounds/hassault/",
+                $name,
+                ".wav"
+            )) as &'static [u8],
+        )
+    };
+}
+
+const EMBEDDED_WAVS: [(&str, &[u8]); 26] = [
+    include_wav!("step_concrete_1"),
+    include_wav!("step_concrete_2"),
+    include_wav!("step_metal_1"),
+    include_wav!("step_metal_2"),
+    include_wav!("step_wood_1"),
+    include_wav!("step_wood_2"),
+    include_wav!("step_sand_1"),
+    include_wav!("step_sand_2"),
+    include_wav!("step_tile_1"),
+    include_wav!("step_tile_2"),
+    include_wav!("land"),
+    include_wav!("jump"),
+    include_wav!("reload_magout"),
+    include_wav!("reload_magin"),
+    include_wav!("reload_bolt"),
+    include_wav!("reload"),
+    include_wav!("callout_spotted"),
+    include_wav!("callout_watch"),
+    include_wav!("callout_danger"),
+    include_wav!("callout_utility"),
+    include_wav!("callout_reloading"),
+    include_wav!("callout_fire_in_the_hole"),
+    include_wav!("callout_flashbang"),
+    include_wav!("callout_smoke_out"),
+    include_wav!("callout_bomb_planted"),
+    include_wav!("callout_bomb_defused"),
+];
+
+fn decode_pcm16_wav(bytes: &[u8]) -> Vec<f32> {
+    if bytes.len() <= 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Vec::new();
+    }
+    bytes[44..]
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+        .collect()
+}
+
+fn wav_bank() -> &'static std::collections::HashMap<&'static str, Vec<f32>> {
+    static BANK: std::sync::OnceLock<std::collections::HashMap<&'static str, Vec<f32>>> =
+        std::sync::OnceLock::new();
+    BANK.get_or_init(|| {
+        EMBEDDED_WAVS
+            .iter()
+            .map(|&(name, bytes)| (name, decode_pcm16_wav(bytes)))
+            .collect()
+    })
+}
+
+static STEP_PARITY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Resolve a noise `kind` to its embedded `.wav` sample buffer, alternating `_1`/`_2`
+/// variants on footstep surfaces so consecutive strides never sound identical.
+pub fn wav_samples_for_kind(kind: &str) -> Option<&'static [f32]> {
+    let bank = wav_bank();
+    let alt = || -> usize {
+        STEP_PARITY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 1
+    };
+    let key: &str = match kind {
+        "step" | "step_concrete" | "step_asphalt" => {
+            if alt() == 0 {
+                "step_concrete_1"
+            } else {
+                "step_concrete_2"
+            }
+        }
+        "step_metal" | "step_duct" => {
+            if alt() == 0 {
+                "step_metal_1"
+            } else {
+                "step_metal_2"
+            }
+        }
+        "step_wood" => {
+            if alt() == 0 {
+                "step_wood_1"
+            } else {
+                "step_wood_2"
+            }
+        }
+        "step_sand" | "step_sandstone" | "step_gravel" | "step_dirt" => {
+            if alt() == 0 {
+                "step_sand_1"
+            } else {
+                "step_sand_2"
+            }
+        }
+        "step_tile" | "step_marble" => {
+            if alt() == 0 {
+                "step_tile_1"
+            } else {
+                "step_tile_2"
+            }
+        }
+        "ping_spotted" => "callout_spotted",
+        "ping_watch" => "callout_watch",
+        "ping_danger" => "callout_danger",
+        "ping_utility" => "callout_utility",
+        other => other,
+    };
+    bank.get(key).map(|v| v.as_slice()).filter(|s| !s.is_empty())
+}
+
+/// Map- and elevation-aware footstep surface selector matching `footstepKindForMap` in `audio.ts`.
+pub fn footstep_kind_for_map(map_name: &str, _x: f32, y: f32, z: f32) -> &'static str {
+    let m = map_name.to_ascii_lowercase();
+    if m.contains("dust2") || m.contains("mirage") {
+        if z > 4.5 {
+            "step_wood"
+        } else {
+            "step_sand"
+        }
+    } else if m.contains("bank") || m.contains("office") {
+        if z > 3.8 {
+            "step_metal"
+        } else {
+            "step_tile"
+        }
+    } else if m.contains("nuke") || m.contains("facility") || m.contains("warehouse") {
+        if z > 2.5 || z < -1.5 {
+            "step_metal"
+        } else {
+            "step_concrete"
+        }
+    } else if m.contains("junkflea") {
+        if z >= 3.5 {
+            "step_metal"
+        } else if z < -0.5 {
+            "step_sand"
+        } else {
+            "step_concrete"
+        }
+    } else if m.contains("assault") {
+        if z >= 8.8 {
+            "step_duct"
+        } else if z >= 4.0 {
+            "step_metal"
+        } else {
+            "step_concrete"
+        }
+    } else if m.contains("inferno") || m.contains("italy") {
+        if y > 80.0 && z > 2.0 {
+            "step_wood"
+        } else {
+            "step_concrete"
+        }
+    } else {
+        "step_concrete"
     }
 }
 
@@ -464,12 +664,26 @@ struct Voice {
     /// Mixed round the flashbang's muffle. Only the ring itself: a filter that
     /// muffled the tinnitus would muffle the one sound a flash adds.
     dry: bool,
+    /// Optional embedded `.wav` sample slice (24 kHz mono) for footsteps, reloads, and callouts.
+    wav_samples: Option<&'static [f32]>,
 }
 
 impl Voice {
     /// One sample, as `(left, right)`.
     fn sample(&mut self, dt: f32) -> (f32, f32) {
         self.t += dt;
+        if let Some(samples) = self.wav_samples {
+            let pos = self.t * WAV_SAMPLE_RATE;
+            let idx = pos as usize;
+            if idx >= samples.len() {
+                return (0.0, 0.0);
+            }
+            let frac = pos - idx as f32;
+            let s0 = samples[idx];
+            let s1 = samples.get(idx + 1).copied().unwrap_or(0.0);
+            let out = (s0 + (s1 - s0) * frac) * self.gain;
+            return (out * self.left, out * self.right);
+        }
         // A 4 ms linear attack into an exponential decay — the browser's
         // envelope, which is what stops every sound starting with a click.
         let env = if self.t < 0.004 {
@@ -531,7 +745,11 @@ impl Voice {
     }
 
     fn done(&self) -> bool {
-        self.t > self.timbre.decay + 0.05
+        if let Some(samples) = self.wav_samples {
+            (self.t * WAV_SAMPLE_RATE) as usize >= samples.len()
+        } else {
+            self.t > self.timbre.decay + 0.05
+        }
     }
 }
 
@@ -663,7 +881,7 @@ impl GameAudio {
             body: FLASH_RING_BODY,
             thump: 0.0,
         };
-        self.send(timbre, volume * self.volume, 0.0, true);
+        self.send(timbre, volume * self.volume, 0.0, true, None);
     }
 
     /// Play one noise.
@@ -684,6 +902,11 @@ impl GameAudio {
         if volume < MIN_GAIN {
             return;
         }
+        let wav = if voice.is_none() {
+            wav_samples_for_kind(kind)
+        } else {
+            None
+        };
         let mut timbre = voice.unwrap_or_else(|| self::timbre(kind));
         // Sounds from above and below are *tilted*, not positioned: stereo has no
         // elevation, and a filter tilt is the cue headphones actually convey.
@@ -704,16 +927,28 @@ impl GameAudio {
             timbre.q *= 1.12;
         }
 
-        self.send(timbre, volume, pan, false);
+        self.send(timbre, volume, pan, false, wav);
     }
 
-    fn send(&self, timbre: Timbre, volume: f32, pan: f32, dry: bool) {
+    fn send(
+        &self,
+        timbre: Timbre,
+        volume: f32,
+        pan: f32,
+        dry: bool,
+        wav_samples: Option<&'static [f32]>,
+    ) {
         if volume < MIN_GAIN {
             return;
         }
+        let gain = if wav_samples.is_some() {
+            (volume * timbre.gain * 1.15).min(1.0)
+        } else {
+            volume * timbre.gain
+        };
         let voice = Voice {
             timbre,
-            gain: volume * timbre.gain,
+            gain,
             // Constant power, like WebAudio's stereo panner: a sound panned hard
             // left must not be quieter than the same sound centred.
             left: ((1.0 - pan) * 0.5).sqrt(),
@@ -728,6 +963,7 @@ impl GameAudio {
             // person walking.
             rng: 0x2545_f491 ^ (volume.to_bits().rotate_left(7)) ^ timbre.frequency.to_bits(),
             dry,
+            wav_samples,
         };
         match self.tx.try_send(voice) {
             Ok(()) => {}
@@ -860,6 +1096,7 @@ mod tests {
             sub_phase: 0.0,
             rng: 12345,
             dry: false,
+            wav_samples: None,
         };
         let dt = 1.0 / 48_000.0;
         let mut peak_early: f32 = 0.0;
@@ -902,6 +1139,7 @@ mod tests {
             sub_phase: 0.0,
             rng: 99,
             dry: false,
+            wav_samples: None,
         };
         let dt = 1.0 / 8_000.0;
         for _ in 0..8_000 {
@@ -909,5 +1147,38 @@ mod tests {
             assert!(l.is_finite() && r.is_finite());
             assert!(l.abs() < 8.0, "{l}");
         }
+    }
+
+    #[test]
+    fn embedded_wav_buffers_decode_and_play_cleanly() {
+        assert_eq!(wav_bank().len(), 26);
+        for (name, samples) in wav_bank() {
+            assert!(!samples.is_empty(), "{name} should decode to non-empty PCM");
+            let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+            assert!(peak > 0.1 && peak <= 1.0, "{name} peak {peak}");
+        }
+        let samples = wav_samples_for_kind("callout_fire_in_the_hole").expect("callout_fire_in_the_hole");
+        let mut voice = Voice {
+            timbre: timbre("callout_fire_in_the_hole"),
+            gain: 0.8,
+            left: 0.707,
+            right: 0.707,
+            t: 0.0,
+            low: 0.0,
+            band: 0.0,
+            phase: 0.0,
+            sub_phase: 0.0,
+            rng: 1,
+            dry: false,
+            wav_samples: Some(samples),
+        };
+        let dt = 1.0 / 48_000.0;
+        let mut max_out = 0.0f32;
+        while !voice.done() {
+            let (l, r) = voice.sample(dt);
+            assert!(l.is_finite() && r.is_finite());
+            max_out = max_out.max(l.abs());
+        }
+        assert!(max_out > 0.05);
     }
 }

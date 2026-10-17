@@ -280,6 +280,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
                 shade_normal = normal;
                 roughness = d.b;
+            } else if (layer_idx < 18u && detail > 0.5) {
+                // Procedural generated surface detail layer (normal + micro-roughness at 36 + layer_idx)
+                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 36u));
+                let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
+                let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
+                normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
+                shade_normal = normal;
+                roughness = d.b;
             }
         }
 

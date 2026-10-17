@@ -6,6 +6,8 @@ import {
   drawHazardTile,
   drawSiteDecalTile,
   createPBRMaterialLibrary,
+  generateDetailNormalAndRoughness,
+  glbSurfacePbrMaps,
 } from '../textures3d';
 
 describe('textures3d procedural engine', () => {
@@ -40,10 +42,26 @@ describe('textures3d procedural engine', () => {
     expect(dataB.length).toBe(64 * 64 * 4);
   });
 
-  it('creates complete PBR material library and disposes cleanly', () => {
+  it('synthesizes wrap-around Sobel normal and micro-roughness maps for procedural tiles', () => {
+    const raw = drawMarbleTile(64, 64);
+    const { normalData, roughnessData } = generateDetailNormalAndRoughness(raw, 64, 64);
+    expect(normalData.length).toBe(64 * 64 * 4);
+    expect(roughnessData.length).toBe(64 * 64 * 4);
+
+    const pbr = glbSurfacePbrMaps(THREE, 'masonry', 0.45);
+    expect(pbr).not.toBeNull();
+    expect(pbr?.normalMap).toBeDefined();
+    expect(pbr?.roughnessMap).toBeDefined();
+    expect(pbr?.spec.normalScale).toBeGreaterThan(0);
+  });
+
+  it('creates complete PBR material library with normal & roughness maps and disposes cleanly', () => {
     const lib = createPBRMaterialLibrary(THREE);
     expect(lib.materials.asphalt).toBeDefined();
+    expect(lib.materials.asphalt.normalMap).toBeDefined();
+    expect(lib.materials.asphalt.roughnessMap).toBeDefined();
     expect(lib.materials.marble).toBeDefined();
+    expect(lib.materials.marble.normalMap).toBeDefined();
     expect(lib.materials.concrete).toBeDefined();
     expect(lib.materials.vault_steel).toBeDefined();
     expect(lib.materials.wood).toBeDefined();

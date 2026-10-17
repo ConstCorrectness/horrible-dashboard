@@ -35,7 +35,7 @@ import {
   type SessionInfo,
   type WeaponSpec,
 } from './api';
-import { GameAudio } from './audio';
+import { footstepKindForMap, GameAudio } from './audio';
 import { FlashLayer } from './flash-layer';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
@@ -2054,6 +2054,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // the server refused puts the number back on the HUD rather than
             // leaving it one short until the next respawn.
             const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
+            if (thrown && audioRef.current) {
+              audioRef.current.callout(
+                thrown.nade === 'flash'
+                  ? 'flashbang'
+                  : thrown.nade === 'smoke'
+                    ? 'smoke_out'
+                    : 'fire_in_the_hole',
+              );
+            }
             const trade = tradeFor(pendingBuyRef.current, session.state.you?.mode);
             pendingBuyRef.current = -1;
             // Held rather than edge-triggered, unlike `thrown` above: the
@@ -2109,7 +2118,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // dropped. Draining it matters anyway: without it the press stays
             // queued and the grenade comes out on the frame you deploy into a
             // real match.
-            nadesRef.current?.frame(now, self);
+            const offlineThrown = nadesRef.current?.frame(now, self);
+            if (offlineThrown && audioRef.current) {
+              audioRef.current.callout(
+                offlineThrown.nade === 'flash'
+                  ? 'flashbang'
+                  : offlineThrown.nade === 'smoke'
+                    ? 'smoke_out'
+                    : 'fire_in_the_hole',
+              );
+            }
             if (intent.reload) range?.requestReload();
             if (intent.weapon >= 0) range?.select(intent.weapon);
             fired = intent.fire;
@@ -2237,13 +2255,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               strideRef.current += Math.hypot(player.velX, player.velY) * dt;
               if (strideRef.current >= OWN_STRIDE) {
                 strideRef.current = 0;
-                audio.own(isVent ? 'step_duct' : 'step', isVent ? 0.6 : 0.45);
+                const activeMap = world3dRef.current?.info.name ?? world.info.name ?? '';
+                const stepKind = footstepKindForMap(activeMap, player.x, player.y, player.z, isVent);
+                audio.own(stepKind, isVent ? 0.65 : 0.52);
               }
             } else {
               strideRef.current = 0;
             }
             if (wasOnGround && !player.onGround && player.velZ > 0) {
-              audio.own(isVent ? 'step_duct' : 'jump', isVent ? 0.6 : 0.5);
+              audio.own(isVent ? 'step_metal' : 'jump', isVent ? 0.6 : 0.5);
             }
             // Breaking the surface, in either direction. Synthesised locally like
             // every other sound we make: the server does not send our own noises
@@ -2268,17 +2288,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               : localReloadingRef.current;
             if (isReloading && !wasReloadingRef.current) {
               wasReloadingRef.current = true;
-              audio.own('reload_magout', 0.65);
+              audio.own('reload_magout', 0.72);
+              audio.callout('reloading', undefined, 0, 0.68);
               const rTime = (shotsRef.current?.weapon?.reloadTime ?? 1.8) * 1000;
               setTimeout(
                 () => {
-                  if (wasReloadingRef.current) audio.own('reload_magin', 0.7);
+                  if (wasReloadingRef.current) audio.own('reload_magin', 0.78);
                 },
                 Math.round(rTime * 0.45),
               );
               setTimeout(
                 () => {
-                  if (wasReloadingRef.current) audio.own('reload_bolt', 0.75);
+                  if (wasReloadingRef.current) audio.own('reload_bolt', 0.82);
                 },
                 Math.round(rTime * 0.8),
               );
@@ -2435,6 +2456,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
           const bomb = session.state.modeState?.bomb;
           if (bomb?.state === 'planted' && typeof bomb.fuseIn === 'number') {
+            if (lastBombBeepTime === 0) {
+              audioRef.current?.callout('bomb_planted', undefined, 0, 0.9);
+            }
             const fuse = bomb.fuseIn;
             const beepInterval = fuse > 20 ? 1.0 : fuse > 10 ? 0.5 : fuse > 5 ? 0.25 : 0.125;
             if (now - lastBombBeepTime >= beepInterval * 1000) {
@@ -2457,6 +2481,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               }
             }
           } else {
+            if (bomb?.state === 'defused' && lastBombBeepTime > 0) {
+              audioRef.current?.callout('bomb_defused', undefined, 0, 0.95);
+            }
             lastBombBeepTime = 0;
             lastHeartbeatTime = 0;
           }
