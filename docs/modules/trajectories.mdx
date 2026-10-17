@@ -466,7 +466,7 @@ the same run dedupes on that id; the index keeps at most 200 per node and **refu
 past that rather than evicting the oldest, which nobody would notice. Only a connection
 that has published the signing node's profile can withdraw a digest.
 
-The **Commons** section lists digests on the connected index — everyone's, or yours with
+The **Shared** section's *Public* side lists digests on the connected index — everyone's, or yours with
 Withdraw — and says *not connected* rather than rendering an empty list that would read
 as nobody having published anything.
 
@@ -647,7 +647,7 @@ FROM traj_runs r JOIN agent_turns t ON t.turn_id = r.turn_id;
 
 ## Frontend
 
-One pane, `trajectories.hub` (`role: document`, singleton), nine sections:
+One pane, `trajectories.hub` (`role: document`, singleton), eight sections:
 
 | Section | Key | What it is |
 | --- | --- | --- |
@@ -657,12 +657,17 @@ One pane, `trajectories.hub` (`role: document`, singleton), nine sections:
 | **Agent** | `a` | The agent chat's turns from the inside: prompt by source, round-by-round diff, steps, sub-agents. See [Following the agent chat](#following-the-agent-chat) |
 | **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
 | **Harness** | `h` | The A/B comparison and the harness inspector |
-| **Friends** | `p` | Friends' shared datasets and runs; pull a finished one |
-| **Commons** | `c` | Digests published to the agent commons index; withdraw your own |
+| **Shared** | `s` | Runs from elsewhere. *Friends*: a friend's shared datasets and runs, pull a finished one. *Public*: digests on the agent commons index, withdraw your own |
 | **Connect** | `o` | Wire an OTLP exporter up: endpoint, ingest token, per-framework snippets, last-span indicator |
 
-Four sections rather than four panes, per the pane-consolidation rule: they are four
-views of one object. No `RENAMED_VIEWS` entry is needed — no view id was removed.
+Sections rather than panes, per the pane-consolidation rule: they are views of one
+object. No `RENAMED_VIEWS` entry is needed — no view id was removed.
+
+**Shared** was two tabs, **Friends** (`peers`) and **Commons** (`commons`), until
+they read as a second friends list and a second social network inside a trace
+viewer. Both are *trajectories that came from somewhere else*, so they are one
+section with a Friends/Public switch in its header (remembered per viewer). A saved
+layout still pointing at `peers` or `commons` falls back to Runs, the default.
 
 A run with an OTel trace (a received one, or a built-in turn while `otel.enabled`)
 shows a **Trace** view between the Timeline and the I/O lane: the span tree, indented

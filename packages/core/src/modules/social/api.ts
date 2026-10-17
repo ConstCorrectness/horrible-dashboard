@@ -6,6 +6,20 @@ import { apiDelete, apiGet, apiPost } from '../../api';
 
 export type FriendStatus = 'pending_out' | 'pending_in' | 'accepted' | 'blocked';
 
+/** What you can set yourself to. */
+export type Persona = 'online' | 'away' | 'busy' | 'invisible';
+/** What a friend sees. An invisible friend arrives as `offline`, indistinguishably. */
+export type SharedPersona = 'online' | 'away' | 'busy' | 'offline';
+
+/** What someone is doing. `kind: 'game'` puts them in the In-Game group. */
+export interface Activity {
+  kind: 'game' | 'app';
+  title: string;
+  detail: string | null;
+  /** Epoch seconds. */
+  since: number;
+}
+
 /** One machine belonging to a person. */
 export interface DeviceInfo {
   node_id: string;
@@ -27,6 +41,9 @@ export interface Friend {
   note: string | null;
   added_at: number;
   presence: 'online' | 'offline';
+  /** Their chosen persona; `offline` whenever `presence` is. */
+  persona: SharedPersona;
+  activity: Activity | null;
   devices: DeviceInfo[];
   /** Your own linked machines appear in the roster, flagged with this. */
   is_self: boolean;
@@ -70,6 +87,11 @@ export interface SelfProfile {
   display_name: string;
   person_public_key: string;
   holds_person_key: boolean;
+  /** Your *chosen* persona, `invisible` included. */
+  persona: Persona;
+  /** Nobody at the keyboard: friends see `away` while this is true. */
+  idle: boolean;
+  activity: Activity | null;
   devices: DeviceInfo[];
 }
 

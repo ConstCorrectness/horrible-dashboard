@@ -319,6 +319,20 @@ def build_friend(row: dict[str, Any], online_nodes: set[str]) -> Friend:
     hub's connection table, not about the database.
     """
     devices = [device_info(d, online_nodes) for d in list_devices(row["person_id"])]
+    # Their chosen persona, over the derived presence. An invisible friend reads as
+    # offline all the way down, devices included — a list of their machines with a
+    # green dot beside one would undo it.
+    from backend.modules.social import status as social_status
+
+    persona, activity = social_status.for_devices(
+        [d.node_id for d in devices if d.online]
+    )
+    if persona == "offline":
+        # A live machine's `last_seen` is "just now", which would say the same.
+        devices = [
+            d.model_copy(update={"online": False, "last_seen": None}) if d.online else d
+            for d in devices
+        ]
     return Friend(
         person_id=row["person_id"],
         display_name=row["display_name"],
@@ -327,7 +341,9 @@ def build_friend(row: dict[str, Any], online_nodes: set[str]) -> Friend:
         status=row["status"],
         note=row["note"],
         added_at=row["added_at"],
-        presence="online" if any(d.online for d in devices) else "offline",
+        presence="online" if persona != "offline" else "offline",
+        persona=persona,
+        activity=activity,
         devices=devices,
         is_self=bool(row["is_self"]),
         # `.get`, not `[...]`: these columns arrive by ALTER, and a row read through

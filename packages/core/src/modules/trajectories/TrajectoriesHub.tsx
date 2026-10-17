@@ -31,10 +31,9 @@ import { FollowSection } from './panels/FollowSection';
 import { HarnessSection } from './panels/HarnessSection';
 import { LineageSection } from './panels/LineageSection';
 import { LiveSection } from './panels/LiveSection';
-import { CommonsSection } from './panels/CommonsSection';
 import { ConnectSection } from './panels/ConnectSection';
-import { PeersSection } from './panels/PeersSection';
 import { RunsSection } from './panels/RunsSection';
+import { SharedSection } from './panels/SharedSection';
 import './trajectories.css';
 
 export function TrajectoriesHub() {
@@ -68,10 +67,8 @@ export function TrajectoriesHub() {
         <FollowSection />
       ) : section === 'live' ? (
         <LiveSection />
-      ) : section === 'peers' ? (
-        <PeersSection onPulled={() => setSection('runs')} />
-      ) : section === 'commons' ? (
-        <CommonsSection />
+      ) : section === 'shared' ? (
+        <SharedSection onPulled={() => setSection('runs')} />
       ) : section === 'connect' ? (
         <ConnectSection />
       ) : section === 'datasets' ? (

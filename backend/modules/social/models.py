@@ -22,6 +22,21 @@ FriendStatus = Literal["pending_out", "pending_in", "accepted", "blocked"]
 # devices has a live session on the fabric.
 PresenceState = Literal["online", "offline"]
 
+#: What you can set yourself to (see `status.py`).
+Persona = Literal["online", "away", "busy", "invisible"]
+#: What a friend can see. `invisible` is deliberately absent: it arrives as `offline`.
+SharedPersona = Literal["online", "away", "busy", "offline"]
+
+
+class Activity(BaseModel):
+    """What someone is doing right now. `kind == "game"` puts them in In-Game."""
+
+    kind: Literal["game", "app"] = "game"
+    title: str
+    detail: str | None = None
+    #: Epoch seconds, so a friend can show "for 12 minutes".
+    since: float
+
 
 class DeviceInfo(BaseModel):
     """One machine belonging to a person."""
@@ -47,6 +62,11 @@ class Friend(BaseModel):
     note: str | None = None
     added_at: float
     presence: PresenceState = "offline"
+    #: What they have set themselves to, as they chose to share it. `offline`
+    #: whenever `presence` is — an invisible friend is indistinguishable from one
+    #: whose machines are down, which is the point of invisible.
+    persona: SharedPersona = "offline"
+    activity: Activity | None = None
     devices: list[DeviceInfo] = Field(default_factory=list)
     # True when this person is *you* — your own linked machines show up in the
     # roster so "play against my other computer" needs no special case.
@@ -76,6 +96,12 @@ class SelfProfile(BaseModel):
     #: name a person has everywhere — the ladder, HorribleAssault, and the roster.
     #: None when signed out, which is why the friend code stays first-class.
     handle: str | None = None
+    #: Your *chosen* persona, `invisible` included — this is the one place it shows.
+    persona: Persona = "online"
+    #: True while the browser reports nobody at the keyboard; friends then see
+    #: `away` without the choice above being overwritten.
+    idle: bool = False
+    activity: Activity | None = None
     devices: list[DeviceInfo] = Field(default_factory=list)
 
 
@@ -129,6 +155,16 @@ class AddFriendResult(BaseModel):
 class RespondRequest(BaseModel):
     person_id: PersonId
     accept: bool
+
+
+class StatusRequest(BaseModel):
+    """Set any of these; omitted fields are left alone. `clear_activity` exists
+    because `activity: null` cannot be told apart from "not sent"."""
+
+    persona: Persona | None = None
+    activity: dict[str, Any] | None = None
+    clear_activity: bool = False
+    idle: bool | None = None
 
 
 class UpdateProfileRequest(BaseModel):

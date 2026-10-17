@@ -5,6 +5,7 @@
  * headless, and importing the shell's socket module would open a real WebSocket
  * at import time, which is exactly what breaks a node test run.
  */
+import { reportActivity } from './activity';
 import type { MatchInvite } from './api';
 import { clearInviteNotification } from './invite-notify';
 import { subscribeChannel, sendChannel } from '../../ws';
@@ -1070,6 +1071,9 @@ export class MatchSession {
     this.pendingShots = [];
     this.pendingNoise = [];
     this.pendingBlasts = [];
+    // Not every caller emits after a reset (`disconnect` does not), and a friend
+    // seeing "In-Game" for a match you closed is exactly the lie to avoid.
+    reportActivity(this.state);
   }
 
   /**
@@ -1089,6 +1093,7 @@ export class MatchSession {
   }
 
   private emit(): void {
+    reportActivity(this.state);
     this.onChange(this.snapshot());
   }
 }

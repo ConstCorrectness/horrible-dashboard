@@ -263,6 +263,12 @@
         ],
         "createdAt": "2026-10-11T23:51:42.129Z",
         "reason": "CLAUDE.local.md (project design rules) explicitly asks for faint grid overlays behind lists"
+      },
+      {
+        "rule": "design-system-radius",
+        "value": "4)",
+        "createdAt": "2026-10-17T18:46:35.486Z",
+        "reason": "DESIGN.md Don'ts: a pill is calc(var(--radius-sm) * 4); this is that token expression, not a literal"
       }
     ]
   }

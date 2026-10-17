@@ -1,4 +1,5 @@
 import { type ModuleManifest } from '../../registry';
+import { socialContextMenu } from './friend-actions';
 import { FriendsPanel } from './FriendsPanel';
 import { initSocial } from './ws';
 
@@ -15,6 +16,8 @@ export const socialModule: ModuleManifest = {
   id: 'social',
   title: 'Friends',
   category: 'people',
+  // Right-click on a friend, and the status picker under your own name.
+  contextMenu: socialContextMenu,
   // No settings: your display name is part of your *identity*, not configuration —
   // it is persisted with the person key and edited from the panel, so it can't drift
   // from what the certificates you hand out actually say.
@@ -30,4 +33,6 @@ export {
   respondViaChannel,
   removeViaChannel,
   blockViaChannel,
+  setPersona,
+  setActivity,
 } from './ws';

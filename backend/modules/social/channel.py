@@ -53,3 +53,13 @@ async def handle_social_message(conn: Any, msg: dict[str, Any]) -> None:
         asyncio.create_task(roster.remove(str(data.get("personId") or "")))
     elif event == "block":
         asyncio.create_task(roster.block(str(data.get("personId") or "")))
+    elif event == "status":
+        # Any subset of persona / activity / idle; see `roster.update_status`.
+        asyncio.create_task(
+            roster.update_status(
+                persona=data.get("persona"),
+                activity=data.get("activity"),
+                clear_activity=bool(data.get("clearActivity")),
+                idle=data.get("idle") if isinstance(data.get("idle"), bool) else None,
+            )
+        )

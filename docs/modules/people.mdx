@@ -145,16 +145,21 @@ The pane got the shape Steam settled on years ago, because it answers the two
 questions people actually have at a glance: **who is around**, and **is anything
 waiting for me**.
 
-- **Friends** — one row per person: face, name, level, what they're up to, an
-  unread badge, and a `⋯` menu (View profile / Message / their machines / Remove /
-  Block). Grouped **Online** then **Offline**, with offline dimmed rather than
-  hidden — the trick that makes the list scannable. A search box appears past three
-  friends. Adding a friend and renaming yourself moved into a
-  fold at the bottom: they are setup, not daily use.
+- **Friends** — you on top, with a status picker (Online / Away / Do Not Disturb
+  / Invisible); then a search box and an add-friend button; then the groups
+  **Friend Requests**, **In-Game**, **Online**, **Offline** and a folded **Sent
+  Requests**, each collapsible. A row is face, name, level, what they're doing
+  (and for how long), and an unread badge; offline is dimmed rather than hidden.
+  Right-click a row, or its `⋯`, for the app's context menu (Send message / View
+  profile / Machines / Remove / Block). See [Status and
+  activity](social.mdx#status-and-activity).
+- **Chat dock** — clicking a friend opens a chat docked beside the list, one tab
+  per open conversation. In a pane at least 560px wide the two sit side by side;
+  narrower, the chat takes the pane and a back arrow returns to the list.
 - **Messages** — a conversation list with unread badges beside a thread, keyed by
   person and persisted server-side. See [Messages](social.mdx#messages).
-- **Requests** — one inbox for friend requests *and* commons meet requests, which
-  used to be a click apart. See [Requests](social.mdx#requests-one-inbox).
+- **Requests** — commons meet requests from strangers, plus a pointer to any
+  friend requests waiting in Friends. See [Requests](social.mdx#requests).
 - **Profiles** — clicking a friend's name opens their
   [profile](games.mdx#profiles--the-part-other-people-can-see) inside the pane:
   banner, face, status, level, showcases and comment wall, with a Back button.
