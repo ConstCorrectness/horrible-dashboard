@@ -25,15 +25,16 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlsplit
 
-# Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
-DeltaSink = Callable[[str, str], Awaitable[None]]
-
 import httpx
 import litellm
 
 # One `chat` span per provider call, at the chokepoint every caller shares.
 from backend.modules.otel.tracing import traced_chat
 from backend.modules.telemetry.instrument import tee_stream
+
+# Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
+DeltaSink = Callable[[str, str], Awaitable[None]]
+
 
 
 @dataclass(frozen=True)
