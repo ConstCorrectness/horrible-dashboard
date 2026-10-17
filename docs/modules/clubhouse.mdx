@@ -582,6 +582,29 @@ offers a reaction that would 422. The backend is not started with `--reload` und
 desktop app, so a validator change reaches it only after a restart. Until then a text
 reaction answers 422 `emoji must not be empty` / `reaction must be an emoji`.
 
+The add box also has a **style picker** for "fancy text": Plain, Bold, Italic, Bold
+italic, Script, Bold script, Fraktur, Double struck, Sans bold, Monospace, Wide, Bubble
+and Badge. The wire carries plain strings only, so a style is a different set of
+characters, not formatting. `stylize` in
+[fancyText.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/fancyText.ts)
+swaps letters for Unicode lookalikes. Most come from the Mathematical Alphanumeric
+Symbols block; Wide uses fullwidth forms, Bubble uses circled letters, and Badge reuses
+`toBadgeLetters` (the blue regional-indicator letters). You type plain text, and the
+box shows a live preview and a code-point count against the 64 limit. **Send** sends it
+once; **Add** puts it on the bar. The last style picked is remembered in `localStorage`
+(`clubhouseCustomReactionStyle`).
+
+- **Holes.** The math block leaves reserved code points where a letter already existed
+  in Letterlike Symbols, such as italic `h` → `ℎ`, script `B` → `ℬ` and fraktur `C` →
+  `ℭ`. A hole left unfilled renders as a box on every platform. Each style lists its
+  holes, and a test fails if any style emits an unassigned (`\p{Cn}`) code point.
+- **No stacking.** `stylize` folds already-styled text back to ASCII first
+  (`unstylize`), so changing style re-spells the text instead of layering two styles.
+- **Length.** Each fancy letter is one code point but two UTF-16 units, so the input
+  has no `maxLength` (that counts units and would stop at about 32 letters). The
+  counter and the Add/Send buttons go by code points, the unit the backend counts.
+  Badge letters cost two code points each because of the zero-width-space fence.
+
 Incoming reactions are read by `parseRoomReaction` in
 [reactions.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/reactions.ts),
 which accepts an emoji under `react` / any `*reaction*` action, and an image URL under

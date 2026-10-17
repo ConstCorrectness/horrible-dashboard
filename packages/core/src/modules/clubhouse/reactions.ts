@@ -45,6 +45,9 @@ export function normalizeCustomReaction(raw: string): string | null {
 /** localStorage key for the reactions the user added to the bar. */
 export const CUSTOM_REACTIONS_KEY = 'clubhouseCustomReactions';
 
+/** localStorage key for the fancy-text style last picked in the add box. */
+export const CUSTOM_REACTION_STYLE_KEY = 'clubhouseCustomReactionStyle';
+
 /** The saved custom reactions, dropping anything malformed or duplicated. */
 export function parseCustomReactions(raw: string | null): string[] {
   let parsed: unknown;

@@ -50,7 +50,9 @@ import {
 } from './badgeLetters';
 import { ClubhouseName } from './ClubhouseName';
 import { MediaInsightsModal } from './MediaInsightsModal';
+import { FANCY_STYLES, stylize, type FancyStyle } from './fancyText';
 import {
+  CUSTOM_REACTION_STYLE_KEY,
   CUSTOM_REACTIONS_KEY,
   DEFAULT_REACTIONS,
   MAX_SENT_REACTION_LEN,
@@ -468,6 +470,28 @@ export function RoomsPanel() {
   });
   const [customReactionOpen, setCustomReactionOpen] = useState(false);
   const [customReactionDraft, setCustomReactionDraft] = useState('');
+  // The draft is typed plain and restyled on the way out, so changing style re-spells
+  // it rather than stacking. The last style used is remembered per browser.
+  const [customReactionStyle, setCustomReactionStyle] = useState<FancyStyle>(() => {
+    try {
+      const saved = localStorage.getItem(CUSTOM_REACTION_STYLE_KEY);
+      return FANCY_STYLES.some((s) => s.id === saved) ? (saved as FancyStyle) : 'plain';
+    } catch {
+      return 'plain';
+    }
+  });
+  const styledReactionDraft = stylize(customReactionDraft, customReactionStyle);
+  const styledReactionLen = [...styledReactionDraft.trim()].length;
+  const styledReaction = normalizeCustomReaction(styledReactionDraft);
+
+  const pickCustomReactionStyle = (style: FancyStyle) => {
+    setCustomReactionStyle(style);
+    try {
+      localStorage.setItem(CUSTOM_REACTION_STYLE_KEY, style);
+    } catch {
+      /* storage unavailable — the style lasts for this session */
+    }
+  };
 
   const saveCustomReactions = (next: string[]) => {
     setCustomReactions(next);
@@ -479,7 +503,7 @@ export function RoomsPanel() {
   };
 
   const addCustomReaction = () => {
-    const r = normalizeCustomReaction(customReactionDraft);
+    const r = styledReaction;
     if (!r) {
       toastsStore.add(
         'warning',
@@ -2516,7 +2540,7 @@ export function RoomsPanel() {
           .ch-reaction-text {
             font-size: 0.8rem;
             font-weight: 600;
-            color: var(--text, #e2e8f0);
+            color: var(--text);
             max-width: 10rem;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -2545,11 +2569,55 @@ export function RoomsPanel() {
             padding: 0.5rem;
           }
 
-          .ch-custom-reaction-row,
+          .ch-custom-reaction-inputs,
           .ch-gif-search-row {
             display: flex;
             align-items: center;
             gap: 0.5rem;
+          }
+
+          .ch-custom-reaction-row {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+          }
+
+          .ch-custom-reaction-style {
+            flex: 0 0 auto;
+            max-width: 9.5rem;
+            background: var(--bg-inset);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-strong);
+            padding: 0 0.6rem;
+            font-size: 0.85rem;
+          }
+
+          .ch-custom-reaction-preview {
+            display: flex;
+            align-items: baseline;
+            gap: 0.75rem;
+            padding: 0.35rem 0.6rem;
+            border-left: 2px solid var(--accent);
+            background: rgba(0, 0, 0, 0.2);
+          }
+
+          .ch-custom-reaction-preview-text {
+            flex: 1;
+            min-width: 0;
+            font-size: 1rem;
+            color: var(--text);
+            overflow-wrap: anywhere;
+          }
+
+          .ch-custom-reaction-count {
+            font-family: var(--font-mono, ui-monospace, monospace);
+            font-size: 0.7rem;
+            color: var(--text-dim);
+          }
+
+          .ch-custom-reaction-count.is-over {
+            color: var(--danger);
           }
 
           .ch-gif-search-input {
@@ -5346,18 +5414,65 @@ export function RoomsPanel() {
                 addCustomReaction();
               }}
             >
-              <input
-                className="ch-gif-search-input"
-                type="text"
-                placeholder="Emoji or text…"
-                maxLength={MAX_SENT_REACTION_LEN}
-                value={customReactionDraft}
-                onChange={(e) => setCustomReactionDraft(e.target.value)}
-                autoFocus
-              />
-              <button type="submit" disabled={!customReactionDraft.trim()}>
-                Add
-              </button>
+              <div className="ch-custom-reaction-inputs">
+                <input
+                  className="ch-gif-search-input"
+                  type="text"
+                  placeholder="Emoji or text…"
+                  value={customReactionDraft}
+                  onChange={(e) => setCustomReactionDraft(e.target.value)}
+                  autoFocus
+                />
+                <select
+                  className="ch-custom-reaction-style"
+                  value={customReactionStyle}
+                  onChange={(e) => pickCustomReactionStyle(e.target.value as FancyStyle)}
+                  title="Text style"
+                  aria-label="Text style"
+                >
+                  {FANCY_STYLES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!styledReaction}
+                  title="Send once without adding it to the bar"
+                  onClick={() => {
+                    if (!styledReaction) return;
+                    void sendReaction(styledReaction).catch((err) =>
+                      toastsStore.add(
+                        'warning',
+                        'Reaction',
+                        err instanceof Error ? err.message : String(err),
+                      ),
+                    );
+                  }}
+                >
+                  Send
+                </button>
+                <button type="submit" disabled={!styledReaction}>
+                  Add
+                </button>
+              </div>
+              {customReactionDraft.trim() && (
+                <div className="ch-custom-reaction-preview">
+                  <span className="ch-custom-reaction-preview-text">
+                    {styledReactionDraft.trim()}
+                  </span>
+                  <span
+                    className={
+                      styledReactionLen > MAX_SENT_REACTION_LEN
+                        ? 'ch-custom-reaction-count is-over'
+                        : 'ch-custom-reaction-count'
+                    }
+                  >
+                    {styledReactionLen}/{MAX_SENT_REACTION_LEN}
+                  </span>
+                </div>
+              )}
             </form>
           )}
 
