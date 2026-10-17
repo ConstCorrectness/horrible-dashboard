@@ -439,6 +439,8 @@ export interface ShotFx {
    * and gating wall dust on this used to lose all seven.
    */
   hit: boolean;
+  /** Whether alt fire was active (e.g. knife heavy stab). */
+  alt?: boolean;
 }
 
 export interface KillFx {

@@ -49,7 +49,7 @@ use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, 
 use hassault_native::chat::{ChatChannel, ChatState};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
-use hassault_native::decals::DecalPool;
+use hassault_native::decals::{DecalPool, MarkKind, MARK_COLOR};
 use hassault_native::editor::{self, EditRequest, Editor, Selection};
 use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::{build_world_mesh, MeshData};
@@ -74,7 +74,7 @@ use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
-use hassault_native::trace::kick_vector;
+use hassault_native::trace::{kick_vector, FACE_NONE, FACE_NORMALS};
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
@@ -1834,12 +1834,13 @@ impl App {
                             faces,
                             hit,
                             weapon,
+                            alt,
                             ..
                         } = fx
                         {
                             let is_knife = *weapon == 0;
+                            let is_mine = id == &self.self_id;
                             if !is_knife {
-                                let is_mine = id == &self.self_id;
                                 let draw_beam = if is_mine {
                                     self.cvars
                                         .boolean("draw.tracers_firstperson")
@@ -1849,12 +1850,8 @@ impl App {
                                 };
                                 self.effects
                                     .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
-                                // No bullet holes from your own shots: they land
-                                // dead on the crosshair and read as a mark on the
-                                // screen rather than on the wall.
-                                if !is_mine {
-                                    self.decals.shot(ends, faces);
-                                }
+                                // All shots leave bullet holes on walls, including your own:
+                                self.decals.shot(ends, faces);
                                 // Brass and the smoke wisp are world effects at the
                                 // shot's origin, which for your own shot is your
                                 // *eye*: the casing and the puff landed on the
@@ -1897,6 +1894,23 @@ impl App {
                                             ];
                                             self.effects.muzzle_smoke(muzzle);
                                         }
+                                    }
+                                }
+                            } else {
+                                // Knife attack wall scratch or puncture
+                                self.effects
+                                    .shot_ex(*origin, ends, faces, is_mine, *hit, false);
+                                let is_stab = *alt;
+                                for (i, end) in ends.iter().enumerate() {
+                                    let face = faces.get(i).copied().unwrap_or(FACE_NONE);
+                                    if face != FACE_NONE && face >= 0 && (face as usize) < FACE_NORMALS.len() {
+                                        let slash_angle = 0.785 + (end[0] * 17.1 + end[1] * 31.3).sin() * 0.35;
+                                        let kind = if is_stab {
+                                            MarkKind::KnifeStab
+                                        } else {
+                                            MarkKind::KnifeSlash
+                                        };
+                                        self.decals.mark_kind(*end, face, kind, slash_angle, MARK_COLOR);
                                     }
                                 }
                             }

@@ -33,12 +33,12 @@ import type * as THREE from 'three';
 
 import { FACE_NONE, FACE_NZ, FACE_PZ } from './trace';
 
-/** How many marks the world remembers. The 129th retires the 1st. */
-export const DECAL_MAX = 128;
+/** How many marks the world remembers. */
+export const DECAL_MAX = 256;
 /** How long one mark lasts before it starts fading, in seconds. */
-export const DECAL_LIFE = 22;
+export const DECAL_LIFE = 60;
 /** How long the fade at the end of that life takes. */
-export const DECAL_FADE = 4;
+export const DECAL_FADE = 6;
 /**
  * How far off the surface a mark sits, in cube units.
  *
@@ -50,6 +50,8 @@ export const DECAL_FADE = 4;
 export const DECAL_LIFT = 0.012;
 /** The mark's width, in cube units. A cube is roughly 36cm, so this is ~7cm. */
 export const DECAL_SIZE = 0.2;
+
+export type DecalKind = 'bullet' | 'knife_slash' | 'knife_stab';
 
 /**
  * The six faces as unit vectors, in **cube** coordinates.
@@ -165,15 +167,106 @@ export function drawImpactTile(size = SIZE): Uint8Array {
   return out;
 }
 
-/** Build the impact texture. A `DataTexture`, so this module runs headless. */
-export function createImpactTexture(three: typeof THREE, size = SIZE): THREE.DataTexture {
-  const texture = new three.DataTexture(drawImpactTile(size), size, size, three.RGBAFormat);
+/**
+ * One knife slash tile: an elongated tapered gouge, simulating a blade cutting
+ * into plaster, wood, or metal with micro-fractures along its flanks.
+ */
+export function drawSlashTile(size = SIZE): Uint8Array {
+  const out = new Uint8Array(size * size * 4);
+  const half = size / 2;
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const dx = (px + 0.5 - half) / half;
+      const dy = (py + 0.5 - half) / half;
+      const len = Math.abs(dy);
+      if (len >= 0.88) continue;
+
+      // Taper width from center (0.28) to ends (0.02)
+      const taper = Math.sqrt(Math.max(0, 1 - (len / 0.88) ** 2));
+      const widthLimit = 0.28 * taper;
+      const dist = Math.abs(dx);
+      if (dist >= widthLimit) continue;
+
+      // Jitter edge to look like jagged sheared material
+      const edgeJitter = (hash(px >> 2, py >> 2) - 0.5) * 0.08 * taper;
+      const normalizedDist = (dist + edgeJitter) / widthLimit;
+      if (normalizedDist > 1) continue;
+
+      // Groove is dark near center, lighter displaced rim toward outer edge
+      const inGroove = normalizedDist < 0.42;
+      const rim = !inGroove && normalizedDist < 0.88;
+      const value = Math.round(inGroove ? 22 : rim ? 175 : 85);
+      const alpha = Math.max(0, Math.min(1, 1 - normalizedDist ** 2));
+
+      const i = (py * size + px) * 4;
+      out[i] = value;
+      out[i + 1] = value;
+      out[i + 2] = value;
+      out[i + 3] = Math.round(alpha * 255);
+    }
+  }
+  return out;
+}
+
+/**
+ * One knife stab tile: a deep puncturing diamond gouge with fractured displaced edges.
+ */
+export function drawStabTile(size = SIZE): Uint8Array {
+  const out = new Uint8Array(size * size * 4);
+  const half = size / 2;
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const dx = (px + 0.5 - half) / half;
+      const dy = (py + 0.5 - half) / half;
+      const r = Math.hypot(dx, dy);
+      const diamond = Math.abs(dx) + Math.abs(dy);
+      if (diamond >= 0.85 || r >= 0.95) continue;
+
+      // Deep puncture core
+      const core = diamond < 0.32;
+      // Displaced chipped perimeter
+      const rim = !core && diamond < 0.62;
+      // Radial micro-fractures extending along cardinal diagonals
+      const fracture = (Math.abs(dx) < 0.12 || Math.abs(dy) < 0.12) && diamond < 0.78;
+
+      let alpha = core ? 1.0 : rim ? 0.85 : fracture ? 0.55 : 0.0;
+      if (diamond >= 0.75) alpha *= Math.max(0, (0.85 - diamond) / 0.1);
+
+      const value = Math.round(core ? 20 : rim ? 172 : 90);
+      const i = (py * size + px) * 4;
+      out[i] = value;
+      out[i + 1] = value;
+      out[i + 2] = value;
+      out[i + 3] = Math.round(Math.max(0, Math.min(1, alpha)) * 255);
+    }
+  }
+  return out;
+}
+
+/** Build a decal texture for the given kind. A `DataTexture`, so this module runs headless. */
+export function createDecalTexture(
+  three: typeof THREE,
+  kind: DecalKind = 'bullet',
+  size = SIZE,
+): THREE.DataTexture {
+  const data =
+    kind === 'knife_slash'
+      ? drawSlashTile(size)
+      : kind === 'knife_stab'
+      ? drawStabTile(size)
+      : drawImpactTile(size);
+  const texture = new three.DataTexture(data, size, size, three.RGBAFormat);
   texture.magFilter = three.LinearFilter;
   texture.minFilter = three.LinearMipmapLinearFilter;
   texture.generateMipmaps = true;
   texture.colorSpace = three.SRGBColorSpace;
   texture.needsUpdate = true;
   return texture;
+}
+
+/** Build the impact texture. A `DataTexture`, so this module runs headless. */
+export function createImpactTexture(three: typeof THREE, size = SIZE): THREE.DataTexture {
+  return createDecalTexture(three, 'bullet', size);
 }
 
 /**
@@ -200,7 +293,7 @@ export class DecalPool {
   private marks: Mark[] = [];
   private next = 0;
   private geometry: THREE.PlaneGeometry;
-  private texture: THREE.DataTexture;
+  private textures: Record<DecalKind, THREE.DataTexture>;
   /**
    * The six orientations, built once.
    *
@@ -212,13 +305,15 @@ export class DecalPool {
   private orientations: THREE.Quaternion[];
 
   constructor(
-    // Not kept: the pool builds everything it needs here and then only moves
-    // it, so holding the module would be a field nothing reads.
     three: typeof THREE,
     private readonly scene: THREE.Scene,
   ) {
     this.geometry = new three.PlaneGeometry(1, 1);
-    this.texture = createImpactTexture(three);
+    this.textures = {
+      bullet: createDecalTexture(three, 'bullet'),
+      knife_slash: createDecalTexture(three, 'knife_slash'),
+      knife_stab: createDecalTexture(three, 'knife_stab'),
+    };
 
     // A `PlaneGeometry` faces +z in its own space, so each orientation is the
     // rotation taking +z onto that face's normal — in **three**'s axes, where
@@ -231,7 +326,7 @@ export class DecalPool {
 
     this.marks = Array.from({ length: DECAL_MAX }, () => {
       const material = new three.MeshBasicMaterial({
-        map: this.texture,
+        map: this.textures.bullet,
         transparent: true,
         opacity: 1,
         // Depth *tested* so a mark is hidden by anything in front of it, but
@@ -264,6 +359,8 @@ export class DecalPool {
     at: [number, number, number],
     face: number,
     tintOrMaterial: number | SurfaceMaterial = 'default',
+    kind: DecalKind = 'bullet',
+    slashAngle = 0,
   ): void {
     if (face === FACE_NONE || face < 0 || face >= FACE_NORMALS.length) return;
     const entry = this.marks[this.next];
@@ -278,10 +375,21 @@ export class DecalPool {
       at[1] + normal[1] * DECAL_LIFT,
     );
     entry.mesh.quaternion.copy(this.orientations[face]);
-    // Spun about its own normal, so twenty marks on one wall are not twenty
-    // copies of the same stamp.
-    entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
-    entry.mesh.scale.setScalar(DECAL_SIZE);
+
+    if (kind === 'knife_slash') {
+      entry.mesh.rotateZ(slashAngle);
+      entry.mesh.scale.set(DECAL_SIZE * 0.45, DECAL_SIZE * 1.5, 1);
+    } else if (kind === 'knife_stab') {
+      entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
+      entry.mesh.scale.set(DECAL_SIZE * 0.75, DECAL_SIZE * 0.75, 1);
+    } else {
+      // Bullet hole: spun about its own normal, so marks are not identical stamps.
+      entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
+      entry.mesh.scale.set(DECAL_SIZE, DECAL_SIZE, 1);
+    }
+
+    entry.material.map = this.textures[kind];
+    entry.material.needsUpdate = true;
     const hex =
       typeof tintOrMaterial === 'number'
         ? tintOrMaterial
@@ -320,6 +428,8 @@ export class DecalPool {
     }
     this.marks = [];
     this.geometry.dispose();
-    this.texture.dispose();
+    for (const tex of Object.values(this.textures)) {
+      tex.dispose();
+    }
   }
 }

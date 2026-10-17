@@ -556,6 +556,8 @@ pub enum Fx {
         /// stay distinguishable or every wall hit silently loses its debris.
         #[serde(default)]
         faces: Vec<i32>,
+        #[serde(default)]
+        alt: bool,
     },
     /// A grenade going off. A kind of its own rather than a flag on anything:
     /// it has a place and a radius, and until now this client had no variant

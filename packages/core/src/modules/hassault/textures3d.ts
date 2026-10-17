@@ -1000,7 +1000,7 @@ export type MaterialKind =
   | 'site_b';
 
 export interface PBRMaterialLibrary {
-  materials: Record<MaterialKind, THREE.Material>;
+  materials: Record<MaterialKind, THREE.MeshStandardMaterial>;
   dispose(): void;
 }
 
@@ -1031,7 +1031,7 @@ export function createPBRMaterialLibrary(three: typeof THREE): PBRMaterialLibrar
   const siteBTex = makeDataTexture(three, drawSiteDecalTile('B'));
   textures.push(siteATex, siteBTex);
 
-  const materials: Record<MaterialKind, THREE.Material> = {
+  const materials: Record<MaterialKind, THREE.MeshStandardMaterial> = {
     asphalt: new three.MeshStandardMaterial({
       map: asphalt.map,
       normalMap: asphalt.normalMap,

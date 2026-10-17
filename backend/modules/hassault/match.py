@@ -2213,6 +2213,7 @@ class MatchRoom:
                 # seven in a wall is `hit: true` and used to lose all its wall
                 # debris.
                 "hit": bool(result.hits),
+                "alt": bool(command.alt_fire),
             }
         )
 

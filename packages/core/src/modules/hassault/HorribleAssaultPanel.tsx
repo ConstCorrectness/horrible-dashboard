@@ -2356,16 +2356,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                   TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
                   own,
                 );
-                // One mark per pellet that stopped on a surface — for other
-                // players' shots only. Your own hole lands dead on the crosshair
-                // and reads as a mark on the screen, not the wall. `faces` is
-                // optional on the wire — a fabric peer may be running an older
-                // backend — and an absent list means "no marks", never "mark
-                // everything": `-1` is refused by `mark` itself.
+                // One mark per pellet that stopped on a surface. Both your own
+                // and other players' shots leave durable 3D decals on the wall.
                 for (let i = 0; i < fx.ends.length; i++) {
                   const face = fx.faces?.[i] ?? -1;
                   const mat = surfaceMaterial(world, fx.ends[i], face);
-                  if (!own) decals.mark(fx.ends[i], face, mat);
+                  decals.mark(fx.ends[i], face, mat, 'bullet');
                   if (face >= 0 && face < FACE_NORMALS.length) {
                     effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
                     const dx = fx.ends[i][0] - player.x;
@@ -2376,6 +2372,30 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                   // CS2 bullet smoke channel: punch a sightline through any
                   // smoke the round penetrated.
                   nadePool.punchSmoke(fx.origin, fx.ends[i]);
+                }
+              } else {
+                // Knife attacks leave a scratch (slash) or puncture (heavy stab) on surfaces
+                for (let i = 0; i < fx.ends.length; i++) {
+                  const face = fx.faces?.[i] ?? -1;
+                  if (face >= 0 && face < FACE_NORMALS.length) {
+                    const mat = surfaceMaterial(world, fx.ends[i], face);
+                    const isStab = Boolean(fx.alt);
+                    const slashAngle =
+                      Math.PI * 0.25 +
+                      Math.sin(fx.ends[i][0] * 17.1 + fx.ends[i][1] * 31.3) * 0.35;
+                    decals.mark(
+                      fx.ends[i],
+                      face,
+                      mat,
+                      isStab ? 'knife_stab' : 'knife_slash',
+                      slashAngle,
+                    );
+                    effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
+                    const dx = fx.ends[i][0] - player.x;
+                    const dy = fx.ends[i][1] - player.y;
+                    const bearing = Math.atan2(dx, dy);
+                    audioRef.current?.surfaceImpact(mat, bearing, player.yaw);
+                  }
                 }
               }
               // Flash and kick the shooter's own avatar. Our body is not drawn

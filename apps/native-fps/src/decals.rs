@@ -30,12 +30,12 @@
 
 use crate::trace::{FACE_NONE, FACE_NORMALS};
 
-/// How many marks the world remembers. The 129th retires the 1st.
-pub const MAX_MARKS: usize = 128;
+/// How many marks the world remembers.
+pub const MAX_MARKS: usize = 256;
 /// How long one mark lasts before it starts fading, in seconds.
-pub const DECAL_LIFE: f32 = 22.0;
+pub const DECAL_LIFE: f32 = 60.0;
 /// How long the fade at the end of that life takes.
-pub const DECAL_FADE: f32 = 4.0;
+pub const DECAL_FADE: f32 = 6.0;
 /// How far off the surface a mark sits, in cube units. A decal coplanar with its
 /// wall z-fights, which reads as flicker rather than as a bug.
 pub const DECAL_LIFT: f32 = 0.012;
@@ -44,7 +44,21 @@ pub const DECAL_SIZE: f32 = 0.2;
 
 /// The crater's colour. Near-black rather than black, so a mark on a dark
 /// surface is still a mark and not a hole in the render.
-const MARK_COLOR: [f32; 3] = [0.102, 0.102, 0.102];
+pub const MARK_COLOR: [f32; 3] = [0.102, 0.102, 0.102];
+
+/// The kind of mark left on a surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkKind {
+    Bullet,
+    KnifeSlash,
+    KnifeStab,
+}
+
+impl Default for MarkKind {
+    fn default() -> Self {
+        MarkKind::Bullet
+    }
+}
 
 /// One impact, in cube coordinates.
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +67,9 @@ struct Mark {
     face: usize,
     age: f32,
     live: bool,
+    kind: MarkKind,
+    rotation: f32,
+    color: [f32; 3],
 }
 
 impl Default for Mark {
@@ -62,6 +79,9 @@ impl Default for Mark {
             face: 0,
             age: 0.0,
             live: false,
+            kind: MarkKind::Bullet,
+            rotation: 0.0,
+            color: MARK_COLOR,
         }
     }
 }
@@ -99,13 +119,20 @@ impl Default for DecalPool {
 }
 
 impl DecalPool {
-    /// Record one impact.
-    ///
-    /// A `face` of [`FACE_NONE`] — a body hit, or a shot that ran out of range —
-    /// is silently ignored: there is no surface to mark. Checked here rather
-    /// than at the call site so every caller has one fewer chance to index
-    /// `FACE_NORMALS` with `-1`.
+    /// Record one standard bullet impact.
     pub fn mark(&mut self, at: [f32; 3], face: i32) {
+        self.mark_kind(at, face, MarkKind::Bullet, 0.0, MARK_COLOR);
+    }
+
+    /// Record an impact with specific kind, rotation, and color.
+    pub fn mark_kind(
+        &mut self,
+        at: [f32; 3],
+        face: i32,
+        kind: MarkKind,
+        rotation: f32,
+        color: [f32; 3],
+    ) {
         if face == FACE_NONE || face < 0 || face as usize >= FACE_NORMALS.len() {
             return;
         }
@@ -114,6 +141,9 @@ impl DecalPool {
             face: face as usize,
             age: 0.0,
             live: true,
+            kind,
+            rotation,
+            color,
         };
         self.next = (self.next + 1) % MAX_MARKS;
     }
@@ -182,23 +212,75 @@ impl DecalPool {
             }
             let n = FACE_NORMALS[mark.face];
             let (u, v) = basis(n);
-            let h = DECAL_SIZE * 0.5;
             let centre = [
                 mark.at[0] + n[0] * DECAL_LIFT,
                 mark.at[1] + n[1] * DECAL_LIFT,
                 mark.at[2] + n[2] * DECAL_LIFT,
             ];
-            let corner = |su: f32, sv: f32| {
-                [
-                    centre[0] + u[0] * su * h + v[0] * sv * h,
-                    centre[1] + u[1] * su * h + v[1] * sv * h,
-                    centre[2] + u[2] * su * h + v[2] * sv * h,
-                ]
+
+            let (a, b, c, d) = match mark.kind {
+                MarkKind::KnifeSlash => {
+                    let cos_r = mark.rotation.cos();
+                    let sin_r = mark.rotation.sin();
+                    let u_rot = [
+                        u[0] * cos_r - v[0] * sin_r,
+                        u[1] * cos_r - v[1] * sin_r,
+                        u[2] * cos_r - v[2] * sin_r,
+                    ];
+                    let v_rot = [
+                        u[0] * sin_r + v[0] * cos_r,
+                        u[1] * sin_r + v[1] * cos_r,
+                        u[2] * sin_r + v[2] * cos_r,
+                    ];
+                    let hw = DECAL_SIZE * 0.225;
+                    let hl = DECAL_SIZE * 0.75;
+                    let corner = |su: f32, sv: f32| {
+                        [
+                            centre[0] + u_rot[0] * su * hw + v_rot[0] * sv * hl,
+                            centre[1] + u_rot[1] * su * hw + v_rot[1] * sv * hl,
+                            centre[2] + u_rot[2] * su * hw + v_rot[2] * sv * hl,
+                        ]
+                    };
+                    (
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    )
+                }
+                MarkKind::KnifeStab => {
+                    let h = DECAL_SIZE * 0.375;
+                    let corner = |su: f32, sv: f32| {
+                        [
+                            centre[0] + u[0] * su * h + v[0] * sv * h,
+                            centre[1] + u[1] * su * h + v[1] * sv * h,
+                            centre[2] + u[2] * su * h + v[2] * sv * h,
+                        ]
+                    };
+                    (
+                        corner(-1.0, 0.0),
+                        corner(0.0, -1.0),
+                        corner(1.0, 0.0),
+                        corner(0.0, 1.0),
+                    )
+                }
+                MarkKind::Bullet => {
+                    let h = DECAL_SIZE * 0.5;
+                    let corner = |su: f32, sv: f32| {
+                        [
+                            centre[0] + u[0] * su * h + v[0] * sv * h,
+                            centre[1] + u[1] * su * h + v[1] * sv * h,
+                            centre[2] + u[2] * su * h + v[2] * sv * h,
+                        ]
+                    };
+                    (
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    )
+                }
             };
-            let a = corner(-1.0, -1.0);
-            let b = corner(1.0, -1.0);
-            let c = corner(1.0, 1.0);
-            let d = corner(-1.0, 1.0);
             // Two triangles. Wound the same way for both, so a mark is visible
             // from the side its surface faces and from nowhere else — which is
             // what stops a floor mark showing through the ceiling below it.
@@ -206,7 +288,7 @@ impl DecalPool {
             // Cube (x, y, z-up) → render (x, height, y), the same mapping
             // `nades.rs` and `effects.rs` apply at their own push.
             for p in [a, b, c, a, c, d] {
-                push([p[0], p[2], p[1]], MARK_COLOR, alpha);
+                push([p[0], p[2], p[1]], mark.color, alpha);
             }
         }
     }
@@ -230,7 +312,7 @@ fn basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace::{FACE_NX, FACE_PZ};
+    use crate::trace::{FACE_NX, FACE_PX, FACE_PZ};
 
     #[test]
     fn a_body_hit_leaves_no_mark() {
@@ -351,6 +433,17 @@ mod tests {
         let lo = xs.iter().copied().fold(f32::MAX, f32::min);
         let hi = xs.iter().copied().fold(f32::MIN, f32::max);
         assert!((hi - lo - DECAL_SIZE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_knife_slash_and_stab_produce_geometry() {
+        let mut pool = DecalPool::default();
+        pool.mark_kind([5.0, 5.0, 1.0], FACE_PX, MarkKind::KnifeSlash, 0.785, [0.8, 0.8, 0.8]);
+        pool.mark_kind([5.0, 5.0, 2.0], FACE_PX, MarkKind::KnifeStab, 0.0, [0.5, 0.5, 0.5]);
+        assert_eq!(pool.len(), 2);
+        let mut count = 0;
+        pool.quads(|_, _, _| count += 1);
+        assert_eq!(count, 12);
     }
 
     #[test]
