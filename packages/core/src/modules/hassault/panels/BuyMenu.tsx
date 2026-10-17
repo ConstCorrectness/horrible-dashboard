@@ -58,8 +58,8 @@ export function BuyMenu({ mode, mine, open, onBuy }: BuyMenuProps) {
         // game carries on behind it; this is a panel being typed into, and a
         // crosshair showing through a price list is a menu you can misread.
         background: 'rgba(13,17,23,0.97)',
-        border: '1px solid var(--border, #2a2a2a)',
-        borderTop: '2px solid #6fa8dc',
+        border: '1px solid var(--border)',
+        borderTop: '2px solid var(--accent)',
         borderRadius: 6,
         padding: '0.6rem 0.75rem',
         fontFamily: 'monospace',
