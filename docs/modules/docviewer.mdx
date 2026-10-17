@@ -56,6 +56,26 @@ style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:
 inlined at capture time can be fetched — no analytics beacon, no CDN call, no
 exfiltration path.
 
+A sanitized archive (`keep_scripts: false`) gets no `allow-scripts`, but it still
+needs `style-src 'unsafe-inline'`: capture inlines every stylesheet as a `<style>`
+block, and without it the browser drops all of them. An app-shell site then renders
+as its header and outline stacked unstyled above the article.
+
+```
+sandbox; default-src 'self' data:; style-src 'self' data: 'unsafe-inline'
+```
+
+### Reader view
+
+A recipe with `reader_view: true` serves each page as its `content_selector` node
+under the page title, with the site's `<head>` stylesheets kept and its scripts,
+chrome and body styling dropped (`docviewer/reader.py`). This is done per request,
+so the archive stays the whole page as captured and the flag or the selector can
+change without recapturing. A page the selector misses is served whole.
+`apxml-course` uses it: each lesson is wrapped in an app shell with the full course
+outline, and a crawler that is not signed in also gets a visitor-limit modal with the
+lesson blurred behind it.
+
 Both halves are checked from the browser, not inferred: the parent gets a
 `SecurityError` reading the frame's `document`, `location` and `origin`, and Chromium
 reports from inside that "the document is sandboxed and lacks the

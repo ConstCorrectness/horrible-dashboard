@@ -20,7 +20,7 @@ from backend.modules.docviewer import crawl, site_crawl
 from backend.modules.docviewer import store as docstore
 from backend.modules.docviewer.recipe import Recipe
 from backend.modules.docviewer.sitemap import parse_sitemap
-from backend.modules.kb import imports, service, store
+from backend.modules.kb import imports, profiles, service, store
 from backend.modules.kb.models import SearchRequest
 from backend.modules.library import store as library_store
 
@@ -651,6 +651,20 @@ def test_an_import_crawl_says_what_it_is(harness):
     assert harness["user_agent"] == USER_AGENT
     assert USER_AGENT.startswith("horrible-dashboard-crawler/")
     assert "github.com/ConstCorrectness/horrible-dashboard" in USER_AGENT
+
+
+def test_reader_view_needs_a_content_selector():
+    spec = {
+        "id": "reader-site",
+        "start_urls": ["https://example.org/"],
+        "allow_domains": ["example.org"],
+        "reader_view": True,
+    }
+    with pytest.raises(ValueError, match="content_selector"):
+        profiles.validate(spec)
+    ok = profiles.validate({**spec, "content_selector": "main.article"})
+    assert ok["reader_view"] is True
+    assert profiles.get_profile("apxml-course")["reader_view"] is True
 
 
 def test_resuming_an_import_follows_the_current_profile(harness):

@@ -73,6 +73,7 @@
     "max_pages": 120,
     "keep_scripts": false,
     "content_selector": "div.course-content",
+    "reader_view": true,
     "hierarchy": "url_path",
     "path_kinds": [
       "course",

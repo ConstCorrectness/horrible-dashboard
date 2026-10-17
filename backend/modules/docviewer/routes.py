@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import logging
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
@@ -40,6 +41,7 @@ from backend.modules.docviewer.models import (
     SearchResponse,
     SetsResponse,
 )
+from backend.modules.docviewer.reader import reader_view
 
 logger = logging.getLogger(__name__)
 
@@ -272,15 +274,30 @@ def page_content(page_id: str) -> FileResponse | HTMLResponse:
     path = artifact_store.artifact_path(row["artifact_id"])
     if artifact is None or path is None or not path.is_file():
         return _missing("the stored archive is gone")
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": page_csp(artifact),
+    }
+    reader = _reader_html(row, path)
+    if reader is not None:
+        return HTMLResponse(reader, headers=headers)
     return FileResponse(
         path,
         media_type=artifact["mime"],
         content_disposition_type="inline",
-        headers={
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": page_csp(artifact),
-        },
+        headers=headers,
     )
+
+
+def _reader_html(row: dict, path: Path) -> str | None:
+    """The page as its article alone, when its set's recipe asks for reader view."""
+    doc_set = store.get_set(row["set_id"])
+    recipe = (doc_set or {}).get("recipe") or {}
+    selector = recipe.get("content_selector")
+    if not recipe.get("reader_view") or not selector:
+        return None
+    archived = path.read_text(encoding="utf-8", errors="replace")
+    return reader_view(archived, selector, row["title"] or row["url"])
 
 
 # ---- search ----------------------------------------------------------------

@@ -408,7 +408,8 @@ _TOOLS = [
             "profile": {
                 "type": "object",
                 "description": "id, label, start_urls, allow_domains, allow_patterns, "
-                "deny_patterns, index_pages, frontier, content_selector, hierarchy, "
+                "deny_patterns, index_pages, frontier, content_selector, reader_view, "
+                "hierarchy, "
                 "path_root, path_kinds, page_kind, keep_scripts, max_pages, "
                 "collections, tags, match, title_strip.",
             }

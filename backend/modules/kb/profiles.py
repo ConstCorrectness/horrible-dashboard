@@ -109,6 +109,9 @@ def validate(spec: dict[str, Any]) -> dict[str, Any]:
         )
     if out.get("content_selector"):
         css_to_xpath(str(out["content_selector"]))  # raises on an unsupported selector
+    out["reader_view"] = bool(out.get("reader_view", False))
+    if out["reader_view"] and not out.get("content_selector"):
+        raise ValueError("reader_view needs a content_selector to show")
     out["max_pages"] = max(1, min(int(out.get("max_pages") or 200), 2000))
     out["max_depth"] = max(0, min(int(out.get("max_depth") or 3), 10))
     out["keep_scripts"] = bool(out.get("keep_scripts", False))

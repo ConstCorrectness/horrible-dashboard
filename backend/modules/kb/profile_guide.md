@@ -12,25 +12,26 @@ A profile tells `kb.import` how to turn one website into an offline, searchable,
 
 ## 2. Fields
 
-| field                              | meaning                                                                                                                                            |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                               | lowercase-dashed, unique; built-in ids can't be replaced                                                                                           |
-| `label`, `description`             | shown in the import dialog                                                                                                                         |
-| `match`                            | regexes on full URLs that select this profile; named groups (`(?P<course>…)`) become `{course}` placeholders in the other fields                   |
-| `root`                             | `{title, url, kind}` — the catalog item standing for the whole import (`kind`: site or course)                                                     |
-| `start_urls`                       | where the crawl starts                                                                                                                             |
-| `allow_domains`                    | required; the crawl never leaves these                                                                                                             |
-| `allow_patterns` / `deny_patterns` | regexes on the URL **path**; a page must match one allow and no deny                                                                               |
-| `index_pages`                      | path regexes for frontier-only pages (listing pages)                                                                                               |
-| `frontier`                         | `bfs`, `sitemap`, `llms_txt` or `auto` (sitemap if there is one, else links)                                                                       |
-| `max_depth`, `max_pages`           | link depth from the start; page cap (≤ 2000)                                                                                                       |
-| `keep_scripts`                     | `true` for pages that need their JavaScript to render (SPA lessons, interactive figures); `false` for static pages — smaller, inert archives       |
-| `content_selector`                 | the article element (above)                                                                                                                        |
-| `hierarchy`                        | `flat` (every page under the root), `url_path` (nest by path: needs `path_root` and `path_kinds`), or `links` (nest under the page that linked it) |
-| `path_root`, `path_kinds`          | for `url_path`: e.g. `/courses/{course}` and `["course", "chapter", "lesson"]`                                                                     |
-| `page_kind`                        | kind for pages: `article`, `primer`, `lesson`, `paper`…                                                                                            |
-| `collections`, `tags`              | where imported items are filed                                                                                                                     |
-| `title_strip`                      | regexes removed from page titles (site names, "Primers •")                                                                                         |
+| field                              | meaning                                                                                                                                             |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                               | lowercase-dashed, unique; built-in ids can't be replaced                                                                                            |
+| `label`, `description`             | shown in the import dialog                                                                                                                          |
+| `match`                            | regexes on full URLs that select this profile; named groups (`(?P<course>…)`) become `{course}` placeholders in the other fields                    |
+| `root`                             | `{title, url, kind}` — the catalog item standing for the whole import (`kind`: site or course)                                                      |
+| `start_urls`                       | where the crawl starts                                                                                                                              |
+| `allow_domains`                    | required; the crawl never leaves these                                                                                                              |
+| `allow_patterns` / `deny_patterns` | regexes on the URL **path**; a page must match one allow and no deny                                                                                |
+| `index_pages`                      | path regexes for frontier-only pages (listing pages)                                                                                                |
+| `frontier`                         | `bfs`, `sitemap`, `llms_txt` or `auto` (sitemap if there is one, else links)                                                                        |
+| `max_depth`, `max_pages`           | link depth from the start; page cap (≤ 2000)                                                                                                        |
+| `keep_scripts`                     | `true` for pages that need their JavaScript to render (SPA lessons, interactive figures); `false` for static pages — smaller, inert archives        |
+| `content_selector`                 | the article element (above)                                                                                                                         |
+| `reader_view`                      | `true` to show pages in the Docs pane as the `content_selector` element alone, for app-shell sites whose nav, sidebar and overlays bury the article |
+| `hierarchy`                        | `flat` (every page under the root), `url_path` (nest by path: needs `path_root` and `path_kinds`), or `links` (nest under the page that linked it)  |
+| `path_root`, `path_kinds`          | for `url_path`: e.g. `/courses/{course}` and `["course", "chapter", "lesson"]`                                                                      |
+| `page_kind`                        | kind for pages: `article`, `primer`, `lesson`, `paper`…                                                                                             |
+| `collections`, `tags`              | where imported items are filed                                                                                                                      |
+| `title_strip`                      | regexes removed from page titles (site names, "Primers •")                                                                                          |
 
 ## 3. Dry run, then import
 

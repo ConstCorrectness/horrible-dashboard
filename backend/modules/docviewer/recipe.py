@@ -36,6 +36,9 @@ class Recipe:
     sitemap_url: str | None = None
     keep_scripts: bool = True
     content_selector: str | None = None
+    # Serve each page as its `content_selector` node alone (see `reader.py`), for a
+    # site whose chrome is noise offline. The archive itself keeps the whole page.
+    reader_view: bool = False
     hierarchy: str = "links"
     path_root: str | None = None
     path_kinds: list[str] = field(default_factory=list)

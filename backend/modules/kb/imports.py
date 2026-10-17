@@ -135,6 +135,7 @@ async def start_import(
         sitemap_url=spec.get("sitemap_url"),
         keep_scripts=bool(spec.get("keep_scripts", True)),
         content_selector=spec.get("content_selector"),
+        reader_view=bool(spec.get("reader_view")),
         hierarchy=spec.get("hierarchy") or "flat",
         path_root=spec.get("path_root"),
         path_kinds=list(spec.get("path_kinds") or []),

@@ -65,6 +65,23 @@ def test_unmarked_page_stays_inert(client: TestClient) -> None:
     assert "allow-scripts" not in csp
 
 
+def test_inert_page_may_use_its_inlined_css(client: TestClient) -> None:
+    """Capture inlines every stylesheet as a <style> block. Without inline CSS
+    allowed, an inert archive rendered unstyled: apxml's nav and sidebar stacked
+    above the lesson."""
+    inert = artifact_store.store_bytes(
+        b"<html><head><style>nav{display:none}</style></head><body>x</body></html>",
+        kind="page",
+        mime="text/html",
+        filename="styled.html",
+        meta={"title": "Styled"},
+    )
+    csp = client.get(f"/api/artifacts/{inert['id']}").headers["content-security-policy"]
+    style_src = next(d for d in csp.split(";") if d.strip().startswith("style-src"))
+    assert "'unsafe-inline'" in style_src
+    assert "allow-scripts" not in csp
+
+
 # ---- link rewriting --------------------------------------------------------
 
 
@@ -252,6 +269,91 @@ def test_page_content_serves_the_archive_with_scripts(client: TestClient) -> Non
     csp = res.headers["content-security-policy"]
     assert "sandbox allow-scripts" in csp
     assert "allow-same-origin" not in csp
+
+
+# An apxml lesson as captured by a crawler past the visitor limit: app chrome, the
+# course outline, a paywall modal, and the lesson blurred in place.
+_APP_SHELL_LESSON = b"""<!DOCTYPE html><html><head>
+<style>html{overflow:hidden}.course-content h2{color:teal}</style>
+<script>window.app=1</script></head>
+<body class="shell" style="height:100vh">
+<header><button>Models</button><button>Log in</button></header>
+<nav><a href="/courses/x/chapter-1">Chapter 1: Course outline link</a></nav>
+<div><h1>Scaled Dot-Product Attention</h1>
+<div class="course-content" style="filter: blur(2px)"><p>Attention weighs
+<span class="katex">QK^T</span> scores.</p><pre><code>import torch</code></pre></div>
+<div class="paywall"><h3>Keep Learning, Unlimited Full Access</h3></div></div>
+</body></html>"""
+
+
+def _captured_page(set_id: str, body: bytes, title: str = "Attention") -> str:
+    page = store.upsert_page(
+        set_id=set_id,
+        url="https://apxml.example/courses/x/chapter-1/attention",
+        title=title,
+        status="pending",
+    )
+    artifact = artifact_store.store_bytes(
+        body,
+        kind="page",
+        mime="text/html",
+        filename="attention.html",
+        meta={"title": title, "scripts": False},
+    )
+    store.mark_captured(
+        page["id"], title=title, artifact_id=artifact["id"], source_id=None, size=1
+    )
+    return page["id"]
+
+
+def test_reader_view_serves_only_the_article(client: TestClient) -> None:
+    doc = _make_set(
+        recipe={
+            "start_urls": ["https://apxml.example/courses/x"],
+            "content_selector": "div.course-content",
+            "reader_view": True,
+        }
+    )
+    page_id = _captured_page(doc["id"], _APP_SHELL_LESSON)
+
+    res = client.get(f"/api/docviewer/pages/{page_id}/content")
+    assert res.status_code == 200
+    text = res.text
+    assert "Attention weighs" in text and "import torch" in text
+    assert 'class="katex"' in text
+    assert '<h1 class="hd-reader-title">Attention</h1>' in text
+    for chrome in ("Log in", "Course outline link", "Keep Learning", "Models"):
+        assert chrome not in text
+    # The paywall's blur, the app bundle and the shell's pinned body are gone; the
+    # site's stylesheet stays, so the article keeps its typography.
+    assert "blur" not in text
+    assert "<script" not in text
+    assert 'class="shell"' not in text
+    assert ".course-content h2{color:teal}" in text
+    assert "overflow: auto !important" in text
+    assert "allow-scripts" not in res.headers["content-security-policy"]
+
+    # The archive itself is untouched: reader view is decided per request.
+    page = store.get_page(page_id)
+    assert artifact_store.artifact_path(page["artifact_id"]).read_bytes() == (
+        _APP_SHELL_LESSON
+    )
+
+
+def test_reader_view_falls_back_to_the_whole_page(client: TestClient) -> None:
+    """A selector that matches nothing (the site's markup changed) shows the page
+    with its chrome rather than an empty frame."""
+    doc = _make_set(
+        recipe={
+            "start_urls": ["https://apxml.example/courses/x"],
+            "content_selector": "div.lesson-body",
+            "reader_view": True,
+        }
+    )
+    page_id = _captured_page(doc["id"], _APP_SHELL_LESSON)
+    res = client.get(f"/api/docviewer/pages/{page_id}/content")
+    assert res.status_code == 200
+    assert res.content == _APP_SHELL_LESSON
 
 
 def test_page_content_renders_html_when_not_captured(client: TestClient) -> None:

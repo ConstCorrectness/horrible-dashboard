@@ -88,8 +88,14 @@ def _row(r: Any) -> dict[str, Any]:
 
 
 # A sanitized archive: no script survived capture, so deny script outright and
-# let it load whatever it inlined.
-_INERT_PAGE_CSP = "sandbox; default-src 'self' data:"
+# let it load whatever it inlined. Capture inlines every stylesheet as a <style>
+# block, so `style-src` must allow inline CSS: under `default-src` alone the browser
+# drops all of it, and an app-shell site (apxml) renders as its nav and sidebar
+# stacked unstyled above the article. CSS cannot run script, and the sandbox still
+# denies it.
+_INERT_PAGE_CSP = (
+    "sandbox; default-src 'self' data:; style-src 'self' data: 'unsafe-inline'"
+)
 
 # A scripted archive. `allow-scripts` WITHOUT `allow-same-origin` puts the page in
 # a unique opaque origin — never add `allow-same-origin` here, it would hand the
