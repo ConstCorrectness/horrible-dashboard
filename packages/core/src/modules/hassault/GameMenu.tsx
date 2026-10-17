@@ -108,7 +108,7 @@ export function GameMenu(props: GameMenuProps) {
               <button
                 type="button"
                 onClick={props.onOpenStudio}
-                style={{ ...styles.tab, color: 'var(--accent, #6ea8fe)' }}
+                style={{ ...styles.tab, color: 'var(--accent)' }}
                 title="Edit current map and position in 3D Level Studio"
               >
                 ◈ 3D Studio
@@ -193,7 +193,7 @@ export function GameMenu(props: GameMenuProps) {
             {match.recording ? (
               <button
                 type="button"
-                style={{ ...styles.action, color: 'var(--danger, #e5484d)' }}
+                style={{ ...styles.action, color: 'var(--danger)' }}
                 onClick={match.onStopRecording}
                 title="Stop and download the .hademo"
               >
@@ -305,7 +305,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     background: 'rgba(13,17,23,0.97)',
-    border: '1px solid var(--border, #2a2a2a)',
+    border: '1px solid var(--border)',
     borderRadius: 8,
     color: 'var(--text)',
     fontSize: '0.82rem',
@@ -318,7 +318,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
     gap: '0.5rem',
     padding: '0.6rem 0.8rem',
-    borderBottom: '1px solid var(--border, #2a2a2a)',
+    borderBottom: '1px solid var(--border)',
   },
   tabs: { display: 'flex', gap: '0.25rem', marginLeft: 'auto', flexWrap: 'wrap' },
   tab: {
@@ -330,16 +330,16 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   tabActive: {
-    background: 'color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent)',
+    background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
     // The shorthand, not `borderColor`: spread over `tab`, which sets `border`.
-    border: '1px solid var(--accent, #6ea8fe)',
+    border: '1px solid var(--accent)',
     color: 'var(--text)',
   },
   resume: {
     marginLeft: '0.4rem',
     flexShrink: 0,
-    background: 'var(--accent, #6ea8fe)',
-    color: 'var(--accent-contrast, #ffffff)',
+    background: 'var(--accent)',
+    color: 'var(--accent-contrast)',
     border: 'none',
     padding: '0.3rem 0.85rem',
     borderRadius: 5,
@@ -351,8 +351,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.35rem',
   },
   resumeFooter: {
-    background: 'var(--accent, #6ea8fe)',
-    color: 'var(--accent-contrast, #ffffff)',
+    background: 'var(--accent)',
+    color: 'var(--accent-contrast)',
     border: 'none',
     padding: '0.3rem 0.85rem',
     borderRadius: 5,
@@ -369,11 +369,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
     gap: '0.4rem',
     padding: '0.5rem 0.8rem',
-    borderTop: '1px solid var(--border, #2a2a2a)',
+    borderTop: '1px solid var(--border)',
   },
   action: {
     background: 'transparent',
-    border: '1px solid var(--border, #2a2a2a)',
+    border: '1px solid var(--border)',
     color: 'var(--text)',
     padding: '0 0.75rem',
     height: 28,
@@ -388,7 +388,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '0.6rem',
     padding: '0.5rem 0.8rem',
-    borderTop: '1px solid var(--border, #2a2a2a)',
+    borderTop: '1px solid var(--border)',
     color: 'var(--text-dim)',
     fontSize: '0.74rem',
   },

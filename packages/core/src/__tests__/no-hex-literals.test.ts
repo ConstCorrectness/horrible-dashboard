@@ -83,7 +83,15 @@ const BASELINE: Record<string, number> = {
   // `--bg-raised` and `--border`, the case this file calls the worst of all), and
   // the eight around them went with them. Lowered rather than left at 801: a
   // ratchet that keeps slack lets the next regression back in unnoticed.
-  excluded: 793,
+  //
+  // 793 → 811 → 782: hassault's GameMenu/MainMenu/BuyMenu and clubhouse's
+  // badge letters and Clubdeck import card landed eighteen over, nearly all of
+  // them `var(--token, #hex)` fallbacks for tokens every theme defines. The
+  // fallbacks went, along with the menus' older ones and two literals sitting on
+  // the accent (now `--accent-contrast`). The in-game HUD panels (ModeHud, Radar,
+  // DefuseProgressRing) still hold theirs: they draw team and objective colours
+  // over the 3D view, which no theme token describes.
+  excluded: 782,
   // 6 → 11, raised deliberately (2026-10-01): the visualizer's `html` mode. Its
   // demo document and the iframe's white backdrop render inside a sandboxed
   // opaque-origin frame, where the app's custom properties do not resolve — a

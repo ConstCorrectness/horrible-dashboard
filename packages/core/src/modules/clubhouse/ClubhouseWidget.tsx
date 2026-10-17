@@ -215,7 +215,7 @@ export function ClubhouseWidget() {
             padding: '0.6rem 0.75rem',
             marginBottom: '0.75rem',
             border: '1px solid var(--border)',
-            borderTop: '2px solid var(--accent, #3b82f6)',
+            borderTop: '2px solid var(--accent)',
             borderRadius: '6px',
             background: 'var(--bg-raised)',
           }}
@@ -245,13 +245,13 @@ export function ClubhouseWidget() {
             onClick={() => void importClubdeck()}
             style={{
               flexShrink: 0,
-              background: 'var(--accent, #3b82f6)',
+              background: 'var(--accent)',
               border: 'none',
               borderRadius: '6px',
               padding: '0 0.75rem',
               fontSize: '0.8rem',
               fontWeight: 600,
-              color: '#fff',
+              color: 'var(--accent-contrast)',
               cursor: 'pointer',
             }}
           >

@@ -9,7 +9,7 @@ import { parseBadgeName } from './badgeLetters';
  * margin takes that back so ellipsis and centring stay true.
  */
 const LETTERS: CSSProperties = {
-  color: 'var(--accent, #6ea8fe)',
+  color: 'var(--accent)',
   fontWeight: 800,
   letterSpacing: '0.3em',
   marginRight: '-0.3em',

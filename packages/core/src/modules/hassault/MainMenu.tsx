@@ -153,7 +153,7 @@ export function MainMenu(props: MainMenuProps) {
       <div style={header}>
         <div>
           <div style={wordmark}>
-            Horrible<span style={{ color: 'var(--accent, #6ea8fe)' }}>Assault</span>
+            Horrible<span style={{ color: 'var(--accent)' }}>Assault</span>
           </div>
           <div style={{ ...panel.dim, fontFamily: MONO, letterSpacing: '0.12em' }}>
             {props.account?.username ?? '—'}
@@ -341,10 +341,10 @@ function NativeClientRow(props: MainMenuProps) {
                 // that their build is progressing normally is exactly the wrong
                 // reading of the state this row was built to make legible.
                 color: launcher.busy
-                  ? 'var(--text-secondary, #94a3b8)'
+                  ? 'var(--text-secondary)'
                   : status.includes('PID') || status.startsWith('Installed')
-                    ? 'var(--success, #4ade80)'
-                    : 'var(--danger, #f87171)',
+                    ? 'var(--success)'
+                    : 'var(--danger)',
                 marginTop: '0.2rem',
               }}
             >
@@ -600,8 +600,8 @@ function PlaySection(props: MainMenuProps) {
             // A pid is the one unambiguous signal it really started; everything
             // else the route returns is a reason it did not.
             color: props.nativeStatus.includes('PID')
-              ? 'var(--success, #4ade80)'
-              : 'var(--danger, #f87171)',
+              ? 'var(--success)'
+              : 'var(--danger)',
           }}
         >
           {props.nativeStatus}
@@ -649,7 +649,7 @@ const sheet: CSSProperties = {
   backdropFilter: 'blur(12px) saturate(1.1)',
   WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
   boxShadow: '0 22px 60px rgba(0,0,0,.5)',
-  color: 'var(--text, #e8eaf2)',
+  color: 'var(--text)',
   fontSize: '0.82rem',
   overflow: 'hidden',
 };
@@ -698,7 +698,7 @@ const navItemActive: CSSProperties = {
   // The full shorthand, not `borderColor`: these objects are spread over
   // `navItem`, which sets `border`, and React warns (rightly) about mixing a
   // shorthand with one of its longhands in the same computed style.
-  border: '1px solid var(--accent, #6ea8fe)',
+  border: '1px solid var(--accent)',
 };
 
 const content: CSSProperties = {
@@ -716,9 +716,9 @@ const footer: CSSProperties = {
 };
 
 const primary: CSSProperties = {
-  background: 'var(--accent, #6ea8fe)',
+  background: 'var(--accent)',
   border: '1px solid transparent',
-  color: '#08111f',
+  color: 'var(--accent-contrast)',
   fontWeight: 600,
   padding: '0.35rem 0.9rem',
   borderRadius: 5,
