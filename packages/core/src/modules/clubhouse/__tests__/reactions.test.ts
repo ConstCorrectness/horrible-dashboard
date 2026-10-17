@@ -1,6 +1,40 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractGifUrl, isAllowedGifUrl, parseRoomReaction } from '../reactions';
+import {
+  extractGifUrl,
+  isAllowedGifUrl,
+  MAX_SENT_REACTION_LEN,
+  normalizeCustomReaction,
+  parseCustomReactions,
+  parseRoomReaction,
+} from '../reactions';
+
+describe('custom reactions the user adds to the bar', () => {
+  it('accepts any emoji or short single-line text, trimmed', () => {
+    expect(normalizeCustomReaction('  gg wp ')).toBe('gg wp');
+    expect(normalizeCustomReaction('🎉')).toBe('🎉');
+    expect(normalizeCustomReaction('👩‍💻')).toBe('👩‍💻');
+    expect(normalizeCustomReaction('x'.repeat(MAX_SENT_REACTION_LEN))).not.toBeNull();
+  });
+
+  it('refuses what the backend would 422', () => {
+    expect(normalizeCustomReaction('   ')).toBeNull();
+    expect(normalizeCustomReaction('x'.repeat(MAX_SENT_REACTION_LEN + 1))).toBeNull();
+    expect(normalizeCustomReaction('one\ntwo')).toBeNull();
+    expect(normalizeCustomReaction('\u202eevil')).toBeNull();
+    expect(normalizeCustomReaction('a\u2028b')).toBeNull();
+  });
+
+  it('loads a saved list, dropping junk and duplicates', () => {
+    expect(parseCustomReactions(JSON.stringify(['lol', ' lol ', 3, '', 'gg']))).toEqual([
+      'lol',
+      'gg',
+    ]);
+    expect(parseCustomReactions(null)).toEqual([]);
+    expect(parseCustomReactions('not json')).toEqual([]);
+    expect(parseCustomReactions('{"a":1}')).toEqual([]);
+  });
+});
 
 describe('which GIF hosts may render', () => {
   it('allows the providers and Clubhouse itself', () => {

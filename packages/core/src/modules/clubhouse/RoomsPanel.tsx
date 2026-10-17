@@ -50,7 +50,13 @@ import {
 } from './badgeLetters';
 import { ClubhouseName } from './ClubhouseName';
 import { MediaInsightsModal } from './MediaInsightsModal';
-import { DEFAULT_REACTIONS } from './reactions';
+import {
+  CUSTOM_REACTIONS_KEY,
+  DEFAULT_REACTIONS,
+  MAX_SENT_REACTION_LEN,
+  normalizeCustomReaction,
+  parseCustomReactions,
+} from './reactions';
 import { useClubhouseVoice, type EarsHealth } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
@@ -449,6 +455,42 @@ export function RoomsPanel() {
     setGifQuery('');
     setGifResults([]);
     setGifError(null);
+  };
+
+  // Reactions the user added to the bar — any emoji or short string, kept after the
+  // room's own options. Saved per browser; right-click one to remove it.
+  const [customReactions, setCustomReactions] = useState<string[]>(() => {
+    try {
+      return parseCustomReactions(localStorage.getItem(CUSTOM_REACTIONS_KEY));
+    } catch {
+      return [];
+    }
+  });
+  const [customReactionOpen, setCustomReactionOpen] = useState(false);
+  const [customReactionDraft, setCustomReactionDraft] = useState('');
+
+  const saveCustomReactions = (next: string[]) => {
+    setCustomReactions(next);
+    try {
+      localStorage.setItem(CUSTOM_REACTIONS_KEY, JSON.stringify(next));
+    } catch {
+      /* storage unavailable — the list still lasts for this session */
+    }
+  };
+
+  const addCustomReaction = () => {
+    const r = normalizeCustomReaction(customReactionDraft);
+    if (!r) {
+      toastsStore.add(
+        'warning',
+        'Reaction',
+        `A reaction is one line of up to ${MAX_SENT_REACTION_LEN} characters.`,
+      );
+      return;
+    }
+    if (!customReactions.includes(r)) saveCustomReactions([...customReactions, r]);
+    setCustomReactionDraft('');
+    setCustomReactionOpen(false);
   };
 
   // Voice agent. The conversation itself lives on the backend (one session per
@@ -2448,6 +2490,7 @@ export function RoomsPanel() {
 
           .ch-reactions-row {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             justify-content: space-around;
             background: rgba(0, 0, 0, 0.2);
@@ -2468,6 +2511,16 @@ export function RoomsPanel() {
           .ch-reaction-btn:hover {
             transform: scale(1.25) translateY(-2px);
             background: rgba(255, 255, 255, 0.05);
+          }
+
+          .ch-reaction-text {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text, #e2e8f0);
+            max-width: 10rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
 
           .ch-reaction-gif-toggle {
@@ -2492,6 +2545,7 @@ export function RoomsPanel() {
             padding: 0.5rem;
           }
 
+          .ch-custom-reaction-row,
           .ch-gif-search-row {
             display: flex;
             align-items: center;
@@ -5231,24 +5285,49 @@ export function RoomsPanel() {
         <div className="ch-room-bottom-panel">
           {/* Reaction Bar */}
           <div className="ch-reactions-row">
-            {REACTIONS.map((emoji) => (
-              <button
-                key={emoji}
-                className="ch-reaction-btn"
-                onClick={() =>
-                  void sendReaction(emoji).catch((err) =>
-                    toastsStore.add(
-                      'warning',
-                      'Reaction',
-                      err instanceof Error ? err.message : String(err),
-                    ),
-                  )
-                }
-                title={`Send ${emoji}`}
-              >
-                {emoji}
-              </button>
-            ))}
+            {[...REACTIONS, ...customReactions.filter((r) => !REACTIONS.includes(r))].map(
+              (emoji) => {
+                const custom = customReactions.includes(emoji);
+                return (
+                  <button
+                    key={emoji}
+                    className={
+                      custom && !/\p{Extended_Pictographic}/u.test(emoji)
+                        ? 'ch-reaction-btn ch-reaction-text'
+                        : 'ch-reaction-btn'
+                    }
+                    onClick={() =>
+                      void sendReaction(emoji).catch((err) =>
+                        toastsStore.add(
+                          'warning',
+                          'Reaction',
+                          err instanceof Error ? err.message : String(err),
+                        ),
+                      )
+                    }
+                    onContextMenu={
+                      custom
+                        ? (e) => {
+                            e.preventDefault();
+                            saveCustomReactions(customReactions.filter((r) => r !== emoji));
+                          }
+                        : undefined
+                    }
+                    title={custom ? `Send ${emoji} (right-click to remove)` : `Send ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                );
+              },
+            )}
+            <button
+              className="ch-reaction-btn ch-reaction-gif-toggle"
+              onClick={() => setCustomReactionOpen((o) => !o)}
+              title="Add a custom reaction: any emoji or short text"
+              aria-expanded={customReactionOpen}
+            >
+              +
+            </button>
             <button
               className="ch-reaction-btn ch-reaction-gif-toggle"
               onClick={() => setGifPickerOpen((o) => !o)}
@@ -5258,6 +5337,29 @@ export function RoomsPanel() {
               GIF
             </button>
           </div>
+
+          {customReactionOpen && (
+            <form
+              className="ch-custom-reaction-row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addCustomReaction();
+              }}
+            >
+              <input
+                className="ch-gif-search-input"
+                type="text"
+                placeholder="Emoji or text…"
+                maxLength={MAX_SENT_REACTION_LEN}
+                value={customReactionDraft}
+                onChange={(e) => setCustomReactionDraft(e.target.value)}
+                autoFocus
+              />
+              <button type="submit" disabled={!customReactionDraft.trim()}>
+                Add
+              </button>
+            </form>
+          )}
 
           {gifPickerOpen && (
             <div className="ch-gif-picker">

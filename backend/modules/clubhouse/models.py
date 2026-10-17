@@ -208,13 +208,14 @@ class ChatPermissionRequest(BaseModel):
     chat_permission: ChatPermission
 
 
-# A reaction may be any real emoji — not only the room's offered
-# ``emoji_reaction_options`` — but it must *be* an emoji. Clubhouse's server draws
-# whatever string arrives as if it were a glyph, so an unchecked text value lets a
-# crafted request burst arbitrary words across every participant's screen (the
-# fake-"leak" abuse). Requiring a pictographic payload with no letters/digits keeps
-# every genuine emoji (including ZWJ sequences, skin tones and flags) and drops text.
-_EMOJI_ONLY = regex.compile(r"^[\p{Extended_Pictographic}\p{Emoji_Component}‍️]+$")
+# A reaction may be any emoji or any short string — not only the room's offered
+# ``emoji_reaction_options``. Clubhouse's server draws whatever string arrives as if it
+# were a glyph, so a text value floats across every participant's screen; that is now
+# allowed on purpose (custom text reactions). What stays refused is the shape no
+# reaction needs: a long payload, or control characters (newlines, bidi overrides)
+# that let a string lay itself out as something other than one line of text.
+MAX_REACTION_LEN = 64
+_CONTROL = regex.compile(r"[\p{Cc}\p{Bidi_Control}\u2028\u2029]")
 
 
 class ReactionRequest(BaseModel):
@@ -222,22 +223,21 @@ class ReactionRequest(BaseModel):
 
     @field_validator("emoji")
     @classmethod
-    def _must_be_emoji(cls, v: str) -> str:
+    def _must_be_short_line(cls, v: str) -> str:
         v = v.strip()
         if not v:
-            raise ValueError("emoji must not be empty")
-        # Code-point cap covers the longest real emoji sequences while bounding abuse.
-        if len(v) > 16:
-            raise ValueError("emoji is too long to be a reaction")
-        if not _EMOJI_ONLY.match(v):
-            raise ValueError("reaction must be an emoji, not text")
+            raise ValueError("reaction must not be empty")
+        if len(v) > MAX_REACTION_LEN:
+            raise ValueError(f"reaction is longer than {MAX_REACTION_LEN} characters")
+        if _CONTROL.search(v):
+            raise ValueError("reaction must be one line of plain text")
         return v
 
 
 # A GIF reaction is sent by Giphy id (Clubhouse's ``/gif_reaction`` endpoint), not a
 # URL — so the id is validated as Giphy's own alphanumeric token. This keeps the send
-# side to real Giphy assets, the same way the emoji validator keeps it to real emoji:
-# a free-form URL or text can never be published to a room through this client.
+# side to real Giphy assets: a free-form URL can never be published to a room as a
+# GIF through this client.
 _GIPHY_ID = regex.compile(r"^[A-Za-z0-9]{6,64}$")
 
 

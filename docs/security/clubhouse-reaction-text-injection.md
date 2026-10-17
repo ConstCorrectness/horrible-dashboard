@@ -81,8 +81,11 @@ privately on request.
 
 Our client is third-party and read-mostly, but we hardened both directions:
 
-- We validate that any reaction we send is a genuine emoji, so our tooling
-  cannot be used to emit these text payloads to a live room.
+- ~~We validate that any reaction we send is a genuine emoji.~~ Since
+  2026-10-17 our client deliberately sends custom text reactions too. Each one
+  is limited to a single line of at most 64 characters, with control,
+  bidi-override and line-separator characters refused. That rules out the
+  multi-line, layout-spoofing payloads, but not short text.
 - We cap and escape incoming reaction text before rendering, so a hostile
   payload cannot grow our UI unbounded or be interpreted as markup.
 

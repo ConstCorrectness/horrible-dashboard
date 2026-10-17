@@ -549,7 +549,7 @@ These exist because a room you _host_ needs more than joining and muting. All
 | `POST /channels/{channel}/chat_settings`    | `ChatSettingsRequest`                          | `/enable_channel_messages` or `/disable_channel_messages`   |
 | `POST /channels/{channel}/chat_permission`  | `ChatPermissionRequest` (`everyone` / `host_followers` / `trusted_followers`) | `/set_chat_permission` — named here, ints 1/2/3 only in `routes._CHAT_PERMISSION` |
 | `POST /channels/{channel}/mute_others`      | —                                              | `/mute_other_speakers`                                      |
-| `POST /channels/{channel}/reaction`         | `ReactionRequest` (`emoji`)                    | `/emoji_reaction` — the room lists accepted emoji as `emoji_reaction_options` on join |
+| `POST /channels/{channel}/reaction`         | `ReactionRequest` (`emoji`: any emoji or one line of text, ≤ 64 chars) | `/emoji_reaction` — the room lists its own emoji as `emoji_reaction_options` on join |
 | `GET /channels/{channel}/audience`          | —                                              | `/get_channel_audience` — the room's listeners              |
 | `GET /channels/{channel}/users/search?query=` | —                                            | `/search_channel_users` — find someone in the room          |
 | `POST /send_channel_message`                | `SendChannelMessageRequest`                    | `/send_channel_message`                                     |
@@ -570,6 +570,17 @@ to float the emoji locally and publish an invented `react` message straight onto
 PubNub channel, which Clubhouse never saw — the sender watched their reaction rise and
 nobody else in the room received it. The emoji now floats when the send **succeeds**
 (Clubhouse echoes it back, and our own echo is skipped), and a refusal toasts.
+
+The **+** button after them adds a custom reaction: any emoji or any short string,
+saved in `localStorage` (`clubhouseCustomReactions`) and shown after the room's own
+options. Right-click a custom one to remove it. Clubhouse draws whatever string it is
+sent, so a text reaction floats across the room just as an emoji does. The backend's
+`ReactionRequest` accepts any single line of up to 64 characters and refuses an empty
+string, a longer one, and control, bidi-override or line-separator characters.
+`normalizeCustomReaction` in `reactions.ts` applies the same rule, so the bar never
+offers a reaction that would 422. The backend is not started with `--reload` under the
+desktop app, so a validator change reaches it only after a restart. Until then a text
+reaction answers 422 `emoji must not be empty` / `reaction must be an emoji`.
 
 Incoming reactions are read by `parseRoomReaction` in
 [reactions.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/reactions.ts),

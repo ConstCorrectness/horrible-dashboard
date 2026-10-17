@@ -25,6 +25,44 @@ export const DEFAULT_REACTIONS = [
 ];
 
 /**
+ * Longest reaction we will *send*, matching the backend's `ReactionRequest`. A
+ * reaction may be any emoji or any short string; text floats across the room the same
+ * way an emoji does.
+ */
+export const MAX_SENT_REACTION_LEN = 64;
+
+// Control characters (newlines, tabs), bidi overrides and line/paragraph separators —
+// the backend refuses these, so the bar never offers a reaction that would 422.
+const CONTROL = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u2028\u2029]/u;
+
+/** A user-typed reaction ready to send, or `null` if the backend would refuse it. */
+export function normalizeCustomReaction(raw: string): string | null {
+  const t = raw.trim();
+  if (!t || [...t].length > MAX_SENT_REACTION_LEN || CONTROL.test(t)) return null;
+  return t;
+}
+
+/** localStorage key for the reactions the user added to the bar. */
+export const CUSTOM_REACTIONS_KEY = 'clubhouseCustomReactions';
+
+/** The saved custom reactions, dropping anything malformed or duplicated. */
+export function parseCustomReactions(raw: string | null): string[] {
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: string[] = [];
+  for (const item of parsed) {
+    const r = typeof item === 'string' ? normalizeCustomReaction(item) : null;
+    if (r && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+
+/**
  * Floaters kept on screen at once. A room where someone holds a reaction down (or a
  * GIF is spammed) otherwise grows the DOM by one animated node per message, each
  * living for seconds, until the pane stutters.
