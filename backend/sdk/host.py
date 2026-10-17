@@ -120,6 +120,34 @@ class PluginHost:
         self._registry.search_providers[provider.id] = provider
         register_provider(provider)
 
+    def add_music_source(self, source: Any) -> None:
+        """Expose a music source (satisfying
+        `backend.modules.music.providers.MusicSource`): `search()` returns
+        candidates, `fetch()` downloads one into the library. The agent's
+        `music.play` and the import resolver use it with no new tools. Reusing a
+        built-in's id (`youtube`) replaces it."""
+        from backend.modules.music.providers import sources
+
+        self._registry.music_sources[source.id] = source
+        sources.register(source)
+
+    def add_playlist_importer(self, importer: Any) -> None:
+        """Expose a playlist importer (`backend.modules.music.providers.
+        PlaylistImporter`): an account that lists playlists, or a file format it
+        parses. Imported tracks are resolved and downloaded by the music library."""
+        from backend.modules.music.providers import importers
+
+        self._registry.playlist_importers[importer.id] = importer
+        importers.register(importer)
+
+    def add_music_listener(self, listener: Any) -> None:
+        """Expose a listener (`backend.modules.music.providers.MusicListener`): told
+        what played (scrobbling) and asked what's similar (the DJ and radio)."""
+        from backend.modules.music.providers import listeners
+
+        self._registry.music_listeners[listener.id] = listener
+        listeners.register(listener)
+
     def add_dash_facade(self, name: str, factory: DashFacadeFactory) -> None:
         """Attach `dash.<name>` in every REPL session (factory builds the object)."""
         self._registry.dash_facades[name] = factory

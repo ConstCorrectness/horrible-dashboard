@@ -69,6 +69,7 @@ const DEFAULT_ICONS: Record<string, string> = {
   flow: '⬡',
   research: '🔬',
   karaoke: '🎤',
+  music: '🎵',
   hassault: '🎯',
   games: '🕹',
   mcp: '🔌',

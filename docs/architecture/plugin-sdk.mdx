@@ -79,7 +79,11 @@ export default definePlugin({
     settings are user-configurable on the settings page; storage is the plugin's
     own bookkeeping. See [../modules/settings.md](../modules/settings.mdx).
   - `host.hasCapability(cap)` — platform capability checks (browser vs desktop).
-  - `host.subscribeChannel(channel, handler)` — the shared `/ws` socket.
+  - `host.subscribeChannel(channel, handler)` — the shared `/ws` socket. Some
+    built-in channels are public contracts a plugin can build on — e.g. `music`
+    (`state`, `progress`, `track`, `job`, `library`; see
+    [music](../modules/music.mdx#the-music-channel)) for a now-playing ticker or a
+    visualizer, driven back with `host.runCommand('music.next')` and friends.
   - `host.openPanel(panelId)` / `host.runCommand(commandId)`.
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,

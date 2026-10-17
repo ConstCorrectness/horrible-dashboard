@@ -20,11 +20,22 @@ export {
   IconComment,
   IconDot,
   IconExternal,
+  IconImport,
+  IconList,
+  IconMusic,
+  IconPause,
+  IconPlay,
   IconPlus,
+  IconRadio,
+  IconRepeat,
   IconRetry,
   IconSearch,
   IconSend,
+  IconShuffle,
+  IconSkipNext,
+  IconSkipPrev,
   IconTrash,
+  IconVolume,
 } from './glyphs';
 /** The shared list-row design system. See DataList.tsx — modules compose rows
  * from these rather than styling their own, so "a record with a verdict and
@@ -455,6 +466,7 @@ export {
 } from './modules/browser/overlay';
 export { databaseModule } from './modules/database';
 export { karaokeModule } from './modules/karaoke';
+export { musicModule, initMusic } from './modules/music';
 export { audioModule, initAudio } from './modules/audio';
 export { libraryModule } from './modules/library';
 export { docviewerModule } from './modules/docviewer';

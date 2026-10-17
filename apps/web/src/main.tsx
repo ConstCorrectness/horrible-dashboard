@@ -30,6 +30,8 @@ import {
   initKeymapPreset,
   installExternalLinkBridge,
   karaokeModule,
+  musicModule,
+  initMusic,
   keymapModule,
   layoutsModule,
   libraryModule,
@@ -262,6 +264,7 @@ async function boot(): Promise<void> {
     registry.register(docviewerModule);
     registry.register(kbModule);
     registry.register(karaokeModule);
+    registry.register(musicModule);
     registry.register(recordsModule);
     registry.register(researchModule);
     registry.register(searchModule);
@@ -344,6 +347,9 @@ async function boot(): Promise<void> {
     // The saved audio routing. Without it the mixer has no buses until its pane is
     // opened, and anything routed through it (a karaoke song) has nowhere to play.
     initAudio();
+    // Music plays app-wide, not in a pane: start the player with the shell so an
+    // agent's "play something" is audible before anyone opens the music pane.
+    initMusic();
     initNotifications();
     // Same reason as initSocial, and the same bug it fixed: the records watch used to
     // start only when a records pane mounted, so an agent proposal filed while you

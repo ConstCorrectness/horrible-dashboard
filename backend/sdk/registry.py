@@ -59,6 +59,12 @@ class PluginRegistry:
     # that module's own registry; this mirror is what `host.add_search_provider`
     # writes to so a plugin's provider is discoverable the same way.
     search_providers: dict[str, Any] = field(default_factory=dict)
+    # Music library providers (duck-typed against backend.modules.music.providers):
+    # sources fetch into the library, importers describe playlists, listeners
+    # scrobble and answer "similar". Mirrors of the music module's own registries.
+    music_sources: dict[str, Any] = field(default_factory=dict)
+    playlist_importers: dict[str, Any] = field(default_factory=dict)
+    music_listeners: dict[str, Any] = field(default_factory=dict)
     # Dataset sources (duck-typed against
     # backend.modules.datasets.sources.DatasetSource): one place training material
     # lives, searchable and peekable. Built-ins win id conflicts.
@@ -86,6 +92,9 @@ class PluginRegistry:
         self.dash_facades.clear()
         self.training_providers.clear()
         self.search_providers.clear()
+        self.music_sources.clear()
+        self.playlist_importers.clear()
+        self.music_listeners.clear()
         self.dataset_sources.clear()
         self.recipe_backends.clear()
         self.eval_runners.clear()

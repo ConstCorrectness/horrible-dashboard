@@ -307,3 +307,114 @@ export function IconRegex(props: SVGProps<SVGSVGElement>) {
     </Glyph>
   );
 }
+
+/** Start playback. Filled, like {@link IconStop}: transport controls are states. */
+export function IconPlay(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M5 3.5v9l7.5-4.5z" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Pause playback. */
+export function IconPause(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="4" y="3.5" width="2.75" height="9" rx="0.6" fill="currentColor" stroke="none" />
+      <rect x="9.25" y="3.5" width="2.75" height="9" rx="0.6" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Skip to the next item. */
+export function IconSkipNext(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 4v8l6-4z" fill="currentColor" stroke="none" />
+      <path d="M12 4v8" />
+    </Glyph>
+  );
+}
+
+/** Back to the previous item (or the start of this one). */
+export function IconSkipPrev(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M12.5 4v8l-6-4z" fill="currentColor" stroke="none" />
+      <path d="M4 4v8" />
+    </Glyph>
+  );
+}
+
+/** Shuffle: two crossing paths. */
+export function IconShuffle(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M2 4.5h2.5c3 0 4 7 7 7H14M2 11.5h2.5c1.2 0 2-1.1 2.7-2.4M9.3 6.9c.7-1.3 1.5-2.4 2.7-2.4H14" />
+      <path d="M12.25 2.75 14 4.5l-1.75 1.75M12.25 9.75 14 11.5l-1.75 1.75" />
+    </Glyph>
+  );
+}
+
+/** Repeat: a loop. Pass `one` for repeat-one. */
+export function IconRepeat({ one, ...props }: SVGProps<SVGSVGElement> & { one?: boolean }) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 7.5V6.25A1.75 1.75 0 0 1 4.75 4.5H13M11.25 2.75 13 4.5l-1.75 1.75" />
+      <path d="M13 8.5v1.25a1.75 1.75 0 0 1-1.75 1.75H3M4.75 13.25 3 11.5l1.75-1.75" />
+      {one && <path d="M7.4 7.2 8.2 6.6v3.2" strokeWidth="1.2" />}
+    </Glyph>
+  );
+}
+
+/** Radio / continuous play: broadcast arcs around a point. */
+export function IconRadio(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" />
+      <path d="M5.2 5.2a4 4 0 0 0 0 5.6M10.8 5.2a4 4 0 0 1 0 5.6M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2" />
+    </Glyph>
+  );
+}
+
+/** Volume. Pass `muted` for the struck-through speaker. */
+export function IconVolume({ muted, ...props }: SVGProps<SVGSVGElement> & { muted?: boolean }) {
+  return (
+    <Glyph {...props}>
+      <path d="M2.5 6.25h2.25L8 3.5v9L4.75 9.75H2.5z" />
+      {muted ? <path d="M10.5 6l3 4M13.5 6l-3 4" /> : <path d="M10.5 5.75a3 3 0 0 1 0 4.5M12.25 4a5.5 5.5 0 0 1 0 8" />}
+    </Glyph>
+  );
+}
+
+/** A piece of music — the empty-art placeholder. */
+export function IconMusic(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 11.5V3.5l7-1.25v8" />
+      <circle cx="4.5" cy="11.5" r="1.75" />
+      <circle cx="11.5" cy="10.25" r="1.75" />
+    </Glyph>
+  );
+}
+
+/** Bring something in — upload / import. */
+export function IconImport(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M8 2.5v7.5M5 7l3 3 3-3" />
+      <path d="M2.75 10.5v2.25h10.5V10.5" />
+    </Glyph>
+  );
+}
+
+/** A list of items — a queue. */
+export function IconList(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
+      <path d="M2.5 4h.01M2.5 8h.01M2.5 12h.01" strokeWidth="2" />
+    </Glyph>
+  );
+}

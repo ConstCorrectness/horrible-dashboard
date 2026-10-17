@@ -1,20 +1,9 @@
-"""yt-dlp: search YouTube, and fetch a video into the songs directory.
+"""Karaoke's use of yt-dlp: karaoke-biased search, and video into the songs directory.
 
-Two design notes worth keeping:
-
-**Downloads do not ride the shared task queue.** `backend.modules.tasks` runs jobs
-serially, and a karaoke download is minutes of network I/O — putting one there
-would park every library ingest behind "Bohemian Rhapsody (Karaoke Version)". They
-run as their own asyncio tasks under a small semaphore instead, so several guests
-can queue songs at once without saturating the link.
-
-**yt-dlp is called in a thread, not a subprocess.** It's a library dependency here,
-so there's no binary to locate and no output to parse — but it is thoroughly
-blocking, so every call goes through `asyncio.to_thread`.
-
-Searching uses the `ytsearchN:` pseudo-extractor with `extract_flat`, which returns
-the result list from one page fetch without resolving each video's formats. Doing it
-non-flat is roughly a second *per hit* and makes the search box unusable.
+The generic machinery (lazy import, flat search, JS runtimes, the shared download
+pool) lives in `backend.modules.ytdl`, which the music library uses too. What stays
+here is karaoke's own: the "karaoke" query bias, the video formats and their ffmpeg
+merge, and writing the result into the `karaoke_songs` catalog.
 """
 
 from __future__ import annotations
@@ -22,81 +11,27 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
+from backend.modules import ytdl
 from backend.modules.karaoke import store, transpose
 from backend.modules.karaoke.models import SearchResult
 
 logger = logging.getLogger(__name__)
 
-# Two at a time. Enough that a party queueing songs doesn't feel serial, few
-# enough that YouTube doesn't start throttling the node.
-_download_semaphore = asyncio.Semaphore(2)
-# Strong refs to in-flight downloads: asyncio only holds weak ones, so a task
-# nobody awaits can be garbage-collected mid-download.
-_in_flight: set[asyncio.Task[None]] = set()
-
-INSTALL_HINT = "yt-dlp is not installed. Run: uv sync"
+INSTALL_HINT = ytdl.INSTALL_HINT
 
 
 def _ytdlp() -> Any | None:
-    """Import yt_dlp lazily, or None when it isn't installed.
-
-    Lazy because the import is ~1s of module scanning and most sessions never open
-    the karaoke pane; optional-tolerant because the rest of the module (library,
-    queue, playback of already-downloaded songs) works fine without it.
-    """
-    try:
-        import yt_dlp  # noqa: PLC0415 — deliberately deferred; see docstring
-    except ImportError:
-        return None
-    return yt_dlp
+    """The yt_dlp module, or None. A module-level seam so tests can fake it."""
+    return ytdl.load()
 
 
 def available() -> bool:
     """Whether downloads can run here. Kept as a bare bool for its callers; the
     three-state answer (and the install hint) is `extras.probe("yt-dlp")`."""
     return _ytdlp() is not None
-
-
-def _duration(entry: dict[str, Any]) -> int | None:
-    value = entry.get("duration")
-    if value is None:
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _thumbnail(entry: dict[str, Any]) -> str | None:
-    thumbs = entry.get("thumbnails") or []
-    if thumbs and isinstance(thumbs, list):
-        last = thumbs[-1]
-        if isinstance(last, dict) and last.get("url"):
-            return str(last["url"])
-    return entry.get("thumbnail")
-
-
-def _search_blocking(query: str, limit: int) -> list[dict[str, Any]]:
-    yt_dlp = _ytdlp()
-    if yt_dlp is None:
-        return []
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-    if not isinstance(info, dict):
-        return []
-    entries = info.get("entries") or []
-    return [e for e in entries if isinstance(e, dict)]
 
 
 async def search(
@@ -120,75 +55,34 @@ async def search(
         effective = f"{effective} karaoke"
 
     try:
-        entries = await asyncio.to_thread(_search_blocking, effective, limit)
+        entries = await asyncio.to_thread(
+            ytdl.search_blocking, _ytdlp(), effective, limit
+        )
     except Exception as exc:  # yt-dlp raises a wide variety of network errors
         logger.warning("karaoke search failed: %s", exc)
         return [], f"Search failed: {exc}"
 
-    results: list[SearchResult] = []
-    for entry in entries:
-        video_id = str(entry.get("id") or "")
-        if not video_id:
-            continue
-        results.append(
-            SearchResult(
-                video_id=video_id,
-                title=str(entry.get("title") or video_id),
-                url=str(
-                    entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
-                ),
-                channel=str(entry.get("channel") or entry.get("uploader") or ""),
-                duration=_duration(entry),
-                thumbnail=_thumbnail(entry),
-                downloaded=store.find_by_video_id(video_id) is not None,
-            )
+    results = [
+        SearchResult(
+            video_id=hit.video_id,
+            title=hit.title,
+            url=hit.url,
+            channel=hit.channel,
+            duration=hit.duration,
+            thumbnail=hit.thumbnail,
+            downloaded=store.find_by_video_id(hit.video_id) is not None,
         )
+        for hit in ytdl.to_hits(entries)
+    ]
     note = "" if results else "No results."
     return results, note
 
 
-_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+parse_video_id = ytdl.parse_video_id
+_split_title = ytdl.split_title
 
-
-def parse_video_id(url: str) -> str:
-    """Pull a video id out of a YouTube URL, or "" if there isn't one.
-
-    A bare 11-character id is accepted as-is so the agent can pass either form.
-    """
-    text = (url or "").strip()
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", text):
-        return text
-    match = _VIDEO_ID_RE.search(text)
-    return match.group(1) if match else ""
-
-
-def _split_title(title: str) -> tuple[str, str]:
-    """Best-effort "Artist - Title" split off a YouTube title.
-
-    Deliberately conservative: if there's no ` - ` separator we return an empty
-    artist rather than guessing, because a wrong artist is worse than none — it
-    shows up in the library list and in every queue row.
-    """
-    for sep in (" - ", " – ", " — "):
-        if sep in title:
-            artist, _, rest = title.partition(sep)
-            return artist.strip(), rest.strip()
-    return "", title.strip()
-
-
-#: JavaScript runtimes yt-dlp may use to solve YouTube's player challenges. yt-dlp
-#: enables only deno by default; without a runtime YouTube withholds most formats
-#: and serves the rest behind 403s. Listing several is safe: an absent runtime is
-#: skipped and the highest-priority one present is used (node and bun are common
-#: on a dev box; deno usually is not). The challenge scripts themselves come from
-#: `yt-dlp-ejs`, pulled in by the `yt-dlp[default]` dependency.
-JS_RUNTIMES: dict[str, dict[str, Any]] = {"deno": {}, "node": {}, "bun": {}}
-
-#: Audio only, for music that is heard rather than watched (the Clubhouse room agent).
-#: A single stream needs no ffmpeg merge -- and it is what YouTube still serves
-#: reliably: measured 2026-09-10, `ba[ext=m4a]` downloaded where the pre-muxed mp4
-#: the video path asks for was gone or 403.
-AUDIO_FORMAT = "ba[ext=m4a]/ba/b"
+JS_RUNTIMES = ytdl.JS_RUNTIMES
+AUDIO_FORMAT = ytdl.AUDIO_FORMAT
 
 #: Karaoke video: separate video and audio streams, joined by ffmpeg. YouTube no
 #: longer serves a single pre-muxed mp4 for most songs -- measured 2026-09-10 on
@@ -221,8 +115,6 @@ NO_FFMPEG_FORMAT = "b[ext=mp4]/b/ba[ext=m4a]/ba"
 #: Shown inline on a library row that asked for video and got only audio.
 AUDIO_ONLY_NOTE = "Audio only: downloading video needs ffmpeg on PATH."
 
-_AUDIO_EXTS = frozenset({".m4a", ".mp3", ".opus", ".ogg", ".aac", ".wav", ".flac"})
-
 
 def download_opts(
     song_id: str,
@@ -236,15 +128,7 @@ def download_opts(
     `ffmpeg` is the binary to merge with, or None when there is none, and it decides
     the video format. An audio-only download ignores it: one stream needs no merge.
     """
-    opts: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        # The output name is the row id: unique, ASCII, and short enough for
-        # Windows' path limit whatever the video is called. See store.py.
-        "outtmpl": str(target / f"{song_id}.%(ext)s"),
-        "js_runtimes": {name: dict(cfg) for name, cfg in JS_RUNTIMES.items()},
-    }
+    opts = ytdl.base_opts(song_id, target)
     if audio_only:
         opts["format"] = AUDIO_FORMAT
     elif ffmpeg:
@@ -257,17 +141,7 @@ def download_opts(
     return opts
 
 
-def got_audio_only(info: dict[str, Any], path: Path) -> bool:
-    """Whether a finished download has no picture.
-
-    yt-dlp reports `vcodec: "none"` for an audio-only format, and a merged download
-    carries its video codec, so the codec decides; the extension is only a fallback
-    for an info dict that omits codecs.
-    """
-    vcodec = info.get("vcodec")
-    if vcodec is not None:
-        return str(vcodec) == "none"
-    return path.suffix.lower() in _AUDIO_EXTS
+got_audio_only = ytdl.got_audio_only
 
 
 def _download_blocking(
@@ -283,11 +157,7 @@ def _download_blocking(
     opts = download_opts(
         song_id, store.songs_dir(), audio_only=audio_only, ffmpeg=ffmpeg
     )
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-    if not isinstance(info, dict):
-        raise RuntimeError("yt-dlp returned no metadata")
-    return info
+    return ytdl.fetch_blocking(yt_dlp, url, opts)
 
 
 async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> None:
@@ -301,7 +171,7 @@ async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> 
     # downloader.
     from backend.modules.karaoke.session import publish_song, session
 
-    async with _download_semaphore:
+    async with ytdl.download_slots:
         song = store.update_song(song_id, status="downloading", error=None)
         if song:
             await publish_song(song)
@@ -322,21 +192,15 @@ async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> 
             await session.song_downloaded(song_id, ok=False)
             return
 
-        # yt-dlp reports the real extension only after the fact (the format it
-        # actually got may not be the one the template guessed).
-        ext = str(info.get("ext") or "mp4")
-        path = store.songs_dir() / f"{song_id}.{ext}"
-        if not path.exists():
-            matches = sorted(store.songs_dir().glob(f"{song_id}.*"))
-            if not matches:
-                failed = store.update_song(
-                    song_id, status="failed", error="Download produced no file"
-                )
-                if failed:
-                    await publish_song(failed)
-                await session.song_downloaded(song_id, ok=False)
-                return
-            path = matches[0]
+        path = ytdl.landed_file(info, store.songs_dir(), song_id)
+        if path is None:
+            failed = store.update_song(
+                song_id, status="failed", error="Download produced no file"
+            )
+            if failed:
+                await publish_song(failed)
+            await session.song_downloaded(song_id, ok=False)
+            return
 
         raw_title = str(info.get("title") or "")
         current = store.get_song(song_id) or {}
@@ -381,6 +245,4 @@ async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> 
 
 def start_download(song_id: str, url: str, *, audio_only: bool = False) -> None:
     """Kick off a detached download, keeping a strong reference to the task."""
-    task = asyncio.create_task(download_song(song_id, url, audio_only=audio_only))
-    _in_flight.add(task)
-    task.add_done_callback(_in_flight.discard)
+    ytdl.spawn(download_song(song_id, url, audio_only=audio_only))

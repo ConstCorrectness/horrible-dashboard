@@ -1,0 +1,176 @@
+---
+sidebar_position: 42
+sidebar_label: Music
+---
+
+# Module: music
+
+The app's own music library, and a player that plays it. Karaoke's sibling for
+normal listening: the same yt-dlp fetching and server-held session, with the original
+mix, audio only, and a library you build up as you use it.
+
+**Status: implemented.** Library, downloads, file import, playlists, the player
+(app-wide, with mixer routing and OS media keys), lyrics, MusicBrainz cleanup,
+Spotify / Apple Music / M3U / CSV / Last.fm playlist import with review, Last.fm and
+ListenBrainz scrobbling, the DJ and radio, the `music` agent group, and plugin hooks.
+
+## The one idea: the library is the authority
+
+Every song the player plays is a **file this app owns**: a row in `music_tracks`
+pointing at `$HORRIBLE_DATA_DIR/music/files/<track_id>.<ext>`. There are three ways
+in, and they all end the same way:
+
+| Way in | What happens |
+|---|---|
+| **Search and download** | a source (built-in: YouTube via the shared `backend/modules/ytdl` fetcher, audio only) fetches it |
+| **Your own files** | dropped on the pane (`POST /api/music/upload`) or imported by path (`POST /api/music/import/files`); copied in, deduplicated by content hash, tags read with tinytag, a sidecar `.lrc` brings its lyrics |
+| **A playlist** | an importer *describes* songs; each is matched against the library, else resolved to a source and downloaded |
+
+Outside services **feed** the library and never play anything. Spotify streams are
+DRM-protected and only play in Spotify's own players, so Spotify here is a source of
+playlists and clean metadata, not audio.
+
+The database is the source of truth for metadata. Tags are read on import and never
+written back; an edit is a row update and locks that field against enrichment.
+
+## Playlist imports
+
+`backend/modules/music/jobs.py`. An import job, per described song:
+
+1. **match the library** by a stable id (`spotify`, `isrc`, `mbid`, `apple`,
+   `youtube`), then by normalized artist + title — which is why a **re-sync** only
+   downloads what's new, and mirrors the source's order;
+2. import a local file directly if the description points at one (M3U, Apple XML);
+3. else **resolve** (`resolve.py`): search the sources and score each candidate —
+   title tokens, artist, duration within a few seconds, a bonus for official
+   channels ("- Topic", VEVO), and a penalty for version words the description
+   didn't ask for (live, karaoke, nightcore, sped up, cover…);
+4. download the best one — or, below `music.minMatchConfidence` (default 0.6),
+   **file it for review** with its alternatives instead of guessing.
+
+Jobs and their items are rows, so a restart resumes them. Importers:
+
+| Importer | Notes |
+|---|---|
+| `spotify` | OAuth PKCE public client, read-only scopes, bring your own app (`developer.spotify.com`; redirect `http://127.0.0.1:<port>/api/connectors/spotify/callback`). Playlists and Liked Songs. Uses the 2026 `/playlists/{id}/items` endpoint (falls back to `/tracks`). **Dev-mode limits:** the app owner needs Premium, five users max, and items may be withheld for playlists you don't own — that comes back as a note, not a failure |
+| `apple-music` | an exported playlist file (Apple Music: File → Library → Export Playlist), `.txt` (UTF-16, tab-separated) or `.xml` plist. No API, no developer account |
+| `m3u`, `csv` | generic; CSV understands Exportify / TuneMyMusic column names |
+| `lastfm-loved` | your Last.fm loved tracks as one playlist |
+
+## Enrichment and lyrics
+
+`enrich.py` looks each new download up on **MusicBrainz** (keyless, at most one
+request per second process-wide) and fetches the sleeve from the **Cover Art
+Archive**. Trust order: a person's edit is never touched; a song with importer
+metadata (it came from Spotify) only has gaps filled; a bare YouTube download gets
+its title and artist replaced — but only when the MusicBrainz title is recognisably
+inside the YouTube one, so a confident match on a *different* recording never
+renames a file. `music.autoEnrich` turns it off.
+
+`lyrics.py`: a sidecar `.lrc`, then the file's own tag, then **LRCLIB** (keyless,
+time-synced when it has them). Cached per track, including "none".
+
+## The player
+
+**The session** (`session.py`) is karaoke's model — the server owns intent, every
+mutation broadcasts a revisioned `PlayerState`, entries are addressed by `entry_id` —
+plus `previous` (restarts after 3 s), shuffle, repeat off/one/all, radio, and
+**persistence**: a backend restart keeps the queue and the current song, paused.
+
+**The audio** (`packages/core/src/modules/music/player.ts`) is one `<audio>` element
+per window, owned by no pane and started at boot (`initMusic`). Panes unmount on
+every tab and workspace switch; music must not stop when they do. It is routed
+through the mixer as the `music` strip and published to `navigator.mediaSession`, so
+keyboard media keys and the OS media flyout drive it.
+
+**Exactly one window plays.** The session names an `output_client`. A window that
+sees "playing, nobody owns it" asks for the output and gets it only if the owner is
+absent or silent for 8 s; pressing play in a window forces it there. Progress and
+end-of-track reports from non-owners are ignored, so a second window can't skip a
+song for everyone.
+
+**What you listened to** is measured from the owner's progress reports — wall time
+during which the position actually advanced — and recorded per play in
+`music_plays` with completed/skipped flags (a skip in the last tenth doesn't count).
+That feeds history, "most played", the DJ, and scrobbling.
+
+## Listeners: scrobbling and similarity
+
+| Listener | Connector | Scrobbles | `similar()` |
+|---|---|---|---|
+| Last.fm | API key + shared secret, then the desktop approval flow (session key never expires) | yes, signed | `track.getSimilar`, falling back to similar artists' top tracks |
+| ListenBrainz | user token | yes | LB Radio, artist mode |
+
+Rule: a track longer than 30 s, listened to for half its length or four minutes,
+whichever is first. Failures go into `music_scrobble_queue` and retry every five
+minutes. `music.scrobble` turns it off.
+
+## The DJ and radio
+
+`curator.py` is deterministic, so radio works with no model involved: seeds (now
+playing and recent history, or ones the caller names) are expanded through the
+listeners' `similar()`, and each suggestion is placed like an import — the library
+first, then resolved and downloaded if allowed and confident. House rules: nothing
+played in the last hour, nothing already queued, nothing skipped more than played, at
+most two per artist. With radio on, the session tops the queue up when fewer than two
+entries are left (`music.radioDownloads` limits it to the library).
+
+Spotify's recommendation endpoints were removed for new apps in 2024, which is why
+similarity comes from Last.fm and ListenBrainz.
+
+## The agent: the `music` group
+
+Seven backend tools (`agent_tools.py`), guide in `backend/modules/agent/guides/music.md`:
+
+| Tool | For |
+|---|---|
+| `music.status` | what's playing, the queue with entry ids, modes, imports running, review count |
+| `music.play` | "play / queue X" — library first, else fetch, in one call; asks with options when unsure |
+| `music.control` | every transport verb behind one enum |
+| `music.library` | read-only: tracks, artists, albums, playlists, top / history, review, and what an importer offers |
+| `music.playlist` | every playlist write, including `import` and `sync` |
+| `music.dj` | seeds → similar → queue; the model turns a mood into seeds |
+| `music.info` | one track: metadata, stats, lyrics, Last.fm bio |
+
+Panes also publish `useAgentContext` snapshots with entry and track ids.
+
+## Extending it
+
+Three contracts in `backend/modules/music/providers.py`, all `Protocol`s, registered
+by a backend plugin with `host.add_music_source`, `host.add_playlist_importer` and
+`host.add_music_listener` (see [the backend plugin SDK](../architecture/backend-plugin-sdk.mdx)).
+A new provider is reached through the existing tools by id — the agent group never
+grows. `examples/backend-plugins/music_folder_source` is a complete source: search a
+folder (a NAS share), copy picks into the library.
+
+### The music channel
+
+The `music` `/ws` channel is a public contract for plugin widgets:
+
+| Event | Data |
+|---|---|
+| `state` | the whole `PlayerState`, revisioned — drop older revisions |
+| `progress` | `{position, duration}`, ~1 Hz, not revisioned |
+| `track` | one library row changed (download progress, edit, enrichment) |
+| `job` | an import job's counters |
+| `library` | `{removed: [ids]}` and/or `{playlists: true}` |
+
+Commands: `music.open`, `music.playPause`, `music.next`, `music.previous`,
+`music.toggleShuffle`, `music.cycleRepeat`, `music.showLibrary`, `music.showQueue`.
+
+## Files
+
+- Backend: `backend/modules/music/` (`library`, `acquire`, `session`, `routes`,
+  `providers`, `resolve`, `jobs`, `enrich`, `lyrics`, `curator`, `importers/`,
+  `listeners/`, `agent_tools`), shared fetcher `backend/modules/ytdl/`, Range serving
+  `backend/modules/ranged_file.py`.
+- Frontend: `packages/core/src/modules/music/` (`player.ts`, `store.ts`, `api.ts`,
+  `ui.tsx`, `NowPlaying.tsx`, `panels/`).
+- Tests: `backend/tests/test_music.py`, `packages/core/src/modules/music/__tests__/`.
+
+## Deferred
+
+- Drag-and-drop reordering (the API takes an index; the queue uses one-step moves).
+- Crossfade and gapless playback.
+- Moving Clubhouse room music onto this library (it still uses karaoke's catalog).
+- A Spotify Web Playback SDK path: it needs Widevine in WebView2, and Premium.

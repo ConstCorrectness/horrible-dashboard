@@ -70,6 +70,9 @@ every capability and doubles as the integration test fixture.
 | `host.add_dash_facade(name, factory)` | an object bound to `dash.<name>` in every REPL session (also shows in `dash.help()`) |
 | `host.add_training_provider(provider)` | one trainable-environment source for the [training](../modules/training.mdx) module (Kaggle, HF, Gymnasium, …) |
 | `host.add_search_provider(provider)` | a web-search provider, joining the existing fan-out and rank fusion |
+| `host.add_music_source(source)` | a place songs come from (Subsonic, a NAS share, SoundCloud): `search()` and `fetch()` into the [music](../modules/music.mdx) library. Reached by `music.play` and every playlist import with no new tools |
+| `host.add_playlist_importer(importer)` | an account or file format that *describes* playlists (Deezer, Tidal, a new export format); the import job resolves and downloads the songs |
+| `host.add_music_listener(listener)` | a service told what played (scrobbling) and asked what's similar (the DJ and radio) |
 | `host.add_dataset_source(source)` | one place training material lives — search, splits, peek, locate. See [datasets](../modules/datasets.mdx) |
 | `host.add_recipe_backend(backend)` | one **training framework**: its tasks, its knobs, and the code they become. Inherits the venv-introspection safety net |
 | `host.add_eval_runner(runner)` | one way of executing an eval suite; results land in the same tables as every other runner's |
@@ -158,6 +161,11 @@ pipeline without touching its core:
   "dropped field" report drifts from every other one's.
 - **`add_eval_runner`** — a new way to execute a suite.
 - **`add_search_provider`** — a crawled corpus joining the same rank fusion.
+- **`add_music_source` / `add_playlist_importer` / `add_music_listener`** — the
+  music library's three contracts (`backend/modules/music/providers.py`). Unlike the
+  four above, a plugin reusing a built-in id (`youtube`, `spotify`, `lastfm`)
+  **replaces** it. `examples/backend-plugins/music_folder_source` is a complete
+  source in ~80 lines.
 
 Built-ins win id conflicts in all four, matching the connector rule. See
 [the AI-research pipeline](./ai-research.mdx) for how they fit together.

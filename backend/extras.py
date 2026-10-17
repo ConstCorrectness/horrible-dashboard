@@ -149,7 +149,7 @@ EXTRAS: dict[str, ExtraSpec] = {
         name="yt-dlp",
         modules=("yt_dlp",),
         install="uv sync",
-        summary="karaoke search and download",
+        summary="YouTube search and download for karaoke and the music library",
     ),
 }
 

@@ -1,0 +1,789 @@
+/* Music — the player pane, its strips, the board widget and the shell chip.
+   `mu-` prefix. Tokens only (DESIGN.md's Scale-Or-Nothing Rule): identity in
+   uppercase tracked sans, every figure in muted mono, the accent on a leading edge
+   or a 2px top rule — never a perimeter glow. */
+
+/* --- shared ------------------------------------------------------------------ */
+
+.mu-pane {
+  font-size: var(--fs-body);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mu-pane__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mu-kicker,
+.mu-section-title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.mu-kicker {
+  color: var(--accent);
+}
+
+.mu-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-top: var(--space-3);
+}
+
+.mu-section-meta,
+.mu-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.mu-muted {
+  color: var(--text-faint);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.mu-notes {
+  font-size: var(--fs-meta);
+}
+
+.mu-spacer {
+  flex: 1;
+}
+
+/* Cover art in a clipped frame: the house's single cut corner, top-left. */
+.mu-art {
+  --mu-art: 44px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--mu-art);
+  height: var(--mu-art);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 27px,
+      color-mix(in srgb, var(--border) 50%, transparent) 27px 28px
+    ),
+    var(--bg-inset);
+  border: 1px solid var(--border);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+  color: var(--text-faint);
+  overflow: hidden;
+  --icon-size: 40%;
+}
+
+.mu-art[data-size='sm'] {
+  --mu-art: 32px;
+}
+
+.mu-art[data-size='lg'] {
+  --mu-art: clamp(160px, 28vmin, 280px);
+  clip-path: polygon(16px 0, 100% 0, 100% 100%, 0 100%, 0 16px);
+}
+
+.mu-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* --- transport --------------------------------------------------------------- */
+
+.mu-transport {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mu-tbtn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  --icon-size: 15px;
+  transition:
+    color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.mu-tbtn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.mu-tbtn[data-on='true'] {
+  color: var(--accent);
+}
+
+.mu-tbtn--main {
+  width: calc(var(--control-h) + 8px);
+  height: calc(var(--control-h) + 8px);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  clip-path: polygon(7px 0, 100% 0, 100% 100%, 0 100%, 0 7px);
+  border-radius: 0;
+  --icon-size: 16px;
+}
+
+.mu-tbtn--main:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, white);
+  color: var(--accent-contrast);
+}
+
+.mu-tbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mu-tbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mu-transport[data-compact='true'] {
+  gap: 0;
+}
+
+.mu-transport[data-compact='true'] .mu-tbtn {
+  width: 22px;
+  height: 22px;
+  --icon-size: 11px;
+}
+
+.mu-transport[data-compact='true'] .mu-tbtn--main {
+  background: transparent;
+  color: var(--accent);
+  clip-path: none;
+}
+
+/* Ranges: a 2px track that fills with the accent up to the value. */
+.mu-scrub,
+.mu-volume {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.mu-scrub {
+  width: 100%;
+}
+
+.mu-range {
+  flex: 1;
+  min-width: 60px;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+
+.mu-range::-webkit-slider-runnable-track {
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--mu-fill, 0%),
+    var(--border-strong) var(--mu-fill, 0%) 100%
+  );
+}
+
+.mu-range::-moz-range-track {
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--mu-fill, 0%),
+    var(--border-strong) var(--mu-fill, 0%) 100%
+  );
+}
+
+.mu-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -4px;
+  background: var(--text);
+  border: none;
+  clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px);
+}
+
+.mu-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  background: var(--text);
+  border: none;
+  border-radius: 0;
+}
+
+.mu-range:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mu-range:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mu-volume .mu-range {
+  max-width: 110px;
+}
+
+.mu-notice {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+}
+
+.mu-notice:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* --- the player pane ----------------------------------------------------------- */
+
+.mu-player {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  /* Asymmetric two columns that stack when the pane is narrow: flex-basis, not a
+     viewport breakpoint — panes are resized by the user (DESIGN.md, Layout). */
+  display: flex;
+  flex-wrap: wrap;
+  align-content: stretch;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 27px,
+      color-mix(in srgb, var(--border) 45%, transparent) 27px 28px
+    ),
+    var(--bg);
+}
+
+.mu-player--empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.mu-player__dock {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-5);
+}
+
+.mu-player__now {
+  position: relative;
+  flex: 1 1 300px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-7) var(--space-6);
+  border-right: 1px solid var(--border);
+  min-width: 0;
+  overflow: auto;
+  animation: mu-arrive var(--dur-base) var(--ease-entrance) both;
+}
+
+/* The accent as a 2px top rule over the now-playing block, not a perimeter. */
+.mu-player__now::before {
+  content: '';
+  position: absolute;
+  inset: 0 var(--space-6) auto var(--space-6);
+  height: 2px;
+  background: var(--accent);
+}
+
+.mu-player__id {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mu-player__title {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.mu-player__sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--fs-lead, var(--fs-body));
+}
+
+.mu-player__artist {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.mu-player__album {
+  color: var(--text-dim);
+}
+
+.mu-player__meta {
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.mu-player__meta > span + span {
+  border-left: 1px solid var(--border);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+}
+
+.mu-player__controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: auto;
+}
+
+.mu-player__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.mu-player__words {
+  flex: 1.6 1 360px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-6) var(--space-6) 0;
+}
+
+.mu-lyrics {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-6) 0 40%;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  mask-image: linear-gradient(transparent, black 12%, black 82%, transparent);
+}
+
+.mu-lyric {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: calc(var(--fs-body) * 1.45);
+  line-height: 1.35;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+
+.mu-lyric:hover {
+  color: var(--text-dim);
+}
+
+.mu-lyric[data-state='past'] {
+  color: var(--text-dim);
+}
+
+.mu-lyric[data-state='now'] {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.mu-lyrics-plain {
+  margin: var(--space-5) 0 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: calc(var(--fs-body) * 1.2);
+  line-height: 1.6;
+  color: var(--text-dim);
+  overflow: auto;
+}
+
+/* --- library strip --------------------------------------------------------------- */
+
+.mu-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.mu-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  height: var(--control-h);
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.mu-tab:hover {
+  color: var(--text);
+}
+
+.mu-tab[aria-selected='true'] {
+  color: var(--text-strong);
+}
+
+.mu-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+}
+
+.mu-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.mu-toolbar select {
+  font-size: var(--fs-body);
+  width: auto;
+}
+
+.mu-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.mu-search {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 0.6rem;
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+}
+
+.mu-search:focus-within {
+  border-color: var(--accent);
+}
+
+/* The field draws the box; the input inside it is bare. Two-class specificity so
+   the element-level control rules (controls.css) don't add a second border. */
+.mu-search input[type='search'] {
+  font-size: var(--fs-body);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  padding: 0;
+}
+
+.mu-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-inset);
+  clip-path: polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px);
+  color: var(--text-dim);
+  --icon-size: 18px;
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.mu-drop[data-over='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-inset));
+}
+
+.mu-drop__title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+/* --- import ------------------------------------------------------------------------ */
+
+.mu-import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mu-importer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-raised);
+}
+
+.mu-importer__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.mu-importer__name {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.mu-candidates {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mu-candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mu-candidate:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.mu-candidate__title {
+  font-size: var(--fs-body);
+}
+
+.mu-candidate__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+/* --- board widget ----------------------------------------------------------------- */
+
+.mu-widget {
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  height: 100%;
+  min-width: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.mu-widget .mu-art {
+  --mu-art: 72px;
+}
+
+.mu-widget__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mu-widget__title {
+  font-size: var(--fs-body);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mu-widget__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+/* --- shell chip (same family as the Clubhouse room chip) ---------------------------- */
+
+.mu-live {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  align-self: center;
+  height: 24px;
+  max-width: 360px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-inset);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+}
+
+.mu-live__open,
+.mu-live__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.mu-live__open:hover,
+.mu-live__stop:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.mu-live__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.mu-live__dot[data-on='true'] {
+  background: var(--accent);
+}
+
+.mu-live__title {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.mu-live__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.mu-live__stop {
+  --icon-size: 11px;
+  border-left: 1px solid var(--border);
+  padding: 0 7px 0 6px;
+  color: var(--text-dim);
+}
+
+.mu-live__stop:hover {
+  color: var(--danger);
+}
+
+.mu-live .mu-transport {
+  border-left: 1px solid var(--border);
+}
+
+/* --- motion ------------------------------------------------------------------------- */
+
+@keyframes mu-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mu-player__now {
+    animation: none;
+  }
+
+  .mu-tbtn,
+  .mu-lyric,
+  .mu-drop {
+    transition: none;
+  }
+
+  .mu-lyrics {
+    scroll-behavior: auto;
+  }
+}

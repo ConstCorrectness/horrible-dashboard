@@ -915,6 +915,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "with reading progress: search it with citations, list and save items, track "
         "status, and import whole sites for offline reading."
     ),
+    "music": (
+        "The user's music library and player: play or queue songs by name (fetching "
+        "ones not in the library), skip/pause/volume/shuffle/repeat, playlists and "
+        "importing them from Spotify or Last.fm, a DJ that queues similar songs, and "
+        "track info with lyrics and listening history."
+    ),
     "docviewer": (
         "Documentation sets captured for offline reading: list them, search one, and "
         "open a page."
@@ -1041,6 +1047,27 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "npm",
         "pip",
         "git",
+    ),
+    # Music. Phrases, not bare verbs: "play" alone is in "display" and "playwright",
+    # "track" in every tracking question.
+    "music": (
+        "song",
+        "playlist",
+        "album",
+        "lyrics",
+        "spotify",
+        "last.fm",
+        "listenbrainz",
+        "scrobble",
+        "play some",
+        "put on ",
+        "skip this",
+        "next track",
+        "now playing",
+        "what's playing",
+        "my library of music",
+        "radio",
+        " dj",
     ),
     # The knowledge base. Phrases, not topics: "transformer" or "RAG" would preload
     # it on every ML question, and the system-prompt nudge already covers those —

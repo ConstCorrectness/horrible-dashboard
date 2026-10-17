@@ -124,6 +124,10 @@ from backend.modules.agentpedia import (
 from backend.modules.agentpedia import router as agentpedia_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
+from backend.modules.music import register_agent_tools as register_music_tools
+from backend.modules.music import register_music
+from backend.modules.music import router as music_router
+from backend.modules.music import start_music
 from backend.modules.library import router as library_router
 from backend.modules.llamacpp import router as llamacpp_router
 from backend.modules.llamacpp.agent_tools import register_llamacpp_tools
@@ -298,6 +302,9 @@ async def lifespan(app: FastAPI):
     # awaited: a warm is not worth a second of boot, and the lists are fetched on
     # demand anyway if it fails.
     agent_routes.start_warm_model_lists()
+    # Music: the saved session (paused), interrupted playlist imports, and the
+    # scrobble retry loop.
+    await start_music()
     # Connect enabled MCP servers and bridge their tools into the agent. Failures
     # are recorded as per-server status, so a broken server never blocks boot.
     await mcp_manager.start_enabled()
@@ -459,6 +466,7 @@ app.include_router(library_router, prefix="/api")
 app.include_router(docviewer_router, prefix="/api")
 app.include_router(kb_router, prefix="/api")
 app.include_router(karaoke_router, prefix="/api")
+app.include_router(music_router, prefix="/api")
 app.include_router(evals_router, prefix="/api")
 app.include_router(trajectories_router, prefix="/api")
 app.include_router(otel_router, prefix="/api")
@@ -554,6 +562,12 @@ register_symdex_tools()
 # Register the karaoke agent tools (grouped under `karaoke`): the session lives on
 # the server, so these run the room with no karaoke pane open anywhere.
 register_karaoke_tools()
+
+# The music library: built-in sources/importers/listeners and their connectors
+# (Spotify, Last.fm, ListenBrainz), then the `music` agent group. Before
+# `load_plugins()`, so a plugin provider reusing a built-in id replaces it.
+register_music()
+register_music_tools()
 
 # Register the docviewer agent tools (grouped under `docviewer`): a captured doc
 # set is searchable with no pane open, which is the point of having saved it.

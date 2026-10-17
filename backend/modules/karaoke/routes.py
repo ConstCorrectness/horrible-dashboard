@@ -9,13 +9,11 @@ client in the room is updated by the same write.
 
 from __future__ import annotations
 
-import mimetypes
-import re
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from backend.modules.karaoke import downloader, store, transpose
 from backend.modules.karaoke.models import (
@@ -34,13 +32,9 @@ from backend.modules.karaoke.models import (
     VolumeRequest,
 )
 from backend.modules.karaoke.session import session
+from backend.modules.ranged_file import ranged_file_response
 
 router = APIRouter(prefix="/karaoke", tags=["karaoke"])
-
-# Read this much per chunk when serving a byte range.
-_STREAM_CHUNK = 256 * 1024
-_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
-
 
 # --- library ---
 
@@ -144,52 +138,7 @@ async def media(song_id: str, request: Request, semitones: int = 0) -> Response:
             headers={"cache-control": "no-store"},
         )
 
-    mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
-    range_header = request.headers.get("range")
-    if not range_header:
-        return FileResponse(path, media_type=mime, headers={"accept-ranges": "bytes"})
-
-    size = path.stat().st_size
-    match = _RANGE_RE.fullmatch(range_header.strip())
-    if not match:
-        raise HTTPException(status_code=416, detail="malformed Range header")
-    raw_start, raw_end = match.groups()
-    if raw_start:
-        start = int(raw_start)
-        end = int(raw_end) if raw_end else size - 1
-    else:
-        # A suffix range ("bytes=-500") asks for the *last* N bytes. Treating the
-        # number as a start offset is the classic misread and serves the wrong
-        # part of the file.
-        if not raw_end:
-            raise HTTPException(status_code=416, detail="malformed Range header")
-        start = max(0, size - int(raw_end))
-        end = size - 1
-    end = min(end, size - 1)
-    if start > end or start >= size:
-        return Response(status_code=416, headers={"content-range": f"bytes */{size}"})
-
-    def iter_range() -> Any:
-        remaining = end - start + 1
-        with path.open("rb") as handle:
-            handle.seek(start)
-            while remaining > 0:
-                chunk = handle.read(min(_STREAM_CHUNK, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
-
-    return StreamingResponse(
-        iter_range(),
-        status_code=206,
-        media_type=mime,
-        headers={
-            "content-range": f"bytes {start}-{end}/{size}",
-            "content-length": str(end - start + 1),
-            "accept-ranges": "bytes",
-        },
-    )
+    return ranged_file_response(path, request, default_mime="video/mp4")
 
 
 # --- session ---
