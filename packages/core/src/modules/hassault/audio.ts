@@ -310,9 +310,20 @@ export class GameAudio {
   private wavBuffers = new Map<string, AudioBuffer>();
   private wavPreloaded = false;
   private stepToggle = 0;
-  private lastCalloutAt = 0;
+  private lastCalloutAt = -Infinity;
+  private lastPlayedAt = new Map<string, number>();
+  private activeCalloutSource: AudioBufferSourceNode | null = null;
   private voices = 0;
   private volume = 1;
+
+  private cooldownForKind(kind: string): [string, number] | null {
+    if (kind === 'step') return ['heard_step', 220];
+    if (kind.startsWith('step_')) return ['own_step', 260];
+    if (kind === 'land' || kind === 'jump') return [kind, 280];
+    if (kind === 'reload' || kind.startsWith('reload_')) return [kind, 350];
+    if (kind.startsWith('callout_') || kind.startsWith('ping_')) return ['callout', 900];
+    return null;
+  }
 
   /** 0 silences it entirely — and then no context is ever created. */
   setVolume(volume: number): void {
@@ -501,6 +512,14 @@ export class GameAudio {
   ): void {
     if (volume < MIN_GAIN) return;
     if (this.voices >= MAX_VOICES) return;
+    const cd = !voice ? this.cooldownForKind(kind) : null;
+    if (cd) {
+      const wallNow = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const [cdKey, minMs] = cd;
+      const prevAt = this.lastPlayedAt.get(cdKey) ?? -Infinity;
+      if (wallNow - prevAt < minMs) return;
+      this.lastPlayedAt.set(cdKey, wallNow);
+    }
     const ctx = this.ready();
     if (!ctx || !this.master || !this.noise) return;
 
@@ -512,9 +531,19 @@ export class GameAudio {
     // Prefer high-definition .wav sample buffer when loaded for footsteps, reloads & callouts
     const wavBuf = !voice ? this.resolveWavBuffer(kind) : undefined;
     if (wavBuf) {
+      const isCallout = kind.startsWith('callout_') || kind.startsWith('ping_');
+      if (isCallout && this.activeCalloutSource) {
+        try {
+          this.activeCalloutSource.stop();
+        } catch {
+          // Ignore if already stopped
+        }
+        this.activeCalloutSource = null;
+      }
+
       const source = ctx.createBufferSource();
       source.buffer = wavBuf;
-      const isCallout = kind.startsWith('callout_') || kind.startsWith('ping_');
+      source.loop = false;
       const jitter = isCallout ? 1.0 : 0.96 + Math.random() * 0.08;
       const elevTilt = up > 0 ? 1.05 : up < 0 ? 0.95 : 1.0;
       source.playbackRate.value = jitter * elevTilt;
@@ -540,14 +569,20 @@ export class GameAudio {
       panner.connect(this.master);
 
       this.voices += 1;
+      if (isCallout) {
+        this.activeCalloutSource = source;
+      }
       source.onended = () => {
         this.voices = Math.max(0, this.voices - 1);
+        if (this.activeCalloutSource === source) {
+          this.activeCalloutSource = null;
+        }
         source.disconnect();
         if (occludeFilter) occludeFilter.disconnect();
         gainNode.disconnect();
         panner.disconnect();
       };
-      source.start(now);
+      source.start(now, 0, wavBuf.duration);
       return;
     }
 
@@ -643,7 +678,8 @@ export class GameAudio {
       event.kind === 'shot' && event.weapon
         ? weaponVoice(weapons.find((w) => w.id === event.weapon))
         : undefined;
-    this.play(event.kind, event.volume, event.bearing, listenerYaw, event.up, voice, occluded);
+    const vol = event.kind === 'step' ? event.volume * 0.65 : event.volume;
+    this.play(event.kind, vol, event.bearing, listenerYaw, event.up, voice, occluded);
   }
 
   /**
@@ -662,7 +698,7 @@ export class GameAudio {
    */
   callout(kind: CalloutKind, bearing?: number, listenerYaw = 0, volume = 0.85): void {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    if (now - this.lastCalloutAt < 350) return;
+    if (now - this.lastCalloutAt < 900) return;
     this.lastCalloutAt = now;
     const calloutKind = `callout_${kind}`;
     if (bearing !== undefined) {
@@ -679,6 +715,9 @@ export class GameAudio {
    * stereophonically; otherwise it plays front-and-centre.
    */
   ping(kind: string, bearing?: number, listenerYaw = 0): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - this.lastCalloutAt < 900) return;
+    this.lastCalloutAt = now;
     const pingKind = `ping_${kind}`;
     if (bearing !== undefined) {
       this.play(pingKind, 0.85, bearing, listenerYaw);

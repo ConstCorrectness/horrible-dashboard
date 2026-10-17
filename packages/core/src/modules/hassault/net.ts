@@ -953,6 +953,9 @@ export class Predictor {
       const kick = this.kicks.get(command.seq);
       if (kick) applyImpulse(player, kick.x, kick.y, kick.z);
     }
+    // Historical landing events replayed during reconciliation already fired when
+    // originally predicted; clear fallSpeed so the current frame only hears its own step.
+    player.fallSpeed = 0;
     // Restore the live view angles: the camera must follow the mouse, not the
     // last command the server happens to have acknowledged.
     const last = this.pending[this.pending.length - 1];

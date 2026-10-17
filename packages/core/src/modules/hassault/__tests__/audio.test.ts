@@ -86,4 +86,21 @@ describe('weaponVoice', () => {
     expect(footstepKindForMap('hd_nuke', 0, 0, 10)).toBe('step_metal');
     expect(footstepKindForMap('hd_nuke', 0, 0, 0)).toBe('step_concrete');
   });
+
+  it('throttles rapid-fire footsteps, reloads, and callouts so .wav buffers do not loop multiple times per second', async () => {
+    const { GameAudio } = await import('../audio');
+    const audio = new GameAudio();
+    const lastPlayed = (audio as unknown as { lastPlayedAt: Map<string, number> }).lastPlayedAt;
+    const cooldownFor = (
+      audio as unknown as { cooldownForKind: (k: string) => [string, number] | null }
+    ).cooldownForKind.bind(audio);
+
+    expect(cooldownFor('step')).toEqual(['heard_step', 220]);
+    expect(cooldownFor('step_concrete')).toEqual(['own_step', 260]);
+    expect(cooldownFor('land')).toEqual(['land', 280]);
+    expect(cooldownFor('reload_magout')).toEqual(['reload_magout', 350]);
+    expect(cooldownFor('callout_reloading')).toEqual(['callout', 900]);
+    expect(cooldownFor('ping_spotted')).toEqual(['callout', 900]);
+    expect(lastPlayed).toBeInstanceOf(Map);
+  });
 });

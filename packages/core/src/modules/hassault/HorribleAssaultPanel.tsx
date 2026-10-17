@@ -277,7 +277,7 @@ const NO_KICK: Vec3 = { x: 0, y: 0, z: 0 };
  * how others hear them, which is inaudible — whereas a drift in anything the server
  * judges would not be.
  */
-const OWN_STRIDE = 4.2;
+const OWN_STRIDE = 7.2;
 
 /** How long a heard noise stays on the direction ring. */
 const NOISE_TTL_MS = 900;
@@ -932,7 +932,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
   const effectsRef = useRef<EffectsPool | null>(null);
-  const wasReloadingRef = useRef(false);
   const lastHeldWeaponRef = useRef<string>('');
 
   // Tactical Ping & Callouts
@@ -1803,6 +1802,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const dropPool = new DropPool(THREE, scene);
       let lastBombBeepTime = 0;
       let lastHeartbeatTime = 0;
+      let lastBombState: string | undefined;
       let placedForRoom = '';
       // Whether we were in water last frame, so *entering* can be told from
       // *being in*: only the crossing makes a sound.
@@ -2011,7 +2011,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
           };
-          const wasOnGround = player.onGround;
+          let wasOnGround = player.onGround;
+          let prevX = player.x;
+          let prevY = player.y;
 
           if (online && session && shots) {
             // Correct against the newest snapshot *before* predicting this
@@ -2027,6 +2029,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 correction.ack,
               );
               session.pendingCorrection = null;
+              wasOnGround = player.onGround;
+              prevX = player.x;
+              prevY = player.y;
             }
             // Recoil is a local move on the camera, exactly like the mouse: the
             // server reads whatever angles the resulting command carries.
@@ -2251,15 +2256,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               player.x <= 36.5;
             // In ventilation duct, even crouch movement scrapes/echoes on sheet metal
             const audibleMove = isVent ? true : player.crouch <= 0.5;
-            if (player.onGround && audibleMove) {
-              strideRef.current += Math.hypot(player.velX, player.velY) * dt;
+            const stepDist = Math.hypot(player.x - prevX, player.y - prevY);
+            if (player.onGround && audibleMove && moving && stepDist > 0.001) {
+              strideRef.current += stepDist;
               if (strideRef.current >= OWN_STRIDE) {
                 strideRef.current = 0;
                 const activeMap = world3dRef.current?.info.name ?? world.info.name ?? '';
                 const stepKind = footstepKindForMap(activeMap, player.x, player.y, player.z, isVent);
                 audio.own(stepKind, isVent ? 0.65 : 0.52);
               }
-            } else {
+            } else if (!player.onGround || !moving) {
               strideRef.current = 0;
             }
             if (wasOnGround && !player.onGround && player.velZ > 0) {
@@ -2282,30 +2288,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
             }
             if (fired) audio.own('shot', 0.55, shotsRef.current?.weapon);
-
-            const isReloading = online
-              ? (session?.state.you?.reloading ?? false)
-              : localReloadingRef.current;
-            if (isReloading && !wasReloadingRef.current) {
-              wasReloadingRef.current = true;
-              audio.own('reload_magout', 0.72);
-              audio.callout('reloading', undefined, 0, 0.68);
-              const rTime = (shotsRef.current?.weapon?.reloadTime ?? 1.8) * 1000;
-              setTimeout(
-                () => {
-                  if (wasReloadingRef.current) audio.own('reload_magin', 0.78);
-                },
-                Math.round(rTime * 0.45),
-              );
-              setTimeout(
-                () => {
-                  if (wasReloadingRef.current) audio.own('reload_bolt', 0.82);
-                },
-                Math.round(rTime * 0.8),
-              );
-            } else if (!isReloading && wasReloadingRef.current) {
-              wasReloadingRef.current = false;
-            }
           }
         }
 
@@ -2456,7 +2438,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
           const bomb = session.state.modeState?.bomb;
           if (bomb?.state === 'planted' && typeof bomb.fuseIn === 'number') {
-            if (lastBombBeepTime === 0) {
+            if (lastBombState !== 'planted') {
+              lastBombState = 'planted';
               audioRef.current?.callout('bomb_planted', undefined, 0, 0.9);
             }
             const fuse = bomb.fuseIn;
@@ -2481,9 +2464,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               }
             }
           } else {
-            if (bomb?.state === 'defused' && lastBombBeepTime > 0) {
+            if (bomb?.state === 'defused' && lastBombState === 'planted') {
               audioRef.current?.callout('bomb_defused', undefined, 0, 0.95);
             }
+            lastBombState = bomb?.state;
             lastBombBeepTime = 0;
             lastHeartbeatTime = 0;
           }
@@ -2665,13 +2649,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               ? Math.max(0, Math.min(1, 1 - reloadLeft / effectiveReloadTime))
               : null;
 
-          // Tactical & Dry Reload multi-stage synthesized audio cues
+          // Tactical & Dry Reload multi-stage audio cues
           if (isReloading) {
             if (!reloadStageRef.current.wasReloading) {
               reloadStageRef.current.wasReloading = true;
               reloadStageRef.current.magInFired = false;
               reloadStageRef.current.boltFired = false;
-              audioRef.current?.own('reload_magout', 0.65);
+              audioRef.current?.own('reload_magout', 0.68);
+              audioRef.current?.callout('reloading', undefined, 0, 0.68);
             }
             if (reloadProgress !== null) {
               if (reloadProgress >= 0.44 && !reloadStageRef.current.magInFired) {
