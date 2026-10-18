@@ -364,6 +364,24 @@ async def _leave_any(conn: WsConnection) -> None:
         _record_result(result)
 
 
+async def _afk_kick(conn: Any) -> None:
+    """Remove an AFK player from a match hosted here (`MatchServer.kick_handler`).
+
+    A browser on this node leaves the way a disconnect would, result filed. A
+    friend's player is dropped through the fabric's own path, which forgets the
+    proxy too — and files nothing, since their session is not this account's.
+    """
+    if isinstance(conn, fabric.PeerPlayerConn):
+        await fabric.drop_hosted_conn(conn)
+        return
+    result = await match_server.leave(conn)
+    if result is not None:
+        _record_result(result)
+
+
+match_server.kick_handler = _afk_kick
+
+
 def _record_result(result: dict[str, Any]) -> None:
     """File a finished match under the signed-in account.
 

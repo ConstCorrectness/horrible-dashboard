@@ -2264,7 +2264,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               if (strideRef.current >= OWN_STRIDE) {
                 strideRef.current = 0;
                 const activeMap = world3dRef.current?.info.name ?? world.info.name ?? '';
-                const stepKind = footstepKindForMap(activeMap, player.x, player.y, player.z, isVent);
+                const stepKind = footstepKindForMap(
+                  activeMap,
+                  player.x,
+                  player.y,
+                  player.z,
+                  isVent,
+                );
                 audio.own(stepKind, isVent ? 0.65 : 0.52);
               }
             } else if (!player.onGround || !moving) {
@@ -2381,8 +2387,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                     const mat = surfaceMaterial(world, fx.ends[i], face);
                     const isStab = Boolean(fx.alt);
                     const slashAngle =
-                      Math.PI * 0.25 +
-                      Math.sin(fx.ends[i][0] * 17.1 + fx.ends[i][1] * 31.3) * 0.35;
+                      Math.PI * 0.25 + Math.sin(fx.ends[i][0] * 17.1 + fx.ends[i][1] * 31.3) * 0.35;
                     decals.mark(
                       fx.ends[i],
                       face,
@@ -2629,9 +2634,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           }
           if (shots) (window as any).__SHOTS = shots;
           const baseWeapon = shots?.weapon?.id ?? '';
-          const heldWeapon = holdingNade
-            ? `nade_${nades?.selectedSpec?.id ?? 'he'}`
-            : baseWeapon;
+          const heldWeapon = holdingNade ? `nade_${nades?.selectedSpec?.id ?? 'he'}` : baseWeapon;
           if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
             if (lastHeldWeaponRef.current !== '') {
               // Weapon switch deploy audio cues matching CS 1.6
@@ -3212,10 +3215,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       shotsRef.current?.press();
     };
     const onMouseUp = (e: MouseEvent) => {
-      if (
-        (e.button === 0 || e.button === 1 || e.button === 2) &&
-        nadesRef.current?.pinPulled
-      ) {
+      if ((e.button === 0 || e.button === 1 || e.button === 2) && nadesRef.current?.pinPulled) {
         nadesRef.current.releasePin();
       }
       if (e.button === 0) shotsRef.current?.release();
@@ -4384,6 +4384,50 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             <strong style={{ fontSize: '1.4rem', letterSpacing: '0.08em' }}>DOWN</strong>
             <span style={{ opacity: 0.8, fontSize: '0.85rem' }}>
               respawning in {Math.max(0, Math.ceil(you.respawnIn))}s
+            </span>
+          </div>
+        )}
+
+        {/* The server's AFK warning: present only once it has warned us, and gone
+            with the next snapshot after any real input. See afk.py. */}
+        {online && you?.afk && (
+          <div
+            role="alert"
+            style={{
+              position: 'absolute',
+              top: '18%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              pointerEvents: 'none',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: '0.9rem',
+              padding: '0.55rem 1.1rem',
+              background: 'rgba(13,17,23,0.82)',
+              borderTop: '2px solid #f85149',
+              clipPath: 'polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%)',
+              color: 'var(--text, #e6edf3)',
+              zIndex: 5,
+            }}
+          >
+            <strong
+              style={{
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
+            >
+              AFK — move or be removed
+            </strong>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                fontSize: '1.1rem',
+                color: '#f85149',
+              }}
+            >
+              {Math.max(0, Math.ceil(you.afk.kickIn))}s
             </span>
           </div>
         )}

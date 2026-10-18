@@ -132,6 +132,9 @@ class HassaultReferee:
         # reach, and on a server that never restarts its rooms it is a file per
         # room forever.
         self.server = MatchServer(record_replays=False)
+        # An AFK removal is a leave like any other here: recorded by the
+        # referee, and the result sent so the player's node files it.
+        self.server.kick_handler = self._kick
         #: Room id → the settings its host has changed from `ROOM_SETTINGS`.
         self._settings: dict[str, dict[str, bool]] = {}
 
@@ -240,7 +243,9 @@ class HassaultReferee:
     def settings_payload(self, room: Any) -> dict[str, Any]:
         return {"settings": self.settings_for(room.id), "hostId": self.host_of(room)}
 
-    async def set_room_setting(self, conn: SeatConn, data: dict[str, Any]) -> str | None:
+    async def set_room_setting(
+        self, conn: SeatConn, data: dict[str, Any]
+    ) -> str | None:
         """The host changing a room setting; why it was refused, or None.
 
         On success every player in the room gets `room_settings`, the host
@@ -257,7 +262,9 @@ class HassaultReferee:
         if key not in ROOM_SETTINGS or not isinstance(value, bool):
             return f"unknown room setting {key!r}"
         self._settings.setdefault(room.id, {})[str(key)] = value
-        await self.server.broadcast_event(room, "room_settings", self.settings_payload(room))
+        await self.server.broadcast_event(
+            room, "room_settings", self.settings_payload(room)
+        )
         return None
 
     def _has_space(self, map_name: str) -> bool:
@@ -333,8 +340,20 @@ class HassaultReferee:
         # who holds the room now, so their console knows whose call it is.
         room = self.server.rooms.get(str(result.get("room", "")))
         if room is not None and room.humans:
-            await self.server.broadcast_event(room, "room_settings", self.settings_payload(room))
+            await self.server.broadcast_event(
+                room, "room_settings", self.settings_payload(room)
+            )
         return result
+
+    async def _kick(self, conn: SeatConn) -> None:
+        """Take an AFK player out (`MatchServer.kick_handler`). The socket stays
+        open — the client is told why and may join again — and the result goes
+        back exactly as the `leave` event sends it, so the node records it."""
+        result = await self.leave(conn)
+        if result is not None:
+            await conn.send_json(
+                {"channel": "hassault", "event": "result", "data": result}
+            )
 
     def _record(self, conn: SeatConn, result: dict[str, Any]) -> None:
         """Log the session and grant its XP through the server's own store.

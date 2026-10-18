@@ -809,6 +809,12 @@ class Defuse(GameMode):
         """Nobody comes back inside a round. Warmup is a warmup, so they do."""
         return self.state.phase == WARMUP
 
+    def afk_clock_runs(self, room: MatchRoom, player: MatchPlayer) -> bool:
+        """Only while a round is live, or in warmup. Freeze time is for buying —
+        and a player who buys nothing has still not walked off — and the post
+        round and a finished match have nothing to do in them at all."""
+        return self.state.phase in (LIVE, WARMUP)
+
     def damage_scale(
         self, room: MatchRoom, attacker: MatchPlayer, victim: MatchPlayer
     ) -> float:

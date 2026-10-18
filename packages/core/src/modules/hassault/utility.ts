@@ -140,11 +140,14 @@ export class GrenadeController {
   /**
    * Take a grenade in hand: ready it *and* put the weapon away.
    *
-   * What the number keys now do. Empty slots still equip — `select`'s reasoning,
-   * and the auto-holster below means nobody is ever left holding nothing.
+   * What the number keys now do. An **empty slot is refused** and the weapon
+   * stays up: unlike `select`, equipping puts the gun away, and a key that
+   * swapped a loaded rifle for an empty hand mid-fight was a way to die. The HUD
+   * still shows the slot greyed with its zero. Returns whether it equipped.
    */
-  equip(slot: number): void {
-    if (slot < 0 || slot >= this.specs.length) return;
+  equip(slot: number): boolean {
+    if (slot < 0 || slot >= this.specs.length) return false;
+    if (this.countOf(slot) <= 0) return false;
     if (this.slot !== slot) {
       this.pinPulledState = false;
       this.pullLobState = false;
@@ -152,6 +155,7 @@ export class GrenadeController {
     }
     this.slot = slot;
     this.equippedSlot = slot;
+    return true;
   }
 
   /** Put the grenade away. A weapon key, Escape, dying, or throwing the last one. */

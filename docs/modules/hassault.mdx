@@ -4479,6 +4479,40 @@ Membership is keyed by connection, so joining twice on the same socket replaces
 the first player rather than leaving a body behind that nothing can remove. A
 second player means a second browser tab (or a second machine).
 
+### The AFK timer
+
+A human who sends no real input for `afk.WARN_AFTER` (90 s) is warned, and at
+`afk.KICK_AFTER` (120 s) is removed from the match. No mode has a spectator seat,
+so removed means out of the room. Both numbers live in
+`backend/modules/hassault/afk.py`; the game server can retune them without a
+code change through `HASSAULT_AFK_WARN` / `HASSAULT_AFK_KICK` (seconds, and
+`HASSAULT_AFK_KICK=0` turns the timer off).
+
+- **The server decides.** `MatchRoom._step_afk` accrues idle seconds from the
+  tick's own `elapsed`. Only `afk.is_activity` resets them, and it reads the
+  *commands the simulation consumed*: movement, jump, a crouch toggle, aim past
+  `AIM_TRAVEL`, fire, reload, a weapon switch, a throw, use, drop, buy and sell.
+  A chat line `chat.post` accepted counts too. A `ping`, an input batch's `rtt`,
+  an empty batch, or frames with every key up and the view still do not count,
+  so a keep-alive is idle however often it arrives. Tactical pings do not count
+  either: a ping key on a macro is just a keep-alive.
+- **Paused, not reset**, while there is nothing to do: dead and waiting to
+  respawn, or whenever `GameMode.afk_clock_runs` says no (defuse's freeze time,
+  the gap between rounds, a finished match). Bots are never timed. A respawn
+  clears the aim baseline, so the spawn's facing does not count as a turn.
+  Without that, every defuse round start would reset every idle player.
+- **A warning always comes first.** A stalled tick that jumps past the kick
+  threshold only warns, and the full grace window still follows.
+- **The warning** is an `afk_warning` event plus a chat line from `SERVER` to
+  that player only. The native client shows the chat line without knowing the
+  event. While warned, `you.afk.kickIn` rides in every snapshot, and the
+  browser HUD draws it as a countdown.
+- **The removal** sends `afk_kicked`, announces it to the room in chat, and then
+  leaves through the host's own path (`MatchServer.kick_handler`). The node's
+  channel files the result as a disconnect would. A friend's player is dropped
+  through the fabric with nothing filed here. The game server's referee records
+  the result and sends `result` back so the player's node files it.
+
 ### Two implementations of one set of rules
 
 An authoritative server has to simulate, so `backend/modules/hassault/physics.py`

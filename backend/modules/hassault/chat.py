@@ -154,6 +154,12 @@ async def post(
         return "empty"
     if not limiter.allow(f"{room.id}:{player.id}"):
         return "slow down"
+    # Talking is playing, for the AFK timer — but only a line that was actually
+    # posted: an empty or rate-limited one returned above, so spamming the send
+    # key with nothing in the box is not a keep-alive. See `afk.py`.
+    from backend.modules.hassault import afk
+
+    afk.note_activity(player)
     payload = message(
         sender_id=player.id,
         sender_name=player.name,

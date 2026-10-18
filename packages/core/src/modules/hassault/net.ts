@@ -257,6 +257,12 @@ export interface SelfState {
    * that never sends it reads as zero rather than `NaN`.
    */
   objectives?: number;
+  /**
+   * Present only once the server's AFK timer has warned us: seconds until it
+   * removes us from the match. Absent is "you are fine" — see
+   * `backend/modules/hassault/afk.py`. Optional because older servers have none.
+   */
+  afk?: { kickIn: number };
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
   hits: {

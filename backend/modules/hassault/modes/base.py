@@ -167,6 +167,15 @@ class GameMode:
         """Whether a dead player whose timer has expired comes back now."""
         return True
 
+    def afk_clock_runs(self, room: MatchRoom, player: MatchPlayer) -> bool:
+        """Whether this living player's AFK timer is running right now.
+
+        False while there is nothing a player could be doing — freeze time, the
+        gap between rounds, a finished match — so standing still through them
+        is not idling. Paused, not reset; see `afk.py`.
+        """
+        return True
+
     def outfit(self, room: MatchRoom, player: MatchPlayer) -> None:
         """Adjust a loadout immediately after `reset_loadout`.
 

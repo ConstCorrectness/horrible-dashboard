@@ -165,11 +165,12 @@ impl GrenadeController {
 
     /// Take a grenade in hand: ready it *and* put the weapon away.
     ///
-    /// What the number keys now do. Empty slots still equip — `select`'s
-    /// reasoning, and the auto-holster below means nobody is ever left holding
-    /// nothing.
+    /// What the number keys now do. An **empty slot is refused** and the weapon
+    /// stays up: unlike `select`, equipping puts the gun away, and a key that
+    /// swapped a loaded rifle for an empty hand mid-fight was a way to die.
+    /// Mirrors `NadeController.equip` in the browser client.
     pub fn equip(&mut self, slot: usize) {
-        if slot < self.specs.len() {
+        if slot < self.specs.len() && self.count_of(slot) > 0 {
             if self.slot != slot {
                 self.pin_pulled = false;
                 self.pull_lob = false;
@@ -382,6 +383,21 @@ mod tests {
         g.select(0);
         g.press(false);
         assert_eq!(g.frame(5000.0, None), ThrowIntent::NONE);
+    }
+
+    #[test]
+    fn an_empty_slot_cannot_be_equipped() {
+        // Equipping puts the weapon away; doing that for a grenade you do not
+        // have left the player holding nothing.
+        let mut g = loadout();
+        g.equip(0);
+        g.press(false);
+        g.frame(0.0, None);
+        assert_eq!(g.count_of(0), 0);
+        g.equip(0);
+        assert!(!g.equipped());
+        g.equip(1);
+        assert!(g.equipped());
     }
 
     #[test]

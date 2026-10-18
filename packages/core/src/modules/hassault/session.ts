@@ -70,6 +70,14 @@ export interface KillNote {
 
 /** How long a kill stays on the feed (6.0s default duration). */
 const KILL_TTL_MS = 6000;
+/**
+ * How long the kill card deck stays up after the *latest* kill in it.
+ *
+ * Aged as a streak rather than card by card, so the tier numbering (I, II, III)
+ * of the cards still showing never shifts under the player. Without it the deck
+ * only cleared on death or a round boundary — never, in a deathmatch.
+ */
+export const ROUND_KILL_TTL_MS = 6000;
 
 export interface SessionState {
   status: 'idle' | 'joining' | 'joined' | 'error';
@@ -866,6 +874,16 @@ export class MatchSession {
         this.emit();
         break;
       }
+      case 'afk_kicked': {
+        // The server's AFK timer took us out of the room. The countdown came in
+        // `you.afk` and the reason in chat; this is the end of the match for us,
+        // shown where any other refusal is.
+        this.state.status = 'error';
+        this.state.error = 'Removed from the match for being AFK';
+        this.state.you = null;
+        this.emit();
+        break;
+      }
       default:
         break;
     }
@@ -958,6 +976,11 @@ export class MatchSession {
       this.state.objective = null;
       changed = true;
     }
+    const lastRoundKill = this.state.roundKills[this.state.roundKills.length - 1];
+    if (lastRoundKill && lastRoundKill.ts <= Date.now() - ROUND_KILL_TTL_MS) {
+      this.state.roundKills = [];
+      changed = true;
+    }
     if (this.state.killfeed.length === 0) return changed;
     const cutoff = Date.now() - KILL_TTL_MS;
     const kept = this.state.killfeed.filter((k) => k.ts > cutoff);
@@ -1025,7 +1048,8 @@ export class MatchSession {
       prev.protected !== next.protected ||
       prev.kills !== next.kills ||
       prev.deaths !== next.deaths ||
-      Math.ceil(prev.respawnIn) !== Math.ceil(next.respawnIn)
+      Math.ceil(prev.respawnIn) !== Math.ceil(next.respawnIn) ||
+      Math.ceil(prev.afk?.kickIn ?? -1) !== Math.ceil(next.afk?.kickIn ?? -1)
     );
   }
 
