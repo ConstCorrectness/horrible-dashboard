@@ -384,9 +384,10 @@ for byte.
 **Resizing a map: cut it, do not scale it.** A generator's coordinates are metres, and
 every detail hangs off a wall by a few centimetres (a rug, a frieze, a sconce, a
 plinth), so scaling pulls them off the wall they were built against. Dust II,
-Mirage and Inferno are instead cut along a few lines in open ground and the halves are spread
+Mirage, Inferno and Nuke are instead cut along a few lines in open ground and the halves are spread
 apart: the shared machinery is `tools/blender/cutlayout.py`, and each map's
-`LAYOUT_CUTS` (in `dust2_layout.py`, `mirage_layout.py`, `inferno_layout.py`) lists its cuts as
+`LAYOUT_CUTS` (in `dust2_layout.py`, `mirage_layout.py`, `inferno_layout.py`,
+`nuke_layout.py`) lists its cuts as
 `(at, gap)` in metres per axis. A generator wraps its own primitives with a
 `Warper` made from them. A piece wholly on one side of a cut only moves; one that crosses
 it (a long wall, the ground, a ramp) grows by the gap. So walls stay joined and
@@ -395,7 +396,7 @@ everything mounted on them goes with them. Composite helpers (`add_crate_stack`,
 point, and `add_crenellations` re-lays its teeth between the moved ends.
 
 To choose cuts, run the generator with `HASSAULT_<MAP>_SCAN=<file>` set (`DUST2`,
-`MIRAGE`, `INFERNO`): it writes every primitive's footprint, and a candidate line is clean when
+`MIRAGE`, `INFERNO`, `NUKE`): it writes every primitive's footprint, and a candidate line is clean when
 no small object (under about 7 m) crosses it. Stairs, composites and anything that
 is laid out from a list (roof beams, planters, a row of columns) are small whatever
 their size: a cut through one either splits it or stretches it. First run a new
@@ -415,8 +416,41 @@ to B, with a fourth route to each site. The mid hump (`Mid_TRamp_Up`) is a wedge
 and lengthens with the cut at y = 15, so its slope eases rather than breaks.
 After changing cuts run all four steps above, then `probe_eye_inside.py`.
 
+**Nuke needed more than cuts.** It was one reactor hall in a bare 62 m yard, and
+its B silo was modelled directly under hall A, sealed under the ground, because
+the server's heightfield keeps one floor per column (A's floor would have been
+B's ceiling). A cut cannot pull apart two things stacked in one column, so the
+generator was changed first and cut second:
+
+- **B is a reactor room of its own**, a building against the hall's west wall
+  whose floor is the pit, 4.5 m down, and whose roof is 5 m up, so no column has
+  two floors and nobody can stand on top. The ground slab is laid in pieces round
+  the holes it needs. T come down the **ramp room** from the south yard, or drop
+  about 2 m onto the ramp through a breach in its west wall (one way). CT come
+  down the **stairs**, which climb north up B's east wall to its north door, or
+  through the **vent**, an opening at the foot of A's west wall, in its south-west
+  corner, that drops 4.5 m straight into B. One way: nothing climbs back. It
+  was first a hatch in A's floor over a shaft and a crawl, and a bot that fell in
+  never left, because a pocket whose only exit points away from where a bot is
+  going is a trap for something that only steers. Its lintel is 2.4 m: lower, and
+  the bake's conservative sampling rounds the lip in front of it shut (under
+  `MIN_OPENING`), so A's floor no longer reached it.
+- **A Lobby** against the hall's south wall makes T walk round to A's south door
+  from the Lobby's west door (beside the ramp) or its open east end, and an
+  **east door** ("Squeaky") from the garage lane is T's second way into A.
+- The cuts (x at 6, 32.5, 45.8 and 51.1, y at 18.5, 21 and 32.2) make 74 x 76 m
+  and put the length on the attackers' side: the y gaps are across the south
+  yard, which also eases the ramp, and across the hall and B between the vent and
+  B's stairs. Nothing is cut north of A, because every line there also lengthens
+  CT's walk to B.
+
+T's walk went from 3.9 s to 8.0 s to A, with three routes, and from 4.3 s to
+6.8 s to B, with two. CT are 2.3 s from A and 4.7 s from B. Those are pinned in
+`test_hassault_routes.py`, along with the three doorways, the stairs, and the
+vent being a drop that does not climb back.
+
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
-dresses a map (Dust II, Mirage and Inferno; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
+dresses a map (Dust II, Mirage, Inferno and Nuke; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
 the lights must come before it). It plans on a quarter-metre grid of the finished
 map in final metres: what is solid (everything built that a body could meet below
 2.2 m), what is banned, and how far each cell is from a wall. It then walks the
@@ -429,7 +463,8 @@ every part fits, no part sits in another, and the floor out from the wall is
 still mostly open, so clutter does not close a passage.
 
 Banned: spawns, bomb sites, anything named like a way through (arch, door,
-portal, exit, window, stairs, ramp, any wedge: 2 m clear), the pit, and
+portal, exit, window, stairs, ramp, any wedge: 2 m clear), the pit (any `Pit_`
+floor: props stand at ground level, so Nuke's whole sunken B is banned), and
 wall-mounted lights (2.5 m clear). The last matters: a crate beside a sconce is a
 step up to it, a body on top has an eye in the cage, and `probe_eye_inside.py`
 fails the map. The zones, their density and what they favour live in `_ZONES` in
@@ -445,14 +480,19 @@ overlapping, rubble below an eye, no passage closed, deterministic for a seed.
 
 **Photographed surfaces.** Dust II's surfaces carry real colour, normal and roughness
 maps from ambientCG (CC0; `apps/web/public/maps/textures/README.md` lists each set
-and the licence). They are nine kinds in `glb-surfaces.json` (`photoKinds`),
-matched only by the `dust2_`, `mirage_` and `inferno_` infixes in each map's own
+and the licence). They are fourteen kinds in `glb-surfaces.json` (`photoKinds`),
+matched only by the `dust2_`, `mirage_`, `inferno_` and `nuke_` infixes in each map's own
 material names, so the names the other maps share (`mat_wood_crate`,
 `mat_sandstone_ochre`) stay as they were. To give another map photographed
 surfaces, give its materials an infix of their own and add that infix to the
 rules of the kinds it wants; do not widen the bare names. A material left out
 (Mirage's wrought iron, olive van metal, palm fronds; Inferno's terracotta,
 bronze, cypress leaves and water) keeps the surface it had.
+Nuke added five kinds for an industrial plant rather than a desert town:
+`cast_concrete` (its walls), `slab_concrete` (the ground and floors),
+`corrugated` (the containers), `painted_metal` (steel, pipes, the reactor's hull
+and the drums) and `tread_plate` (grating), and reuses `souk_crate` and `burlap`
+for its crates and sandbags. Its hazard paint keeps the generated stripes.
 Each kind needs an entry in `maplib.SOFTEN_BY_KIND` too, which every photo kind
 already has.
 
@@ -469,11 +509,16 @@ time and swaps in the images when they arrive, with roughness taken from the map
 (`roughness = 1`). It never does this on the Low tier, which draws Lambert and has
 no use for either map, so Low neither fetches nor shows them. The native client has
 no asset directory, so it embeds the files and appends them to the one
-`Rgba8UnormSrgb` texture array: nine albedo layers, then nine detail layers
+`Rgba8UnormSrgb` texture array: fourteen albedo layers, then fourteen detail layers
 holding the normal's x and y and the roughness. The array decodes sRGB on
 sampling, so those values are stored *encoded*; sampling gives back exactly what
 went in, and the sRGB-space mip chain averages the data rather than its encoding.
-That is why nothing about the bind group or the pipelines changed. The shader
+That is why nothing about the bind group or the pipelines changed. Layers are only
+ever appended, but `shader.wgsl` hardcodes three numbers that follow
+`PHOTO_COUNT` (`textures3d.rs`): the end of the photo range (`18 + PHOTO_COUNT`),
+the photo detail offset (`PHOTO_COUNT`) and the generated detail base
+(`18 + 2 * PHOTO_COUNT`). A new kind changes all three; the generated kinds'
+8, 10 and 11 never move. The shader
 builds the tangent frame from the screen-space derivatives of position and the
 planar UV (taken at the top of `fs_main`, in uniform control flow) and flips the
 normal's green, because a texture's row 0 is its top here and the maps are
@@ -510,7 +555,9 @@ and in both client tables (ids 11 to 15), so the item count is 15, not 10.
 
 `tools/hassault_route_times.py <map>` measures the walk on the baked grid with the
 playability lint's own rules for what a body can stand in and climb (a jump costs
-three cubes of running): seconds from each team's spawns to each site, and how many
+three cubes of running, and a drop off a ledge lands two cells out, as the lint's
+own fill does, so a vent or a breach counts as a way down): seconds from each
+team's spawns to each site, and how many
 *different* routes there are, the shortest and then the shortest that keeps 14
 cubes from the ones already found, within 1.6 times its length.
 `backend/tests/test_hassault_routes.py` pins the result: every team reaches every
@@ -526,7 +573,13 @@ probe round what is in the way, so a place reached only by a ramp from the far
 side gets no visits however good it is for a player, and a cover node belongs at a
 place they can reach. On the original Dust II they never reached B at all; they do
 now. A bot sitting still for 13 to 26 s is holding cover, not stuck: Mirage and
-Inferno do the same.
+Inferno do the same. So is a bot sitting for minutes after the match ends
+(`phase` is `over`): the soak keeps ticking. On Nuke every cover node gets
+visits, B's included (its node is at the ramp's foot, straight down the ramp).
+What still costs them time is walls across their straight line: T bots slide
+along the Lobby's south wall to reach A. Clutter is kept off the Lobby and its
+south wall for that reason; waypoints for bots are the real fix. A pocket with
+one way out is worse than a wall: see the vent, above.
 
 To look at a map without running the game,
 `tools/blender/render_map_views.py -- hd_dust2 [out_dir] [glb]` renders a frame
@@ -633,7 +686,7 @@ What each map's revision changed:
 | `hd_dust2` | `desert_noon` | Mid doors are a choke. A wall now closes the 9 m of open street beside them. A ramp lets you walk onto Catwalk from mid. Pit exit and Suicide are slopes instead of 1.4 m and 1.2 m steps. Adds a cart in Long A, a planter on the CT side of Short and a well in B. | Plinths, vigas, awnings, banners, cables and rubble. Lanterns and sconces light the tunnels and doorways (17 lights). |
 | `hd_mirage` | `desert_noon`, lower western sun | Palace gets stairs at both ends; its 2.8 m floor had no way up. Walking onto the Window Room from the connector is now possible. The B Apartments get outside stairs and a ground-floor wall with a door. Two houses in mid and a wall short of B break the spawn-to-spawn and T-to-B sightlines. | Plinths, mosaic bands, vigas, awnings, planters and five lanterns. |
 | `hd_inferno` | `golden_hour` | A house in the east street splits the approach to A into two alleys. The pit exit and the T ramp are slopes, and mid gets a well. | Shutters, coping, washing across Banana, awnings. Lanterns now light, with sconces down Banana and under the apartments. |
-| `hd_nuke` | `overcast` | Adds jersey barriers and a container stack in the yard, and crates inside A. | Door striping, hall pipes, six yard floodlights, wall packs, and the hall's troffers and reactor as lights. |
+| `hd_nuke` | `overcast` | Adds jersey barriers and a container stack in the yard, and crates inside A. Later rebuilt: B moved out from under A into a sunken reactor room with a ramp, stairs and a vent from A, a Lobby and an east door added, and cut to 74 x 76 m (see above). | Door striping, hall pipes, six yard floodlights, wall packs, and the hall's, Lobby's, ramp's and B's troffers and B's reactor as lights. Rule-placed crates, drums and sandbags, and photographed concrete and steel. |
 | `hd_office` | `interior_cool` | Two meeting rooms, each with two doors, fill the open band between the core and the cubicles. | Baseboards, planters, every troffer, and the server LEDs as lights. |
 | `hd_bank` | `coastal_morning`, warm interior | Unchanged. It already had the most structure of any map. | Chandeliers, sconces and troffers as lights. |
 | `hd_facility` | `interior_cool`, darker | Broken partition walls turn the two lab corridors, which had only ever been rows of lights, into real ones. | Pit-rim striping and wall pipes. Troffers, sirens and coolant glow as lights. |
@@ -8960,10 +9013,10 @@ The skin system provides distinct faction styling and collectible operator skins
   load. A lamp lights the wall behind a crate as if the crate were not there.
   Both clients also cap how many they draw at once: the native client the 64
   nearest, the browser 8.
-- **Nuke's B silo is sealed.** It sits directly under hall A, and the server's
-  heightfield keeps one floor per column. Opening it would make A's floor the
-  silo's ceiling online. The offline tables still place a health and an armour
-  pickup down there, which nobody can reach.
+- **A site cannot be under another floor.** The server's heightfield keeps one
+  floor per column, which is why Nuke's B is a sunken room beside hall A rather
+  than under it, as it is in the original, and why its vent is an opening in A's
+  wall instead of a hatch in A's floor over B.
 - **Upper floors are offline-only on modelled maps.** The same one-floor rule
   means a catwalk or a second storey over a walkable street (Mirage's
   apartments, Nuke's rafters) is the street's ceiling on the server. It can be

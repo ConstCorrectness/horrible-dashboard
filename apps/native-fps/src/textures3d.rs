@@ -23,12 +23,13 @@ pub const TEXTURE_SIZE: u32 = 256;
 /// The generated surfaces, then the photographed ones' albedo, then their detail.
 pub const GENERATED_LAYERS: u32 = 18;
 /// Surfaces backed by photographed CC0 maps (`apps/web/public/maps/textures/`).
-pub const PHOTO_COUNT: u32 = 9;
+pub const PHOTO_COUNT: u32 = 14;
 /// Base layer index for the 18 procedural normal + micro-roughness detail layers.
 pub const GENERATED_DETAIL_BASE: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
-/// Every layer of the array: 18 generated albedos, 9 photo albedos, 9 photo details,
-/// and 18 generated normal+roughness detail layers. Appended so no existing layer
-/// index moves.
+/// Every layer of the array: 18 generated albedos, 14 photo albedos, 14 photo
+/// details, and 18 generated normal+roughness detail layers. The generated
+/// albedos never move; `shader.wgsl` hardcodes the photo range, the photo detail
+/// offset and the generated detail base, so a new photo kind changes those three.
 pub const LAYER_COUNT: u32 = GENERATED_LAYERS * 2 + PHOTO_COUNT * 2;
 
 /// Fast deterministic pseudo-random hash.
@@ -858,9 +859,9 @@ pub enum MaterialKind {
     RoofTile = 16,
     Carpet = 17,
     Brick = 18,
-    // Photographed surfaces, matched only by Dust II's own `dust2_` material
-    // names. Kind `18 + n` has its albedo in layer `17 + n` and its normal and
-    // roughness in layer `26 + n`.
+    // Photographed surfaces, matched only by a map's own infixed material names
+    // (`dust2_`, `mirage_`, `inferno_`, `nuke_`). Kind `18 + n` has its albedo
+    // in layer `17 + n` and its normal and roughness in layer `17 + n + PHOTO_COUNT`.
     Limewash = 19,
     Sandstone = 20,
     Paving = 21,
@@ -870,6 +871,12 @@ pub enum MaterialKind {
     RustIron = 25,
     Burlap = 26,
     Glaze = 27,
+    // Nuke's: an industrial plant.
+    CastConcrete = 28,
+    SlabConcrete = 29,
+    Corrugated = 30,
+    PaintedMetal = 31,
+    TreadPlate = 32,
 }
 
 impl MaterialKind {
@@ -904,6 +911,11 @@ impl MaterialKind {
             "rust_iron" => MaterialKind::RustIron,
             "burlap" => MaterialKind::Burlap,
             "glaze" => MaterialKind::Glaze,
+            "cast_concrete" => MaterialKind::CastConcrete,
+            "slab_concrete" => MaterialKind::SlabConcrete,
+            "corrugated" => MaterialKind::Corrugated,
+            "painted_metal" => MaterialKind::PaintedMetal,
+            "tread_plate" => MaterialKind::TreadPlate,
             _ => return None,
         })
     }
@@ -943,6 +955,10 @@ impl MaterialKind {
             MaterialKind::RustIron => 0.6,
             MaterialKind::Burlap => 0.95,
             MaterialKind::Glaze => 0.35,
+            MaterialKind::CastConcrete | MaterialKind::SlabConcrete => 0.8,
+            MaterialKind::Corrugated => 0.55,
+            MaterialKind::PaintedMetal => 0.5,
+            MaterialKind::TreadPlate => 0.4,
         }
     }
 
@@ -967,6 +983,10 @@ impl MaterialKind {
             | MaterialKind::Brick => 0.02,
             MaterialKind::Carpet => 0.0,
             MaterialKind::RustIron => 0.5,
+            MaterialKind::CastConcrete | MaterialKind::SlabConcrete => 0.04,
+            MaterialKind::Corrugated => 0.45,
+            MaterialKind::PaintedMetal => 0.55,
+            MaterialKind::TreadPlate => 0.85,
             MaterialKind::Limewash
             | MaterialKind::Sandstone
             | MaterialKind::Paving
@@ -1161,6 +1181,11 @@ const PHOTO_KINDS: [MaterialKind; PHOTO_COUNT as usize] = [
     MaterialKind::RustIron,
     MaterialKind::Burlap,
     MaterialKind::Glaze,
+    MaterialKind::CastConcrete,
+    MaterialKind::SlabConcrete,
+    MaterialKind::Corrugated,
+    MaterialKind::PaintedMetal,
+    MaterialKind::TreadPlate,
 ];
 
 /// In `MaterialKind` order, from Limewash.
@@ -1174,6 +1199,11 @@ static PHOTO_SETS: [PhotoSet; PHOTO_COUNT as usize] = [
     photo_set!("rust_iron"),
     photo_set!("burlap"),
     photo_set!("glaze"),
+    photo_set!("cast_concrete"),
+    photo_set!("slab_concrete"),
+    photo_set!("corrugated"),
+    photo_set!("painted_metal"),
+    photo_set!("tread_plate"),
 ];
 
 /// Decode an embedded WebP to RGBA8 at `size` x `size`.
@@ -1190,7 +1220,7 @@ fn decode_square(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     )
 }
 
-/// The photographed surfaces' layers: nine albedos, then nine details.
+/// The photographed surfaces' layers: every albedo, then every detail.
 ///
 /// **Albedo** layers are normalised at build time (`hassault_process_textures.py`)
 /// so a surface averages back to its authored colour once the shader's `* 1.5`
@@ -1723,6 +1753,11 @@ mod tests {
             "rust_iron",
             "burlap",
             "glaze",
+            "cast_concrete",
+            "slab_concrete",
+            "corrugated",
+            "painted_metal",
+            "tread_plate",
         ]
         .iter()
         .enumerate()
@@ -1776,6 +1811,19 @@ mod tests {
         assert_eq!(MaterialKind::from_name("mat_inferno_sandbag_burlap"), MaterialKind::Burlap);
         assert!(!MaterialKind::from_name("mat_inferno_italian_cypress_leaves").is_photo());
         assert!(!MaterialKind::from_name("mat_cobblestone_street").is_photo());
+        // Nuke's own.
+        assert_eq!(MaterialKind::from_name("mat_nuke_concrete_wall"), MaterialKind::CastConcrete);
+        assert_eq!(MaterialKind::from_name("mat_nuke_concrete_dark"), MaterialKind::CastConcrete);
+        assert_eq!(MaterialKind::from_name("mat_nuke_concrete_floor"), MaterialKind::SlabConcrete);
+        assert_eq!(MaterialKind::from_name("mat_nuke_container_red"), MaterialKind::Corrugated);
+        assert_eq!(MaterialKind::from_name("mat_nuke_steel_industrial"), MaterialKind::PaintedMetal);
+        assert_eq!(MaterialKind::from_name("mat_nuke_steel_grate"), MaterialKind::TreadPlate);
+        assert_eq!(MaterialKind::from_name("mat_nuke_wood_crate"), MaterialKind::SoukCrate);
+        assert_eq!(MaterialKind::from_name("mat_nuke_sandbag"), MaterialKind::Burlap);
+        assert!(!MaterialKind::from_name("mat_nuke_hazard_yellow").is_photo());
+        assert!(!MaterialKind::from_name("mat_nuke_coolant_blue").is_photo());
+        assert!(!MaterialKind::from_name("mat_concrete_wall").is_photo());
+        assert!(!MaterialKind::from_name("mat_container_red").is_photo());
         // And its foliage and ironwork keep what they had.
         assert!(!MaterialKind::from_name("mat_mirage_palm_fronds").is_photo());
         assert!(!MaterialKind::from_name("mat_wrought_iron").is_photo());

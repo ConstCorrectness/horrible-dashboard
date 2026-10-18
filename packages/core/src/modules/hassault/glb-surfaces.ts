@@ -40,8 +40,9 @@ export type SurfaceKind =
 
 /**
  * Kinds backed by photographed CC0 maps (colour, normal, roughness) rather than a
- * generated tile. Matched only by Dust II's own `dust2_` material names, so no
- * other map changes. See `tools/hassault_process_textures.py`.
+ * generated tile. Matched only by a map's own infixed material names (`dust2_`,
+ * `mirage_`, `inferno_`, `nuke_`), so no other map changes. See
+ * `tools/hassault_process_textures.py`.
  */
 export type PhotoKind =
   | 'limewash'
@@ -52,7 +53,12 @@ export type PhotoKind =
   | 'souk_crate'
   | 'rust_iron'
   | 'burlap'
-  | 'glaze';
+  | 'glaze'
+  | 'cast_concrete'
+  | 'slab_concrete'
+  | 'corrugated'
+  | 'painted_metal'
+  | 'tread_plate';
 
 interface SurfaceTable {
   default: SurfaceKind;
@@ -86,6 +92,11 @@ export const PHOTO_FALLBACK: Record<PhotoKind, SurfaceKind> = {
   rust_iron: 'vault_steel',
   burlap: 'carpet',
   glaze: 'marble',
+  cast_concrete: 'concrete',
+  slab_concrete: 'concrete',
+  corrugated: 'container',
+  painted_metal: 'vault_steel',
+  tread_plate: 'vault_steel',
 };
 
 /** Where a photo kind's map lives, relative to the web root. `c` albedo, `n` normal, `r` roughness. */

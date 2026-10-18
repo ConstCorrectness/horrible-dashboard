@@ -547,6 +547,17 @@ def test_tactical_cover_nodes_contain_hd_inferno_and_hd_dust2():
     assert len(bots.TACTICAL_COVER_NODES["hd_dust2"]) >= 8
 
 
+def test_nuke_cover_nodes_stand_on_floor_a_body_fits():
+    # A node inside a crate or a wall is one no bot ever arrives at.
+    from backend.modules.hassault import assets, maplint
+    from backend.modules.hassault.physics import World
+
+    world = World.from_map(assets.load_map("hd_nuke"))
+    cells = maplint._standable(world)
+    for x, y, name in bots.TACTICAL_COVER_NODES["hd_nuke"]:
+        assert (int(x), int(y)) in cells, name
+
+
 def test_bot_archetypes_and_acoustic_investigation():
     from backend.modules.hassault.noise import Noise
 
@@ -573,7 +584,7 @@ def test_bot_archetypes_and_acoustic_investigation():
 
     cmd = bot.brain.think(room, bot, 1 / 20)
     assert bot.brain.investigate is not None
-    assert (bot.brain.investigate[0] - enemy.state.x)**2 < 0.1
+    assert (bot.brain.investigate[0] - enemy.state.x) ** 2 < 0.1
 
 
 def test_bot_utility_throw_decision():
@@ -593,5 +604,6 @@ def test_bot_utility_throw_decision():
         if cmd.throw and cmd.nade in (0, 1, 2):
             threw = True
             break
-    assert threw, "bot with grenades in engagement range should attempt tactical utility throw"
-
+    assert threw, (
+        "bot with grenades in engagement range should attempt tactical utility throw"
+    )

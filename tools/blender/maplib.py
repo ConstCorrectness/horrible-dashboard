@@ -187,6 +187,12 @@ SOFTEN_BY_KIND = {
     "rust_iron": (0.025, 0.15),
     "burlap": (0.03, 0.3),
     "glaze": (0.03, 0.15),
+    # Nuke's: concrete was unclassified (the default), the steel was vault steel.
+    "cast_concrete": (0.04, 0.2),
+    "slab_concrete": (0.04, 0.2),
+    "corrugated": (0.025, 0.15),
+    "painted_metal": (0.025, 0.15),
+    "tread_plate": (0.025, 0.15),
 }
 #: A material the table does not classify.
 SOFTEN_DEFAULT = (0.04, 0.2)

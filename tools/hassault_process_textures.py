@@ -1,6 +1,8 @@
 """Turn downloaded CC0 PBR sets into the map textures both clients ship.
 
-    python tools/hassault_process_textures.py <dir of unzipped ambientCG sets> [out_dir]
+    python tools/hassault_process_textures.py <dir of unzipped ambientCG sets> [out_dir] [kind ...]
+
+Name kinds to process only those (the others' sets need not be downloaded).
 
 The sets are ambientCG's, licence CC0 1.0 (https://docs.ambientcg.com/license/):
 free to use, change and ship, no attribution required (it is given anyway, in
@@ -42,6 +44,12 @@ KINDS = {
     "rust_iron": ("Metal053C", "rusted iron"),
     "burlap": ("Fabric081C", "coarse cloth"),
     "glaze": ("Tiles139", "glazed tile"),
+    # Nuke's (`nuke_` materials): an industrial plant, not a desert town.
+    "cast_concrete": ("Concrete031", "board-formed concrete walls"),
+    "slab_concrete": ("Concrete044A", "stained concrete slab"),
+    "corrugated": ("CorrugatedSteel007A", "corrugated container steel"),
+    "painted_metal": ("PaintedMetal004", "chipped painted steel"),
+    "tread_plate": ("DiamondPlate003", "diamond tread plate"),
 }
 
 
@@ -76,10 +84,12 @@ def normalise_albedo(img):
     return np.clip(out, 0.0, 1.0)
 
 
-def process(src_dir, out_dir):
+def process(src_dir, out_dir, only=None):
     os.makedirs(out_dir, exist_ok=True)
     report = {}
     for kind, (set_id, _) in KINDS.items():
+        if only and kind not in only:
+            continue
         base = os.path.join(src_dir, set_id, f"{set_id}_1K-JPG")
         color = Image.open(f"{base}_Color.jpg").resize((SIZE, SIZE), Image.LANCZOS)
         normal = (
@@ -110,5 +120,5 @@ if __name__ == "__main__":
         if len(sys.argv) > 2
         else os.path.join(here, "..", "apps", "web", "public", "maps", "textures")
     )
-    for kind, mean in process(sys.argv[1], out).items():
+    for kind, mean in process(sys.argv[1], out, set(sys.argv[3:])).items():
         print(f"{kind:11s} linear mean {np.round(mean, 4)}")
