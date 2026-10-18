@@ -46,9 +46,10 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from backend.modules.hassault import (
+    afk,
     assets,
     grenades,
     modes,
@@ -538,6 +539,18 @@ class MatchPlayer:
     #: the debrief would never appear. Set once and never cleared, so "there was
     #: a match here" survives everybody else leaving first.
     faced_opponents: bool = False
+    #: The AFK timer — see `afk.py`. Seconds of *counted* idle (paused while
+    #: dead or in freeze time, never accrued for a bot), whether the warning has
+    #: gone out, and the latch that stops a removal being queued twice.
+    afk_idle: float = 0.0
+    afk_warned: bool = False
+    afk_kicked: bool = False
+    #: Baselines `afk.is_activity` compares a command against. `afk_aim_ref` is
+    #: the previous command's view, `None` after a respawn so a spawn's facing
+    #: does not read as the player turning.
+    afk_aim_ref: tuple[float, float] | None = None
+    afk_aim_travel: float = 0.0
+    afk_crouch: bool = False
 
     @property
     def is_bot(self) -> bool:
@@ -892,6 +905,10 @@ class MatchRoom:
         self._nade_seq = 0
         self._zone_seq = 0
         self._ping_seq = 0
+        #: AFK thresholds for this room, and the warnings and removals
+        #: `_step_afk` has decided on and the server has not yet carried out.
+        self.afk: afk.AfkPolicy = afk.AfkPolicy.from_env()
+        self.afk_events: list[tuple[str, MatchPlayer]] = []
         # Seeded per room rather than per shot: reproducible if you know the room
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
@@ -1104,6 +1121,11 @@ class MatchRoom:
         # first envelope after the respawn and send a player who has just come
         # back somewhere across the map to look at nothing.
         player.pending_hurt.clear()
+        # The spawn faces somewhere the client was not looking, and the first
+        # command after it would otherwise read to the AFK timer as a turn —
+        # resetting every idle player at every defuse round start.
+        player.afk_aim_ref = None
+        player.afk_aim_travel = 0.0
 
     # -- simulation ---------------------------------------------------------
 
@@ -1153,6 +1175,11 @@ class MatchRoom:
                 player.queue.popleft()
                 player.budget -= dt
                 player.sim_time += dt
+                # Before the angles are applied, so the aim baseline is the last
+                # command's. Consumed commands only: a keep-alive that never
+                # carries intent never gets here as anything but idle.
+                if afk.is_activity(player, command):
+                    afk.note_activity(player)
                 # View angles are cosmetic on the server but they steer movement,
                 # so they are applied before the step, not after.
                 player.state.yaw = command.yaw
@@ -1199,6 +1226,9 @@ class MatchRoom:
 
         self._step_grenades(elapsed, now)
         self._step_pings(now)
+        # After the drain, so input consumed this tick has already reset the
+        # clock before this tick's idle is added to it.
+        self._step_afk(elapsed)
         # After grenades and before the history: a round that ends on this tick
         # has already seen every consequence of the commands in it, and a round
         # reset that teleports everybody happens before the positions those
@@ -1220,6 +1250,41 @@ class MatchRoom:
                 if p.alive
             },
         )
+
+    def _step_afk(self, elapsed: float) -> None:
+        """Accrue idle time and queue warnings and removals. See `afk.py`.
+
+        Accrued from the tick's `elapsed` rather than measured against a
+        timestamp, which is what makes pausing free: a dead player or a frozen
+        round simply adds nothing. The removal itself is the server's to carry
+        out (`MatchServer._process_afk`) — it is the layer that knows which
+        host's leave path, and which result write, this player belongs to.
+        """
+        if not self.afk.enabled:
+            return
+        for player in self.players.values():
+            if player.is_bot or player.afk_kicked or not player.alive:
+                continue
+            if not self.mode.afk_clock_runs(self, player):
+                continue
+            player.afk_idle += max(0.0, elapsed)
+            if not player.afk_warned:
+                if player.afk_idle >= self.afk.warn_after:
+                    # Clamped to the threshold, so the whole grace window follows
+                    # the warning even when a stalled tick jumped past the kick:
+                    # nobody is removed without having been told first.
+                    player.afk_idle = self.afk.warn_after
+                    player.afk_warned = True
+                    self.afk_events.append(("warn", player))
+            elif player.afk_idle >= self.afk.kick_after:
+                player.afk_kicked = True
+                self.afk_events.append(("kick", player))
+
+    def afk_kick_in(self, player: MatchPlayer) -> float | None:
+        """Seconds until this player is removed, once they have been warned."""
+        if not player.afk_warned or not self.afk.enabled:
+            return None
+        return max(0.0, self.afk.kick_after - player.afk_idle)
 
     # -- thrown utility -------------------------------------------------------
 
@@ -2469,6 +2534,11 @@ class MatchRoom:
                 else p.owner == player.id
             )
         ]
+        # Only once warned, so the HUD's countdown is present exactly when there
+        # is something to count down — absent is "you are fine".
+        kick_in = self.afk_kick_in(player)
+        if kick_in is not None:
+            you["afk"] = {"kickIn": round(kick_in, 1)}
         return you
 
     def cull_pvs_snapshot_rows(
@@ -2638,6 +2708,12 @@ class MatchServer:
         # cleaned up without searching every room.
         self.membership: dict[int, tuple[str, str]] = {}
         self._task: asyncio.Task[None] | None = None
+        #: How an AFK player is taken out, given their connection. `None` is a
+        #: plain `leave`. A host that files results on leaving sets its own, so a
+        #: removal goes down exactly the path a disconnect does: the node's
+        #: channel records it under the account, the game server's referee
+        #: records it under `authority="server"` and tells the player's node.
+        self.kick_handler: Callable[[Any], Awaitable[Any]] | None = None
 
     # -- rooms --------------------------------------------------------------
 
@@ -2765,6 +2841,7 @@ class MatchServer:
                     # point in time.
                     sim_started = time.perf_counter()
                     room.simulate(elapsed)
+                    await self._process_afk(room)
                     sent_started = time.perf_counter()
                     await self._broadcast(room)
                     finished = time.perf_counter()
@@ -2908,6 +2985,101 @@ class MatchServer:
                 await player.conn.send_json(message)
             except Exception:
                 pass
+
+    async def _process_afk(self, room: MatchRoom) -> None:
+        """Carry out the warnings and removals `room._step_afk` queued.
+
+        The warning goes to that player alone, twice over: an `afk_warning`
+        event for the HUD's countdown and a chat line from the server, which
+        every client already renders — the native one included, which knows
+        nothing of the event. A removal is announced to the room in chat.
+        """
+        from backend.modules.hassault import chat
+
+        events, room.afk_events = room.afk_events, []
+        for kind, player in events:
+            if room.players.get(player.id) is not player:
+                continue
+            if kind == "warn":
+                kick_in = room.afk_kick_in(player) or 0.0
+                await self._send_to(
+                    player,
+                    "afk_warning",
+                    {
+                        "kickIn": round(kick_in, 1),
+                        "warnAfter": room.afk.warn_after,
+                        "kickAfter": room.afk.kick_after,
+                    },
+                )
+                await self._send_to(
+                    player,
+                    "chat",
+                    self._server_line(chat, player, afk.warning_text(kick_in)),
+                )
+                continue
+            await self._send_to(
+                player,
+                "afk_kicked",
+                {"room": room.id, "idle": round(player.afk_idle, 1)},
+            )
+            logger.info(
+                "hassault: removing %s from %s for being AFK (%.0fs)",
+                player.name,
+                room.id,
+                player.afk_idle,
+            )
+            await self.kick(room, player)
+            await self.broadcast_event(
+                room,
+                "chat",
+                self._server_line(chat, player, afk.kicked_text(player.name)),
+            )
+
+    @staticmethod
+    def _server_line(chat: Any, player: MatchPlayer, text: str) -> dict[str, Any]:
+        return chat.message(
+            sender_id="",
+            sender_name=afk.SENDER,
+            team=player.team,
+            is_team=False,
+            text=text,
+        )
+
+    @staticmethod
+    async def _send_to(player: MatchPlayer, event: str, data: dict[str, Any]) -> None:
+        if player.conn is None:
+            return
+        try:
+            await player.conn.send_json(
+                {"channel": CHANNEL, "event": event, "data": data}
+            )
+        except Exception:
+            pass
+
+    async def kick(self, room: MatchRoom, player: MatchPlayer) -> None:
+        """Take `player` out of `room` through the host's own leave path.
+
+        A player with no connection on record (a test's, or one whose socket is
+        already half torn down) is removed from the room directly, since there
+        is no membership entry for a leave to find.
+        """
+        conn = player.conn
+        if conn is None or self.membership.get(id(conn)) != (room.id, player.id):
+            room.remove(player.id)
+            await self.broadcast_event(
+                room, "left", {"room": room.id, "playerId": player.id}
+            )
+            return
+        try:
+            if self.kick_handler is not None:
+                await self.kick_handler(conn)
+            else:
+                await self.leave(conn)
+        except Exception:
+            logger.exception("hassault: AFK removal failed; removing directly")
+            self.membership.pop(id(conn), None)
+            if room.players.get(player.id) is player:
+                room.remove(player.id)
 
     # -- membership ---------------------------------------------------------
 

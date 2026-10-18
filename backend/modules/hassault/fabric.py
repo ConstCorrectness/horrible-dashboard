@@ -288,6 +288,19 @@ async def _drop_hosted(key: tuple[str, str]) -> None:
         await match_server.leave(conn)  # type: ignore[arg-type]
 
 
+async def drop_hosted_conn(conn: PeerPlayerConn) -> None:
+    """Remove a remote player by their proxy, e.g. for the AFK timer.
+
+    Removed from the room even if the proxy is no longer the one registered
+    for its key — a guest who rejoined holds a new one, and the old player is
+    still the one being taken out.
+    """
+    key = (conn.node_id, conn.client)
+    if _hosted.get(key) is conn:
+        del _hosted[key]
+    await match_server.leave(conn)  # type: ignore[arg-type]
+
+
 async def _reply_error(
     hub: PeerHub, node_id: str, env: PeerEnvelope, message: str
 ) -> None:

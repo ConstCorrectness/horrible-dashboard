@@ -221,7 +221,6 @@ describe('reset', () => {
   });
 });
 
-
 /**
  * Equipping a grenade.
  *
@@ -242,6 +241,17 @@ describe('equipping', () => {
     expect(nades.equipped).toBe(true);
     nades.holster();
     expect(nades.equipped).toBe(false);
+  });
+
+  it('refuses a slot with none left and keeps the weapon up', () => {
+    // Equipping puts the gun away; doing that for a grenade you do not have
+    // left the player holding nothing mid-fight.
+    const nades = controller();
+    nades.frame(0, you({ nades: { he: 0, flash: 2, smoke: 1 } }));
+    expect(nades.equip(0)).toBe(false);
+    expect(nades.equipped).toBe(false);
+    expect(nades.equip(1)).toBe(true);
+    expect(nades.equipped).toBe(true);
   });
 
   it('ignores a slot that does not exist', () => {

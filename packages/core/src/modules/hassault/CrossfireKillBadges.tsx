@@ -34,23 +34,44 @@ interface CrossfireKillBadgesProps {
   headHit?: boolean;
 }
 
+/** How long a kill badge is on screen; the pop animation runs over the same span. */
+export const BADGE_TTL_MS = 1800;
+
+/**
+ * How far into its life a badge is, or null once it has expired.
+ *
+ * The badge is aged off its own timestamp, not off when this component happened
+ * to mount: the HUD unmounts with pointer lock, so opening the Escape menu and
+ * coming back used to replay the last kill's badge from the start, as if new.
+ */
+export function badgeAge(badge: KillBadgeData | null, now: number): number | null {
+  if (!badge) return null;
+  const age = Math.max(0, now - badge.timestamp);
+  return age < BADGE_TTL_MS ? age : null;
+}
+
 export const CrossfireKillBadges: React.FC<CrossfireKillBadgesProps> = ({
   badge,
   hit,
   headHit,
 }) => {
-  const [activeBadge, setActiveBadge] = useState<KillBadgeData | null>(badge);
-  const [animKey, setAnimKey] = useState(0);
+  const [activeBadge, setActiveBadge] = useState<KillBadgeData | null>(() =>
+    badgeAge(badge, Date.now()) === null ? null : badge,
+  );
+  // Fixed at the moment the badge is adopted, so a re-render mid-animation does
+  // not move the animation's start.
+  const [ageAtShow, setAgeAtShow] = useState(() => badgeAge(badge, Date.now()) ?? 0);
 
   useEffect(() => {
-    if (badge) {
-      setActiveBadge(badge);
-      setAnimKey((k) => k + 1);
-      const timer = setTimeout(() => {
-        setActiveBadge(null);
-      }, 1900);
-      return () => clearTimeout(timer);
+    const age = badgeAge(badge, Date.now());
+    if (!badge || age === null) {
+      setActiveBadge(null);
+      return;
     }
+    setActiveBadge(badge);
+    setAgeAtShow(age);
+    const timer = setTimeout(() => setActiveBadge(null), BADGE_TTL_MS - age);
+    return () => clearTimeout(timer);
   }, [badge]);
 
   return (
@@ -126,7 +147,7 @@ export const CrossfireKillBadges: React.FC<CrossfireKillBadgesProps> = ({
       {/* 2. Crossfire Kill Badge Popup: Center-screen below crosshair */}
       {activeBadge && (
         <div
-          key={animKey}
+          key={activeBadge.id}
           style={{
             position: 'absolute',
             left: '50%',
@@ -137,7 +158,9 @@ export const CrossfireKillBadges: React.FC<CrossfireKillBadgesProps> = ({
             flexDirection: 'column',
             alignItems: 'center',
             zIndex: 70,
-            animation: 'cfBadgePop 1.8s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards',
+            // A negative delay resumes a badge that remounted mid-life where it
+            // was, rather than popping it in a second time.
+            animation: `cfBadgePop ${BADGE_TTL_MS}ms cubic-bezier(0.18, 0.89, 0.32, 1.28) -${ageAtShow}ms forwards`,
           }}
         >
           <style>{`
@@ -230,7 +253,11 @@ const BadgeGraphic: React.FC<{ type: KillBadgeType; streak: number }> = ({ type 
       </defs>
 
       {/* Wings Behind Skull */}
-      <g fill={isGold ? 'url(#goldGrad)' : 'url(#silverGrad)'} stroke="rgb(26, 21, 5)" strokeWidth="1">
+      <g
+        fill={isGold ? 'url(#goldGrad)' : 'url(#silverGrad)'}
+        stroke="rgb(26, 21, 5)"
+        strokeWidth="1"
+      >
         {/* Left Wing */}
         <path d="M 70 45 C 50 30, 20 20, 5 35 C 20 48, 45 55, 68 58 Z" />
         <path d="M 68 55 C 45 42, 18 35, 10 50 C 25 58, 50 64, 66 66 Z" />
@@ -299,7 +326,12 @@ const BadgeGraphic: React.FC<{ type: KillBadgeType; streak: number }> = ({ type 
 
       {/* Knife Kill Crossed Blades Overlay */}
       {type === 'knife' && (
-        <g stroke="rgb(255, 255, 255)" strokeWidth="2.5" strokeLinecap="round" filter="drop-shadow(0 0 3px rgb(255, 170, 0))">
+        <g
+          stroke="rgb(255, 255, 255)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          filter="drop-shadow(0 0 3px rgb(255, 170, 0))"
+        >
           <line x1="35" y1="20" x2="115" y2="75" />
           <line x1="115" y1="20" x2="35" y2="75" />
         </g>
@@ -308,7 +340,14 @@ const BadgeGraphic: React.FC<{ type: KillBadgeType; streak: number }> = ({ type 
       {/* Wallbang Penetration Bullet Icon */}
       {type === 'wallbang' && (
         <g transform="translate(62, 58)" filter="drop-shadow(0 0 3px rgb(255, 51, 51))">
-          <rect x="-18" y="-12" width="6" height="24" fill="rgb(102, 102, 102)" stroke="rgb(34, 34, 34)" />
+          <rect
+            x="-18"
+            y="-12"
+            width="6"
+            height="24"
+            fill="rgb(102, 102, 102)"
+            stroke="rgb(34, 34, 34)"
+          />
           <polygon points="12,0 0,-6 0,6" fill="rgb(255, 215, 0)" stroke="rgb(255, 170, 0)" />
         </g>
       )}

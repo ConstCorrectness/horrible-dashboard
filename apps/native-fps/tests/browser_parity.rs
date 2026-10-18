@@ -232,12 +232,18 @@ fn no_quality_level_changes_how_far_you_can_see() {
     const RENDERER_RS: &str = include_str!("../src/renderer.rs");
     const GRAPHICS_TS: &str =
         include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
-    assert!(!SETTINGS_RS.contains("fn fog_scale"), "a quality level scales the fog again");
+    assert!(
+        !SETTINGS_RS.contains("fn fog_scale"),
+        "a quality level scales the fog again"
+    );
     assert!(
         RENDERER_RS.contains("let fog = self.lighting.atmosphere.fog_density;"),
         "the renderer no longer draws the map's own fog density"
     );
-    assert!(!GRAPHICS_TS.contains("fogScale"), "a browser tier scales the fog again");
+    assert!(
+        !GRAPHICS_TS.contains("fogScale"),
+        "a browser tier scales the fog again"
+    );
     assert!(
         PANEL_TSX.contains("new THREE.FogExp2(a.fogColor, a.fogDensity)"),
         "the browser no longer draws the map's own fog density"
@@ -478,8 +484,19 @@ fn both_clients_equip_a_grenade_rather_than_merely_readying_one() {
         "the native client has no equip"
     );
     assert!(
-        UTILITY_TS.contains("equip(slot: number): void"),
+        UTILITY_TS.contains("equip(slot: number): boolean"),
         "the browser has no equip"
+    );
+    // Both refuse a slot with none left: equipping puts the weapon away, and
+    // one client swapping a loaded rifle for an empty hand is a way to die the
+    // other does not have.
+    assert!(
+        UTILITY_RS.contains("&& self.count_of(slot) > 0"),
+        "the native client equips an empty grenade slot"
+    );
+    assert!(
+        UTILITY_TS.contains("if (this.countOf(slot) <= 0) return false;"),
+        "the browser equips an empty grenade slot"
     );
     for source in [UTILITY_RS, UTILITY_TS] {
         assert!(
@@ -900,7 +917,11 @@ fn both_clients_thin_and_clear_a_smoke_on_the_same_clock() {
         "SMOKE_CHANNEL_LIFE",
         "SMOKE_CHANNEL_RADIUS",
     ] {
-        assert_eq!(rust_f32(NADES_RS, name), browser_f32(NADES_TS, name), "{name}");
+        assert_eq!(
+            rust_f32(NADES_RS, name),
+            browser_f32(NADES_TS, name),
+            "{name}"
+        );
     }
 }
 
@@ -911,8 +932,16 @@ fn both_clients_offer_the_same_field_of_view_and_brightness() {
     use hassault_native::settings::{BRIGHTNESS_RANGE, FOV_RANGE, KEY_BRIGHTNESS};
     const MENU_TS: &str =
         include_str!("../../../packages/core/src/modules/hassault/menu-panels.tsx");
-    assert_eq!(FOV_RANGE.0, browser_f32(MENU_TS, "FOV_MIN"), "the FOV floor");
-    assert_eq!(FOV_RANGE.1, browser_f32(MENU_TS, "FOV_MAX"), "the FOV ceiling");
+    assert_eq!(
+        FOV_RANGE.0,
+        browser_f32(MENU_TS, "FOV_MIN"),
+        "the FOV floor"
+    );
+    assert_eq!(
+        FOV_RANGE.1,
+        browser_f32(MENU_TS, "FOV_MAX"),
+        "the FOV ceiling"
+    );
     assert_eq!(BRIGHTNESS_RANGE.0, browser_f32(MENU_TS, "BRIGHTNESS_MIN"));
     assert_eq!(BRIGHTNESS_RANGE.1, browser_f32(MENU_TS, "BRIGHTNESS_MAX"));
     assert!(
