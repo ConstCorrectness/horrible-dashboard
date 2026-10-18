@@ -556,16 +556,22 @@ async def tts(
     speech synthesis is optional (``uv sync --extra voice``), and every other
     agent route works without it."""
     try:
-        from backend.modules.agent.edge_tts_service import edge_tts_service
+        from backend.modules.agent.edge_tts_service import (
+            TTSSynthesisError,
+            edge_tts_service,
+        )
     except ImportError as exc:
         raise HTTPException(
             status_code=503,
             detail="Text-to-speech unavailable — install it with `uv sync --extra voice`",
         ) from exc
 
-    audio_bytes = await edge_tts_service.generate_audio(
-        text, voice=voice, rate=rate, pitch=pitch, volume=volume
-    )
+    try:
+        audio_bytes = await edge_tts_service.generate_audio(
+            text, voice=voice, rate=rate, pitch=pitch, volume=volume
+        )
+    except TTSSynthesisError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return Response(content=audio_bytes, media_type="audio/mpeg")
 
 

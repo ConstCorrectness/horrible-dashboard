@@ -1537,7 +1537,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         );
         const res = await fetch(url);
         if (!res.ok) {
-          throw new Error(`TTS preview failed (${res.status})`);
+          const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+          const detail = typeof body?.detail === 'string' ? `: ${body.detail}` : '';
+          throw new Error(`TTS preview failed (${res.status})${detail}`);
         }
         const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
         const source = ctx.createBufferSource();

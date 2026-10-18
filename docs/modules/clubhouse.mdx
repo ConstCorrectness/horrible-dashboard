@@ -820,6 +820,8 @@ is its turn, and speaks. The speech pipeline is two routes on the agent module:
 - **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS. `voice`, `rate`,
   `pitch` and `volume` are all passed through to the synthesizer, so the agent's
   loudness is tuned alongside its speed and pitch rather than left to the mixer.
+  A synthesis failure is a **502** whose `detail` carries the cause, never an
+  empty 200.
 
 Everything between those two — whether to answer, what the agent knows, what it
 remembers — is the **voice session**, and it lives on the server.
@@ -1417,6 +1419,16 @@ XTTS-v2 was tried first and dropped. It held a model in VRAM **alongside the
 local LLM** and OOM'd against it, and took seconds per utterance — dead air in a
 live room. Edge TTS has no local weights and starts immediately. The trade is
 explicit: it is a network call, so utterances leave the machine.
+
+:::note Voice preview: `Unable to decode audio data`
+Microsoft's endpoint refuses the WebSocket handshake with a **403** when edge-tts
+presents a stale Edge client version — 7.2.8 hit this in October 2026; 7.3.1 fixed
+it, and `pyproject.toml` now requires it. The service used to log the failure and
+return `b""`, so the route answered an empty `200 audio/mpeg` and the browser's
+`decodeAudioData` produced this message instead of the cause. It now raises
+`TTSSynthesisError`, the route answers 502 with the reason, and the voice preview
+shows it. When it comes back, check for a newer edge-tts before anything else.
+:::
 
 ### Installing it
 

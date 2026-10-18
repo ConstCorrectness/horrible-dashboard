@@ -174,6 +174,10 @@ def sanitize_text_for_tts(text: str) -> str:
     return text
 
 
+class TTSSynthesisError(RuntimeError):
+    """Edge TTS was reachable in principle but produced no audio."""
+
+
 class EdgeTTSService:
     async def generate_audio(
         self,
@@ -196,21 +200,25 @@ class EdgeTTSService:
             _audio_cache.move_to_end(cache_key)
             return _audio_cache[cache_key]
 
+        # Failures raise rather than return b"": an empty 200 reaches the browser as
+        # "Unable to decode audio data", which hides the real cause (Microsoft
+        # 403s clients pinned to a stale Edge version — upgrade edge-tts).
         try:
             communicate = edge_tts.Communicate(clean, v, rate=r, pitch=p, volume=vol)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
                     audio += chunk["data"]
-            res = bytes(audio)
-            if res:
-                _audio_cache[cache_key] = res
-                if len(_audio_cache) > _CACHE_MAX_SIZE:
-                    _audio_cache.popitem(last=False)
-            return res
         except Exception as exc:
             logger.warning("Edge TTS synthesis failed for voice %s: %s", v, exc)
-            return b""
+            raise TTSSynthesisError(f"Edge TTS synthesis failed: {exc}") from exc
+        res = bytes(audio)
+        if not res:
+            raise TTSSynthesisError(f"Edge TTS returned no audio for voice {v}")
+        _audio_cache[cache_key] = res
+        if len(_audio_cache) > _CACHE_MAX_SIZE:
+            _audio_cache.popitem(last=False)
+        return res
 
     async def list_voices(self) -> list[dict[str, Any]]:
         try:

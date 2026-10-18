@@ -100,7 +100,7 @@ hub = ["docker>=7.1"]
 voice = [
     "torch>=2.0.0",
     "transformers>=4.40.0",
-    "edge-tts>=7.0.0",
+    "edge-tts>=7.3.1",
 ]
 # Vector stores the database console can query natively (json dialect). Each is
 # lazy-imported by its driver, so the console lists the provider either way and only
