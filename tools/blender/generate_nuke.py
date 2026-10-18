@@ -26,7 +26,9 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cutlayout  # noqa: E402
 import maplib  # noqa: E402  (a sibling, found via the path above)
+import nuke_layout  # noqa: E402
 
 
 def clear_scene():
@@ -288,6 +290,23 @@ def add_substation(collection, mats):
             add_cylinder(collection, f"Bushing_Skirt_{bx}_{skirt}_NonCol", skirt_pos, 0.24, 0.06, mats["insulator_ceramic"], segments=10)
 
 
+# ---------------------------------------------------------------------------
+# Layout: the map is cut along a few empty lines and the halves spread apart (see
+# `cutlayout.py`, and `nuke_layout.py` for the cuts). Every primitive goes through
+# the warper; the composites move as one by their anchor point.
+# ---------------------------------------------------------------------------
+W = cutlayout.Warper(nuke_layout.CUTS)
+
+add_box = W.box(add_box)
+add_cylinder = W.cylinder(add_cylinder)
+add_boxes = W.boxes(maplib.add_boxes)
+add_plinths = W.plinths(maplib.add_plinths)
+add_wall_with_door = W.wall_with_door(maplib.add_wall_with_door)
+add_light = W.light(maplib.add_light)
+add_pipe_run = W.line(add_pipe_run, 2, 3)
+add_shipping_container = W.composite(add_shipping_container, 2)
+
+
 def build_nuke_perimeter_and_ground(col, mats):
     # Main Ground Floor (70m x 70m)
     add_box(col, "Terrain_Concrete_Ground", (35.0, 35.0, -0.5), (70.0, 70.0, 1.0), mats["concrete_floor"])
@@ -310,10 +329,10 @@ def build_site_a_upper_hall(col, mats):
     # Outer containment building walls (X: 22..50, Y: 28..52, Z: 0..8.0)
     # Doorways on the T (south), CT (north) and west sides. The hall was once four
     # unbroken 8 m walls: Site A was sealed, reachable by nobody.
-    maplib.add_wall_with_door(col, "SiteA_Wall_N", (36.0, 52.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 30.0, 3.5, 3.2)
+    add_wall_with_door(col, "SiteA_Wall_N", (36.0, 52.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 30.0, 3.5, 3.2)
     add_box(col, "SiteA_Wall_E", (50.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"])
-    maplib.add_wall_with_door(col, "SiteA_Wall_W", (22.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"], 44.0, 3.5, 3.2)
-    maplib.add_wall_with_door(col, "SiteA_Wall_S", (36.0, 28.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 40.0, 3.5, 3.2)
+    add_wall_with_door(col, "SiteA_Wall_W", (22.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"], 44.0, 3.5, 3.2)
+    add_wall_with_door(col, "SiteA_Wall_S", (36.0, 28.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 40.0, 3.5, 3.2)
 
     # Hall ceiling at Z=8.0
     add_box(col, "SiteA_Roof_Deck", (36.0, 40.0, 8.2), (28.0, 24.0, 0.4), mats["concrete_dark"])
@@ -484,7 +503,7 @@ def build_layout_revision(col, mats):
 def build_dressing_and_lights(col, mats):
     """Pipes, striping and lamps; then the sky."""
     # Hazard striping on the hall's door reveals and the perimeter's foot.
-    maplib.add_boxes(col, "Hazard_Door_Stripes_NonCol", [
+    add_boxes(col, "Hazard_Door_Stripes_NonCol", [
         ((30.0 - 1.85, 52.0, 1.6), (0.2, 1.3, 3.2)), ((30.0 + 1.85, 52.0, 1.6), (0.2, 1.3, 3.2)),
         ((40.0 - 1.85, 28.0, 1.6), (0.2, 1.3, 3.2)), ((40.0 + 1.85, 28.0, 1.6), (0.2, 1.3, 3.2)),
         ((22.0, 44.0 - 1.85, 1.6), (1.3, 0.2, 3.2)), ((22.0, 44.0 + 1.85, 1.6), (1.3, 0.2, 3.2)),
@@ -495,7 +514,7 @@ def build_dressing_and_lights(col, mats):
         ((66.0, 35.0, 6.0), (1.2, 62.0, 12.0)),
         ((4.0, 35.0, 6.0), (1.2, 62.0, 12.0)),
     ]
-    maplib.add_plinths(col, "Trim_Kerb_NonCol", walls, mats["concrete_dark"], height=0.35, proud=0.12)
+    add_plinths(col, "Trim_Kerb_NonCol", walls, mats["concrete_dark"], height=0.35, proud=0.12)
 
     # Pipe runs along the outside of the hall, on brackets.
     pipes, brackets = [], []
@@ -504,8 +523,8 @@ def build_dressing_and_lights(col, mats):
         pipes.append(((36.0, y, 6.2), (27.0, 0.2, 0.2)))
         for x in range(24, 50, 4):
             brackets.append(((x, y + side * 0.1, 5.9), (0.12, 0.5, 1.0)))
-    maplib.add_boxes(col, "Pipes_Hall_NonCol", pipes, mats["pipe_yellow"])
-    maplib.add_boxes(col, "Pipe_Brackets_NonCol", brackets, mats["steel_dark"])
+    add_boxes(col, "Pipes_Hall_NonCol", pipes, mats["pipe_yellow"])
+    add_boxes(col, "Pipe_Brackets_NonCol", brackets, mats["steel_dark"])
 
     # Yard floodlights: a pole, a head, a light each.
     sodium = maplib.make_material("mat_light_sodium_glow", (1.0, 0.78, 0.42), emission=(1.0, 0.72, 0.35), strength=6.0)
@@ -513,21 +532,21 @@ def build_dressing_and_lights(col, mats):
     for x, y in ((12.0, 12.0), (58.0, 12.0), (10.0, 60.0), (60.0, 58.0), (28.0, 18.0), (48.0, 58.0)):
         poles.append(((x, y, 3.5), (0.22, 0.22, 7.0)))
         heads.append(((x, y, 7.05), (0.9, 0.5, 0.18)))
-        maplib.add_light((x, y, 6.6), color=(255, 200, 140), radius=11.0, intensity=1.6)
+        add_light((x, y, 6.6), color=(255, 200, 140), radius=11.0, intensity=1.6)
     # Solid: a NonCol pole is one a body stands inside, and it vanishes from there.
-    maplib.add_boxes(col, "Yard_Poles", poles, mats["steel_dark"])
-    maplib.add_boxes(col, "Floodlight_Heads_NonCol", heads, sodium)
+    add_boxes(col, "Yard_Poles", poles, mats["steel_dark"])
+    add_boxes(col, "Floodlight_Heads_NonCol", heads, sodium)
 
     # Wall packs over the hall's three doors.
     packs = [((30.0, 52.8, 3.9), (0.6, 0.3, 0.3)), ((40.0, 27.2, 3.9), (0.6, 0.3, 0.3)), ((21.2, 44.0, 3.9), (0.3, 0.6, 0.3))]
-    maplib.add_boxes(col, "Wallpack_NonCol", packs, mats["light_fluor"])
+    add_boxes(col, "Wallpack_NonCol", packs, mats["light_fluor"])
     for (x, y, z), _ in packs:
-        maplib.add_light((x, y, z - 0.4), color=(235, 242, 255), radius=7.0, intensity=1.6)
+        add_light((x, y, z - 0.4), color=(235, 242, 255), radius=7.0, intensity=1.6)
 
     # The hall's own troffers.
     maplib.lights_from_emitters("mat_light_fluor", color=(235, 242, 255), radius=10.0, intensity=1.8, spacing=5.0, drop=0.6)
     # And the reactor's glow up through the dome.
-    maplib.add_light((36.0, 40.0, 0.8), color=(80, 220, 255), radius=6.0, intensity=1.4)
+    add_light((36.0, 40.0, 0.8), color=(80, 220, 255), radius=6.0, intensity=1.4)
 
     maplib.set_atmosphere("overcast")
 
@@ -549,6 +568,8 @@ def build_nuke_scene():
     build_outside_yard(c_yard, mats)
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
+    if os.environ.get("HASSAULT_NUKE_SCAN"):
+        W.dump_scan(os.environ["HASSAULT_NUKE_SCAN"])
 
 
 def export_glb():
