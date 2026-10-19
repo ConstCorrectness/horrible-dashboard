@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_` and Inferno's own `inferno_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_`, Inferno's own `inferno_` and Nuke's own `nuke_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -59,7 +59,7 @@
     },
     {
       "kind": "souk_crate",
-      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate"]
+      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate", "nuke_wood_crate"]
     },
     {
       "kind": "rust_iron",
@@ -67,11 +67,31 @@
     },
     {
       "kind": "burlap",
-      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap", "inferno_canopy_", "inferno_sandbag"]
+      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap", "inferno_canopy_", "inferno_sandbag", "nuke_sandbag"]
     },
     {
       "kind": "glaze",
       "match": ["dust2_moorish_tile", "mirage_mosaic_tile"]
+    },
+    {
+      "kind": "cast_concrete",
+      "match": ["nuke_concrete_wall", "nuke_concrete_dark"]
+    },
+    {
+      "kind": "slab_concrete",
+      "match": ["nuke_concrete_floor"]
+    },
+    {
+      "kind": "corrugated",
+      "match": ["nuke_container_"]
+    },
+    {
+      "kind": "painted_metal",
+      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue"]
+    },
+    {
+      "kind": "tread_plate",
+      "match": ["nuke_steel_grate"]
     },
     {
       "kind": "site_a",
@@ -210,7 +230,12 @@
     "souk_crate": 2.4,
     "rust_iron": 3,
     "burlap": 3,
-    "glaze": 6
+    "glaze": 6,
+    "cast_concrete": 4,
+    "slab_concrete": 4,
+    "corrugated": 3,
+    "painted_metal": 3,
+    "tread_plate": 1.5
   },
   "detailMean": 0.6667,
   "detailGain": 1.5,
@@ -223,7 +248,12 @@
     "souk_crate",
     "rust_iron",
     "burlap",
-    "glaze"
+    "glaze",
+    "cast_concrete",
+    "slab_concrete",
+    "corrugated",
+    "painted_metal",
+    "tread_plate"
   ],
   "photoNormalScale": {
     "limewash": 0.5,
@@ -234,6 +264,11 @@
     "souk_crate": 1.2,
     "rust_iron": 1.5,
     "burlap": 1.0,
-    "glaze": 1.0
+    "glaze": 1.0,
+    "cast_concrete": 0.6,
+    "slab_concrete": 0.6,
+    "corrugated": 1.2,
+    "painted_metal": 0.8,
+    "tread_plate": 1.2
   }
 }

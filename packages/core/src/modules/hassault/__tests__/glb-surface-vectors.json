@@ -842,34 +842,6 @@
       "kind": "plaster"
     },
     {
-      "name": "mat_concrete_dark",
-      "kind": "concrete"
-    },
-    {
-      "name": "mat_concrete_floor",
-      "kind": "concrete"
-    },
-    {
-      "name": "mat_concrete_wall",
-      "kind": "concrete"
-    },
-    {
-      "name": "mat_container_blue",
-      "kind": "container"
-    },
-    {
-      "name": "mat_container_green",
-      "kind": "container"
-    },
-    {
-      "name": "mat_container_red",
-      "kind": "container"
-    },
-    {
-      "name": "mat_coolant_blue",
-      "kind": "none"
-    },
-    {
       "name": "mat_dust2_canopy_crimson",
       "kind": "burlap"
     },
@@ -938,14 +910,6 @@
       "kind": "glass"
     },
     {
-      "name": "mat_hazard_black",
-      "kind": "hazard"
-    },
-    {
-      "name": "mat_hazard_yellow",
-      "kind": "hazard"
-    },
-    {
       "name": "mat_inferno_canopy_crimson",
       "kind": "burlap"
     },
@@ -986,10 +950,6 @@
       "kind": "souk_crate"
     },
     {
-      "name": "mat_insulator_ceramic",
-      "kind": "concrete"
-    },
-    {
       "name": "mat_italian_cypress_leaves",
       "kind": "none"
     },
@@ -1003,14 +963,6 @@
     },
     {
       "name": "mat_lantern_glow",
-      "kind": "none"
-    },
-    {
-      "name": "mat_light_fluor",
-      "kind": "none"
-    },
-    {
-      "name": "mat_light_sodium_glow",
       "kind": "none"
     },
     {
@@ -1070,24 +1022,100 @@
       "kind": "souk_crate"
     },
     {
+      "name": "mat_nuke_concrete_dark",
+      "kind": "cast_concrete"
+    },
+    {
+      "name": "mat_nuke_concrete_floor",
+      "kind": "slab_concrete"
+    },
+    {
+      "name": "mat_nuke_concrete_wall",
+      "kind": "cast_concrete"
+    },
+    {
+      "name": "mat_nuke_container_blue",
+      "kind": "corrugated"
+    },
+    {
+      "name": "mat_nuke_container_green",
+      "kind": "corrugated"
+    },
+    {
+      "name": "mat_nuke_container_red",
+      "kind": "corrugated"
+    },
+    {
+      "name": "mat_nuke_coolant_blue",
+      "kind": "none"
+    },
+    {
+      "name": "mat_nuke_drum_blue",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "mat_nuke_glass_window",
+      "kind": "glass"
+    },
+    {
+      "name": "mat_nuke_hazard_black",
+      "kind": "hazard"
+    },
+    {
+      "name": "mat_nuke_hazard_yellow",
+      "kind": "hazard"
+    },
+    {
+      "name": "mat_nuke_insulator_ceramic",
+      "kind": "concrete"
+    },
+    {
+      "name": "mat_nuke_light_fluor",
+      "kind": "none"
+    },
+    {
+      "name": "mat_nuke_light_sodium_glow",
+      "kind": "none"
+    },
+    {
+      "name": "mat_nuke_pipe_yellow",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "mat_nuke_reactor_glow_cyan",
+      "kind": "none"
+    },
+    {
+      "name": "mat_nuke_reactor_hull",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "mat_nuke_sandbag",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_nuke_steel_dark",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "mat_nuke_steel_grate",
+      "kind": "tread_plate"
+    },
+    {
+      "name": "mat_nuke_steel_industrial",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "mat_nuke_wood_crate",
+      "kind": "souk_crate"
+    },
+    {
       "name": "mat_office_plant_leaves",
       "kind": "none"
     },
     {
       "name": "mat_palm_fronds",
       "kind": "none"
-    },
-    {
-      "name": "mat_pipe_yellow",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "mat_reactor_glow_cyan",
-      "kind": "none"
-    },
-    {
-      "name": "mat_reactor_hull",
-      "kind": "concrete"
     },
     {
       "name": "mat_screen_display",
@@ -1103,18 +1131,6 @@
     },
     {
       "name": "mat_stainless",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "mat_steel_dark",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "mat_steel_grate",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "mat_steel_industrial",
       "kind": "vault_steel"
     },
     {
@@ -1136,10 +1152,6 @@
     {
       "name": "mat_wall_drywall",
       "kind": "plaster"
-    },
-    {
-      "name": "mat_wood_crate",
-      "kind": "crate"
     },
     {
       "name": "mat_wrought_iron",

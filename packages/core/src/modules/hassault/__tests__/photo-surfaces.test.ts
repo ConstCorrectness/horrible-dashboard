@@ -47,8 +47,9 @@ function world(...names: string[]): THREE.Group {
 afterEach(() => vi.restoreAllMocks());
 
 describe('photo surface kinds', () => {
-  it('are exactly the nine promised, each with a stand-in', () => {
-    expect(PHOTO_KINDS).toHaveLength(9);
+  it('are exactly the fourteen promised, each with a stand-in', () => {
+    // Nine for the desert and Italian maps, five for Nuke's concrete and steel.
+    expect(PHOTO_KINDS).toHaveLength(14);
     for (const kind of PHOTO_KINDS) {
       expect(isPhotoKind(kind)).toBe(true);
       expect(PHOTO_FALLBACK[kind], kind).toBeTruthy();
@@ -70,7 +71,7 @@ describe('photo surface kinds', () => {
     }
   });
 
-  it("match Dust II's and Mirage's own materials and no other map's", () => {
+  it("match the stretched maps' own materials and no other map's", () => {
     expect(classifySurface('mat_dust2_sandstone_ochre')).toBe('sandstone');
     expect(classifySurface('mat_dust2_sandstone_light')).toBe('limewash');
     expect(classifySurface('mat_dust2_limestone_paving')).toBe('paving');
@@ -103,6 +104,18 @@ describe('photo surface kinds', () => {
     expect(classifySurface('mat_inferno_canopy_crimson')).toBe('burlap');
     expect(isPhotoKind(classifySurface('mat_inferno_italian_cypress_leaves'))).toBe(false);
     expect(isPhotoKind(classifySurface('mat_inferno_terracotta_roof'))).toBe(false);
+    // Nuke's own.
+    expect(classifySurface('mat_nuke_concrete_wall')).toBe('cast_concrete');
+    expect(classifySurface('mat_nuke_concrete_dark')).toBe('cast_concrete');
+    expect(classifySurface('mat_nuke_concrete_floor')).toBe('slab_concrete');
+    expect(classifySurface('mat_nuke_container_green')).toBe('corrugated');
+    expect(classifySurface('mat_nuke_steel_dark')).toBe('painted_metal');
+    expect(classifySurface('mat_nuke_pipe_yellow')).toBe('painted_metal');
+    expect(classifySurface('mat_nuke_steel_grate')).toBe('tread_plate');
+    expect(classifySurface('mat_nuke_wood_crate')).toBe('souk_crate');
+    expect(classifySurface('mat_nuke_sandbag')).toBe('burlap');
+    expect(isPhotoKind(classifySurface('mat_nuke_hazard_yellow'))).toBe(false);
+    expect(isPhotoKind(classifySurface('mat_nuke_reactor_glow_cyan'))).toBe(false);
     // Mirage and the rest reuse these names, minus the infix, and must not change.
     for (const other of [
       'mat_sandstone_ochre',
@@ -111,6 +124,9 @@ describe('photo surface kinds', () => {
       'mat_palm_bark',
       'mat_cobblestone_street',
       'mat_tuscan_stucco_warm',
+      'mat_concrete_wall',
+      'mat_container_red',
+      'mat_steel_grate',
     ]) {
       expect(isPhotoKind(classifySurface(other)), other).toBe(false);
     }
@@ -123,7 +139,10 @@ describe('photo surface kinds', () => {
       if (isPhotoKind(row.kind)) {
         const lower = row.name.toLowerCase();
         expect(
-          lower.includes('dust2_') || lower.includes('mirage_') || lower.includes('inferno_'),
+          lower.includes('dust2_') ||
+            lower.includes('mirage_') ||
+            lower.includes('inferno_') ||
+            lower.includes('nuke_'),
           row.name,
         ).toBe(true);
       }

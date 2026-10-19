@@ -64,6 +64,8 @@ def dijkstra(world, cells, starts, blocked=frozenset()):
     Walks, steps up to `STEP_HEIGHT`, and jumps up to the lint's `JUMP_CLIMB`
     (two cells at a time, as `maplint._reachable` does, because a body cannot stand
     in the cell hugging a ledge it cannot step onto), a jump costing `JUMP_COST`.
+    Drops off a ledge the same two cells at a time, for the same reason: that is
+    how a body falls into Nuke's vent.
     """
     dist = {s: 0.0 for s in starts if s in cells}
     prev = {}
@@ -103,6 +105,10 @@ def dijkstra(world, cells, starts, blocked=frozenset()):
             rise = world.floor_at(*far) - here
             if physics.STEP_HEIGHT < rise <= maplint.JUMP_CLIMB:
                 moves.append((far, 2.0 + JUMP_COST))
+            elif rise < -physics.STEP_HEIGHT:
+                # Off a ledge: the cell at its foot is never standable (the body
+                # would overlap the ledge), but walking off it lands two cells out.
+                moves.append((far, 2.0))
         for nxt, cost in moves:
             nd = d + cost
             if nd < dist.get(nxt, 1e18):
