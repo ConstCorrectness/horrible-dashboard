@@ -174,8 +174,8 @@ when codecs are missing) and lands the row as **`ready` with a note in `error`**
 (`AUDIO_ONLY_NOTE`). The Library row renders `error` inline and only disables a song
 whose status is `failed`, so the note explains the black stage without blocking the
 song. The Search tab shows an install hint whenever `/status` reports no ffmpeg. An
-audio-only *request* — the Clubhouse room agent's `play_music` — carries no note: it
-asked for audio on purpose.
+audio-only *request* (`audio_only=True`) carries no note: it asked for audio on
+purpose.
 
 ## Pitch shift
 

@@ -789,6 +789,62 @@ def test_play_fetches_when_missing_and_asks_when_unsure(data_dir, session, sourc
     assert "options" in out and "error" in out
 
 
+# --- Clubhouse room agent ------------------------------------------------------------
+
+
+def test_room_agent_plays_from_the_library_without_touching_the_player(
+    data_dir, session, source
+):
+    """The room's music is the pane's published track, not the music player: a
+    library hit is played by id and the session stays empty."""
+    from backend.modules.clubhouse.voice_runtime import play_music
+
+    row = _track("Africa", "Toto")
+    said, action = asyncio.run(play_music("Africa by Toto"))
+    assert action == {
+        "type": "music.play",
+        "songId": row["id"],
+        "title": "Africa by Toto",
+        "ready": True,
+    }
+    assert "from your library" in said
+    assert source.fetched == []
+    assert session.snapshot().now_playing is None
+
+
+def test_room_agent_fetches_into_the_library_and_asks_when_unsure(data_dir, source):
+    from backend.modules.clubhouse.voice_runtime import play_music
+
+    source.catalog = {"Rosanna": [_cand("ro", "Rosanna", "Toto", 331)]}
+
+    async def fetch() -> tuple[str, dict | None]:
+        out = await play_music("Rosanna by Toto")
+        await _drain()
+        return out
+
+    said, action = asyncio.run(fetch())
+    assert action is not None and action["ready"] is False
+    assert "downloading" in said
+    row = library.get_track(action["songId"])
+    assert row is not None and row["status"] == "ready"
+    assert source.fetched == ["ro"]
+
+    source.catalog = {
+        "Mystery": [
+            TrackCandidate(
+                source="fake",
+                ref="z",
+                title="Unrelated Podcast",
+                artist="",
+                duration=3600,
+            )
+        ]
+    }
+    said, action = asyncio.run(play_music("Mystery Song by Nobody"))
+    assert action is None and "Ask which" in said
+    assert source.fetched == ["ro"]
+
+
 def test_playlist_tools_round_trip(data_dir, session):
     a, b, _ = _three()
     out = asyncio.run(
@@ -835,11 +891,7 @@ def test_dj_prefers_library_matches_from_similarity(data_dir, session, monkeypat
             ]
 
     monkeypatch.setattr(listeners, "_items", {"sim": Similar(fail=False)})
-    result = asyncio.run(
-        curator.curate(
-            seeds=[seed], count=5, allow_download=False
-        )
-    )
+    result = asyncio.run(curator.curate(seeds=[seed], count=5, allow_download=False))
     assert sorted(t["title"] for t in result["picks"]) == ["Dreams", "Hold the Line"]
     assert all("in your library" in w for w in result["why"])
 
@@ -854,12 +906,16 @@ def test_status_reports_review_and_imports(data_dir, session):
 # --- plugin SDK ----------------------------------------------------------------------
 
 
-def test_example_folder_source_plugin_plugs_in(data_dir, tmp_path, monkeypatch, session):
+def test_example_folder_source_plugin_plugs_in(
+    data_dir, tmp_path, monkeypatch, session
+):
     """`host.add_music_source` is the whole integration: the agent's `music.play`
     reaches a plugin source with no new tools."""
     from backend.sdk import PluginRegistry, load_plugins
 
-    examples = Path(__file__).resolve().parent.parent.parent / "examples" / "backend-plugins"
+    examples = (
+        Path(__file__).resolve().parent.parent.parent / "examples" / "backend-plugins"
+    )
     shelf = tmp_path / "nas"
     _wav(shelf / "Toto" / "Toto - Georgy Porgy.wav", tone=9)
     monkeypatch.setenv("MUSIC_FOLDER_SOURCE_DIR", str(shelf))
@@ -881,7 +937,9 @@ def test_example_folder_source_plugin_plugs_in(data_dir, tmp_path, monkeypatch, 
 
 def test_only_one_client_owns_the_output(data_dir, session, monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("backend.modules.music.session.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "backend.modules.music.session.time.monotonic", lambda: clock[0]
+    )
     a, *_ = _three()
 
     async def run():
@@ -946,7 +1004,16 @@ def test_lyrics_from_another_cut_keep_words_but_drop_timing(data_dir, monkeypatc
         async def get(self, url, params=None):
             if url == lyrics.LRCLIB_URL:
                 return Resp(404, {})
-            return Resp(200, [{"duration": 295, "plainLyrics": "I hear the drums", "syncedLyrics": "[00:10.00]I hear the drums"}])
+            return Resp(
+                200,
+                [
+                    {
+                        "duration": 295,
+                        "plainLyrics": "I hear the drums",
+                        "syncedLyrics": "[00:10.00]I hear the drums",
+                    }
+                ],
+            )
 
     monkeypatch.setattr(lyrics.httpx, "AsyncClient", Client)
     found = asyncio.run(lyrics.get_lyrics(track["id"]))

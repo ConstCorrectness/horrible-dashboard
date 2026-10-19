@@ -378,7 +378,7 @@ def test_the_music_status_route_reports_a_download(client, monkeypatch):
             return None
         return {"id": "s1", "status": "downloading", "title": "Africa", "error": None}
 
-    monkeypatch.setattr("backend.modules.karaoke.store.get_song", fake_get)
+    monkeypatch.setattr("backend.modules.music.library.get_track", fake_get)
     assert client.get("/api/clubhouse/voice/music/s1").json()["status"] == "downloading"
     assert client.get("/api/clubhouse/voice/music/nope").status_code == 404
 

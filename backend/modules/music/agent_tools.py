@@ -52,7 +52,7 @@ _FILLER = {
     "me",
 }
 # Below this, `music.play` asks instead of downloading a guess.
-_PLAY_MIN_CONFIDENCE = 0.35
+PLAY_MIN_CONFIDENCE = 0.35
 _PERIODS = {"day": 1, "week": 7, "month": 30, "year": 365}
 
 
@@ -130,7 +130,7 @@ async def _status(_args: dict[str, Any]) -> dict[str, Any]:
 # --- finding a track ------------------------------------------------------------------
 
 
-def _parse_query(query: str) -> DescribedTrack:
+def parse_query(query: str) -> DescribedTrack:
     """'Africa by Toto' / 'Toto - Africa' → a description the resolver can score."""
     text = query.strip()
     if " by " in text.lower():
@@ -168,7 +168,7 @@ async def _play(args: dict[str, Any]) -> dict[str, Any]:
 
     hits = find_in_library(query)
     if hits:
-        desc = _parse_query(query)
+        desc = parse_query(query)
         # A named song: prefer an exact title match. Just an artist ("something by
         # Adele"): any of theirs, weighted towards favourites.
         exact = [
@@ -186,11 +186,11 @@ async def _play(args: dict[str, Any]) -> dict[str, Any]:
         await session.add([track], mode=mode)
         return {"queued": _brief(track), "mode": mode, "source": "library"}
 
-    desc = _parse_query(query)
+    desc = parse_query(query)
     resolution = await resolve.resolve(desc)
     if resolution.best is None:
         return {"error": "; ".join(resolution.notes) or f"Nothing found for {query!r}."}
-    if resolution.confidence < _PLAY_MIN_CONFIDENCE:
+    if resolution.confidence < PLAY_MIN_CONFIDENCE:
         return {
             "error": "not confident about any match — ask the user which one, then call music.play with its title",
             "options": [s.as_dict() for s in resolution.alternatives[:4]],

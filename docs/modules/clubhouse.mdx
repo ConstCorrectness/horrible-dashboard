@@ -862,7 +862,7 @@ a room is strangers talking to your agent, so nothing that acts on a person or a
 
 | Tool | Does | Notes |
 | --- | --- | --- |
-| `play_music(query)` | a `ready` song from the karaoke library, else a YouTube search **without** the karaoke bias and a background **audio-only** download (`ba[ext=m4a]`) | returns a `music.play` action |
+| `play_music(query)` | a track from the [music](./music.mdx) library (the same lookup as the `music.play` agent tool), else the music resolver's scored search and a background download into that library; a match below `music.play`'s confidence floor is not fetched, the model is told to ask which one | returns a `music.play` action; never queues on the music player |
 | `music_control(action, value)` | `stop` / `pause` / `resume` / `volume` (0–1, clamped) / `louder` / `quieter` (±0.2 step) | a pane action only; "Nothing is playing" when the room brief says so |
 | `look_up(query)` | web + library snippets via `gather_context` | not offered when `retrieval` is `off` |
 

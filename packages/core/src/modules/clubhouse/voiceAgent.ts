@@ -141,9 +141,9 @@ export function chatSpeakerLabel(comment: {
   return name || undefined;
 }
 
-/** Where a song the agent resolved is served from (the karaoke catalog's media route). */
+/** Where a song the agent resolved is served from (the music library's media route). */
 export function musicUrl(songId: string): string {
-  return apiUrl(`/api/karaoke/media/${encodeURIComponent(songId)}`);
+  return apiUrl(`/api/music/media/${encodeURIComponent(songId)}`);
 }
 
 /** Whether a song the agent asked for has finished downloading. */

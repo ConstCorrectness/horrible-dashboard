@@ -268,51 +268,78 @@ def _play_action(song_id: str, title: str, *, ready: bool) -> dict[str, Any]:
 async def play_music(query: str) -> tuple[str, dict[str, Any] | None]:
     """Find-or-fetch a song for the room: (what to tell the model, pane action).
 
-    Reuses the karaoke catalog and downloader rather than keeping a second one, but
-    searches **without** the karaoke bias -- someone asking a room agent for a song
-    wants the record, not the backing track. The server only makes sure a file will
-    exist; the pane plays it, because the room's published track lives there.
+    Goes through the music library -- the same lookup and scored resolver as the
+    `music.play` agent tool -- so a song the room asks for is one the library keeps,
+    and a library track plays without a download. It does **not** queue on the music
+    player: the server only makes sure a file will exist; the pane plays it, because
+    the room's published track lives there.
     """
-    from backend.modules.karaoke import downloader, store
+    from backend.modules.music import acquire, library, resolve
+    from backend.modules.music.agent_tools import (
+        PLAY_MIN_CONFIDENCE,
+        find_in_library,
+        parse_query,
+    )
+    from backend.modules.music.providers import ProviderError
 
     query = query.strip()
     if not query:
         return "play_music needs a song or artist.", None
-    ready = [s for s in store.list_songs(query, limit=5) if s["status"] == "ready"]
-    if ready:
-        song = ready[0]
+    desc = parse_query(query)
+    hits = find_in_library(query)
+    if hits:
+        exact = [
+            h
+            for h in hits
+            if desc.title
+            and library.normalize(h["title"]) == library.normalize(desc.title)
+        ]
+        track = exact[0] if exact else hits[0]
+        ready = track["status"] == "ready"
         return (
-            f"Now playing '{song['title']}' from your library.",
-            _play_action(song["id"], song["title"], ready=True),
+            f"Now playing '{_label(track)}' from your library."
+            if ready
+            else f"'{_label(track)}' is still downloading and will start in a moment.",
+            _play_action(track["id"], _label(track), ready=ready),
         )
-    if not downloader.available():
-        return f"Can't fetch music: {downloader.INSTALL_HINT}", None
     try:
-        results, note = await asyncio.wait_for(
-            downloader.search(query, limit=1, karaoke_bias=False),
-            timeout=RETRIEVAL_TIMEOUT_S,
+        resolution = await asyncio.wait_for(
+            resolve.resolve(desc), timeout=RETRIEVAL_TIMEOUT_S
         )
     except asyncio.TimeoutError:
         return "The music search timed out.", None
-    if not results:
+    if resolution.best is None:
+        note = "; ".join(resolution.notes)
         return f"Found nothing to play for '{query}'. {note}".strip(), None
-    hit = results[0]
-    existing = store.find_by_video_id(hit.video_id)
-    if existing is not None:
-        return (
-            f"Now playing '{existing['title']}'.",
-            _play_action(existing["id"], existing["title"], ready=True),
+    if resolution.confidence < PLAY_MIN_CONFIDENCE:
+        options = ", ".join(
+            f"'{_label({'title': s.candidate.title, 'artist': s.candidate.artist})}'"
+            for s in resolution.alternatives[:3]
         )
-    song = store.create_song(
-        title=hit.title, video_id=hit.video_id, url=hit.url, status="queued"
-    )
-    # Audio only: the room hears the song, nobody watches it, and a single audio
-    # stream is what YouTube still serves without an ffmpeg merge.
-    downloader.start_download(song["id"], hit.url, audio_only=True)
+        return (
+            f"Not sure which song '{query}' means. Ask which one: {options}.",
+            None,
+        )
+    try:
+        track = await acquire.start_download(
+            resolution.best.candidate, confidence=resolution.confidence
+        )
+    except ProviderError as exc:
+        return f"Can't fetch music: {exc}", None
+    ready = track["status"] == "ready"
     return (
-        f"Found '{hit.title}'. It is downloading and will start in a moment.",
-        _play_action(song["id"], hit.title, ready=False),
+        f"Now playing '{_label(track)}'."
+        if ready
+        else f"Found '{_label(track)}'. It is downloading and will start in a moment.",
+        _play_action(track["id"], _label(track), ready=ready),
     )
+
+
+def _label(track: dict[str, Any]) -> str:
+    """'Africa by Toto' -- what the model says and the room's now-playing line."""
+    title = str(track.get("title") or "")
+    artist = str(track.get("artist") or "")
+    return f"{title} by {artist}" if artist and title else title
 
 
 def music_control(action: Any, value: Any = None) -> tuple[str, dict[str, Any] | None]:

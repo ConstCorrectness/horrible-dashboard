@@ -344,9 +344,9 @@ def music_status(song_id: str) -> MusicStatus:
     """
     from fastapi import HTTPException
 
-    from backend.modules.karaoke import store
+    from backend.modules.music import library
 
-    song = store.get_song(song_id)
+    song = library.get_track(song_id)
     if song is None:
         raise HTTPException(status_code=404, detail="song not found")
     return MusicStatus(
