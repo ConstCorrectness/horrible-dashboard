@@ -188,6 +188,8 @@ import {
 } from './graphics';
 import { GrenadeController } from './utility';
 import { TrainingRange, type DrillStatus } from './training';
+import { setWeaponTable, visualId } from './weapon-visuals';
+import { LOADOUT_KEY, loadoutSlots, parseLoadout, serializeLoadout } from './loadout';
 import { readBests, recordBest, type DrillSummary } from './training-drill';
 import { DrillCard, DrillClock } from './panels/DrillCard';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
@@ -655,6 +657,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const brightnessRef = useRef(1);
   brightnessRef.current = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
+  /** The loadout to carry (`loadout.ts`), sent on every welcome. */
+  const loadoutRaw = useSetting<string>(LOADOUT_KEY);
+  const loadoutChoice = useMemo(() => parseLoadout(loadoutRaw), [loadoutRaw]);
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
   const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
@@ -944,6 +949,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * room id, and the room is only ours once the welcome lands. */
   const pendingBotsRef = useRef<{ count: number; skill: string } | null>(null);
   if (sessionRef.current === null) sessionRef.current = paneMatch ?? new MatchSession();
+  // The loadout rides the session, which re-sends it on every welcome.
+  useEffect(() => {
+    sessionRef.current?.setLoadout(loadoutChoice ? { ...loadoutChoice } as Record<string, string> : null);
+  }, [loadoutChoice]);
   if (shotsRef.current === null) shotsRef.current = new ShotController();
   if (nadesRef.current === null) nadesRef.current = new GrenadeController();
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
@@ -1155,6 +1164,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (cancelled) return;
         setLoadoutError(specs.length === 0 ? 'The server returned an empty loadout.' : '');
         setWeapons(specs);
+        setWeaponTable(specs);
         shotsRef.current?.setWeapons(specs, Math.min(2, specs.length - 1));
         rangeRef.current?.setWeapons(specs, Math.min(2, specs.length - 1));
       })
@@ -2686,7 +2696,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             arcLine.hide();
           }
           if (shots) (window as any).__SHOTS = shots;
-          const baseWeapon = shots?.weapon?.id ?? '';
+          // Drawn as the base model it borrows; skinned as itself.
+          const realWeapon = shots?.weapon?.id ?? '';
+          const baseWeapon = shots?.weapon ? visualId(shots.weapon) : '';
           const heldWeapon = holdingNade ? `nade_${nades?.selectedSpec?.id ?? 'he'}` : baseWeapon;
           if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
             if (lastHeldWeaponRef.current !== '') {
@@ -2701,7 +2713,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }
             lastHeldWeaponRef.current = heldWeapon;
           }
-          viewmodel.setWeapon(heldWeapon, skinsRef.current[heldWeapon] ?? null);
+          viewmodel.setWeapon(
+            heldWeapon,
+            skinsRef.current[holdingNade ? heldWeapon : realWeapon] ?? null,
+          );
           // The reload's *progress*, from the two served numbers: how long it
           // takes (`reloadTime`, on the weapon) and how much is left
           // (`reloadIn`, on the snapshot). `null` when there is no length to
@@ -3423,7 +3438,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // A weapon key puts the grenade away — the counterpart of a number key
         // taking one out. Purely cosmetic on the wire: `holster` sets no slot.
         nadesRef.current?.holster();
-        shotsRef.current?.select(Number(action.slice(6)) - 1);
+        // 1 primary, 2 secondary, 3 knife (`ShotController.selectKey`).
+        shotsRef.current?.selectKey(Number(action.slice(6)));
       }
       // Selecting **equips**: the weapon goes down and the two mouse buttons
       // become throw and toss. Picking a grenade and choosing the moment are
@@ -3649,6 +3665,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     if (range) {
       range.reset();
       range.setWeapons(weapons, Math.min(2, weapons.length - 1));
+      range.setLoadout(loadoutSlots(weapons, loadoutChoice));
       // Placed relative to where we are about to stand, so the nearest dummies
       // are the ones in front of you rather than the ones the map happens to
       // list first.
@@ -3681,7 +3698,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     }
     deploy();
     },
-    [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName],
+    [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName, loadoutChoice],
   );
 
   /**
@@ -4727,6 +4744,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 botSkill={botSkill}
                 onBotSkill={setBotSkill}
                 onTrain={train}
+                weapons={weapons}
+                loadout={loadoutChoice}
+                onLoadout={(choice) => setSetting(LOADOUT_KEY, serializeLoadout(choice))}
                 drills={drills}
                 drillBests={readBests()}
                 onHost={host}

@@ -609,6 +609,15 @@ export class MatchSession {
     if (this.state.status === 'joined') sendChannel('hassault', 'respawn');
   }
 
+  /** The loadout to carry, `{primary, secondary}` weapon ids, applied at the
+   * next spawn. Kept and re-sent on every welcome, so it survives a rejoin. */
+  private loadoutChoice: Record<string, string> | null = null;
+
+  setLoadout(choice: Record<string, string> | null): void {
+    this.loadoutChoice = choice;
+    if (choice && this.state.status === 'joined') sendChannel('hassault', 'loadout', choice);
+  }
+
   /**
    * Add bots to the match we are hosting.
    *
@@ -677,6 +686,7 @@ export class MatchSession {
         // exactly like the round having just ended.
         this.state.modeState = (data.mode as ModeShared | undefined) ?? null;
         this.absorbRoomSettings(data.roomSettings);
+        if (this.loadoutChoice) sendChannel('hassault', 'loadout', this.loadoutChoice);
         if (this.state.mode && (this.state.mode.v ?? 0) > SUPPORTED_MODE_V) {
           // The one thing that would otherwise fail in silence. An unknown key
           // inside this blob is simply absent to an older build — no error, no

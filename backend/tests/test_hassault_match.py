@@ -817,3 +817,31 @@ def test_respawning_starts_the_pattern_again():
 
     player.reset_loadout()
     assert player.spray_index == 0
+
+
+# ---- loadouts -----------------------------------------------------------------------
+
+
+def test_a_loadout_applies_at_the_next_spawn_and_bounds_the_switch():
+    from backend.modules.hassault import weapons
+    from backend.modules.hassault.match import Command, MatchRoom
+    from backend.modules.hassault.physics import flat_world
+
+    room = MatchRoom("r_loadout", "test", flat_world(32), [])
+    p = room.add("ada", None, team=0)
+    assert p.held == {0, 1, 2}
+    room.set_loadout(p, {"primary": "lancer", "secondary": "hand_cannon"})
+    assert p.held == {0, 1, 2}, "not until the next spawn"
+    p.reset_loadout()
+    lancer = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["lancer"])
+    cannon = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["hand_cannon"])
+    assert p.held == {0, cannon, lancer} and p.weapon == lancer
+
+    def switch(index):
+        cmd = Command(seq=1, forward=0, strafe=0, jump=False, yaw=0, pitch=0, dt=0.05, weapon=index)
+        room._handle_combat(p, cmd, 0.0, 0.0)
+
+    switch(2)  # the old rifle: not carried
+    assert p.weapon == lancer
+    switch(cannon)
+    assert p.weapon == cannon

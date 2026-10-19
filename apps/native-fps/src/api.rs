@@ -358,6 +358,14 @@ pub struct WeaponSpec {
     pub per_shot_inaccuracy: f32,
     #[serde(rename = "recoveryTime", default = "default_recovery")]
     pub recovery_time: f32,
+    /// The roster (`weapons.py`): which slot it is carried in, and the base
+    /// model it is drawn as. Empty from a backend older than the roster.
+    #[serde(default)]
+    pub slot: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(rename = "boltAction", default)]
+    pub bolt_action: bool,
     /// Active equipped attachments on this weapon.
     #[serde(default)]
     pub attachments: Vec<String>,
@@ -392,6 +400,19 @@ pub struct WeaponAttachmentSpec {
 /// `Weapon.recovery_time`'s default, for a backend that sends no accuracy model.
 fn default_recovery() -> f32 {
     0.35
+}
+
+/// The five base models, in the slot order the remote-body props are built in.
+pub const BASE_MODELS: [&str; 5] = ["knife", "pistol", "assault", "shotgun", "sniper"];
+
+/// The base-model slot a wire weapon index is drawn from. A weapon the table
+/// does not have is drawn as the rifle, a gun rather than nothing.
+pub fn visual_slot(weapons: &[WeaponSpec], index: i32) -> i32 {
+    let model = weapons
+        .get(index.max(0) as usize)
+        .map(|w| w.visual())
+        .unwrap_or("assault");
+    BASE_MODELS.iter().position(|m| *m == model).unwrap_or(2) as i32
 }
 
 fn default_one() -> f32 {
@@ -439,6 +460,16 @@ impl WeaponSpec {
             cone += self.air_inaccuracy;
         }
         cone + self.per_shot_inaccuracy * recovering
+    }
+
+    /// The base model this weapon is drawn as: its own id, or the one it
+    /// borrows. `visualId` in `weapon-visuals.ts`.
+    pub fn visual(&self) -> &str {
+        if self.model.is_empty() {
+            &self.id
+        } else {
+            &self.model
+        }
     }
 
     pub fn residual_cone(&self, scoped: i32) -> f32 {

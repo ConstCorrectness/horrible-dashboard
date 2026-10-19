@@ -246,6 +246,36 @@ class Weapon:
     shot is a first shot again."""
     recovery_time: float = 0.35
 
+    # -- the roster (see `SLOTS` and `loadout_for`) -------------------------------
+
+    """Which slot it is carried in: `primary`, `secondary` or `melee`. A player
+    holds one of each, so this is also what the number keys select."""
+    slot: str = "primary"
+    """The weapon whose visuals this one borrows: its view model, prop, sound
+    and HUD silhouette. Empty means itself. The roster outgrew the model set,
+    and a gun with no model of its own still has to be drawn as *something*."""
+    model: str = ""
+    """`any`, or the side that may buy and pick it: `t` (ARC) or `ct` (HALON).
+    Only modes with sides read it."""
+    side: str = "any"
+    """Price in a buy mode, and the money a kill with it pays."""
+    price: int = 0
+    kill_reward: int = 300
+    """How much of a wall a shot carries through (`resolve_shot`'s
+    `penetration`). Zero stops at the first surface."""
+    penetration: float = 0.0
+    """Share of armour's protection the round ignores. A body-shot sniper that
+    armour saved would not be the weapon its price says it is."""
+    armor_pen: float = 0.0
+    """Chambers a round between shots, which a quick switch cancels (the
+    "QQ" rule in `_handle_combat`)."""
+    bolt_action: bool = False
+
+    @property
+    def visual(self) -> str:
+        """The id the clients draw this weapon as."""
+        return self.model or self.id
+
     @property
     def interval(self) -> float:
         return 60.0 / self.rpm
@@ -297,6 +327,16 @@ class Weapon:
             "crouchScale": self.crouch_scale,
             "perShotInaccuracy": self.per_shot_inaccuracy,
             "recoveryTime": self.recovery_time,
+            # The roster. `model` is always concrete on the wire, so a client
+            # draws `weapon.model` and never has to know the fallback rule.
+            "slot": self.slot,
+            "model": self.visual,
+            "side": self.side,
+            "price": self.price,
+            "killReward": self.kill_reward,
+            "penetration": self.penetration,
+            "armorPen": self.armor_pen,
+            "boltAction": self.bolt_action,
         }
 
 
@@ -555,6 +595,27 @@ ASSAULT_SPRAY: tuple[tuple[float, float], ...] = (
 )
 
 
+def _scaled_spray(
+    base: tuple[tuple[float, float], ...], yaw: float, pitch: float, length: int
+) -> tuple[tuple[float, float], ...]:
+    """`base` scaled per axis and held at its last entry out to `length`.
+
+    The appended automatics share the rifle's *shape* — a climb, then a wander —
+    at their own size, and a negative `yaw` mirrors the wander so two rifles
+    are not countered with the same hand movement.
+    """
+    out = [(y * yaw, p * pitch) for y, p in base]
+    while len(out) < length:
+        out.append(out[-1])
+    return tuple((round(y, 5), round(p, 5)) for y, p in out[:length])
+
+
+VIPER_SPRAY = _scaled_spray(ASSAULT_SPRAY, 0.6, 0.62, 30)
+RAIDER_SPRAY = _scaled_spray(ASSAULT_SPRAY, 1.3, 1.25, 30)
+LANCER_SPRAY = _scaled_spray(ASSAULT_SPRAY, -0.9, 0.95, 30)
+LANCER_S_SPRAY = _scaled_spray(ASSAULT_SPRAY, -0.75, 0.85, 20)
+
+
 WEAPONS: tuple[Weapon, ...] = (
     Weapon(
         id="knife",
@@ -571,6 +632,7 @@ WEAPONS: tuple[Weapon, ...] = (
         falloff_start=5.0,
         auto=False,
         kickback=0.0,
+        slot="melee",
     ),
     Weapon(
         id="pistol",
@@ -594,6 +656,7 @@ WEAPONS: tuple[Weapon, ...] = (
         crouch_scale=0.85,
         per_shot_inaccuracy=0.02,
         recovery_time=0.30,
+        slot="secondary",
     ),
     Weapon(
         id="assault",
@@ -619,6 +682,8 @@ WEAPONS: tuple[Weapon, ...] = (
         move_inaccuracy=0.05,
         air_inaccuracy=0.16,
         crouch_scale=0.75,
+        price=2700,
+        penetration=0.8,
     ),
     Weapon(
         id="shotgun",
@@ -641,11 +706,16 @@ WEAPONS: tuple[Weapon, ...] = (
         air_inaccuracy=0.05,
         crouch_scale=0.9,
         recovery_time=1.0,
+        price=1800,
+        kill_reward=900,
     ),
     Weapon(
         id="sniper",
         name="Sniper Rifle",
-        damage=72,
+        # A body shot kills. It used to take two, which made the most expensive
+        # gun in the game a slower rifle; the scope, the bolt and the movement
+        # penalty are what it pays for this instead.
+        damage=115,
         head_multiplier=2.0,
         rpm=62,
         mag=5,
@@ -670,11 +740,229 @@ WEAPONS: tuple[Weapon, ...] = (
         move_inaccuracy=0.08,
         air_inaccuracy=0.20,
         recovery_time=1.0,
+        price=4750,
+        kill_reward=100,
+        penetration=1.25,
+        armor_pen=0.75,
+        bolt_action=True,
+    ),
+    # ---- appended: indexes 0-4 above keep their meaning on the wire --------------
+    Weapon(
+        id="hand_cannon",
+        name="Hand Cannon",
+        damage=34,
+        head_multiplier=2.4,
+        rpm=240,
+        mag=7,
+        reserve=35,
+        reload_time=2.0,
+        spread=0.012,
+        pellets=1,
+        range=160.0,
+        falloff_start=50.0,
+        auto=False,
+        kickback=1.5,
+        first_shot_spread=0.004,
+        move_inaccuracy=0.04,
+        air_inaccuracy=0.14,
+        crouch_scale=0.85,
+        per_shot_inaccuracy=0.035,
+        recovery_time=0.45,
+        slot="secondary",
+        model="pistol",
+        price=700,
+        penetration=0.5,
+    ),
+    Weapon(
+        id="smg",
+        name="ARC Viper SMG",
+        damage=14,
+        head_multiplier=1.8,
+        rpm=857,
+        mag=30,
+        reserve=120,
+        reload_time=2.1,
+        spread=0.024,
+        pellets=1,
+        range=120.0,
+        falloff_start=30.0,
+        auto=True,
+        kickback=0.0,
+        spray=VIPER_SPRAY,
+        residual_spread=0.008,
+        first_shot_spread=0.006,
+        # The SMG's whole case: it barely cares that you are moving.
+        move_inaccuracy=0.015,
+        air_inaccuracy=0.12,
+        crouch_scale=0.85,
+        model="assault",
+        price=1250,
+        kill_reward=600,
+    ),
+    Weapon(
+        id="raider",
+        name="ARC Raider",
+        damage=25,
+        head_multiplier=2.2,
+        rpm=600,
+        mag=30,
+        reserve=90,
+        reload_time=2.4,
+        spread=0.024,
+        pellets=1,
+        range=200.0,
+        falloff_start=70.0,
+        auto=True,
+        kickback=0.0,
+        spray=RAIDER_SPRAY,
+        residual_spread=0.005,
+        first_shot_spread=0.0015,
+        move_inaccuracy=0.065,
+        air_inaccuracy=0.18,
+        crouch_scale=0.75,
+        model="assault",
+        side="t",
+        price=2700,
+        penetration=0.8,
+    ),
+    Weapon(
+        id="lancer",
+        name="HALON Lancer",
+        damage=22,
+        head_multiplier=2.0,
+        rpm=666,
+        mag=30,
+        reserve=90,
+        reload_time=2.0,
+        spread=0.020,
+        pellets=1,
+        range=200.0,
+        falloff_start=80.0,
+        auto=True,
+        kickback=0.0,
+        spray=LANCER_SPRAY,
+        residual_spread=0.004,
+        first_shot_spread=0.0012,
+        move_inaccuracy=0.055,
+        air_inaccuracy=0.17,
+        crouch_scale=0.75,
+        model="assault",
+        side="ct",
+        price=3100,
+        penetration=0.8,
+    ),
+    Weapon(
+        id="lancer_s",
+        name="HALON Lancer-S",
+        damage=22,
+        head_multiplier=2.0,
+        rpm=600,
+        mag=20,
+        reserve=80,
+        reload_time=2.2,
+        spread=0.017,
+        pellets=1,
+        range=200.0,
+        falloff_start=90.0,
+        auto=True,
+        kickback=0.0,
+        spray=LANCER_S_SPRAY,
+        residual_spread=0.003,
+        first_shot_spread=0.001,
+        move_inaccuracy=0.055,
+        air_inaccuracy=0.17,
+        crouch_scale=0.75,
+        model="assault",
+        side="ct",
+        price=2900,
+        penetration=0.7,
+    ),
+    Weapon(
+        id="scout",
+        name="Scout",
+        damage=75,
+        head_multiplier=2.5,
+        rpm=48,
+        mag=10,
+        reserve=40,
+        reload_time=2.0,
+        spread=0.003,
+        pellets=1,
+        range=300.0,
+        falloff_start=300.0,
+        auto=False,
+        kickback=4.0,
+        zoom_levels=(2.0, 4.0),
+        hipfire_spread=0.03,
+        # Light enough to move with, and famously steady in the air.
+        move_inaccuracy=0.04,
+        air_inaccuracy=0.03,
+        recovery_time=1.0,
+        model="sniper",
+        price=1700,
+        penetration=1.0,
+        bolt_action=True,
+    ),
+    Weapon(
+        id="breacher",
+        name="Breacher",
+        damage=9,
+        head_multiplier=1.4,
+        rpm=240,
+        mag=8,
+        reserve=32,
+        reload_time=3.0,
+        spread=0.085,
+        pellets=6,
+        range=40.0,
+        falloff_start=12.0,
+        auto=True,
+        kickback=3.0,
+        move_inaccuracy=0.02,
+        air_inaccuracy=0.06,
+        crouch_scale=0.9,
+        recovery_time=1.0,
+        model="shotgun",
+        price=2000,
+        kill_reward=900,
     ),
 )
 
 WEAPON_BY_ID = {w.id: w for w in WEAPONS}
 DEFAULT_WEAPON = 2  # the assault rifle, index into WEAPONS
+
+#: The slots a player carries one of each, in the order the number keys select
+#: them: 1 primary, 2 secondary, 3 melee.
+SLOTS: tuple[str, ...] = ("primary", "secondary", "melee")
+
+#: What a player carries until they pick: the rifle, the pistol, the knife.
+DEFAULT_LOADOUT: dict[str, str] = {
+    "primary": "assault",
+    "secondary": "pistol",
+    "melee": "knife",
+}
+
+
+def loadout_for(choice: Any = None) -> dict[str, int]:
+    """A loadout as `{slot: weapon index}`, from a client's `{slot: id}`.
+
+    Validated rather than trusted, slot by slot: an unknown id, or a weapon
+    named for the wrong slot (a sniper as a sidearm), falls back to that slot's
+    default instead of failing the whole choice.
+    """
+    picked = choice if isinstance(choice, dict) else {}
+    out: dict[str, int] = {}
+    for slot in SLOTS:
+        wanted = WEAPON_BY_ID.get(str(picked.get(slot) or ""))
+        if wanted is None or wanted.slot != slot:
+            wanted = WEAPON_BY_ID[DEFAULT_LOADOUT[slot]]
+        out[slot] = WEAPONS.index(wanted)
+    return out
+
+
+def weapons_in_slot(slot: str) -> list[Weapon]:
+    """Every weapon carried in `slot`, in table order — the picker's list."""
+    return [w for w in WEAPONS if w.slot == slot]
 
 
 def weapon_slots() -> list[str]:

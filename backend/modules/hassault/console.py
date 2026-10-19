@@ -1417,6 +1417,8 @@ class ConsoleRegistry:
         w = weapons.weapon_at(weapon_idx)
         player = ctx.resolve_player()
         if player:
+            # Into the hand as well as the magazine, or the switch is refused.
+            player.held.add(weapon_idx)
             player.weapon = weapon_idx
             player.ammo[weapon_idx] = w.mag
             player.reserve[weapon_idx] = w.reserve

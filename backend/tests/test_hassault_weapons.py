@@ -588,9 +588,10 @@ def test_a_nonsense_weapon_slot_is_clamped_not_obeyed():
 # and what the claim is worth once the server has clamped it.
 
 
-def test_only_the_sniper_carries_a_scope():
+def test_only_the_snipers_carry_a_scope():
     scoped = [w.id for w in weapons.WEAPONS if w.zoom_levels]
-    assert scoped == ["sniper"]
+    assert scoped == ["sniper", "scout"]
+    assert all(weapons.WEAPON_BY_ID[i].visual == "sniper" for i in scoped)
     assert weapons.WEAPON_BY_ID["sniper"].zoom_levels == (2.0, 4.0)
 
 
@@ -795,3 +796,38 @@ def test_weapon_attachments_modify_stats():
     assert modded.spray[1][1] == pytest.approx(base_rifle.spray[1][1] * 0.75, rel=0.01)
 
 
+
+
+# ---- the roster ---------------------------------------------------------------------
+
+
+def test_the_first_five_keep_their_wire_indexes():
+    """Old clients send a weapon index; the table is append-only."""
+    ids = [w.id for w in weapons.WEAPONS[:5]]
+    assert ids == ["knife", "pistol", "assault", "shotgun", "sniper"]
+
+
+def test_every_weapon_has_a_real_slot_and_model():
+    for w in weapons.WEAPONS:
+        assert w.slot in weapons.SLOTS, w.id
+        assert w.visual in {"knife", "pistol", "assault", "shotgun", "sniper"}, w.id
+        assert w.side in ("any", "t", "ct"), w.id
+
+
+def test_every_automatic_with_one_pellet_has_a_pattern():
+    for w in weapons.WEAPONS:
+        if w.auto and w.pellets == 1:
+            assert len(w.spray) >= w.mag, w.id
+
+
+def test_a_loadout_falls_back_slot_by_slot():
+    chosen = weapons.loadout_for({"primary": "raider", "secondary": "sniper", "melee": "x"})
+    assert weapons.WEAPONS[chosen["primary"]].id == "raider"
+    assert weapons.WEAPONS[chosen["secondary"]].id == "pistol"
+    assert weapons.WEAPONS[chosen["melee"]].id == "knife"
+
+
+def test_the_sniper_kills_an_armoured_body_in_one():
+    sniper = weapons.WEAPON_BY_ID["sniper"]
+    absorbed = min(100.0, sniper.damage * weapons.ARMOUR_ABSORB * (1 - sniper.armor_pen))
+    assert sniper.damage - absorbed >= weapons.MAX_HEALTH

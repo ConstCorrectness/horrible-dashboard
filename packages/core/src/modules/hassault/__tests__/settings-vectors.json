@@ -51,6 +51,13 @@
    "document": true
   },
   {
+   "key": "hassault.loadout",
+   "type": "string",
+   "default": "",
+   "scope": "account",
+   "document": true
+  },
+  {
    "key": "hassault.debug.hitboxes",
    "type": "boolean",
    "default": false,

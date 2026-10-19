@@ -19,7 +19,8 @@
  * Free of three and of React, like the rest of the game's logic files.
  */
 import type { ItemReach, ItemSpec, WeaponSpec } from './api';
-import type { ItemRow, PickedItem, PlayerRow, SelfState } from './net';
+import type { ItemRow, LoadoutSlots, PickedItem, PlayerRow, SelfState } from './net';
+import { visualId } from './weapon-visuals';
 import { currentHitbox, heightAt } from './hitbox';
 import { spawnAt } from './player';
 import {
@@ -296,6 +297,17 @@ export class TrainingRange {
     }
   }
 
+  /** The range's loadout, by slot, as `MatchPlayer.loadout` is. */
+  private slots: LoadoutSlots | null = null;
+
+  /** Carry `slots`: what the number keys select, and the only weapons held. */
+  setLoadout(slots: LoadoutSlots): void {
+    this.slots = slots;
+    this.slot = slots.primary;
+    this.reloadIn = 0;
+    this.sprayIndex = 0;
+  }
+
   setWeapons(specs: WeaponSpec[], slot: number): void {
     this.weapons = specs;
     this.slot = Math.max(0, Math.min(specs.length - 1, slot));
@@ -420,7 +432,8 @@ export class TrainingRange {
   }
 
   select(slot: number): void {
-    if (slot >= 0 && slot < this.weapons.length && slot !== this.slot) {
+    const held = this.slots ? Object.values(this.slots).includes(slot) : true;
+    if (slot >= 0 && slot < this.weapons.length && slot !== this.slot && held) {
       this.slot = slot;
       // A switch cancels a reload, exactly as it does server-side: otherwise the
       // timer keeps running on a weapon you are no longer holding and fills it
@@ -565,7 +578,7 @@ export class TrainingRange {
           { x: origin[0], y: origin[1], z: origin[2] },
           { x: pdx, y: pdy, z: pdz },
           weapon.range,
-          weapon.id,
+          visualId(weapon),
         );
         wall = rayResult.dist;
         penFactor = rayResult.damageFactor;
@@ -700,6 +713,11 @@ export class TrainingRange {
       kills: 0,
       deaths: 0,
       mag: weapon?.mag ?? 0,
+      // The same two fields a match sends, so the number keys and the wheel
+      // behave identically in Train.
+      ...(this.slots
+        ? { held: [this.slots.primary, this.slots.secondary, this.slots.melee], slots: this.slots }
+        : {}),
       hits,
       picked: this.drainPickups(),
     };

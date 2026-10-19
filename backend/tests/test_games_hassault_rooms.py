@@ -227,7 +227,23 @@ def test_a_shot_is_resolved_by_the_server(referee: HassaultReferee):
         _, victim = referee.server.player_for(b)
 
         victim.protected_until = 0.0
-        shooter.state.x, shooter.state.y = victim.state.x - 12.0, victim.state.y
+        # Twelve cubes from the victim along a clear line on the same floor. The
+        # victim's spawn is random (room ids are), and a fixed offset put the
+        # shooter inside a wall or up on a ledge from some of them.
+        world = room.world
+        floor = world.floor_at(int(victim.state.x), int(victim.state.y))
+        eye = victim.state.z + 4.5
+        for dx, dy in ((-12, 0), (12, 0), (0, -12), (0, 12), (-8, 0), (8, 0), (0, -8), (0, 8)):
+            sx, sy = victim.state.x + dx, victim.state.y + dy
+            if world.floor_at(int(sx), int(sy)) != floor:
+                continue
+            reach = math.hypot(dx, dy)
+            clear = weapons.raycast_world(
+                world, (sx, sy, eye), (-dx / reach, -dy / reach, 0.0), reach
+            )
+            if clear >= reach - 1.5:
+                break
+        shooter.state.x, shooter.state.y = sx, sy
         shooter.state.z = victim.state.z
         shooter.state.on_ground = True
         shooter.weapon = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["assault"])

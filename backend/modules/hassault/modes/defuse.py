@@ -1179,6 +1179,11 @@ class Defuse(GameMode):
                 return "defuse"
         return ""
 
+    def holds(self, room: MatchRoom, player: MatchPlayer, index: int) -> bool:
+        """What was bought or picked up, plus the free knife and pistol. The
+        loadout picker has no say in a buy mode: the money does."""
+        return index in FREE_SLOTS or index in player.owned
+
     def outfit(self, room: MatchRoom, player: MatchPlayer) -> None:
         """Take back what `reset_loadout` just gave, and hand over what was bought.
 

@@ -32,6 +32,8 @@ import type {
 import { installNativeClient, nativeClientStatus } from './api';
 import { useNativeLaunch } from './native-launch';
 import type { DrillStats, DrillSummary } from './training-drill';
+import type { WeaponSpec } from './api';
+import { DEFAULT_LOADOUT, weaponsInSlot, type LoadoutChoice } from './loadout';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -97,6 +99,11 @@ export interface MainMenuProps {
    * drill (`drills.py`); with `null`, the free range's static dummies.
    */
   onTrain: (drill: string | null) => void;
+  /** The served loadout, for the loadout picker. */
+  weapons: WeaponSpec[];
+  /** What this player chose to carry; `null` is the server's default. */
+  loadout: LoadoutChoice | null;
+  onLoadout: (choice: LoadoutChoice) => void;
   /** The aim drills offered on `mapName`. Empty when the backend has none. */
   drills: DrillSummary[];
   /** This browser's best run on each drill, by id. */
@@ -569,6 +576,33 @@ function PlaySection(props: MainMenuProps) {
           </button>
         </div>
       </div>
+
+      {/* Before Host on purpose: what you carry is decided before the fight.
+          Applied at your next spawn, in every mode without a buy menu. */}
+      {props.weapons.some((w) => w.slot) && (
+        <div style={panel.row}>
+          <div style={panel.rowMain}>
+            <span>Loadout</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            {(['primary', 'secondary'] as const).map((slot) => (
+              <select
+                key={slot}
+                value={props.loadout?.[slot] ?? DEFAULT_LOADOUT[slot]}
+                onChange={(e) => props.onLoadout({ ...props.loadout, [slot]: e.target.value })}
+                aria-label={slot === 'primary' ? 'Primary weapon' : 'Secondary weapon'}
+                style={{ width: 132, padding: '0 0.4rem' }}
+              >
+                {weaponsInSlot(props.weapons, slot).map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={panel.row}>
         <div style={panel.rowMain}>

@@ -162,6 +162,9 @@ pub struct App {
     socket: Option<MatchSocket>,
     /// Bots to field once the welcome names a room, `--mode=host` only.
     pending_bots: Option<(u32, String)>,
+    /// The stored loadout (`hassault.loadout`), `{primary, secondary}` ids,
+    /// sent on every welcome and applied to the range in Train.
+    loadout: Option<serde_json::Value>,
     /// The aim drill this Train was launched into (`--drill`), kept so the
     /// results card can run it again.
     drill: Option<hassault_native::drills::DrillSpec>,
@@ -528,6 +531,7 @@ impl App {
             spawn_index: None,
             socket,
             pending_bots: None,
+            loadout: None,
             drill: None,
             prediction: Prediction::default(),
             camera: Camera::default(),
@@ -889,11 +893,13 @@ impl App {
             } else {
                 &self.drawn
             };
+            let rows = visual_rows(&self.weapons, rows);
             if let Some(squad) = self.squad.as_mut() {
-                squad.update(dt, rows, &self.self_id);
+                squad.update(dt, &rows, &self.self_id);
             }
         }
-        let weapon = self.held().map(|w| w.id.clone()).unwrap_or_default();
+        // Drawn as the base model it borrows (`WeaponSpec::visual`).
+        let weapon = self.held().map(|w| w.visual().to_string()).unwrap_or_default();
         if weapon != self.viewmodel.weapon() {
             // A weapon swap drops the scope: the step is an index into *this*
             // weapon's levels, and carrying it across would put you at a
@@ -1511,6 +1517,29 @@ impl App {
         self.range.place(&self.world, body.x, body.y);
     }
 
+    /// Carry `choice` (the stored `hassault.loadout`): sent on the next welcome,
+    /// and applied to the range now, through the same fallback rule the server
+    /// uses (`loadout_for`), so Train and a match hand you the same guns.
+    pub fn set_loadout(&mut self, choice: serde_json::Value) {
+        let pick = |slot: &str, fallback: &str| -> i32 {
+            let wanted = choice.get(slot).and_then(|v| v.as_str()).unwrap_or("");
+            let find = |id: &str| self.weapons.iter().position(|w| w.id == id);
+            match find(wanted) {
+                Some(i) if self.weapons[i].slot == slot => i as i32,
+                _ => find(fallback).unwrap_or(0) as i32,
+            }
+        };
+        if self.weapons.iter().any(|w| !w.slot.is_empty()) {
+            self.range.set_loadout(hassault_native::protocol::LoadoutSlots {
+                primary: pick("primary", "assault"),
+                secondary: pick("secondary", "pistol"),
+                melee: pick("melee", "knife"),
+            });
+            self.you = Some(self.range.self_state());
+        }
+        self.loadout = Some(choice);
+    }
+
     pub fn queue_bots(&mut self, count: u32, skill: String) {
         if count > 0 {
             self.pending_bots = Some((count, skill));
@@ -1798,6 +1827,11 @@ impl App {
                     // The moment the room exists, and the only moment it is worth
                     // trying: the request is host-only and we are the host of
                     // whatever this welcome named.
+                    if let (Some(socket), Some(choice)) = (self.socket.as_ref(), self.loadout.as_ref()) {
+                        if let Err(e) = socket.send_loadout(choice) {
+                            eprintln!("hassault: could not send the loadout ({e})");
+                        }
+                    }
                     if let Some((count, skill)) = self.pending_bots.take() {
                         if let Some(socket) = &self.socket {
                             if let Err(e) = socket.add_bot(count, &skill) {
@@ -2251,7 +2285,7 @@ impl App {
         let dt = self.input_accum.min(MAX_DT);
         self.input_accum = 0.0;
         let is_knife =
-            self.held().map(|w| w.id.as_str()) == Some("knife") && !self.utility.equipped();
+            self.held().map(|w| w.visual()) == Some("knife") && !self.utility.equipped();
         let input = MoveInput {
             forward: axis(self.keys.forward, self.keys.back),
             strafe: axis(self.keys.right, self.keys.left),
@@ -2627,12 +2661,40 @@ impl App {
     /// Switch weapons. Offline the range owns the slot; in a match the *server*
     /// does, so this is a request on the next command rather than a local change
     /// — setting it locally would show a weapon the server has not given us.
+    /// The weapon index a number key selects: the loadout's primary, secondary
+    /// and knife for 1-3 when the server sends `slots`, and key N as weapon N
+    /// against an older one. `usize::MAX` (refused below) for a key with
+    /// nothing on it.
+    fn slot_key(&self, key: usize) -> usize {
+        let slots = match &self.you {
+            Some(you) => you.slots,
+            None => self.range.loadout(),
+        };
+        match slots {
+            Some(s) => match key {
+                1 => s.primary.max(0) as usize,
+                2 => s.secondary.max(0) as usize,
+                3 => s.melee.max(0) as usize,
+                _ => usize::MAX,
+            },
+            None => key - 1,
+        }
+    }
+
+    /// Whether weapon `index` is in hand: the server's `held`, else everything.
+    fn holds(&self, index: usize) -> bool {
+        match self.you.as_ref().and_then(|y| y.held.as_ref()) {
+            Some(held) => held.contains(&(index as i32)),
+            None => true,
+        }
+    }
+
     fn select_weapon(&mut self, slot: usize) {
         // A weapon key puts the grenade away — the counterpart of a number key
         // taking one out. Purely cosmetic: `holster` sets no slot and puts
         // nothing on the wire.
         self.utility.holster();
-        if slot >= self.weapons.len() {
+        if slot >= self.weapons.len() || !self.holds(slot) {
             return;
         }
         // Asking for the slot we already hold is not a switch, and dipping the
@@ -2764,11 +2826,12 @@ impl App {
             Action::Reload if down => self.reload(),
             // Purely local — see `WeaponViewModel::inspect`.
             Action::Inspect if down => self.viewmodel.inspect(),
-            Action::Weapon1 if down => self.select_weapon(0),
-            Action::Weapon2 if down => self.select_weapon(1),
-            Action::Weapon3 if down => self.select_weapon(2),
-            Action::Weapon4 if down => self.select_weapon(3),
-            Action::Weapon5 if down => self.select_weapon(4),
+            // 1 primary, 2 secondary, 3 knife, the CS layout. See `slot_key`.
+            Action::Weapon1 if down => self.select_weapon(self.slot_key(1)),
+            Action::Weapon2 if down => self.select_weapon(self.slot_key(2)),
+            Action::Weapon3 if down => self.select_weapon(self.slot_key(3)),
+            Action::Weapon4 if down => self.select_weapon(self.slot_key(4)),
+            Action::Weapon5 if down => self.select_weapon(self.slot_key(5)),
             // **Selecting equips.** The weapon goes down and the two mouse
             // buttons become throw and toss. The slot order is the served
             // `/tacticals` order, the same as `NADE_ACTIONS` in the pane.
@@ -4035,7 +4098,11 @@ impl ApplicationHandler for App {
                 // so the prop in its hand rides the untextured stream.
                 let mut verts = match self.squad.as_ref() {
                     Some(squad) => held::build(squad.poses()),
-                    None => bodies::build(rows, &self.self_id, &self.hitbox),
+                    None => bodies::build(
+                        &visual_rows(&self.weapons, rows),
+                        &self.self_id,
+                        &self.hitbox,
+                    ),
                 };
                 // Into the same opaque stream as the bodies: a grenade is a
                 // small solid object and wants no pass of its own. The clouds do
@@ -4599,6 +4666,18 @@ fn refetch(
 /// away: a 409 from a save means "that map exists, pass overwrite", and a 422
 /// means "this document will not build" — different problems with different
 /// answers.
+/// `rows` with each weapon index swapped for the base-model slot it is drawn
+/// from (`api::visual_slot`). The body and prop builders know five weapons;
+/// the roster has more.
+fn visual_rows(weapons: &[WeaponSpec], rows: &[PlayerRow]) -> Vec<PlayerRow> {
+    rows.iter()
+        .map(|r| PlayerRow {
+            weapon: hassault_native::api::visual_slot(weapons, r.weapon),
+            ..r.clone()
+        })
+        .collect()
+}
+
 fn describe_api_error(error: &hassault_native::api::ApiError) -> String {
     match error {
         hassault_native::api::ApiError::Status(409, _) => {

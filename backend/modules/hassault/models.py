@@ -324,6 +324,15 @@ class WeaponOut(BaseModel):
     crouchScale: float = 1.0  # noqa: N815
     perShotInaccuracy: float = 0.0  # noqa: N815
     recoveryTime: float = 0.35  # noqa: N815
+    # The roster (`Weapon.slot` and on). Declared here too, or dropped.
+    slot: str = "primary"
+    model: str = ""
+    side: str = "any"
+    price: int = 0
+    killReward: int = 300  # noqa: N815
+    penetration: float = 0.0
+    armorPen: float = 0.0  # noqa: N815
+    boltAction: bool = False  # noqa: N815
 
 
 class ThrowPhysicsOut(BaseModel):

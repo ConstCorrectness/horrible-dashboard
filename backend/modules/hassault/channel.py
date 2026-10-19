@@ -171,6 +171,16 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         if isinstance(rtt, (int, float)):
             player.rtt_ms = _clamp(_num(rtt), 0.0, 60_000.0)
 
+    elif event == "loadout":
+        # Local rooms only for now. A guest's choice would need its own
+        # fabric message, and ranked rooms keep the default until the game
+        # server stores loadouts per account (P5).
+        entry = match_server.player_for(conn)
+        if entry is not None:
+            room, player = entry
+            chosen = room.set_loadout(player, data)
+            await conn.send_json(_evt("loadout", chosen))
+
     elif event == "respawn":
         if ranked.session_for(conn) is not None:
             await ranked.relay_respawn(conn)

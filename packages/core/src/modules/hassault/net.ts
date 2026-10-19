@@ -46,6 +46,13 @@ export const SNAP_DISTANCE = 2.0;
 /** Per-second decay of the visual error offset. 0.001 ≈ gone in ~150 ms. */
 const CORRECTION_DECAY = 0.001;
 
+/** A loadout by slot, as weapon indexes. `MatchPlayer.loadout`. */
+export interface LoadoutSlots {
+  primary: number;
+  secondary: number;
+  melee: number;
+}
+
 export interface Command {
   seq: number;
   forward: number;
@@ -245,6 +252,11 @@ export interface SelfState {
    * Optional, because a peer on the fabric may be running an older backend.
    */
   sprayIndex?: number;
+  /** Weapon indexes in hand, by the mode's rule. Absent from an older server,
+   * which means everything is held. */
+  held?: number[];
+  /** The loadout by slot: what keys 1, 2 and 3 select. */
+  slots?: LoadoutSlots;
   reloadIn: number;
   respawnIn: number;
   protected: boolean;

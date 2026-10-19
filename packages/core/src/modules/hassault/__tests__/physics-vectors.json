@@ -12236,7 +12236,15 @@
       "airInaccuracy": 0.0,
       "crouchScale": 1.0,
       "perShotInaccuracy": 0.0,
-      "recoveryTime": 0.35
+      "recoveryTime": 0.35,
+      "slot": "melee",
+      "model": "knife",
+      "side": "any",
+      "price": 0,
+      "killReward": 300,
+      "penetration": 0.0,
+      "armorPen": 0.0,
+      "boltAction": false
     },
     "pistol": {
       "id": "pistol",
@@ -12264,7 +12272,15 @@
       "airInaccuracy": 0.1,
       "crouchScale": 0.85,
       "perShotInaccuracy": 0.02,
-      "recoveryTime": 0.3
+      "recoveryTime": 0.3,
+      "slot": "secondary",
+      "model": "pistol",
+      "side": "any",
+      "price": 0,
+      "killReward": 300,
+      "penetration": 0.0,
+      "armorPen": 0.0,
+      "boltAction": false
     },
     "assault": {
       "id": "assault",
@@ -12389,7 +12405,15 @@
       "airInaccuracy": 0.16,
       "crouchScale": 0.75,
       "perShotInaccuracy": 0.0,
-      "recoveryTime": 0.35
+      "recoveryTime": 0.35,
+      "slot": "primary",
+      "model": "assault",
+      "side": "any",
+      "price": 2700,
+      "killReward": 300,
+      "penetration": 0.8,
+      "armorPen": 0.0,
+      "boltAction": false
     },
     "shotgun": {
       "id": "shotgun",
@@ -12417,12 +12441,20 @@
       "airInaccuracy": 0.05,
       "crouchScale": 0.9,
       "perShotInaccuracy": 0.0,
-      "recoveryTime": 1.0
+      "recoveryTime": 1.0,
+      "slot": "primary",
+      "model": "shotgun",
+      "side": "any",
+      "price": 1800,
+      "killReward": 900,
+      "penetration": 0.0,
+      "armorPen": 0.0,
+      "boltAction": false
     },
     "sniper": {
       "id": "sniper",
       "name": "Sniper Rifle",
-      "damage": 72,
+      "damage": 115,
       "headMultiplier": 2.0,
       "rpm": 62,
       "interval": 0.9677,
@@ -12448,7 +12480,714 @@
       "airInaccuracy": 0.2,
       "crouchScale": 1.0,
       "perShotInaccuracy": 0.0,
-      "recoveryTime": 1.0
+      "recoveryTime": 1.0,
+      "slot": "primary",
+      "model": "sniper",
+      "side": "any",
+      "price": 4750,
+      "killReward": 100,
+      "penetration": 1.25,
+      "armorPen": 0.75,
+      "boltAction": true
+    },
+    "hand_cannon": {
+      "id": "hand_cannon",
+      "name": "Hand Cannon",
+      "damage": 34,
+      "headMultiplier": 2.4,
+      "rpm": 240,
+      "interval": 0.25,
+      "mag": 7,
+      "reserve": 35,
+      "reloadTime": 2.0,
+      "spread": 0.012,
+      "pellets": 1,
+      "range": 160.0,
+      "auto": false,
+      "kickback": 1.5,
+      "zoomLevels": [],
+      "hipfireSpread": 0.012,
+      "spray": [],
+      "sprayReset": 0.35,
+      "residualSpread": 0.012,
+      "falloffStart": 50.0,
+      "firstShotSpread": 0.004,
+      "moveInaccuracy": 0.04,
+      "airInaccuracy": 0.14,
+      "crouchScale": 0.85,
+      "perShotInaccuracy": 0.035,
+      "recoveryTime": 0.45,
+      "slot": "secondary",
+      "model": "pistol",
+      "side": "any",
+      "price": 700,
+      "killReward": 300,
+      "penetration": 0.5,
+      "armorPen": 0.0,
+      "boltAction": false
+    },
+    "smg": {
+      "id": "smg",
+      "name": "ARC Viper SMG",
+      "damage": 14,
+      "headMultiplier": 1.8,
+      "rpm": 857,
+      "interval": 0.07,
+      "mag": 30,
+      "reserve": 120,
+      "reloadTime": 2.1,
+      "spread": 0.024,
+      "pellets": 1,
+      "range": 120.0,
+      "auto": true,
+      "kickback": 0.0,
+      "zoomLevels": [],
+      "hipfireSpread": 0.024,
+      "spray": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.00036,
+          0.00868
+        ],
+        [
+          0.00072,
+          0.01736
+        ],
+        [
+          0.00096,
+          0.02666
+        ],
+        [
+          0.0006,
+          0.03596
+        ],
+        [
+          -0.0009,
+          0.04464
+        ],
+        [
+          -0.003,
+          0.05208
+        ],
+        [
+          -0.0066,
+          0.05828
+        ],
+        [
+          -0.0108,
+          0.06262
+        ],
+        [
+          -0.0144,
+          0.0651
+        ],
+        [
+          -0.0168,
+          0.06634
+        ],
+        [
+          -0.0156,
+          0.06696
+        ],
+        [
+          -0.0108,
+          0.06758
+        ],
+        [
+          -0.0048,
+          0.0682
+        ],
+        [
+          0.0024,
+          0.06851
+        ],
+        [
+          0.009,
+          0.06882
+        ],
+        [
+          0.0144,
+          0.06913
+        ],
+        [
+          0.018,
+          0.06944
+        ],
+        [
+          0.0192,
+          0.06944
+        ],
+        [
+          0.0156,
+          0.06975
+        ],
+        [
+          0.0096,
+          0.07006
+        ],
+        [
+          0.0024,
+          0.07006
+        ],
+        [
+          -0.0048,
+          0.07037
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ],
+        [
+          -0.0108,
+          0.07068
+        ]
+      ],
+      "sprayReset": 0.35,
+      "residualSpread": 0.008,
+      "falloffStart": 30.0,
+      "firstShotSpread": 0.006,
+      "moveInaccuracy": 0.015,
+      "airInaccuracy": 0.12,
+      "crouchScale": 0.85,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35,
+      "slot": "primary",
+      "model": "assault",
+      "side": "any",
+      "price": 1250,
+      "killReward": 600,
+      "penetration": 0.0,
+      "armorPen": 0.0,
+      "boltAction": false
+    },
+    "raider": {
+      "id": "raider",
+      "name": "ARC Raider",
+      "damage": 25,
+      "headMultiplier": 2.2,
+      "rpm": 600,
+      "interval": 0.1,
+      "mag": 30,
+      "reserve": 90,
+      "reloadTime": 2.4,
+      "spread": 0.024,
+      "pellets": 1,
+      "range": 200.0,
+      "auto": true,
+      "kickback": 0.0,
+      "zoomLevels": [],
+      "hipfireSpread": 0.024,
+      "spray": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.00078,
+          0.0175
+        ],
+        [
+          0.00156,
+          0.035
+        ],
+        [
+          0.00208,
+          0.05375
+        ],
+        [
+          0.0013,
+          0.0725
+        ],
+        [
+          -0.00195,
+          0.09
+        ],
+        [
+          -0.0065,
+          0.105
+        ],
+        [
+          -0.0143,
+          0.1175
+        ],
+        [
+          -0.0234,
+          0.12625
+        ],
+        [
+          -0.0312,
+          0.13125
+        ],
+        [
+          -0.0364,
+          0.13375
+        ],
+        [
+          -0.0338,
+          0.135
+        ],
+        [
+          -0.0234,
+          0.13625
+        ],
+        [
+          -0.0104,
+          0.1375
+        ],
+        [
+          0.0052,
+          0.13812
+        ],
+        [
+          0.0195,
+          0.13875
+        ],
+        [
+          0.0312,
+          0.13937
+        ],
+        [
+          0.039,
+          0.14
+        ],
+        [
+          0.0416,
+          0.14
+        ],
+        [
+          0.0338,
+          0.14062
+        ],
+        [
+          0.0208,
+          0.14125
+        ],
+        [
+          0.0052,
+          0.14125
+        ],
+        [
+          -0.0104,
+          0.14188
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ],
+        [
+          -0.0234,
+          0.1425
+        ]
+      ],
+      "sprayReset": 0.35,
+      "residualSpread": 0.005,
+      "falloffStart": 70.0,
+      "firstShotSpread": 0.0015,
+      "moveInaccuracy": 0.065,
+      "airInaccuracy": 0.18,
+      "crouchScale": 0.75,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35,
+      "slot": "primary",
+      "model": "assault",
+      "side": "t",
+      "price": 2700,
+      "killReward": 300,
+      "penetration": 0.8,
+      "armorPen": 0.0,
+      "boltAction": false
+    },
+    "lancer": {
+      "id": "lancer",
+      "name": "HALON Lancer",
+      "damage": 22,
+      "headMultiplier": 2.0,
+      "rpm": 666,
+      "interval": 0.0901,
+      "mag": 30,
+      "reserve": 90,
+      "reloadTime": 2.0,
+      "spread": 0.02,
+      "pellets": 1,
+      "range": 200.0,
+      "auto": true,
+      "kickback": 0.0,
+      "zoomLevels": [],
+      "hipfireSpread": 0.02,
+      "spray": [
+        [
+          -0.0,
+          0.0
+        ],
+        [
+          -0.00054,
+          0.0133
+        ],
+        [
+          -0.00108,
+          0.0266
+        ],
+        [
+          -0.00144,
+          0.04085
+        ],
+        [
+          -0.0009,
+          0.0551
+        ],
+        [
+          0.00135,
+          0.0684
+        ],
+        [
+          0.0045,
+          0.0798
+        ],
+        [
+          0.0099,
+          0.0893
+        ],
+        [
+          0.0162,
+          0.09595
+        ],
+        [
+          0.0216,
+          0.09975
+        ],
+        [
+          0.0252,
+          0.10165
+        ],
+        [
+          0.0234,
+          0.1026
+        ],
+        [
+          0.0162,
+          0.10355
+        ],
+        [
+          0.0072,
+          0.1045
+        ],
+        [
+          -0.0036,
+          0.10497
+        ],
+        [
+          -0.0135,
+          0.10545
+        ],
+        [
+          -0.0216,
+          0.10592
+        ],
+        [
+          -0.027,
+          0.1064
+        ],
+        [
+          -0.0288,
+          0.1064
+        ],
+        [
+          -0.0234,
+          0.10687
+        ],
+        [
+          -0.0144,
+          0.10735
+        ],
+        [
+          -0.0036,
+          0.10735
+        ],
+        [
+          0.0072,
+          0.10783
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ],
+        [
+          0.0162,
+          0.1083
+        ]
+      ],
+      "sprayReset": 0.35,
+      "residualSpread": 0.004,
+      "falloffStart": 80.0,
+      "firstShotSpread": 0.0012,
+      "moveInaccuracy": 0.055,
+      "airInaccuracy": 0.17,
+      "crouchScale": 0.75,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35,
+      "slot": "primary",
+      "model": "assault",
+      "side": "ct",
+      "price": 3100,
+      "killReward": 300,
+      "penetration": 0.8,
+      "armorPen": 0.0,
+      "boltAction": false
+    },
+    "lancer_s": {
+      "id": "lancer_s",
+      "name": "HALON Lancer-S",
+      "damage": 22,
+      "headMultiplier": 2.0,
+      "rpm": 600,
+      "interval": 0.1,
+      "mag": 20,
+      "reserve": 80,
+      "reloadTime": 2.2,
+      "spread": 0.017,
+      "pellets": 1,
+      "range": 200.0,
+      "auto": true,
+      "kickback": 0.0,
+      "zoomLevels": [],
+      "hipfireSpread": 0.017,
+      "spray": [
+        [
+          -0.0,
+          0.0
+        ],
+        [
+          -0.00045,
+          0.0119
+        ],
+        [
+          -0.0009,
+          0.0238
+        ],
+        [
+          -0.0012,
+          0.03655
+        ],
+        [
+          -0.00075,
+          0.0493
+        ],
+        [
+          0.00113,
+          0.0612
+        ],
+        [
+          0.00375,
+          0.0714
+        ],
+        [
+          0.00825,
+          0.0799
+        ],
+        [
+          0.0135,
+          0.08585
+        ],
+        [
+          0.018,
+          0.08925
+        ],
+        [
+          0.021,
+          0.09095
+        ],
+        [
+          0.0195,
+          0.0918
+        ],
+        [
+          0.0135,
+          0.09265
+        ],
+        [
+          0.006,
+          0.0935
+        ],
+        [
+          -0.003,
+          0.09392
+        ],
+        [
+          -0.01125,
+          0.09435
+        ],
+        [
+          -0.018,
+          0.09477
+        ],
+        [
+          -0.0225,
+          0.0952
+        ],
+        [
+          -0.024,
+          0.0952
+        ],
+        [
+          -0.0195,
+          0.09563
+        ]
+      ],
+      "sprayReset": 0.35,
+      "residualSpread": 0.003,
+      "falloffStart": 90.0,
+      "firstShotSpread": 0.001,
+      "moveInaccuracy": 0.055,
+      "airInaccuracy": 0.17,
+      "crouchScale": 0.75,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35,
+      "slot": "primary",
+      "model": "assault",
+      "side": "ct",
+      "price": 2900,
+      "killReward": 300,
+      "penetration": 0.7,
+      "armorPen": 0.0,
+      "boltAction": false
+    },
+    "scout": {
+      "id": "scout",
+      "name": "Scout",
+      "damage": 75,
+      "headMultiplier": 2.5,
+      "rpm": 48,
+      "interval": 1.25,
+      "mag": 10,
+      "reserve": 40,
+      "reloadTime": 2.0,
+      "spread": 0.003,
+      "pellets": 1,
+      "range": 300.0,
+      "auto": false,
+      "kickback": 4.0,
+      "zoomLevels": [
+        2.0,
+        4.0
+      ],
+      "hipfireSpread": 0.03,
+      "spray": [],
+      "sprayReset": 0.35,
+      "residualSpread": 0.003,
+      "falloffStart": 300.0,
+      "firstShotSpread": null,
+      "moveInaccuracy": 0.04,
+      "airInaccuracy": 0.03,
+      "crouchScale": 1.0,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 1.0,
+      "slot": "primary",
+      "model": "sniper",
+      "side": "any",
+      "price": 1700,
+      "killReward": 300,
+      "penetration": 1.0,
+      "armorPen": 0.0,
+      "boltAction": true
+    },
+    "breacher": {
+      "id": "breacher",
+      "name": "Breacher",
+      "damage": 9,
+      "headMultiplier": 1.4,
+      "rpm": 240,
+      "interval": 0.25,
+      "mag": 8,
+      "reserve": 32,
+      "reloadTime": 3.0,
+      "spread": 0.085,
+      "pellets": 6,
+      "range": 40.0,
+      "auto": true,
+      "kickback": 3.0,
+      "zoomLevels": [],
+      "hipfireSpread": 0.085,
+      "spray": [],
+      "sprayReset": 0.35,
+      "residualSpread": 0.085,
+      "falloffStart": 12.0,
+      "firstShotSpread": null,
+      "moveInaccuracy": 0.02,
+      "airInaccuracy": 0.06,
+      "crouchScale": 0.9,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 1.0,
+      "slot": "primary",
+      "model": "shotgun",
+      "side": "any",
+      "price": 2000,
+      "killReward": 900,
+      "penetration": 0.0,
+      "armorPen": 0.0,
+      "boltAction": false
     }
   },
   "sprays": [
@@ -12738,17 +13477,182 @@
     {
       "weapon": "sniper",
       "distance": 0.0,
-      "expect": 72
+      "expect": 115
     },
     {
       "weapon": "sniper",
       "distance": 320.0,
-      "expect": 72
+      "expect": 115
     },
     {
       "weapon": "sniper",
       "distance": 640.0,
-      "expect": 72
+      "expect": 115
+    },
+    {
+      "weapon": "hand_cannon",
+      "distance": 0.0,
+      "expect": 34
+    },
+    {
+      "weapon": "hand_cannon",
+      "distance": 50.0,
+      "expect": 34
+    },
+    {
+      "weapon": "hand_cannon",
+      "distance": 105.0,
+      "expect": 25.5
+    },
+    {
+      "weapon": "hand_cannon",
+      "distance": 160.0,
+      "expect": 17.0
+    },
+    {
+      "weapon": "hand_cannon",
+      "distance": 320.0,
+      "expect": 17.0
+    },
+    {
+      "weapon": "smg",
+      "distance": 0.0,
+      "expect": 14
+    },
+    {
+      "weapon": "smg",
+      "distance": 30.0,
+      "expect": 14
+    },
+    {
+      "weapon": "smg",
+      "distance": 75.0,
+      "expect": 10.5
+    },
+    {
+      "weapon": "smg",
+      "distance": 120.0,
+      "expect": 7.0
+    },
+    {
+      "weapon": "smg",
+      "distance": 240.0,
+      "expect": 7.0
+    },
+    {
+      "weapon": "raider",
+      "distance": 0.0,
+      "expect": 25
+    },
+    {
+      "weapon": "raider",
+      "distance": 70.0,
+      "expect": 25
+    },
+    {
+      "weapon": "raider",
+      "distance": 135.0,
+      "expect": 18.75
+    },
+    {
+      "weapon": "raider",
+      "distance": 200.0,
+      "expect": 12.5
+    },
+    {
+      "weapon": "raider",
+      "distance": 400.0,
+      "expect": 12.5
+    },
+    {
+      "weapon": "lancer",
+      "distance": 0.0,
+      "expect": 22
+    },
+    {
+      "weapon": "lancer",
+      "distance": 80.0,
+      "expect": 22
+    },
+    {
+      "weapon": "lancer",
+      "distance": 140.0,
+      "expect": 16.5
+    },
+    {
+      "weapon": "lancer",
+      "distance": 200.0,
+      "expect": 11.0
+    },
+    {
+      "weapon": "lancer",
+      "distance": 400.0,
+      "expect": 11.0
+    },
+    {
+      "weapon": "lancer_s",
+      "distance": 0.0,
+      "expect": 22
+    },
+    {
+      "weapon": "lancer_s",
+      "distance": 90.0,
+      "expect": 22
+    },
+    {
+      "weapon": "lancer_s",
+      "distance": 145.0,
+      "expect": 16.5
+    },
+    {
+      "weapon": "lancer_s",
+      "distance": 200.0,
+      "expect": 11.0
+    },
+    {
+      "weapon": "lancer_s",
+      "distance": 400.0,
+      "expect": 11.0
+    },
+    {
+      "weapon": "scout",
+      "distance": 0.0,
+      "expect": 75
+    },
+    {
+      "weapon": "scout",
+      "distance": 300.0,
+      "expect": 75
+    },
+    {
+      "weapon": "scout",
+      "distance": 600.0,
+      "expect": 75
+    },
+    {
+      "weapon": "breacher",
+      "distance": 0.0,
+      "expect": 9
+    },
+    {
+      "weapon": "breacher",
+      "distance": 12.0,
+      "expect": 9
+    },
+    {
+      "weapon": "breacher",
+      "distance": 26.0,
+      "expect": 6.75
+    },
+    {
+      "weapon": "breacher",
+      "distance": 40.0,
+      "expect": 4.5
+    },
+    {
+      "weapon": "breacher",
+      "distance": 80.0,
+      "expect": 4.5
     }
   ],
   "throwTolerance": 0.0001,

@@ -128,9 +128,9 @@ export const ACTIONS: readonly ActionDoc[] = [
     group: 'Combat',
     note: 'Tap for crosshair target ping. Hold to open radial callout wheel (Spotted, Watch, Danger, Utility).',
   },
-  { action: 'weapon1', label: 'Weapon 1', group: 'Combat' },
-  { action: 'weapon2', label: 'Weapon 2', group: 'Combat' },
-  { action: 'weapon3', label: 'Weapon 3', group: 'Combat' },
+  { action: 'weapon1', label: 'Primary', group: 'Combat' },
+  { action: 'weapon2', label: 'Secondary', group: 'Combat' },
+  { action: 'weapon3', label: 'Knife', group: 'Combat' },
   { action: 'weapon4', label: 'Weapon 4', group: 'Combat' },
   { action: 'weapon5', label: 'Weapon 5', group: 'Combat' },
   {

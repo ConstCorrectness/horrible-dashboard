@@ -228,6 +228,16 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
 
 BOT_ARCHETYPES = ("entry", "sniper", "anchor", "support", "balanced")
 
+#: What each archetype carries. A bot holds a loadout like anyone else, so
+#: a match against bots shows the roster rather than five rifles.
+BOT_LOADOUTS: dict[str, dict[str, str]] = {
+    "entry": {"primary": "smg", "secondary": "pistol"},
+    "sniper": {"primary": "sniper", "secondary": "hand_cannon"},
+    "anchor": {"primary": "breacher", "secondary": "pistol"},
+    "support": {"primary": "raider", "secondary": "pistol"},
+    "balanced": {"primary": "assault", "secondary": "pistol"},
+}
+
 
 class BotBrain:
     """One bot's mind. Ticked once per server tick by `MatchRoom._think`."""
@@ -498,13 +508,17 @@ class BotBrain:
         self.switch_in -= dt
         if self.switch_in > 0 and not dry:
             return -1
-        if distance > 70:
-            wanted = weapons.WEAPON_BY_ID["sniper"]
-        elif distance < 16:
-            wanted = weapons.WEAPON_BY_ID["shotgun"]
-        else:
-            wanted = weapons.WEAPON_BY_ID["assault"]
-        index = weapons.WEAPONS.index(wanted)
+        # From what is in hand, never the whole table: a switch to anything
+        # else is refused. The primary unless it is the wrong tool for the
+        # range — a scoped rifle up close, a shotgun at distance — then the
+        # sidearm.
+        primary = me.loadout.get("primary", weapons.DEFAULT_WEAPON)
+        secondary = me.loadout.get("secondary", 1)
+        kind = weapons.weapon_at(primary).visual
+        wrong_tool = (kind == "sniper" and distance < 16) or (
+            kind == "shotgun" and distance > 40
+        )
+        index = secondary if wrong_tool else primary
         if not self._has_rounds(me, index):
             # Second choice is whatever still has rounds, nearest slot first, so
             # a bot out of rifle ammo falls back to the sidearm rather than to
@@ -513,7 +527,7 @@ class BotBrain:
                 (
                     i
                     for i in sorted(
-                        range(len(weapons.WEAPONS)),
+                        me.held or range(len(weapons.WEAPONS)),
                         key=lambda i: -weapons.WEAPONS[i].range,
                     )
                     if self._has_rounds(me, i)
@@ -928,5 +942,11 @@ def add_bots(
             seed=room.rng.randrange(1 << 30),
             archetype=archetype,
         )
-        out.append(room.add(name, None, brain=brain, team=team))
+        bot = room.add(name, None, brain=brain, team=team)
+        # Chosen, then re-issued: `add` already spawned the bot with the
+        # default, and a loadout otherwise applies from the next spawn.
+        room.set_loadout(bot, BOT_LOADOUTS[archetype])
+        bot.reset_loadout()
+        room.mode.outfit(room, bot)
+        out.append(bot)
     return out

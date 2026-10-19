@@ -271,6 +271,17 @@ export interface WeaponSpec {
   crouchScale?: number;
   perShotInaccuracy?: number;
   recoveryTime?: number;
+  /** The roster (`weapons.py`). Optional: a backend older than it sends none. */
+  slot?: 'primary' | 'secondary' | 'melee';
+  /** The weapon whose visuals this one borrows. See `weapon-visuals.ts`. */
+  model?: string;
+  side?: 'any' | 't' | 'ct';
+  price?: number;
+  killReward?: number;
+  penetration?: number;
+  armorPen?: number;
+  /** Chambers a round; a quick switch cancels it. */
+  boltAction?: boolean;
 }
 
 /**

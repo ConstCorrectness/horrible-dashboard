@@ -217,6 +217,8 @@ pub struct TrainingRange {
     /// The drill being run, if any. Its targets replace the free range's dummies
     /// and move by replaying the served schedule (`drills.rs`).
     drill: Option<Drill>,
+    /// The range's loadout (`set_loadout`), or `None`: every weapon held.
+    loadout: Option<crate::protocol::LoadoutSlots>,
 }
 
 /// One item the range will actually give you.
@@ -530,8 +532,25 @@ impl TrainingRange {
         self.slot
     }
 
+    /// The range's loadout, if one was set: what the number keys select.
+    pub fn loadout(&self) -> Option<crate::protocol::LoadoutSlots> {
+        self.loadout
+    }
+
+    /// Carry `slots`, as `setLoadout` in `training.ts`: the number keys select
+    /// them, and nothing else is held.
+    pub fn set_loadout(&mut self, slots: crate::protocol::LoadoutSlots) {
+        self.loadout = Some(slots);
+        self.slot = slots.primary.max(0) as usize;
+        self.reload_in = 0.0;
+        self.spray_index = 0;
+    }
+
     pub fn select(&mut self, slot: usize) {
-        if slot < self.weapons.len() && slot != self.slot {
+        let held = self.loadout.is_none_or(|s| {
+            [s.primary, s.secondary, s.melee].contains(&(slot as i32))
+        });
+        if slot < self.weapons.len() && slot != self.slot && held {
             self.slot = slot;
             // A switch cancels a reload, exactly as it does server-side —
             // otherwise the timer keeps running on a weapon you are no longer

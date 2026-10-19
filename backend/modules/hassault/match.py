@@ -463,6 +463,14 @@ class MatchPlayer:
     last_fire_at: float = -999.0
     #: Whether the last simulated command held walk. Silences footsteps.
     walking: bool = False
+    #: What this player chose to carry, `{slot: weapon index}`. Applied at the
+    #: next spawn (`reset_loadout`), never mid-life: a loadout change is a
+    #: decision about the next fight, not a way out of this one.
+    loadout: dict[str, int] = field(default_factory=weapons.loadout_for)
+    #: Weapon indexes in hand. A switch to anything else is refused, which
+    #: is what makes a loadout a loadout. Modes may answer differently
+    #: (`GameMode.holds`): defuse holds what was bought.
+    held: set[int] = field(default_factory=set)
     #: How many shots into the current burst this player is.
     #:
     #: Indexes the weapon's spray pattern (`weapons.ASSAULT_SPRAY`). Reset when
@@ -623,7 +631,8 @@ class MatchPlayer:
         # with it would make the pickup that exists to be fought over a top-up.
         self.armour = 0.0
         self.alive = True
-        self.weapon = weapons.DEFAULT_WEAPON
+        self.held = set(self.loadout.values())
+        self.weapon = self.loadout["primary"]
         self.ammo = {i: w.mag for i, w in enumerate(weapons.WEAPONS)}
         self.reserve = {i: w.reserve for i, w in enumerate(weapons.WEAPONS)}
         self.reload_until = -999.0
@@ -1111,6 +1120,15 @@ class MatchRoom:
         if not self.humans:
             self.empty_since = time.monotonic()
         return len(chosen)
+
+    def set_loadout(self, player: MatchPlayer, choice: Any) -> dict[str, int]:
+        """Record what `player` wants to carry, from `{slot: weapon id}`.
+
+        Takes effect at their next spawn. Validated slot by slot
+        (`weapons.loadout_for`), so a bad pick costs only that slot.
+        """
+        player.loadout = weapons.loadout_for(choice)
+        return player.loadout
 
     def respawn(self, player: MatchPlayer) -> None:
         player.state = self._spawn_state(player.team)
@@ -1901,7 +1919,12 @@ class MatchRoom:
     ) -> None:
         if command.attachments is not None:
             player.attachments = command.attachments
-        if command.weapon >= 0 and command.weapon != player.weapon:
+        if (
+            command.weapon >= 0
+            and command.weapon != player.weapon
+            and command.weapon < len(weapons.WEAPONS)
+            and self.mode.holds(self, player, command.weapon)
+        ):
             player.weapon = max(0, min(len(weapons.WEAPONS) - 1, command.weapon))
             # Switching cancels a reload rather than queueing behind it: that is
             # what every player expects the switch to be *for*.
@@ -1913,7 +1936,7 @@ class MatchRoom:
             player.spray_index = 0
             # Combat Arms "QQ" quick-switch rechamber cancel for sniper
             w = weapons.weapon_at(player.weapon)
-            if w.id == "sniper" and player.sim_time - player.last_fire_at >= 0.50:
+            if w.bolt_action and player.sim_time - player.last_fire_at >= 0.50:
                 player.last_fire_at = player.sim_time - w.interval
         # Every frame, not only on the next trigger pull. Resolving it lazily
         # deadlocks anyone who reloads and then waits — including every bot, which
@@ -2153,11 +2176,7 @@ class MatchRoom:
                 other.id, physics.body_height(other.state)
             )
 
-        pen = (
-            1.25
-            if getattr(weapon, "id", "") == "sniper"
-            else (0.8 if getattr(weapon, "id", "") in ("assault", "carbine") else 0.0)
-        )
+        pen = weapon.penetration
         result = weapons.resolve_shot(
             self.world,
             weapon,
@@ -2345,7 +2364,11 @@ class MatchRoom:
         # is a fixed amount of protection rather than a permanent discount.
         absorbed = 0.0
         if victim.armour > 0:
-            absorbed = min(victim.armour, amount * weapons.ARMOUR_ABSORB)
+            # Some rounds ignore part of a vest (`Weapon.armor_pen`).
+            pen = getattr(weapon, "armor_pen", 0.0)
+            absorbed = min(
+                victim.armour, amount * weapons.ARMOUR_ABSORB * (1.0 - pen)
+            )
             victim.armour -= absorbed
             amount -= absorbed
 
@@ -2522,6 +2545,12 @@ class MatchRoom:
         computing each team's answer once per member of that team.
         """
         you = player.private_view(time.monotonic())
+        # What is in hand, by the mode's rule, and the chosen loadout by slot,
+        # so the number keys select a slot and the HUD lists what you carry.
+        you["held"] = [
+            i for i in range(len(weapons.WEAPONS)) if self.mode.holds(self, player, i)
+        ]
+        you["slots"] = dict(player.loadout)
         # Resolved per recipient, here rather than in the shared rows, because
         # audibility is the whole mechanic: a shared list of noises with positions
         # in it would hand every client the location of everyone it cannot hear.

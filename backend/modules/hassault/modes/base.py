@@ -163,6 +163,11 @@ class GameMode:
         """
         return 0.0 if attacker.team == victim.team else 1.0
 
+    def holds(self, room: MatchRoom, player: MatchPlayer, index: int) -> bool:
+        """Whether `player` has weapon `index` in hand: what they may switch
+        to, and what their HUD lists. The default is their loadout."""
+        return index in player.held
+
     def may_respawn(self, room: MatchRoom, player: MatchPlayer, now: float) -> bool:
         """Whether a dead player whose timer has expired comes back now."""
         return True

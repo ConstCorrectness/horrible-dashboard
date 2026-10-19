@@ -12,6 +12,7 @@
  */
 import { memo } from 'react';
 import type { KillNote, KillFeedTeam } from '../session';
+import { visualId } from '../weapon-visuals';
 
 export type { KillNote, KillFeedTeam };
 export type KillFeedEvent = KillNote;
@@ -399,7 +400,7 @@ const KillFeedCard: React.FC<{ entry: KillNote }> = memo(({ entry }) => {
           opacity: 0.95,
         }}
       >
-        <WeaponSilhouetteBadge weaponId={entry.weaponId} />
+        <WeaponSilhouetteBadge weaponId={visualId(entry.weaponId)} />
       </span>
 
       {/* Backstab Stabbing Emoji Badge */}

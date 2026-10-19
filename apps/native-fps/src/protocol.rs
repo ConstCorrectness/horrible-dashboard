@@ -261,6 +261,14 @@ pub struct PlayerRow {
 /// carries a bearing and not a position: handing every client the whole truth is
 /// a wall hack, whatever the UI chooses to draw.
 ///
+/// A loadout by slot, as weapon indexes. `MatchPlayer.loadout`.
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoadoutSlots {
+    pub primary: i32,
+    pub secondary: i32,
+    pub melee: i32,
+}
+
 /// **This is the HUD's entire data source**, which is why it grew: health, the
 /// magazine, the reload clock and the respawn clock are all per-recipient, and
 /// none of them can be derived from the shared rows.
@@ -318,6 +326,13 @@ pub struct SelfState {
     /// snapshot, which looks exactly like a rifle with no recoil.
     #[serde(rename = "sprayIndex", default)]
     pub spray_index: i32,
+    /// Weapon indexes in hand, by the mode's rule. `None` from an older server,
+    /// which means everything is held and the number keys pick indexes.
+    #[serde(default)]
+    pub held: Option<Vec<i32>>,
+    /// The loadout by slot: what keys 1, 2 and 3 select.
+    #[serde(default)]
+    pub slots: Option<LoadoutSlots>,
     #[serde(rename = "reloadIn", default)]
     pub reload_in: f32,
     #[serde(rename = "respawnIn", default)]

@@ -4698,16 +4698,92 @@ magazine down the instant you press the button — a gun that waits a round trip
 acknowledge the trigger does not feel like a gun — but *whether you hit anything*
 is decided on the server, from the server's own copy of the world.
 
-Five weapons, in slot order: knife, pistol, assault rifle, shotgun, sniper rifle.
-The numbers are AssaultCube-*flavoured* rather than derived: our movement speed is
-22 cubes/s, which is not AC's, so copying its damage table would produce a
-different game wearing its numbers.
+Twelve weapons. The first five keep the wire indexes they always had (knife,
+pistol, assault rifle, shotgun, sniper rifle) and the rest are appended, so an
+older client's weapon index still means the same gun: the Hand Cannon, the ARC
+Viper SMG, the ARC Raider (T side), the HALON Lancer and Lancer-S (CT side), the
+Scout and the Breacher auto-shotgun. The numbers are AssaultCube-*flavoured*
+rather than derived: our movement speed is 22 cubes/s, which is not AC's, so
+copying its damage table would produce a different game wearing its numbers.
 
 They are **served, not duplicated** — `GET /api/hassault/weapons` — for the same
 reason `plane_order` is reported rather than hardcoded. The client needs each
 weapon's fire interval so it does not send input the server will only discard, and
 a second copy of that constant in TypeScript is a bug waiting for someone to tune
 the rifle.
+
+### Loadouts: one primary, one secondary, the knife
+
+A player carries a **loadout**, CS-style: `MatchPlayer.loadout` is
+`{primary, secondary, melee}` as weapon indexes, and `held` is what is in hand.
+`reset_loadout` re-issues the loadout at every spawn, and `_handle_combat`
+refuses a switch to anything not held, which is what makes a loadout a loadout
+rather than a list of favourites.
+
+- **Picked in the menu, applied at the next spawn.** The pane's **Loadout** row
+  (beside Host) stores `{primary, secondary}` weapon ids under `hassault.loadout`,
+  an account-scoped setting. The session sends it as a `loadout` event on every
+  welcome, the native client reads the same setting from the node, and the
+  server validates it slot by slot (`weapons.loadout_for`): an unknown id, or a
+  sniper named as a sidearm, costs only that slot. A change never applies
+  mid-life: it is a decision about the next fight, not a way out of this one.
+- **The number keys select slots.** 1 primary, 2 secondary, 3 knife, from the
+  `slots` the private view now carries; the wheel steps through `held` only.
+  Against a server too old to send `slots`, key N is weapon N as it always was.
+- **A mode decides what "held" means** (`GameMode.holds`). The default is the
+  loadout. Defuse answers with what was bought or picked up, plus the free knife
+  and pistol, so the loadout picker has no say in a buy mode: the money does.
+- **Bots carry loadouts too**, by archetype (`bots.BOT_LOADOUTS`): the entry
+  bot an SMG, the sniper a sniper and a Hand Cannon, the anchor the Breacher.
+  `_choose_weapon` picks from what they hold, so a bot never asks for a gun the
+  server would refuse.
+- **The training range carries the loadout as well** (`TrainingRange.setLoadout`,
+  `training.rs::set_loadout`), so Train hands you the guns a match does.
+
+**Visuals borrow a base model.** There are five view models, props and HUD
+silhouettes, and twelve guns, so each weapon serves a `model` naming the one it
+is drawn as (always concrete on the wire). `weapon-visuals.ts` and
+`WeaponSpec::visual` / `api::visual_slot` are the one place a weapon id or a
+wire index becomes a model, in each client. A skin is still looked up by the
+weapon's own id, so a rifle skin does not appear on a Lancer.
+
+Behaviour that used to be keyed on an id is now a served field: `penetration`
+(how far a round carries through a wall), `armorPen` (the share of a vest it
+ignores, which is how the sniper, now 115 damage, one-shots an armoured body),
+and `boltAction` (the quick-switch rechamber cancel).
+
+### Accuracy: stopping is what buys the shot
+
+Every shot's cone is `weapons.shot_cone(weapon, ctx)`, built by the server from
+its own state after the step that carried the shot:
+
+1. The base is `residual_spread` (the scope and the pattern already applied).
+2. At rest (no shot within `recoveryTime`) `firstShotSpread` replaces it if
+   tighter: a tap is a different shot from a spam.
+3. Crouching scales the base by `crouchScale`.
+4. Horizontal speed above a third of a run (`ACCURATE_SPEED_SCALE`) adds up to
+   `moveInaccuracy` at full speed; being off the ground adds `airInaccuracy`.
+5. A shot inside `recoveryTime` of the last adds a fading `perShotInaccuracy`.
+
+So counter-strafing's braking finally has an accuracy payoff, a jump-shot is a
+gamble, and a scoped sniper on the move is a miss. Movement itself is unchanged:
+AssaultCube's momentum and air control stay as they are. Every new field
+defaults to "no change", so a weapon nobody tuned fires as it did before.
+
+The training ranges fire through ports of the same function (`shotCone` in
+`trace.ts`, `WeaponSpec::shot_cone`), fed the player's real velocity, so Train
+teaches the same thing about stopping to shoot. `accuracy-vectors.json` pins all
+three and carries a `weaponsSpecId` content hash of the weapon table: retuning a
+gun without regenerating the fixture fails the Python suite instead of leaving
+the clients pinned against yesterday's numbers. It is its own file so that
+tuning a gun never churns the movement fixture.
+
+**Walk.** Shift is now walk, the CS convention: 52% of a run, silent like a
+crouch, and above the accurate threshold on purpose, so a walking shot is
+steadier than a running one but not free. It is a `walk` flag on the command and
+a speed scale in all three physics ports, pinned by two cases in
+`physics-vectors.json`. Sprint moved off Shift and ships unbound: the server has
+never simulated it, so online it mispredicted on every press.
 
 ### Firing is a flag on a movement command
 

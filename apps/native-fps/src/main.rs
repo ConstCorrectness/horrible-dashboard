@@ -371,6 +371,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // hold one set of preferences rather than two. A node that only served the
     // map still gets a playable client — the defaults are the game's, not an
     // error state — so this warns and carries on.
+    let mut stored_loadout: Option<serde_json::Value> = None;
     let (mut settings, controls) = match node.settings().map(|mut values| {
         if let Some(bag) = values.as_object_mut() {
             for (key, value) in &args.overrides {
@@ -380,7 +381,15 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         values
     }) {
         Ok(values) => (
-            Settings::from_values(&values),
+            {
+                // A document the server validates, not a setting this client
+                // interprets, so it is read raw.
+                stored_loadout = values
+                    .get("hassault.loadout")
+                    .and_then(|v| v.as_str())
+                    .and_then(|raw| serde_json::from_str(raw).ok());
+                Settings::from_values(&values)
+            },
             // The pane's Controls screen writes this; the native client used to
             // ignore it and hard-code every key.
             Controls::from_values(&values),
@@ -684,6 +693,10 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         // host-only on the channel — which is why the launcher only ever sends a
         // count with `--mode=host`.
         app.queue_bots(args.bots, args.bot_skill.clone());
+    }
+    // The loadout to carry, as the pane stored it.
+    if let Some(choice) = stored_loadout {
+        app.set_loadout(choice);
     }
     if let (Mode::Train, Some(drill)) = (args.mode, args.drill.as_deref()) {
         // Fetched here rather than inside the app, like the loadout: the

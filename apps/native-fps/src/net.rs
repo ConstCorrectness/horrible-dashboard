@@ -238,6 +238,12 @@ impl MatchSocket {
         ))
     }
 
+    /// The loadout to carry, `{primary, secondary}` weapon ids, applied by the
+    /// server at the next spawn and validated slot by slot there.
+    pub fn send_loadout(&self, choice: &serde_json::Value) -> Result<(), NetError> {
+        self.send(&Outbound::new("loadout", choice.clone()))
+    }
+
     pub fn send_voice(&self, transmitting: bool) -> Result<(), NetError> {
         self.send(&Outbound::new(
             "voice",

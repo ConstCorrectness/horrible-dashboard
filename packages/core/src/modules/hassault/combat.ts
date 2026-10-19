@@ -21,7 +21,8 @@
  */
 import type { WeaponSpec } from './api';
 import { residualSpread, sprayOffset } from './trace';
-import type { SelfState, ShotIntent, Vec3 } from './net';
+import type { LoadoutSlots, SelfState, ShotIntent, Vec3 } from './net';
+import { visualId } from './weapon-visuals';
 
 /** No shot intent at all — offline, dead, or between matches. */
 export const NO_SHOT: ShotIntent = {
@@ -90,6 +91,10 @@ export class ShotController {
   weapons: WeaponSpec[] = [];
   /** The slot we believe we are holding. Corrected from `you.weapon`. */
   slot = 0;
+  /** What is in hand and the loadout by slot, from the last `you`. `null`
+   * from an older server, where every weapon is held and keys pick indexes. */
+  heldWeapons: number[] | null = null;
+  slots: LoadoutSlots | null = null;
   /** Predicted magazine, so the HUD counts down on the frame you fire. */
   ammo = 0;
   /**
@@ -174,7 +179,7 @@ export class ShotController {
   }
 
   get isKnife(): boolean {
-    return this.weapon?.id === 'knife';
+    return visualId(this.weapon) === 'knife';
   }
 
   /**
@@ -224,8 +229,26 @@ export class ShotController {
 
   /** Select a slot. Out-of-range numbers are ignored rather than clamped: they
    * come from a key the player pressed, and `6` means nothing, not "the last one". */
+  /**
+   * A number key: 1 primary, 2 secondary, 3 knife, the CS layout. Against a
+   * server too old to send `slots`, key N is weapon N as it always was.
+   */
+  selectKey(key: number): void {
+    if (!this.slots) {
+      this.select(key - 1);
+      return;
+    }
+    const order = [this.slots.primary, this.slots.secondary, this.slots.melee];
+    const index = order[key - 1];
+    if (index !== undefined) this.select(index);
+  }
+
+  private holds(index: number): boolean {
+    return this.heldWeapons === null || this.heldWeapons.includes(index);
+  }
+
   select(slot: number): void {
-    if (slot >= 0 && slot < this.weapons.length && slot !== this.slot) {
+    if (slot >= 0 && slot < this.weapons.length && slot !== this.slot && this.holds(slot)) {
       this.previousSlot = this.slot;
       this.wantSlot = slot;
       this.slot = slot;
@@ -239,7 +262,8 @@ export class ShotController {
       this.scoped = 0;
       // Combat Arms "QQ" quick-switch rechamber cancel for sniper
       const targetWeapon = this.weapons[slot];
-      if (targetWeapon && targetWeapon.id === 'sniper' && performance.now() - this.lastFireMs >= 500) {
+      const bolt = targetWeapon?.boltAction ?? targetWeapon?.id === 'sniper';
+      if (targetWeapon && bolt && performance.now() - this.lastFireMs >= 500) {
         this.lastFireMs = performance.now() - targetWeapon.interval * 1000;
       }
     }
@@ -286,8 +310,12 @@ export class ShotController {
 
   cycle(direction: number): void {
     if (this.weapons.length === 0) return;
-    const next = (this.slot + direction + this.weapons.length) % this.weapons.length;
-    this.select(next);
+    // Through what is in hand only, or the wheel would stop on weapons the
+    // server refuses and look broken.
+    const ring = this.heldWeapons ?? this.weapons.map((_, i) => i);
+    if (ring.length === 0) return;
+    const at = Math.max(0, ring.indexOf(this.slot));
+    this.select(ring[(at + direction + ring.length) % ring.length]);
   }
 
   /**
@@ -314,6 +342,10 @@ export class ShotController {
     } else if (you) {
       this.slot = you.weapon;
       this.ammo = you.ammo;
+    }
+    if (you) {
+      this.heldWeapons = you.held ?? null;
+      this.slots = you.slots ?? null;
     }
     // The server's word on where we are in the pattern. Taken whenever it is on
     // the wire, including through a pending switch — the index is about the
@@ -346,7 +378,7 @@ export class ShotController {
     // Knife attack handling:
     // Left-click (held): quick slashing (~0.32s interval)
     // Right-click (heldAlt): heavy stabbing (~0.75s interval)
-    if (weapon.id === 'knife') {
+    if (visualId(weapon) === 'knife') {
       const isAlt = this.heldAlt;
       const attacking = this.held || isAlt || clicked;
       if (!attacking || this.triggerUsed) return intent;

@@ -18,6 +18,7 @@ import type * as THREE from 'three';
 
 import type { PlayerRow } from '../net';
 import type { CharacterModel } from './CharacterModel';
+import { visualSlot } from '../weapon-visuals';
 import {
   fadeFor,
   isOneShot,
@@ -118,7 +119,8 @@ export class CharacterAnimator {
     if (!(dt > 0) || Number.isNaN(dt)) dt = 1 / 60;
 
     this.model.decayMuzzleFlash(dt);
-    this.model.setWeapon(row.weapon ?? 2);
+    // A wire index, drawn as the base model it borrows (`weapon-visuals.ts`).
+    this.model.setWeapon(visualSlot(row.weapon ?? 2));
     this.model.setOpacity(row.stale ? 0.35 : 1);
 
     this.play(selectLocomotion(this.deriveState(dt, row)));

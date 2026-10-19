@@ -240,7 +240,7 @@ async def test_give_fills_the_magazine_and_the_reserve(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("query", ["ak47", "carbine", "subgun", "9", "-1"])
+@pytest.mark.parametrize("query", ["ak47", "carbine", "subgun", "99", "-1"])
 async def test_give_refuses_a_weapon_that_does_not_exist(
     fresh_registry: ConsoleRegistry, room_with_player, query
 ) -> None:
