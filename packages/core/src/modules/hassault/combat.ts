@@ -433,28 +433,25 @@ export class ShotController {
   }
 
   /**
-   * Crosshair gap in pixels: wider while firing, so the spread is visible.
+   * The cone the crosshair opens to, in radians — the one the *next* shot would
+   * actually use.
    *
-   * Reads the cone the *next* shot would actually use, so an unscoped sniper
-   * shows its hip-fire penalty as a crosshair you can see is too wide to trust.
-   * The alternative — drawing `spread` always — would hide the one number the
-   * scope exists to change.
+   * Through `residualSpread`, the function the range and the server both ask, so
+   * an unscoped sniper shows its hip-fire penalty and a patterned weapon is not
+   * drawn at its full `spread` (five times its real cone: a crosshair telling you
+   * not to take a shot the weapon would have made). Pixels are `crosshair.ts`'s
+   * business (`coneGapPx`), shared with the native client so both open the same
+   * distance for the same cone.
+   *
+   * Movement is deliberately not in it yet. The browser used to add its own
+   * speed and air bloom here, which the native client never drew and the server
+   * never applied: a wider crosshair that changed nothing about where the shot
+   * went. The served movement cone (P3) is what will put it back, in both.
    */
-  crosshairSpread(options?: { speed?: number; isAirborne?: boolean }): number {
+  crosshairCone(): number {
     const weapon = this.weapon;
-    if (!weapon) return 4;
-    // The cone the *next* shot would actually use, through the one function that
-    // answers that — `residualSpread`, which the range and the server both ask
-    // too. Drawing `spread` for a patterned weapon would advertise a cone five
-    // times the real one: a crosshair telling you not to take a shot the weapon
-    // would have made.
-    const cone = residualSpread(weapon, this.scoped);
-    const speed = options?.speed ?? 0;
-    const isAirborne = options?.isAirborne ?? false;
-    // Dynamic inaccuracy bloom: moving or airborne opens the crosshair gap
-    const speedBloom = speed > 1.0 ? Math.pow(Math.min(speed / 22, 1.8), 1.2) * 14 : 0;
-    const airBloom = isAirborne ? 18 : 0;
-    return 4 + cone * 260 + this.owed * 90 + speedBloom + airBloom;
+    if (!weapon) return 0;
+    return residualSpread(weapon, this.scoped);
   }
 
   reset(): void {

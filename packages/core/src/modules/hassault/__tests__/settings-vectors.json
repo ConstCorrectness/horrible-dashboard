@@ -1,0 +1,460 @@
+{
+ "generator": "scripts/gen_hassault_settings_vectors.py",
+ "version": 1,
+ "settings": [
+  {
+   "key": "hassault.sensitivity",
+   "type": "number",
+   "default": 1,
+   "scope": "account",
+   "min": 0.05,
+   "max": 10,
+   "native": true
+  },
+  {
+   "key": "hassault.video.fov",
+   "type": "number",
+   "default": 75,
+   "scope": "account",
+   "min": 60,
+   "max": 110,
+   "native": true,
+   "aliases": [
+    "hassault.fov"
+   ]
+  },
+  {
+   "key": "hassault.volume",
+   "type": "number",
+   "default": 0.7,
+   "scope": "account",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "key": "hassault.crouchToggle",
+   "type": "boolean",
+   "default": false,
+   "scope": "account"
+  },
+  {
+   "key": "hassault.voice.pushToTalk",
+   "type": "boolean",
+   "default": false,
+   "scope": "account"
+  },
+  {
+   "key": "hassault.controls",
+   "type": "string",
+   "default": "",
+   "scope": "account",
+   "document": true
+  },
+  {
+   "key": "hassault.debug.hitboxes",
+   "type": "boolean",
+   "default": false,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.debug.grenadeArc",
+   "type": "boolean",
+   "default": false,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.style",
+   "type": "string",
+   "default": "cross",
+   "scope": "account",
+   "enum": [
+    "cross",
+    "crossDot",
+    "dot",
+    "circle"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.size",
+   "type": "number",
+   "default": 3.0,
+   "scope": "account",
+   "min": 1.0,
+   "max": 12.0,
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.gap",
+   "type": "number",
+   "default": 4.0,
+   "scope": "account",
+   "min": -5.0,
+   "max": 20.0,
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.thickness",
+   "type": "number",
+   "default": 0.6,
+   "scope": "account",
+   "min": 0.2,
+   "max": 3.0,
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.outline",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.outlineThickness",
+   "type": "number",
+   "default": 0.3,
+   "scope": "account",
+   "min": 0.0,
+   "max": 2.0,
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.alpha",
+   "type": "number",
+   "default": 0.9,
+   "scope": "account",
+   "min": 0.15,
+   "max": 1.0,
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.dot",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.tStyle",
+   "type": "boolean",
+   "default": false,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.dynamic",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.crosshair.color",
+   "type": "string",
+   "default": "white",
+   "scope": "account",
+   "enum": [
+    "white",
+    "green",
+    "cyan",
+    "amber",
+    "magenta",
+    "red"
+   ],
+   "hexColor": true,
+   "native": true
+  },
+  {
+   "key": "hassault.nativeClient",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine"
+  },
+  {
+   "key": "hassault.graphics",
+   "type": "string",
+   "default": "auto",
+   "scope": "machine",
+   "enum": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ]
+  },
+  {
+   "key": "hassault.graphics.custom",
+   "type": "string",
+   "default": "{}",
+   "scope": "machine",
+   "document": true
+  },
+  {
+   "key": "hassault.nativeBinaryPath",
+   "type": "string",
+   "default": "",
+   "scope": "machine"
+  },
+  {
+   "key": "hassault.autoBuildNative",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine"
+  },
+  {
+   "key": "hassault.video.fullscreen",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.displayMode",
+   "type": "string",
+   "default": "borderless",
+   "scope": "machine",
+   "enum": [
+    "borderless",
+    "exclusive"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.monitor",
+   "type": "number",
+   "default": 0,
+   "scope": "machine",
+   "min": 0,
+   "max": 16,
+   "integer": true,
+   "native": true
+  },
+  {
+   "key": "hassault.video.exclusiveMode",
+   "type": "string",
+   "default": "",
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.renderScale",
+   "type": "number",
+   "default": 1,
+   "scope": "machine",
+   "min": 0.5,
+   "max": 2,
+   "native": true
+  },
+  {
+   "key": "hassault.video.hudScale",
+   "type": "number",
+   "default": 1,
+   "scope": "machine",
+   "min": 0.75,
+   "max": 1.5,
+   "native": true
+  },
+  {
+   "key": "hassault.video.quality",
+   "type": "string",
+   "default": "medium",
+   "scope": "machine",
+   "enum": [
+    "low",
+    "medium",
+    "high",
+    "ultra"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.vsync",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.msaa",
+   "type": "number",
+   "default": 1,
+   "scope": "machine",
+   "min": 1,
+   "max": 8,
+   "choices": [
+    1,
+    2,
+    4,
+    8
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.antialias",
+   "type": "boolean",
+   "default": false,
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.anisotropy",
+   "type": "number",
+   "default": 8,
+   "scope": "machine",
+   "min": 1,
+   "max": 16,
+   "choices": [
+    1,
+    2,
+    4,
+    8,
+    16
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.textureQuality",
+   "type": "string",
+   "default": "medium",
+   "scope": "machine",
+   "enum": [
+    "low",
+    "medium",
+    "high"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.shadows",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.shadowQuality",
+   "type": "string",
+   "default": "medium",
+   "scope": "machine",
+   "enum": [
+    "low",
+    "medium",
+    "high",
+    "ultra",
+    "extreme"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.mapLights",
+   "type": "number",
+   "default": 8,
+   "scope": "machine",
+   "min": 0,
+   "max": 64,
+   "choices": [
+    0,
+    8,
+    16,
+    32,
+    64
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.bloom",
+   "type": "number",
+   "default": 0,
+   "scope": "machine",
+   "min": 0,
+   "max": 1,
+   "native": true
+  },
+  {
+   "key": "hassault.video.sky",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.sharpen",
+   "type": "number",
+   "default": 0,
+   "scope": "machine",
+   "min": 0,
+   "max": 1,
+   "native": true
+  },
+  {
+   "key": "hassault.video.brightness",
+   "type": "number",
+   "default": 1,
+   "scope": "machine",
+   "min": 0.6,
+   "max": 1.6,
+   "native": true
+  },
+  {
+   "key": "hassault.video.frameLatency",
+   "type": "number",
+   "default": 1,
+   "scope": "machine",
+   "min": 1,
+   "max": 3,
+   "integer": true,
+   "native": true
+  },
+  {
+   "key": "hassault.video.fpsLimit",
+   "type": "number",
+   "default": 0,
+   "scope": "machine",
+   "min": 0,
+   "max": 360,
+   "choices": [
+    0,
+    60,
+    120,
+    144,
+    240,
+    360
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.adapter",
+   "type": "string",
+   "default": "auto",
+   "scope": "machine",
+   "native": true
+  },
+  {
+   "key": "hassault.video.backend",
+   "type": "string",
+   "default": "auto",
+   "scope": "machine",
+   "enum": [
+    "auto",
+    "dx12",
+    "vulkan",
+    "metal",
+    "gl"
+   ],
+   "native": true
+  },
+  {
+   "key": "hassault.video.powerPreference",
+   "type": "string",
+   "default": "high",
+   "scope": "machine",
+   "enum": [
+    "high",
+    "low"
+   ],
+   "native": true
+  }
+ ]
+}

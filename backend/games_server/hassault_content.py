@@ -103,5 +103,6 @@ for _path, _handler, _model in (
     ("/hitbox", node.get_hitbox, HitboxOut),
     ("/lore", node.get_lore, LoreOut),
     ("/textures", node.get_textures, list[TextureOut]),
+    ("/settings/schema", node.get_settings_schema, None),
 ):
     router.add_api_route(_path, _handler, methods=["GET"], response_model=_model)

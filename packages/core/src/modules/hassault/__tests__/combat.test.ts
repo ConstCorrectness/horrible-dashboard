@@ -252,16 +252,7 @@ describe('ShotController recoil', () => {
   it('opens the crosshair for a wider weapon', () => {
     const wide = controller([spec({ spread: 0.08 })]);
     const tight = controller([spec({ spread: 0.001 })]);
-    expect(wide.crosshairSpread()).toBeGreaterThan(tight.crosshairSpread());
-  });
-
-  it('blooms crosshair dynamically when moving or airborne', () => {
-    const shots = controller([spec({ spread: 0.02 })]);
-    const stationary = shots.crosshairSpread({ speed: 0, isAirborne: false });
-    const moving = shots.crosshairSpread({ speed: 22, isAirborne: false });
-    const airborne = shots.crosshairSpread({ speed: 0, isAirborne: true });
-    expect(moving).toBeGreaterThan(stationary);
-    expect(airborne).toBeGreaterThan(stationary);
+    expect(wide.crosshairCone()).toBeGreaterThan(tight.crosshairCone());
   });
 
   it('forgets everything on reset, so a new match starts cold', () => {
@@ -404,9 +395,9 @@ describe('ShotController scope', () => {
     // The crosshair is the only warning that an unscoped sniper is a gamble, so
     // it has to read the cone the next shot will actually use.
     const shots = controller([SCOPED]);
-    const hip = shots.crosshairSpread();
+    const hip = shots.crosshairCone();
     shots.cycleScope();
-    expect(shots.crosshairSpread()).toBeLessThan(hip);
+    expect(shots.crosshairCone()).toBeLessThan(hip);
   });
 
   it('is cleared by reset, like every other piece of trigger state', () => {
@@ -515,7 +506,7 @@ describe('the spray pattern', () => {
     // shot the weapon would have made.
     const patterned = controller([PATTERNED]);
     const plain = controller([spec({ spray: [] })]);
-    expect(patterned.crosshairSpread()).toBeLessThan(plain.crosshairSpread());
+    expect(patterned.crosshairCone()).toBeLessThan(plain.crosshairCone());
   });
 
   it('gives back the climb but never the drift', () => {

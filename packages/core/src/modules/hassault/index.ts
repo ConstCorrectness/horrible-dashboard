@@ -242,14 +242,6 @@ export const hassaultModule: ModuleManifest = {
       default: 1,
     },
     {
-      key: 'hassault.fov',
-      title: 'Field of view',
-      description:
-        'Vertical field of view in degrees, 60–110. Wider sees more of the map and makes movement read as faster. Applies immediately, mid-match included.',
-      type: 'number',
-      default: 75,
-    },
-    {
       key: 'hassault.volume',
       title: 'Volume',
       description:
@@ -338,10 +330,12 @@ export const hassaultModule: ModuleManifest = {
       default: 'medium',
     },
     {
+      // One row for both clients. The pane used to keep its own
+      // `hassault.fov`; it is still read when this row has never been saved.
       key: 'hassault.video.fov',
-      title: 'Native client: field of view',
+      title: 'Field of view',
       description:
-        'Vertical field of view in degrees, 70–120, before a scope divides it. 75 is the pane’s, so the default is the same picture in both clients. The one video setting that changes how the game plays rather than how it looks — a wider view is more of the room and a smaller enemy in it.',
+        'Vertical field of view in degrees, 60–110, before a scope divides it — the same row in the pane and the native client, so both draw the same picture. Wider sees more of the map and makes movement read as faster; it is the one video setting that changes how the game plays rather than how it looks. Applies immediately, mid-match included.',
       type: 'number',
       default: 75,
     },
@@ -365,9 +359,9 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.anisotropy',
       title: 'Native client: texture filtering',
       description:
-        '1, 2, 4, 8 or 16× anisotropic filtering on the modelled maps’ surfaces — what keeps a floor sharp at the grazing angle a shooter nearly always sees it from. Nearly free on a discrete GPU.',
+        '1, 2, 4, 8 or 16× anisotropic filtering on the modelled maps’ surfaces — what keeps a floor sharp at the grazing angle a shooter nearly always sees it from. Nearly free on a discrete GPU. The default is what the Medium preset writes.',
       type: 'number',
-      default: 16,
+      default: 8,
     },
     {
       key: 'hassault.video.textureQuality',
@@ -389,9 +383,9 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.shadowQuality',
       title: 'Native client: shadow quality',
       description:
-        'low (1024, 4 taps), medium (2048, 8), high (2048, 16 — the browser’s), ultra (4096, 16) or extreme (8192, 16). The map is rendered into it once, at load, so resolution costs memory and a moment rather than frames; the taps are the per-pixel cost.',
+        'low (1024, 4 taps), medium (2048, 8), high (2048, 16 — the browser’s), ultra (4096, 16) or extreme (8192, 16). The map is rendered into it once, at load, so resolution costs memory and a moment rather than frames; the taps are the per-pixel cost. The default is what the Medium preset writes.',
       type: 'string',
-      default: 'high',
+      default: 'medium',
     },
     {
       key: 'hassault.video.mapLights',
@@ -489,11 +483,15 @@ export const hassaultModule: ModuleManifest = {
       type: 'boolean',
       default: true,
     },
+    // The crosshair rows are spec v1 (`backend/modules/hassault/crosshair.py`),
+    // the same in both clients and what an `HXC1-` share code writes. Ranges
+    // and defaults are pinned against the served schema by
+    // `settings-schema.test.ts`.
     {
       key: 'hassault.crosshair.style',
       title: 'Crosshair style',
       description:
-        'cross, crossDot, dot or circle. The circle draws a ring at the spread radius, which is the honest picture of a cone. Every style still opens with the weapon — a reticle that could be configured to hide the hip-fire penalty would be a setting that wins gunfights.',
+        'cross, crossDot, dot or circle. The circle draws a ring at the spread radius, which is the honest picture of a cone. The crosshair generator in the main menu previews every row here and copies or pastes them as one share code.',
       type: 'string',
       default: 'cross',
     },
@@ -501,7 +499,7 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.crosshair.size',
       title: 'Crosshair size',
       description:
-        'Arm length, 1–12. Scaled with the window, so it means the same on every monitor.',
+        'Arm length, 1–12 in steps of 0.5. Scaled with the window, so it means the same on every monitor.',
       type: 'number',
       default: 3,
     },
@@ -509,22 +507,67 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.crosshair.gap',
       title: 'Crosshair gap',
       description:
-        "Distance from the centre to the inside of each arm, 0–20. The floor the crosshair opens from as the weapon's cone widens, never a cap on it.",
+        "Distance from the centre to the inside of each arm, −5–20 in steps of 0.5. Below zero the arms cross the centre. With dynamic on, the floor the crosshair opens from as the weapon's cone widens.",
       type: 'number',
       default: 4,
     },
     {
       key: 'hassault.crosshair.thickness',
       title: 'Crosshair thickness',
-      description: 'Line thickness, 0.2–3.',
+      description: 'Line thickness, 0.2–3 in tenths.',
       type: 'number',
       default: 0.6,
+    },
+    {
+      key: 'hassault.crosshair.outline',
+      title: 'Crosshair outline',
+      description:
+        'A dark border around every element. On by default: a single colour disappears against any surface near its own brightness, and the way you find out is by missing.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.crosshair.outlineThickness',
+      title: 'Crosshair outline thickness',
+      description:
+        'How wide the outline is drawn when it is on, 0.1–2 in tenths. Kept when the outline is turned off, so turning it back on brings the same width.',
+      type: 'number',
+      default: 0.3,
+    },
+    {
+      key: 'hassault.crosshair.alpha',
+      title: 'Crosshair opacity',
+      description: 'Overall opacity, 0.15–1. The outline fades with it.',
+      type: 'number',
+      default: 0.9,
+    },
+    {
+      key: 'hassault.crosshair.dot',
+      title: 'Crosshair centre dot',
+      description: 'Whether the centre dot is drawn, independent of the style.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.crosshair.tStyle',
+      title: 'Crosshair T-style',
+      description: 'Drop the top arm.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'hassault.crosshair.dynamic',
+      title: 'Dynamic crosshair',
+      description:
+        "On (the default), the arms open with the weapon's cone, so a hip-fire penalty is something you can see. Off draws the gap alone. Either way the shot goes where the cone says — this changes what you are shown, not where bullets land.",
+      type: 'boolean',
+      default: true,
     },
     {
       key: 'hassault.crosshair.color',
       title: 'Crosshair colour',
       description:
-        'white, green, cyan, amber, magenta or red. Named rather than a hex field: the reason to change it is contrast against a particular map, and all six are bright — a dark crosshair on a dark map is the one choice that would make the game worse.',
+        'white, green, cyan, amber, magenta or red, or a custom #rrggbb. A custom colour may be any hue but not dark: one below the luma floor is lifted towards white, because a dark crosshair on a dark map is the one choice that would make the game worse.',
       type: 'string',
       default: 'white',
     },

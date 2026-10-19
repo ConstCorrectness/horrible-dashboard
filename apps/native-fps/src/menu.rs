@@ -130,9 +130,19 @@ pub enum Action {
     CrosshairGap,
     CrosshairThickness,
     CrosshairOutline,
+    CrosshairOutlineWidth,
     CrosshairDot,
+    CrosshairTStyle,
+    CrosshairDynamic,
     CrosshairAlpha,
     CrosshairColor,
+    /// Step through the presets, as share codes.
+    CrosshairPreset,
+    /// Read an `HXC1-` code off the clipboard and apply it. The app owns it:
+    /// reading the clipboard is a child process, and a frame never waits on one.
+    CrosshairPaste,
+    /// Put the current code on the clipboard. The app owns it, like paste.
+    CrosshairCopy,
     /// Windowed, borderless or exclusive — one row, three states.
     Fullscreen,
     RenderScale,
@@ -218,6 +228,9 @@ pub struct Menu {
     /// menu owns the keyboard while this is set: Escape cancels, Backspace
     /// clears, anything else is bound.
     pub listening: Option<controls::Action>,
+    /// What the last paste or copy said, and whether it worked — drawn under
+    /// the crosshair preview. Set by the app, which owns the clipboard.
+    pub note: Option<(String, bool)>,
 }
 
 impl Menu {
@@ -297,54 +310,44 @@ impl Menu {
                     Action::Quit,
                 ),
             ],
-            Page::Crosshair => vec![
-                row(
-                    "STYLE",
-                    settings.crosshair.style.label().to_string(),
-                    Action::CrosshairStyle,
-                ),
-                row(
-                    "SIZE",
-                    format!("{:.1}", settings.crosshair.size),
-                    Action::CrosshairSize,
-                ),
-                row(
-                    "GAP",
-                    format!("{:.1}", settings.crosshair.gap),
-                    Action::CrosshairGap,
-                ),
-                row(
-                    "THICKNESS",
-                    format!("{:.1}", settings.crosshair.thickness),
-                    Action::CrosshairThickness,
-                ),
-                row(
-                    "COLOUR",
-                    settings.crosshair.color.label().to_string(),
-                    Action::CrosshairColor,
-                ),
-                row(
-                    "OUTLINE",
-                    if settings.crosshair.outline {
-                        "ON"
-                    } else {
-                        "OFF"
-                    }
-                    .to_string(),
-                    Action::CrosshairOutline,
-                ),
-                row(
-                    "CENTRE DOT",
-                    if settings.crosshair.dot { "ON" } else { "OFF" }.to_string(),
-                    Action::CrosshairDot,
-                ),
-                row(
-                    "OPACITY",
-                    format!("{:.0}%", settings.crosshair.alpha * 100.0),
-                    Action::CrosshairAlpha,
-                ),
-                row("BACK", String::new(), Action::Back),
-            ],
+            Page::Crosshair => {
+                let c = &settings.crosshair;
+                let code = crate::crosshair::encode(*c);
+                let preset = crate::crosshair::PRESETS
+                    .iter()
+                    .find(|(_, p)| *p == code)
+                    .map(|(name, _)| name.to_string())
+                    .unwrap_or_else(|| "CUSTOM".to_string());
+                vec![
+                    row("PRESET", preset, Action::CrosshairPreset),
+                    row("STYLE", c.style.label().to_string(), Action::CrosshairStyle),
+                    row("SIZE", format!("{:.1}", c.size), Action::CrosshairSize),
+                    row("GAP", format!("{:.1}", c.gap), Action::CrosshairGap),
+                    row(
+                        "THICKNESS",
+                        format!("{:.1}", c.thickness),
+                        Action::CrosshairThickness,
+                    ),
+                    row("COLOUR", c.color.label().to_string(), Action::CrosshairColor),
+                    row("OUTLINE", on_off(c.outline > 0.0), Action::CrosshairOutline),
+                    row(
+                        "OUTLINE WIDTH",
+                        format!("{:.1}", settings.crosshair_outline),
+                        Action::CrosshairOutlineWidth,
+                    ),
+                    row("CENTRE DOT", on_off(c.dot), Action::CrosshairDot),
+                    row("T-STYLE", on_off(c.t_style), Action::CrosshairTStyle),
+                    row("DYNAMIC", on_off(c.dynamic), Action::CrosshairDynamic),
+                    row(
+                        "OPACITY",
+                        format!("{:.0}%", c.alpha * 100.0),
+                        Action::CrosshairAlpha,
+                    ),
+                    row("PASTE CODE", String::new(), Action::CrosshairPaste),
+                    row("COPY CODE", String::new(), Action::CrosshairCopy),
+                    row("BACK", String::new(), Action::Back),
+                ]
+            }
             Page::Video => vec![
                 row(
                     "DISPLAY",
@@ -556,7 +559,7 @@ impl Menu {
         }
         match self.page {
             Page::Root => "ESC RESUMES - ARROWS AND ENTER, OR THE MOUSE",
-            Page::Crosshair => "THE GAP ALSO OPENS WITH THE WEAPON'S SPREAD",
+            Page::Crosshair => "SHARE CODES WORK IN THE BROWSER TOO",
             Page::Video => "RESOLUTION SCALES THE WORLD, NEVER THE HUD",
             Page::Advanced => "QUALITY WRITES THESE - CHANGING ONE MAKES IT CUSTOM",
             Page::Display => "* GPU AND API CHANGES APPLY ON RESTART",
@@ -696,6 +699,10 @@ impl Menu {
             }
         }
 
+        if self.page == Page::Crosshair {
+            self.preview(&mut p, settings, px + PANEL_W + 12.0, py);
+        }
+
         let footer_y = py + panel_h - FOOTER + 12.0;
         p.text(px + 16.0, footer_y, 1.3, TEXT_DIM, "< > CHANGES A VALUE");
         p.text_right(
@@ -705,6 +712,56 @@ impl Menu {
             TEXT_DIM,
             "SAVED ON THE NODE",
         );
+    }
+}
+
+impl Menu {
+    /// The crosshair page's preview: the reticle over three surfaces — open sky,
+    /// sunlit sandstone, a shadowed interior — at a little spread, with the share
+    /// code and the last paste's verdict under it.
+    ///
+    /// Drawn by `Painter::crosshair_at`, the HUD's own reticle, at the HUD's own
+    /// unit, so what this shows is what the match will show.
+    fn preview(&self, p: &mut Painter, settings: &Settings, x: f32, y: f32) {
+        const TILE: f32 = 120.0;
+        const SURFACES: [(&str, [f32; 4]); 3] = [
+            ("SKY", [0.66, 0.80, 0.90, 1.0]),
+            ("SANDSTONE", [0.78, 0.62, 0.40, 1.0]),
+            ("SHADOW", [0.10, 0.11, 0.13, 1.0]),
+        ];
+        let (w, h) = (TILE * 3.0 + 4.0 + 32.0, HEADER + TILE + 74.0);
+        let x = x.min(p.width() - w - 8.0).max(8.0);
+        p.rect(x, y, w, h, PANEL_BG);
+        p.rect(x, y, w, 2.0, ACCENT);
+        p.text(x + 16.0, y + 18.0, 2.0, TEXT, "PREVIEW");
+        let unit = crate::crosshair::hud_unit(p.height() as f64, settings.video.hud_scale as f64);
+        for (i, (label, color)) in SURFACES.iter().enumerate() {
+            let tx = x + 16.0 + i as f32 * (TILE + 2.0);
+            let ty = y + HEADER - 12.0;
+            p.rect(tx, ty, TILE, TILE, *color);
+            p.text(tx + 6.0, ty + TILE - 14.0, 1.1, TEXT_DIM, label);
+            p.crosshair_at(
+                tx + TILE / 2.0,
+                ty + TILE / 2.0,
+                &settings.crosshair,
+                0.012,
+                unit as f32,
+                false,
+                false,
+            );
+        }
+        let code = crate::crosshair::encode(settings.crosshair);
+        let below = y + HEADER - 12.0 + TILE + 14.0;
+        p.text(x + 16.0, below, 1.5, ACCENT, &code);
+        if let Some((note, ok)) = &self.note {
+            p.text(
+                x + 16.0,
+                below + 22.0,
+                1.2,
+                if *ok { TEXT_DIM } else { [0.97, 0.32, 0.28, 0.95] },
+                note,
+            );
+        }
     }
 }
 
@@ -731,37 +788,75 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         | Action::Quit
         | Action::Bind(_)
         | Action::ResetKeys => vec![],
+        // The app owns the clipboard.
+        Action::CrosshairPaste | Action::CrosshairCopy => vec![],
+        Action::CrosshairPreset => {
+            let presets = crate::crosshair::PRESETS;
+            let code = crate::crosshair::encode(settings.crosshair);
+            let at = presets.iter().position(|(_, p)| *p == code);
+            let next = match at {
+                Some(i) => cycle(&[0, 1, 2, 3, 4, 5], i, step),
+                None => 0,
+            };
+            if let Ok(spec) = crate::crosshair::decode(presets[next].1) {
+                set_crosshair(settings, spec);
+            }
+            crate::crosshair::KEYS.to_vec()
+        }
         Action::CrosshairStyle => {
             settings.crosshair.style = cycle(&CrosshairStyle::ALL, settings.crosshair.style, step);
             vec![KEY_CROSSHAIR_STYLE]
         }
         Action::CrosshairColor => {
-            settings.crosshair.color = cycle(&CrosshairColor::ALL, settings.crosshair.color, step);
+            // A custom colour (pasted, or set in the browser) steps onto the
+            // named ones; there is no hex field to type into here.
+            settings.crosshair.color =
+                cycle(&CrosshairColor::NAMED, settings.crosshair.color, step);
+            settings.crosshair = settings.crosshair.normalized();
             vec![KEY_CROSSHAIR_COLOR]
         }
         Action::CrosshairSize => {
-            settings.crosshair.size = step_value(settings.crosshair.size, step, 0.5, 1.0, 12.0);
+            settings.crosshair.size = step_f64(settings.crosshair.size, step, 0.5, 1.0, 12.0);
             vec![KEY_CROSSHAIR_SIZE]
         }
         Action::CrosshairGap => {
-            settings.crosshair.gap = step_value(settings.crosshair.gap, step, 1.0, 0.0, 20.0);
+            settings.crosshair.gap = step_f64(settings.crosshair.gap, step, 0.5, -5.0, 20.0);
             vec![KEY_CROSSHAIR_GAP]
         }
         Action::CrosshairThickness => {
             settings.crosshair.thickness =
-                step_value(settings.crosshair.thickness, step, 0.2, 0.2, 3.0);
+                step_f64(settings.crosshair.thickness, step, 0.1, 0.2, 3.0);
             vec![KEY_CROSSHAIR_THICKNESS]
         }
         Action::CrosshairOutline => {
-            settings.crosshair.outline = !settings.crosshair.outline;
-            vec![KEY_CROSSHAIR_OUTLINE]
+            settings.crosshair.outline = if settings.crosshair.outline > 0.0 {
+                0.0
+            } else {
+                settings.crosshair_outline.max(0.1)
+            };
+            vec![KEY_CROSSHAIR_OUTLINE, KEY_CROSSHAIR_OUTLINE_THICKNESS]
+        }
+        Action::CrosshairOutlineWidth => {
+            settings.crosshair_outline = step_f64(settings.crosshair_outline, step, 0.1, 0.1, 2.0);
+            if settings.crosshair.outline > 0.0 {
+                settings.crosshair.outline = settings.crosshair_outline;
+            }
+            vec![KEY_CROSSHAIR_OUTLINE_THICKNESS]
         }
         Action::CrosshairDot => {
             settings.crosshair.dot = !settings.crosshair.dot;
             vec![KEY_CROSSHAIR_DOT]
         }
+        Action::CrosshairTStyle => {
+            settings.crosshair.t_style = !settings.crosshair.t_style;
+            vec![KEY_CROSSHAIR_T_STYLE]
+        }
+        Action::CrosshairDynamic => {
+            settings.crosshair.dynamic = !settings.crosshair.dynamic;
+            vec![KEY_CROSSHAIR_DYNAMIC]
+        }
         Action::CrosshairAlpha => {
-            settings.crosshair.alpha = step_value(settings.crosshair.alpha, step, 0.05, 0.15, 1.0);
+            settings.crosshair.alpha = step_f64(settings.crosshair.alpha, step, 0.05, 0.15, 1.0);
             vec![KEY_CROSSHAIR_ALPHA]
         }
         Action::Fullscreen => {
@@ -1002,6 +1097,26 @@ fn cycle<T: Copy + PartialEq>(all: &[T], current: T, step: i32) -> T {
     let at = all.iter().position(|v| *v == current).unwrap_or(0) as i32;
     let next = ((at + step.signum()) % n + n) % n;
     all[next as usize]
+}
+
+/// Replace the whole crosshair — a preset or a pasted code — keeping the
+/// outline width in step so the width row shows what is drawn.
+pub fn set_crosshair(settings: &mut Settings, spec: crate::settings::Crosshair) {
+    let spec = spec.normalized();
+    if spec.outline > 0.0 {
+        settings.crosshair_outline = spec.outline;
+    }
+    settings.crosshair = spec;
+}
+
+/// `step_value` for the crosshair's f64 fields, normalized onto the spec's own
+/// quanta so the menu can never hold a value a share code cannot carry.
+fn step_f64(current: f64, step: i32, size: f64, min: f64, max: f64) -> f64 {
+    let next = current + size * step.signum() as f64;
+    let snapped = ((next / size) + 0.5).floor() * size;
+    // Through the quantizer: 0.1 * 7 is 0.7000000000000001, 7 / 10 is 0.7.
+    let k = (1.0 / size).round();
+    ((snapped.clamp(min, max) * k + 0.5).floor()) / k
 }
 
 /// Step a number and clamp it. Rounded to the step, so a value nudged up and
@@ -1270,5 +1385,27 @@ mod tests {
         let mut out = Vec::new();
         m.build(&s, &Controls::default(), false, 1920.0, 1080.0, &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_preset_replaces_the_whole_crosshair_and_saves_every_row() {
+        let (_, mut s) = menu();
+        let keys = apply(Action::CrosshairPreset, 1, &mut s);
+        assert_eq!(keys, crate::crosshair::KEYS.to_vec());
+        // The default is the first preset, so one step is the second.
+        let code = crate::crosshair::encode(s.crosshair);
+        assert_eq!(code, crate::crosshair::PRESETS[1].1);
+    }
+
+    #[test]
+    fn turning_the_outline_off_and_on_keeps_its_width() {
+        let (_, mut s) = menu();
+        apply(Action::CrosshairOutlineWidth, 1, &mut s);
+        let width = s.crosshair.outline;
+        assert!((width - 0.4).abs() < 1e-9);
+        apply(Action::CrosshairOutline, 1, &mut s);
+        assert_eq!(s.crosshair.outline, 0.0);
+        apply(Action::CrosshairOutline, 1, &mut s);
+        assert_eq!(s.crosshair.outline, width);
     }
 }

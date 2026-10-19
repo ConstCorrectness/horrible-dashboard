@@ -22,6 +22,7 @@ import type { Invitee, MapSummary, MatchInvite } from './api';
 import type { Bindings } from './controls';
 import {
   ControlsPanel,
+  CrosshairPanel,
   FriendsPanel,
   ServerBrowserPanel,
   SettingsPanel,
@@ -29,10 +30,11 @@ import {
 } from './menu-panels';
 import type { MatchPeer } from './session';
 
-export type MenuTab = 'settings' | 'servers' | 'friends' | 'controls';
+export type MenuTab = 'settings' | 'crosshair' | 'servers' | 'friends' | 'controls';
 
 const TABS: { id: MenuTab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
+  { id: 'crosshair', label: 'Crosshair' },
   { id: 'servers', label: 'Servers' },
   { id: 'friends', label: 'Friends' },
   { id: 'controls', label: 'Controls' },
@@ -91,7 +93,7 @@ export interface MatchActions {
   onToggleCleanView: () => void;
 }
 
-const STANDALONE_TABS: MenuTab[] = ['settings', 'controls'];
+const STANDALONE_TABS: MenuTab[] = ['settings', 'crosshair', 'controls'];
 
 export function GameMenu(props: GameMenuProps) {
   const [tab, setTab] = useState<MenuTab>('settings');
@@ -180,6 +182,7 @@ export function GameMenu(props: GameMenuProps) {
               onDismiss={props.onDismissInvite}
             />
           )}
+          {tab === 'crosshair' && <CrosshairPanel />}
           {tab === 'controls' && (
             <ControlsPanel bindings={props.controls} onChange={props.onControls} />
           )}

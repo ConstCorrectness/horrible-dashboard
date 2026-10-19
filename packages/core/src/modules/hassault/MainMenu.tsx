@@ -34,6 +34,7 @@ import { useNativeLaunch } from './native-launch';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
+  CrosshairPanel,
   FriendsPanel,
   ServerBrowserPanel,
   SettingsPanel,
@@ -50,6 +51,7 @@ export type MenuSection =
   | 'servers'
   | 'friends'
   | 'settings'
+  | 'crosshair'
   | 'controls';
 
 /**
@@ -67,6 +69,7 @@ const SECTIONS: { id: MenuSection; label: string }[] = [
   { id: 'servers', label: 'Servers' },
   { id: 'friends', label: 'Friends' },
   { id: 'settings', label: 'Settings' },
+  { id: 'crosshair', label: 'Crosshair' },
   { id: 'controls', label: 'Controls' },
 ];
 
@@ -224,6 +227,7 @@ export function MainMenu(props: MainMenuProps) {
               <NativeClientRow {...props} />
             </>
           )}
+          {section === 'crosshair' && <CrosshairPanel />}
           {section === 'controls' && (
             <ControlsPanel bindings={props.controls} onChange={props.onControls} />
           )}

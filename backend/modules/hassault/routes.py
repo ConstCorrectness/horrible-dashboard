@@ -36,6 +36,7 @@ from backend.modules.hassault import (
     modes,
     pickups,
     ranked,
+    settings_schema,
     textures,
     weapons,
 )
@@ -665,6 +666,19 @@ async def get_lore() -> LoreOut:
     cannot move a rating.
     """
     return LoreOut(**lore.to_dict())
+
+
+@router.get("/settings/schema")
+async def get_settings_schema() -> dict:
+    """Every `hassault.*` setting: type, range, default and scope.
+
+    The one place the ranges are written down. The native client clamps every
+    key it reads to these, and `settings-vectors.json` checks those clamps and
+    the pane manifest's types and defaults against this table rather than
+    against each other. `scope` is what account sync will key on: only
+    `account` rows follow a player between machines.
+    """
+    return settings_schema.to_dict()
 
 
 @router.get("/invitees", response_model=list[Invitee])

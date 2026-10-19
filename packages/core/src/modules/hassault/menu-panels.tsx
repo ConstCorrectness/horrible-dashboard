@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { setSetting, useSetting } from '../../settings';
+import { isSettingOverridden, setSetting, useSetting } from '../../settings';
 import { addFriend, searchDirectory, type DirectoryEntry } from '../social/api';
 import { browseServers, ONLINE_HOST, type BrowseMatch, type MapSummary } from './api';
 import {
@@ -45,6 +45,26 @@ import {
   type GraphicsTier,
   type TierSpec,
 } from './graphics';
+import {
+  CROSSHAIR_KEYS,
+  COLOR_NAMES,
+  CUSTOM,
+  DEFAULT_SPEC,
+  NAMED_COLORS,
+  PRESETS,
+  STYLES,
+  decodeCrosshair,
+  encodeCrosshair,
+  hexRgb,
+  hudUnit,
+  coneGapPx,
+  rgbHex,
+  settingsFromSpec,
+  type CrosshairSpec,
+  type CrosshairStyle,
+  type DecodeFailure,
+} from './crosshair';
+import { CrosshairShapes, useCrosshairSpec } from './crosshair-view';
 import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 import type { MatchPeer } from './session';
 
@@ -64,7 +84,15 @@ const LAN_KEY = 'network.enableLanDiscovery';
 export const SENSITIVITY_KEY = 'hassault.sensitivity';
 export const CONTROLS_KEY = 'hassault.controls';
 export const VOLUME_KEY = 'hassault.volume';
-export const FOV_KEY = 'hassault.fov';
+/**
+ * Field of view: one row for both clients (`settings::KEY_FOV` natively), 60–110.
+ * The pane used to keep its own `hassault.fov`; `useFov` still reads that when
+ * this row has never been saved, and saves it here the first time it does.
+ */
+export const FOV_KEY = 'hassault.video.fov';
+export const LEGACY_FOV_KEY = 'hassault.fov';
+/** The HUD scale, shared with the native client: the crosshair's unit uses it. */
+export const HUD_SCALE_KEY = 'hassault.video.hudScale';
 export const CROUCH_TOGGLE_KEY = 'hassault.crouchToggle';
 /** Lobby voice: closed mic except while the Push to talk key is held. */
 export const PUSH_TO_TALK_KEY = 'hassault.voice.pushToTalk';
@@ -121,6 +149,31 @@ const SENS_MAX = 4;
  */
 export const FOV_MIN = 60;
 export const FOV_MAX = 110;
+
+export function clampFov(value: unknown): number {
+  const v = typeof value === 'number' && Number.isFinite(value) ? value : 75;
+  return Math.max(FOV_MIN, Math.min(FOV_MAX, v));
+}
+
+/** The shared row when it was saved, else the pane's old row, else the default. */
+export function resolveFov(current: unknown, saved: boolean, legacy: unknown): number {
+  if (!saved && typeof legacy === 'number' && Number.isFinite(legacy)) return clampFov(legacy);
+  return clampFov(current);
+}
+
+/** The field of view, migrating the pane's old `hassault.fov` the first time it is read. */
+export function useFov(): number {
+  const current = useSetting<number>(FOV_KEY);
+  const legacy = useSetting<number>(LEGACY_FOV_KEY);
+  const saved = isSettingOverridden(FOV_KEY);
+  const fov = resolveFov(current, saved, legacy);
+  useEffect(() => {
+    if (!saved && typeof legacy === 'number' && Number.isFinite(legacy)) {
+      void setSetting(FOV_KEY, clampFov(legacy)).catch(() => {});
+    }
+  }, [saved, legacy]);
+  return fov;
+}
 
 /**
  * A multiplier on the map's exposure, shared with the native client — the same
@@ -406,7 +459,7 @@ export function GraphicsRows() {
  */
 export function SettingsPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
-  const fov = useSetting<number>(FOV_KEY) ?? 75;
+  const fov = useFov();
   const brightness = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
@@ -580,6 +633,482 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
     </div>
   );
 }
+
+// ---- the crosshair generator -------------------------------------------------
+
+const DECODE_MESSAGES: Record<DecodeFailure, string> = {
+  prefix: 'Not a crosshair code: one starts with HXC1-.',
+  char: 'Contains a character no code uses.',
+  short: 'Too short: part of the code is missing.',
+  crc: 'Checksum mismatch: a character was mistyped or dropped.',
+  version: 'Made by a newer version of the game.',
+};
+
+const STYLE_LABELS: Record<CrosshairStyle, string> = {
+  cross: 'Cross',
+  crossDot: 'Cross + pip',
+  dot: 'Dot',
+  circle: 'Ring',
+};
+
+/**
+ * Three surfaces to judge contrast against, standing in for map stills: open
+ * sky, sunlit sandstone and a shadowed interior. A reticle that only works on
+ * one of them is the thing this page exists to catch.
+ *
+ * Literal colours on purpose, and the same in every theme: they are pictures of
+ * map pixels, which do not change with the app's theme either.
+ */
+const BACKDROPS: { label: string; background: string }[] = [
+  { label: 'SKY', background: 'linear-gradient(180deg, rgb(156,195,228) 0%, rgb(207,224,236) 70%, rgb(185,162,124) 100%)' },
+  {
+    label: 'SANDSTONE',
+    background:
+      'repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0 1px, transparent 1px 22px), linear-gradient(160deg, rgb(217,185,138) 0%, rgb(196,154,99) 55%, rgb(167,125,75) 100%)',
+  },
+  { label: 'SHADOW', background: 'linear-gradient(200deg, rgb(58,62,68) 0%, rgb(29,32,36) 60%, rgb(18,20,22) 100%)' },
+];
+
+/** The preview's reference height: the reticle as it draws at 1080p. */
+const PREVIEW_HEIGHT = 1080;
+
+/** Keyframes the generator needs; inline styles cannot declare them. */
+const GENERATOR_CSS = `
+@keyframes hx-xh-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes hx-xh-flash { from { background: rgba(110,168,254,0.28); } to { background: rgba(0,0,0,0.25); } }
+`;
+
+/** Write only the rows `next` changes, so a slider drag is one PUT per frame, not ten. */
+function writeSpec(current: CrosshairSpec, next: CrosshairSpec): void {
+  const before = settingsFromSpec(current);
+  for (const [key, value] of Object.entries(settingsFromSpec(next))) {
+    if (before[key] !== value) void setSetting(key, value).catch(() => {});
+  }
+}
+
+/**
+ * The crosshair generator: every spec v1 field, a live preview against three
+ * surfaces, and the `HXC1-` share code to copy out or paste in.
+ *
+ * Applying a code writes the same rows the controls below write, so a pasted
+ * crosshair is the player's crosshair in the native client too — it reads the
+ * same bag and draws the same `crosshairRects`.
+ */
+export function CrosshairPanel() {
+  const spec = useCrosshairSpec();
+  const hudScale = useSetting<number>(HUD_SCALE_KEY) ?? 1;
+  const outlineWidth = useSetting<number>(CROSSHAIR_KEYS.outlineThickness) ?? DEFAULT_SPEC.outline;
+  const [paste, setPaste] = useState('');
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [previewCone, setPreviewCone] = useState(0.012);
+  const [showMarker, setShowMarker] = useState(false);
+  const code = encodeCrosshair(spec);
+  const unit = hudUnit(PREVIEW_HEIGHT, hudScale);
+  const set = (patch: Partial<CrosshairSpec>) => writeSpec(spec, { ...spec, ...patch });
+
+  const applyCode = (text: string) => {
+    const result = decodeCrosshair(text);
+    if (!result.ok) {
+      setNote({ ok: false, text: DECODE_MESSAGES[result.reason] });
+      return;
+    }
+    writeSpec(spec, result.spec);
+    setPaste('');
+    setNote({ ok: true, text: 'Applied.' });
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setNote({ ok: true, text: 'Copied to the clipboard.' });
+    } catch {
+      // A sandboxed pane can refuse the clipboard; the code is selectable.
+      setNote({ ok: false, text: 'The clipboard refused. Select the code and copy it.' });
+    }
+  };
+
+  return (
+    <div style={styles.rows} data-testid="crosshair-generator">
+      <style>{GENERATOR_CSS}</style>
+      <div style={xh.top}>
+        <div style={xh.previewGrid}>
+          {BACKDROPS.map((b, i) => (
+            <div
+              key={b.label}
+              style={{ ...xh.tile, background: b.background, animationDelay: `${i * 40}ms` }}
+            >
+              <div style={xh.gridOverlay} />
+              <div style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                <CrosshairShapes
+                  spec={spec}
+                  coneGap={coneGapPx(previewCone, unit)}
+                  unit={unit}
+                  hit={showMarker}
+                />
+              </div>
+              <span style={xh.tileLabel}>{b.label}</span>
+            </div>
+          ))}
+        </div>
+        <div style={xh.codeColumn}>
+          <div style={xh.heading}>Share code</div>
+          <input
+            key={code}
+            type="text"
+            readOnly
+            value={code}
+            aria-label="Crosshair share code"
+            onFocus={(e) => e.currentTarget.select()}
+            style={xh.code}
+          />
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <button type="button" onClick={() => void copy()}>
+              Copy
+            </button>
+          </div>
+          <div style={xh.heading}>Paste a code</div>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <input
+              type="text"
+              value={paste}
+              placeholder="HXC1-…"
+              aria-label="Paste a crosshair code"
+              spellCheck={false}
+              onChange={(e) => setPaste(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') applyCode(paste);
+              }}
+              style={xh.pasteInput}
+            />
+            <button type="button" onClick={() => applyCode(paste)} disabled={!paste.trim()}>
+              Apply
+            </button>
+          </div>
+          {note && (
+            <div style={{ ...xh.meta, color: note.ok ? 'var(--text-dim)' : 'var(--danger)' }}>
+              {note.text}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={xh.heading}>Presets</div>
+      <div style={xh.presets}>
+        {Object.entries(PRESETS).map(([name, presetCode], i) => {
+          const decoded = decodeCrosshair(presetCode);
+          if (!decoded.ok) return null;
+          const active = presetCode === code;
+          return (
+            <button
+              key={name}
+              type="button"
+              className="hx-xh-preset"
+              aria-pressed={active}
+              onClick={() => applyCode(presetCode)}
+              style={{
+                ...xh.preset,
+                ...(active ? xh.presetActive : null),
+                animationDelay: `${Math.min(i, 6) * 35}ms`,
+              }}
+            >
+              <span style={xh.presetSwatch}>
+                <span style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                  <CrosshairShapes spec={decoded.spec} coneGap={0} unit={2} />
+                </span>
+              </span>
+              <span style={xh.presetName}>{name}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={xh.heading}>Shape</div>
+      <ChoiceRow
+        label="Style"
+        hint="The ring sits at the spread radius: the honest picture of a cone."
+        value={spec.style}
+        options={STYLES.map((value) => ({ value, label: STYLE_LABELS[value] }))}
+        onPick={(style) => set({ style })}
+      />
+      <Slider
+        label="Size"
+        hint="Arm length, scaled with the window."
+        value={spec.size}
+        min={1}
+        max={12}
+        step={0.5}
+        suffix=""
+        fallback={DEFAULT_SPEC.size}
+        onChange={(size) => set({ size })}
+      />
+      <Slider
+        label="Gap"
+        hint="Below zero the arms cross the centre."
+        value={spec.gap}
+        min={-5}
+        max={20}
+        step={0.5}
+        suffix=""
+        fallback={DEFAULT_SPEC.gap}
+        onChange={(gap) => set({ gap })}
+      />
+      <Slider
+        label="Thickness"
+        hint="Line width."
+        value={spec.thickness}
+        min={0.2}
+        max={3}
+        step={0.1}
+        suffix=""
+        fallback={DEFAULT_SPEC.thickness}
+        onChange={(thickness) => set({ thickness })}
+      />
+      <ChoiceRow
+        label="Centre dot"
+        hint="Independent of the style."
+        value={spec.dot}
+        options={ON_OFF}
+        onPick={(dot) => set({ dot })}
+      />
+      <ChoiceRow
+        label="T-style"
+        hint="Drops the top arm."
+        value={spec.tStyle}
+        options={ON_OFF}
+        onPick={(tStyle) => set({ tStyle })}
+      />
+      <ChoiceRow
+        label="Dynamic"
+        hint="Opens with the weapon's cone. Off changes what you see, never where shots land."
+        value={spec.dynamic}
+        options={ON_OFF}
+        onPick={(dynamic) => set({ dynamic })}
+      />
+
+      <div style={xh.heading}>Colour</div>
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Colour</span>
+          <span style={styles.dim}>
+            Any hue, but not dark: a custom colour below the luma floor is lifted towards white.
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {COLOR_NAMES.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className="hx-xh-swatch"
+              aria-label={name}
+              aria-pressed={spec.color === name}
+              title={name}
+              onClick={() => set({ color: name, rgb: [...NAMED_COLORS[name]] })}
+              style={{
+                ...xh.swatch,
+                background: `rgb(${NAMED_COLORS[name].join(',')})`,
+                ...(spec.color === name ? xh.swatchActive : null),
+              }}
+            />
+          ))}
+          <input
+            type="color"
+            aria-label="Custom colour"
+            value={rgbHex(spec.rgb)}
+            onChange={(e) => {
+              const rgb = hexRgb(e.target.value);
+              if (rgb) set({ color: CUSTOM, rgb });
+            }}
+            style={{
+              ...xh.colorInput,
+              ...(spec.color === CUSTOM ? xh.swatchActive : null),
+            }}
+          />
+          <code style={xh.meta}>{spec.color === CUSTOM ? rgbHex(spec.rgb) : spec.color}</code>
+        </div>
+      </div>
+      <Slider
+        label="Opacity"
+        hint="The outline fades with it."
+        value={spec.alpha}
+        min={0.15}
+        max={1}
+        step={0.01}
+        suffix=""
+        fallback={DEFAULT_SPEC.alpha}
+        onChange={(alpha) => set({ alpha })}
+      />
+      <ChoiceRow
+        label="Outline"
+        hint="A dark border so one colour works on every wall."
+        value={spec.outline > 0}
+        options={ON_OFF}
+        onPick={(on) => set({ outline: on ? Math.max(outlineWidth, 0.1) : 0 })}
+      />
+      <Slider
+        label="Outline thickness"
+        hint="Kept when the outline is off."
+        value={Math.max(0.1, outlineWidth)}
+        min={0.1}
+        max={2}
+        step={0.1}
+        suffix=""
+        fallback={DEFAULT_SPEC.outline}
+        onChange={(v) => {
+          void setSetting(CROSSHAIR_KEYS.outlineThickness, v).catch(() => {});
+          if (spec.outline > 0) set({ outline: v });
+        }}
+      />
+
+      <div style={xh.heading}>Preview</div>
+      <Slider
+        label="Preview spread"
+        hint="A cone to open a dynamic crosshair by. Only this page."
+        value={previewCone}
+        min={0}
+        max={0.06}
+        step={0.002}
+        suffix=""
+        fallback={0.012}
+        onChange={setPreviewCone}
+      />
+      <ChoiceRow
+        label="Hitmarker"
+        hint="Drawn around the reticle, never instead of it."
+        value={showMarker}
+        options={ON_OFF}
+        onPick={setShowMarker}
+      />
+    </div>
+  );
+}
+
+/** The generator's own styles: structure by grid and edge, not glow. */
+const xh: Record<string, React.CSSProperties> = {
+  top: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '0.8rem',
+    borderTop: '2px solid var(--accent)',
+    paddingTop: '0.7rem',
+  },
+  previewGrid: {
+    flex: '2 1 300px',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 2,
+    minWidth: 0,
+  },
+  tile: {
+    position: 'relative',
+    height: 150,
+    overflow: 'hidden',
+    clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)',
+    animation: 'hx-xh-in 220ms ease-out both',
+  },
+  gridOverlay: {
+    position: 'absolute',
+    inset: 0,
+    backgroundImage:
+      'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+    backgroundSize: '16px 16px',
+    pointerEvents: 'none',
+  },
+  tileLabel: {
+    position: 'absolute',
+    left: 6,
+    bottom: 4,
+    fontFamily: 'var(--font-mono, monospace)',
+    fontSize: '0.62rem',
+    letterSpacing: '0.14em',
+    color: 'rgba(255,255,255,0.75)',
+    textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+  },
+  codeColumn: {
+    flex: '1 1 220px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.35rem',
+    minWidth: 0,
+  },
+  heading: {
+    margin: '0.8rem 0 0.25rem',
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    letterSpacing: '0.14em',
+    textTransform: 'uppercase',
+    color: 'var(--text)',
+  },
+  code: {
+    width: '100%',
+    padding: '0 0.5rem',
+    fontFamily: 'var(--font-mono, monospace)',
+    // Thirty characters that must be readable whole: no extra tracking.
+    fontSize: '0.74rem',
+    color: 'var(--text)',
+    background: 'rgba(0,0,0,0.25)',
+    border: '1px solid var(--border)',
+    borderLeft: '2px solid var(--accent)',
+    animation: 'hx-xh-flash 600ms ease-out',
+  },
+  pasteInput: {
+    flex: 1,
+    minWidth: 0,
+    padding: '0 0.6rem',
+    fontFamily: 'var(--font-mono, monospace)',
+  },
+  meta: {
+    fontFamily: 'var(--font-mono, monospace)',
+    fontSize: '0.72rem',
+    color: 'var(--text-dim)',
+  },
+  presets: { display: 'flex', flexWrap: 'wrap', gap: '0.35rem' },
+  preset: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.45rem',
+    padding: '0.25rem 0.6rem 0.25rem 0.25rem',
+    background: 'rgba(0,0,0,0.2)',
+    border: '1px solid var(--border)',
+    borderTop: '2px solid transparent',
+    color: 'var(--text-dim)',
+    cursor: 'pointer',
+    animation: 'hx-xh-in 200ms ease-out both',
+  },
+  presetActive: {
+    borderTop: '2px solid var(--accent)',
+    color: 'var(--text)',
+  },
+  presetSwatch: {
+    position: 'relative',
+    width: 30,
+    height: 30,
+    background: 'linear-gradient(160deg, rgb(107,111,117), rgb(52,55,59))',
+    flexShrink: 0,
+  },
+  presetName: {
+    fontFamily: 'var(--font-mono, monospace)',
+    fontSize: '0.72rem',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+  },
+  swatch: {
+    width: 22,
+    height: 22,
+    padding: 0,
+    border: '1px solid rgba(0,0,0,0.5)',
+    outline: '1px solid transparent',
+    outlineOffset: 1,
+    cursor: 'pointer',
+  },
+  swatchActive: { outline: '2px solid var(--accent)' },
+  colorInput: {
+    width: 30,
+    padding: '0 2px',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    cursor: 'pointer',
+  },
+};
 
 // ---- the server browser -----------------------------------------------------
 

@@ -35,7 +35,7 @@ use crate::console::{LogLine, Tone};
 use crate::damage::Placed;
 use crate::protocol::{Fx, HitMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
 use crate::radar::{self, Blip, Run};
-use crate::settings::{Crosshair, CrosshairStyle};
+use crate::settings::Crosshair;
 
 /// One overlay vertex: a position already in clip space, and a colour with an
 /// alpha the blend state actually uses.
@@ -980,11 +980,9 @@ impl Hud {
             if !dead && view.magnification > 1.0 {
                 p.scope(u, hit, self.hit_killed, view.magnification);
             } else if !dead {
-                // The browser's `crosshairSpread`, in its units, scaled to this
-                // window's — with the player's own gap as the floor it opens
-                // from.
-                let gap = (view.crosshair.gap + view.spread * 260.0) * u * 0.5;
-                p.crosshair(gap.max(2.0), u, hit, self.hit_killed, &view.crosshair);
+                // `crosshair_rects` in pixels, opened by the served cone —
+                // the same function and fixture the browser draws from.
+                p.crosshair(&view.crosshair, view.spread, u, hit, self.hit_killed);
             }
 
             // Over the crosshair and under everything else: an arrow is read at
@@ -3612,6 +3610,14 @@ impl<'a> Painter<'a> {
         Painter { out, width, height }
     }
 
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
     /// Pixels (top-left origin, y down) to clip space (centre origin, y up).
     fn ndc(&self, x: f32, y: f32) -> [f32; 2] {
         [x / self.width * 2.0 - 1.0, 1.0 - y / self.height * 2.0]
@@ -3716,135 +3722,86 @@ impl<'a> Painter<'a> {
         self.rect(w - band, 0.0, band, h, color);
     }
 
-    /// The crosshair, the hitmarker over it, and the shapes people actually
-    /// play with.
+    /// The crosshair, and the hitmarker around it.
     ///
-    /// Three things here are deliberate and were each wrong first.
+    /// **The geometry is `crosshair::crosshair_rects`**, the function the
+    /// browser's reticle draws from too and that `crosshair-vectors.json` pins to
+    /// the Python reference: a share code is the same rectangles in both clients.
+    /// All this decides is colour by layer — the spec's own for the fill,
+    /// `OUTLINE` for the outline — and how a rect lands on pixels.
     ///
-    /// **Every element is drawn twice**: once in near-black at
-    /// `thick + 2 * outline`, then in the chosen colour on top. A one-colour
-    /// reticle disappears against any surface near its own brightness, and the
-    /// player only finds out by missing. The outline is what makes a single
-    /// colour work on every wall in the game, and it costs six triangles.
+    /// **The marker is drawn *around* the reticle, never instead of it, and
+    /// never by recolouring it.** It used to replace the reticle with an X, and
+    /// then to tint it amber: either way, while spraying into somebody — the
+    /// exact moment aim matters most — the thing you are aiming with changed
+    /// under you roughly ten times a second. The ticks sit outside the arms.
     ///
-    /// **The marker is drawn *around* the reticle rather than replacing it.**
-    /// It used to `return` early with an X in its place, which meant that while
-    /// spraying into somebody — the exact moment aim matters most — the thing
-    /// you are aiming with swapped shape roughly ten times a second. The ticks
-    /// now sit outside the arms, so a hit adds information instead of removing
-    /// the aim.
-    ///
-    /// **The elements are feathered.** This painter has no texture and no MSAA
-    /// on the overlay pass, so an axis-aligned rect an odd number of pixels wide
-    /// lands half on a pixel and reads as a hard, chunky square — which is
-    /// exactly what a "dot" at the default thickness was. `soft_rect` ramps the
-    /// outer half-pixel down, which is enough to make the same shape read as
-    /// deliberate at every size.
-    fn crosshair(&mut self, gap: f32, u: f32, hit: bool, killed: bool, style: &Crosshair) {
-        let color = if killed {
-            RED
-        } else if hit {
-            AMBER
-        } else {
-            style.color.rgba()
-        };
-        let color = [color[0], color[1], color[2], color[3] * style.alpha];
+    /// **The rects are feathered.** This painter has no texture and no MSAA on
+    /// the overlay pass, so an axis-aligned rect at a fractional width lands half
+    /// on a pixel and reads as a hard, chunky square. `soft_rect` ramps the outer
+    /// half-pixel down, which is what the browser's anti-aliasing does for free.
+    fn crosshair(&mut self, spec: &Crosshair, cone: f32, u: f32, hit: bool, killed: bool) {
         let (cx, cy) = (self.width / 2.0, self.height / 2.0);
-        let arm = u * style.size;
-        // No `.max(1.0)`: that snapped every sub-pixel thickness up to a whole
-        // pixel, which is what turned the centre dot into a blocky square at the
-        // default 0.6. `soft_rect` handles thin shapes by feathering instead.
-        let thick = (u * style.thickness).max(0.35);
-        // Scaled with the reticle so the outline neither swamps a small
-        // crosshair nor vanishes on a large one.
-        let grow = if style.outline {
-            (u * 0.3).max(1.0)
-        } else {
-            0.0
-        };
+        self.crosshair_at(cx, cy, spec, cone, u, hit, killed);
+    }
 
-        // Each element is a closure taking its own extra width and colour, so
-        // the outline pass and the fill pass are the same geometry by
-        // construction and cannot drift apart.
-        let dot = |p: &mut Self, g: f32, c: [f32; 4]| {
-            let r = thick + g;
-            p.soft_rect(cx - r, cy - r, r * 2.0, r * 2.0, c);
-        };
-        let arms = |p: &mut Self, g: f32, c: [f32; 4]| {
-            let t = thick + g;
-            let a = arm + g;
-            p.soft_rect(cx - gap - a, cy - t, a, t * 2.0, c);
-            p.soft_rect(cx + gap, cy - t, a, t * 2.0, c);
-            p.soft_rect(cx - t, cy - gap - a, t * 2.0, a, c);
-            p.soft_rect(cx - t, cy + gap, t * 2.0, a, c);
-        };
-        let pip = |p: &mut Self, g: f32, c: [f32; 4]| {
-            let r = thick * 2.0 + g;
-            p.soft_rect(cx - r, cy - r, r * 2.0, r * 2.0, c);
-        };
-
-        // Outline first, fill second: two passes over the same closures rather
-        // than a branch inside each one.
-        let passes: [(f32, [f32; 4]); 2] = [
-            (
-                grow,
-                [OUTLINE[0], OUTLINE[1], OUTLINE[2], OUTLINE[3] * color[3]],
-            ),
-            (0.0, color),
-        ];
-        for (g, c) in passes {
-            if g <= 0.0 && c[3] < color[3] {
-                // The outline pass with outlines off.
-                continue;
-            }
-            match style.style {
-                // The default keeps the centre dot the original always drew: it
-                // is where the shot goes, and the four arms are where it might
-                // go.
-                CrosshairStyle::Cross => {
-                    if style.dot {
-                        dot(self, g, c);
-                    }
-                    arms(self, g, c);
+    /// `crosshair`, centred anywhere — the menu's preview draws the reticle
+    /// through exactly this, so the preview *is* the reticle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn crosshair_at(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        spec: &Crosshair,
+        cone: f32,
+        u: f32,
+        hit: bool,
+        killed: bool,
+    ) {
+        use crate::crosshair::{cone_gap_px, crosshair_rects, Geometry, Layer};
+        let unit = u as f64;
+        let cone_gap = cone_gap_px(cone as f64, unit);
+        let fill = spec.rgba();
+        for shape in crosshair_rects(*spec, cone_gap, unit) {
+            let base = match shape.layer {
+                Layer::Fill => fill,
+                Layer::Outline => OUTLINE,
+            };
+            let color = [base[0], base[1], base[2], shape.alpha as f32];
+            match shape.geometry {
+                Geometry::Rect { x, y, w, h } => {
+                    self.soft_rect(cx + x as f32, cy + y as f32, w as f32, h as f32, color)
                 }
-                CrosshairStyle::CrossDot => {
-                    if style.dot {
-                        dot(self, g, c);
-                    }
-                    arms(self, g, c);
-                    // A second, larger pip so the centre survives a busy
-                    // background, which is the whole reason to pick this over
-                    // the plain cross.
-                    pip(self, g, [c[0], c[1], c[2], c[3] * 0.45]);
-                }
-                CrosshairStyle::Dot => dot(self, g, c),
-                // The honest picture of a cone: a ring *at* the spread radius,
-                // so it grows with the weapon exactly as the arms' gap does.
-                CrosshairStyle::Circle => {
-                    self.ring(cx, cy, (gap - g).max(1.0), gap + thick + g, c);
-                    if style.dot {
-                        dot(self, g, c);
-                    }
-                }
+                Geometry::Ring { r0, r1 } => self.ring(cx, cy, r0 as f32, r1 as f32, color),
             }
         }
 
-        // The marker last and *outside* the arms, so it reads over whatever the
-        // reticle is instead of taking its place.
         if hit {
+            let s = spec.normalized();
+            let open = if s.dynamic { cone_gap } else { 0.0 };
+            let gap = ((s.gap * unit * 0.5 + open).max(0.0)) as f32;
+            let arm = (s.size * unit) as f32;
+            let thick = ((s.thickness * unit).max(0.35) * 2.0) as f32;
+            let grow = if s.outline > 0.0 {
+                (s.outline * unit).max(1.0) as f32
+            } else {
+                0.0
+            };
+            let marker = if killed { RED } else { AMBER };
             let d = std::f32::consts::FRAC_1_SQRT_2;
             let (near, far) = (gap + arm * 0.7, gap + arm * 1.9);
+            let mut passes = vec![(0.0, marker)];
+            if grow > 0.0 {
+                passes.insert(0, (grow, OUTLINE));
+            }
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                for (g, c) in passes {
-                    if g <= 0.0 && c[3] < color[3] {
-                        continue;
-                    }
+                for &(g, c) in &passes {
                     self.line(
                         cx + sx * (near - g) * d,
                         cy + sy * (near - g) * d,
                         cx + sx * (far + g) * d,
                         cy + sy * (far + g) * d,
-                        thick * 2.0 + g * 2.0,
+                        thick + g * 2.0,
                         c,
                     );
                 }
@@ -5353,7 +5310,7 @@ mod tests {
         // wall in the game and one that vanishes on about a third of them.
         let hud = Hud::default();
         let mut bare = Crosshair::default();
-        bare.outline = false;
+        bare.outline = 0.0;
         let outlined = Crosshair::default();
         assert!(
             reticle(&hud, outlined).len() > reticle(&hud, bare).len(),
