@@ -105,5 +105,6 @@ for _path, _handler, _model in (
     ("/textures", node.get_textures, list[TextureOut]),
     ("/drills", node.list_drills, None),
     ("/drills/{drill_id}", node.get_drill, None),
+    ("/settings/schema", node.get_settings_schema, None),
 ):
     router.add_api_route(_path, _handler, methods=["GET"], response_model=_model)

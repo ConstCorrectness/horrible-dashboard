@@ -115,15 +115,18 @@ import {
   clampBrightness,
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
-  FOV_KEY,
+  HUD_SCALE_KEY,
   NATIVE_CLIENT_KEY,
   PUSH_TO_TALK_KEY,
   GRENADE_ARC_KEY,
   grenadeArcAllowed,
   SHOW_HITBOXES_KEY,
   SENSITIVITY_KEY,
+  useFov,
   VOLUME_KEY,
 } from './menu-panels';
+import { coneGapPx, hudUnit } from './crosshair';
+import { CrosshairShapes, useCrosshairSpec } from './crosshair-view';
 import type { ItemsResponse } from './api';
 import type {
   NoiseEvent,
@@ -646,7 +649,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     lobbyVoice.setPushToTalk(pushToTalk);
   }, [pushToTalk]);
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
-  const fov = useSetting<number>(FOV_KEY) ?? 75;
+  const fov = useFov();
   // A ref the render loop reads, so moving the slider mid-match applies on the
   // next frame without rebuilding the scene.
   const brightnessRef = useRef(1);
@@ -4090,8 +4093,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const showHit = now - flash.hit < FLASH_MS;
   const showKilled = now - flash.killed < FLASH_MS * 2;
   const showHurt = now - flash.hurt < FLASH_MS * 2;
-  const crosshairGap =
-    shotsRef.current?.crosshairSpread({ speed: hud.speed, isAirborne: !hud.onGround }) ?? 4;
+  const crosshairCone = shotsRef.current?.crosshairCone() ?? 0;
   const magnification = shotsRef.current?.magnification() ?? 1;
 
   return (
@@ -4752,7 +4754,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             {scoped > 0 ? (
               <ScopeOverlay magnification={magnification} hit={showHit} killed={showKilled} />
             ) : (
-              <Crosshair gap={crosshairGap} hit={showHit} killed={showKilled} />
+              <Crosshair cone={crosshairCone} hit={showHit} killed={showKilled} />
             )}
             <CrossfireKillBadges
               badge={killBadge}
@@ -5360,41 +5362,44 @@ function ScopeOverlay({
   );
 }
 
-function Crosshair({ gap, hit, killed }: { gap: number; hit: boolean; killed: boolean }) {
-  const color = killed ? '#ff6b6b' : hit ? '#ffd166' : 'rgba(255,255,255,0.8)';
-  const arm = 6;
-  const ticks = [
-    { left: -gap - arm, top: -1, width: arm, height: 2 },
-    { left: gap, top: -1, width: arm, height: 2 },
-    { left: -1, top: -gap - arm, width: 2, height: arm },
-    { left: -1, top: gap, width: 2, height: arm },
-  ];
+/**
+ * The player's reticle: spec v1 from the settings bag, drawn by the same
+ * `crosshairRects` the native HUD draws (`crosshair-vectors.json` pins the two).
+ *
+ * The HUD unit comes from the height of the game view, exactly as the native
+ * client's comes from its window — so a share code is the same size in both.
+ * The hitmarker is its own layer around the reticle, never a recolour of it.
+ */
+function Crosshair({ cone, hit, killed }: { cone: number; hit: boolean; killed: boolean }) {
+  const spec = useCrosshairSpec();
+  const hudScale = useSetting<number>(HUD_SCALE_KEY) ?? 1;
+  const anchor = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(() =>
+    typeof window === 'undefined' ? 1080 : window.innerHeight,
+  );
+  useEffect(() => {
+    const host = anchor.current?.parentElement;
+    if (!host) return;
+    const measure = () => setHeight(host.clientHeight || window.innerHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+  const unit = hudUnit(height, hudScale);
   return (
     <div
-      style={{
-        position: 'absolute',
-        left: '50%',
-        top: '50%',
-        pointerEvents: 'none',
-        // Hitmarkers rotate the ticks into an X, which reads instantly and needs
-        // no second element to fade in and out.
-        transform: hit ? 'rotate(45deg)' : undefined,
-      }}
+      ref={anchor}
+      style={{ position: 'absolute', left: '50%', top: '50%', pointerEvents: 'none' }}
     >
-      <div
-        style={{
-          position: 'absolute',
-          left: -1.5,
-          top: -1.5,
-          width: 3,
-          height: 3,
-          borderRadius: '50%',
-          background: color,
-        }}
+      <CrosshairShapes
+        spec={spec}
+        coneGap={coneGapPx(cone, unit)}
+        unit={unit}
+        hit={hit}
+        killed={killed}
       />
-      {ticks.map((t, i) => (
-        <div key={i} style={{ position: 'absolute', background: color, ...t }} />
-      ))}
     </div>
   );
 }

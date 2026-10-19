@@ -36,6 +36,9 @@ pub const KEY_RENDER_SCALE: &str = "hassault.video.renderScale";
 pub const KEY_QUALITY: &str = "hassault.video.quality";
 pub const KEY_VSYNC: &str = "hassault.video.vsync";
 pub const KEY_FOV: &str = "hassault.video.fov";
+/// The browser pane's own FOV row before both clients shared `KEY_FOV`. Read
+/// only when `KEY_FOV` is absent, so a player who set it there keeps it here.
+pub const KEY_LEGACY_FOV: &str = "hassault.fov";
 /// The old on/off anti-aliasing row. Still written (as `msaa > 1`) and read when
 /// `KEY_MSAA` is absent, so a bag saved before the count existed keeps its choice.
 pub const KEY_ANTIALIAS: &str = "hassault.video.antialias";
@@ -57,14 +60,15 @@ pub const KEY_GPU_BACKEND: &str = "hassault.video.backend";
 pub const KEY_GPU_POWER: &str = "hassault.video.powerPreference";
 pub const KEY_SHADOWS: &str = "hassault.video.shadows";
 pub const KEY_FPS_LIMIT: &str = "hassault.video.fpsLimit";
-pub const KEY_CROSSHAIR_STYLE: &str = "hassault.crosshair.style";
-pub const KEY_CROSSHAIR_SIZE: &str = "hassault.crosshair.size";
-pub const KEY_CROSSHAIR_GAP: &str = "hassault.crosshair.gap";
-pub const KEY_CROSSHAIR_THICKNESS: &str = "hassault.crosshair.thickness";
-pub const KEY_CROSSHAIR_COLOR: &str = "hassault.crosshair.color";
-pub const KEY_CROSSHAIR_OUTLINE: &str = "hassault.crosshair.outline";
-pub const KEY_CROSSHAIR_DOT: &str = "hassault.crosshair.dot";
-pub const KEY_CROSSHAIR_ALPHA: &str = "hassault.crosshair.alpha";
+// The crosshair's rows are spec v1's, declared once in `crosshair.rs`.
+pub use crate::crosshair::{
+    KEY_ALPHA as KEY_CROSSHAIR_ALPHA, KEY_COLOR as KEY_CROSSHAIR_COLOR,
+    KEY_DOT as KEY_CROSSHAIR_DOT, KEY_DYNAMIC as KEY_CROSSHAIR_DYNAMIC,
+    KEY_GAP as KEY_CROSSHAIR_GAP, KEY_OUTLINE as KEY_CROSSHAIR_OUTLINE,
+    KEY_OUTLINE_THICKNESS as KEY_CROSSHAIR_OUTLINE_THICKNESS, KEY_SIZE as KEY_CROSSHAIR_SIZE,
+    KEY_STYLE as KEY_CROSSHAIR_STYLE, KEY_THICKNESS as KEY_CROSSHAIR_THICKNESS,
+    KEY_T_STYLE as KEY_CROSSHAIR_T_STYLE,
+};
 pub const KEY_HUD_SCALE: &str = "hassault.video.hudScale";
 pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
 /// `GRENADE_ARC_KEY` in the pane's `menu-panels.tsx`.
@@ -308,182 +312,17 @@ impl ShadowLevel {
         }
     }
 
-    fn parse(s: &str) -> ShadowLevel {
-        match s {
-            "low" => ShadowLevel::Low,
-            "medium" => ShadowLevel::Medium,
-            "ultra" => ShadowLevel::Ultra,
-            "extreme" => ShadowLevel::Extreme,
-            _ => ShadowLevel::High,
-        }
-    }
-}
-/// Crosshair shapes. Deliberately few: this is a reticle, not a drawing program,
-/// and every one of these is a shape people actually play with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CrosshairStyle {
-    /// Four ticks with a gap — the default, and the one that shows spread.
-    #[default]
-    Cross,
-    /// Four ticks and a centre dot.
-    CrossDot,
-    /// A dot alone. The smallest thing that still says where the shot goes.
-    Dot,
-    /// A ring at the spread radius, which is the honest picture of a cone.
-    Circle,
-}
-
-impl CrosshairStyle {
-    pub const ALL: [CrosshairStyle; 4] = [
-        CrosshairStyle::Cross,
-        CrosshairStyle::CrossDot,
-        CrosshairStyle::Dot,
-        CrosshairStyle::Circle,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            CrosshairStyle::Cross => "CROSS",
-            CrosshairStyle::CrossDot => "CROSS + DOT",
-            CrosshairStyle::Dot => "DOT",
-            CrosshairStyle::Circle => "CIRCLE",
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            CrosshairStyle::Cross => "cross",
-            CrosshairStyle::CrossDot => "crossDot",
-            CrosshairStyle::Dot => "dot",
-            CrosshairStyle::Circle => "circle",
-        }
-    }
-
-    pub fn parse(s: &str) -> CrosshairStyle {
-        match s {
-            "crossDot" => CrosshairStyle::CrossDot,
-            "dot" => CrosshairStyle::Dot,
-            "circle" => CrosshairStyle::Circle,
-            _ => CrosshairStyle::Cross,
-        }
+    /// `None` for a name this build does not know, so the reader keeps what the
+    /// quality preset already wrote rather than jumping to one fixed level.
+    fn parse(s: &str) -> Option<ShadowLevel> {
+        ShadowLevel::ALL.into_iter().find(|v| v.key() == s)
     }
 }
 
-/// Named colours rather than a picker.
-///
-/// A hex field in a menu driven by a gamepad-shaped cursor is a bad time, and
-/// the reason people change crosshair colour is contrast against a particular
-/// map — which six well-separated hues cover. They are also all *bright*: a dark
-/// crosshair on a dark map is the one choice that would make the game worse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CrosshairColor {
-    #[default]
-    White,
-    Green,
-    Cyan,
-    Amber,
-    Magenta,
-    Red,
-}
-
-impl CrosshairColor {
-    pub const ALL: [CrosshairColor; 6] = [
-        CrosshairColor::White,
-        CrosshairColor::Green,
-        CrosshairColor::Cyan,
-        CrosshairColor::Amber,
-        CrosshairColor::Magenta,
-        CrosshairColor::Red,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            CrosshairColor::White => "WHITE",
-            CrosshairColor::Green => "GREEN",
-            CrosshairColor::Cyan => "CYAN",
-            CrosshairColor::Amber => "AMBER",
-            CrosshairColor::Magenta => "MAGENTA",
-            CrosshairColor::Red => "RED",
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            CrosshairColor::White => "white",
-            CrosshairColor::Green => "green",
-            CrosshairColor::Cyan => "cyan",
-            CrosshairColor::Amber => "amber",
-            CrosshairColor::Magenta => "magenta",
-            CrosshairColor::Red => "red",
-        }
-    }
-
-    fn parse(s: &str) -> CrosshairColor {
-        match s {
-            "green" => CrosshairColor::Green,
-            "cyan" => CrosshairColor::Cyan,
-            "amber" => CrosshairColor::Amber,
-            "magenta" => CrosshairColor::Magenta,
-            "red" => CrosshairColor::Red,
-            _ => CrosshairColor::White,
-        }
-    }
-
-    pub fn rgba(self) -> [f32; 4] {
-        match self {
-            CrosshairColor::White => [0.92, 0.94, 0.96, 0.9],
-            CrosshairColor::Green => [0.45, 0.95, 0.45, 0.92],
-            CrosshairColor::Cyan => [0.40, 0.90, 0.95, 0.92],
-            CrosshairColor::Amber => [0.97, 0.78, 0.35, 0.92],
-            CrosshairColor::Magenta => [0.95, 0.45, 0.90, 0.92],
-            CrosshairColor::Red => [0.97, 0.35, 0.32, 0.92],
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Crosshair {
-    pub style: CrosshairStyle,
-    /// Arm length in pixels at a 1080p-ish window; scaled with the window like
-    /// the rest of the HUD, so a setting means the same thing on every monitor.
-    pub size: f32,
-    /// Distance from the centre to the inside end of each arm. **This one moves
-    /// on its own too**: the crosshair opens with the weapon's cone, and this is
-    /// the floor it opens from.
-    pub gap: f32,
-    pub thickness: f32,
-    pub color: CrosshairColor,
-    /// A dark border around every element.
-    ///
-    /// On by default, and the one setting here that changes whether the reticle
-    /// *works* rather than how it looks: a single colour is invisible against
-    /// any surface near its own brightness, and the way a player finds that out
-    /// is by missing. Offered as a setting anyway, because somebody running a
-    /// very thin reticle may prefer the cleaner line.
-    pub outline: bool,
-    /// Whether the centre dot is drawn, independent of the style.
-    ///
-    /// Separate from `style` because "cross, no dot" and "cross with dot" were
-    /// two of the four styles, which meant picking a ring cost you the choice.
-    pub dot: bool,
-    /// Overall opacity, 0.15–1.0.
-    pub alpha: f32,
-}
-
-impl Default for Crosshair {
-    fn default() -> Crosshair {
-        Crosshair {
-            style: CrosshairStyle::default(),
-            size: 3.0,
-            gap: 4.0,
-            thickness: 0.6,
-            color: CrosshairColor::default(),
-            outline: true,
-            dot: true,
-            alpha: 1.0,
-        }
-    }
-}
+/// The crosshair is spec v1 (`crosshair.rs`), shared with the browser and
+/// pinned by `crosshair-vectors.json`; these names are what the menu and the HUD
+/// have always called its parts.
+pub use crate::crosshair::{Color as CrosshairColor, Spec as Crosshair, Style as CrosshairStyle};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Video {
@@ -692,6 +531,10 @@ pub fn snap<T: Copy + Into<f64>>(offered: &[T], want: f64) -> T {
 pub struct Settings {
     pub sensitivity: f32,
     pub crosshair: Crosshair,
+    /// The outline width to come back to when the outline is turned on again.
+    /// `crosshair.outline` is 0 while it is off, so the width lives here too —
+    /// it is its own row (`KEY_CROSSHAIR_OUTLINE_THICKNESS`), kept through a toggle.
+    pub crosshair_outline: f64,
     pub video: Video,
     /// Which GPU and API to open next time. Applies on restart — see `gpu.rs`.
     pub gpu: GpuPick,
@@ -758,6 +601,7 @@ impl Default for Settings {
         Settings {
             sensitivity: 1.0,
             crosshair: Crosshair::default(),
+            crosshair_outline: Crosshair::default().outline,
             video: Video::default(),
             gpu: GpuPick::default(),
             show_hitboxes: false,
@@ -811,7 +655,7 @@ impl Settings {
         if let Some(v) = flag(KEY_VSYNC) {
             s.video.vsync = v;
         }
-        if let Some(v) = num(KEY_FOV) {
+        if let Some(v) = num(KEY_FOV).or_else(|| num(KEY_LEGACY_FOV)) {
             s.video.fov = (v as f32).clamp(FOV_RANGE.0, FOV_RANGE.1);
         }
         // The old on/off row, read only when the new one is absent: a bag saved
@@ -830,8 +674,8 @@ impl Settings {
         if let Some(v) = flag(KEY_SHADOWS) {
             s.video.shadows = v;
         }
-        if let Some(v) = text(KEY_SHADOW_QUALITY) {
-            s.video.shadow_level = ShadowLevel::parse(v);
+        if let Some(v) = text(KEY_SHADOW_QUALITY).and_then(ShadowLevel::parse) {
+            s.video.shadow_level = v;
         }
         if let Some(v) = num(KEY_BLOOM) {
             s.video.bloom = (v as f32).clamp(BLOOM_RANGE.0, BLOOM_RANGE.1);
@@ -867,35 +711,22 @@ impl Settings {
         if let Some(v) = text(KEY_GPU_POWER) {
             s.gpu.low_power = v == "low";
         }
-        if let Some(v) = text(KEY_CROSSHAIR_STYLE) {
-            s.crosshair.style = CrosshairStyle::parse(v);
-        }
-        if let Some(v) = num(KEY_CROSSHAIR_SIZE) {
-            s.crosshair.size = (v as f32).clamp(1.0, 12.0);
-        }
-        if let Some(v) = num(KEY_CROSSHAIR_GAP) {
-            s.crosshair.gap = (v as f32).clamp(0.0, 20.0);
-        }
-        if let Some(v) = num(KEY_CROSSHAIR_THICKNESS) {
-            s.crosshair.thickness = (v as f32).clamp(0.2, 3.0);
+        // The whole spec through the one reader the fixture pins, so a code
+        // pasted in the browser draws here exactly as it drew there.
+        s.crosshair = Crosshair::from_settings(values);
+        if let Some(v) = num(KEY_CROSSHAIR_OUTLINE_THICKNESS) {
+            s.crosshair_outline = Crosshair {
+                outline: v,
+                ..Crosshair::default()
+            }
+            .normalized()
+            .outline;
         }
         if let Some(v) = flag(KEY_SHOW_HITBOXES) {
             s.show_hitboxes = v;
         }
         if let Some(v) = flag(KEY_GRENADE_ARC) {
             s.grenade_arc = v;
-        }
-        if let Some(v) = text(KEY_CROSSHAIR_COLOR) {
-            s.crosshair.color = CrosshairColor::parse(v);
-        }
-        if let Some(v) = flag(KEY_CROSSHAIR_OUTLINE) {
-            s.crosshair.outline = v;
-        }
-        if let Some(v) = flag(KEY_CROSSHAIR_DOT) {
-            s.crosshair.dot = v;
-        }
-        if let Some(v) = num(KEY_CROSSHAIR_ALPHA) {
-            s.crosshair.alpha = (v as f32).clamp(0.15, 1.0);
         }
         s
     }
@@ -936,14 +767,19 @@ impl Settings {
             KEY_GPU_ADAPTER => json!(self.gpu.adapter_name().unwrap_or("auto")),
             KEY_GPU_BACKEND => json!(self.gpu.backend.key()),
             KEY_GPU_POWER => json!(if self.gpu.low_power { "low" } else { "high" }),
-            KEY_CROSSHAIR_STYLE => json!(self.crosshair.style.key()),
-            KEY_CROSSHAIR_SIZE => json!(self.crosshair.size),
-            KEY_CROSSHAIR_GAP => json!(self.crosshair.gap),
-            KEY_CROSSHAIR_THICKNESS => json!(self.crosshair.thickness),
-            KEY_CROSSHAIR_COLOR => json!(self.crosshair.color.key()),
-            KEY_CROSSHAIR_OUTLINE => json!(self.crosshair.outline),
-            KEY_CROSSHAIR_DOT => json!(self.crosshair.dot),
-            KEY_CROSSHAIR_ALPHA => json!(self.crosshair.alpha),
+            KEY_CROSSHAIR_OUTLINE_THICKNESS => json!(if self.crosshair.outline > 0.0 {
+                self.crosshair.outline
+            } else {
+                self.crosshair_outline
+            }),
+            key if key.starts_with("hassault.crosshair.") => {
+                return self
+                    .crosshair
+                    .to_settings()
+                    .into_iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v);
+            }
             KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
             KEY_GRENADE_ARC => json!(self.grenade_arc),
             _ => return None,
@@ -1062,6 +898,7 @@ mod tests {
         assert_eq!(s.crosshair.color, CrosshairColor::Green);
         assert_eq!(s.video.quality, Quality::High);
         assert_eq!(s.crosshair.size, Crosshair::default().size);
+        assert_eq!(s.crosshair.rgb, [115, 242, 115]);
     }
 
     #[test]
@@ -1103,6 +940,10 @@ mod tests {
         original.crosshair.size = 5.0;
         original.crosshair.gap = 9.0;
         original.crosshair.thickness = 1.4;
+        original.crosshair.t_style = true;
+        original.crosshair.dynamic = false;
+        original.crosshair.outline = 0.0;
+        original.crosshair_outline = 0.8;
         original.video.quality = Quality::High;
         original.video.render_scale = 0.75;
         original.video.vsync = true;
@@ -1125,6 +966,9 @@ mod tests {
             KEY_CROSSHAIR_OUTLINE,
             KEY_CROSSHAIR_DOT,
             KEY_CROSSHAIR_ALPHA,
+            KEY_CROSSHAIR_T_STYLE,
+            KEY_CROSSHAIR_DYNAMIC,
+            KEY_CROSSHAIR_OUTLINE_THICKNESS,
             KEY_SHOW_HITBOXES,
             KEY_GRENADE_ARC,
         ] {
@@ -1137,6 +981,9 @@ mod tests {
         assert_eq!(read.crosshair.outline, original.crosshair.outline);
         assert_eq!(read.crosshair.dot, original.crosshair.dot);
         assert_eq!(read.crosshair.alpha, original.crosshair.alpha);
+        assert_eq!(read.crosshair, original.crosshair.normalized());
+        // Off keeps its width for when it is turned back on.
+        assert_eq!(read.crosshair_outline, 0.8);
         assert_eq!(read.video.quality, original.video.quality);
         assert_eq!(read.video.render_scale, original.video.render_scale);
         assert_eq!(read.video.hud_scale, original.video.hud_scale);

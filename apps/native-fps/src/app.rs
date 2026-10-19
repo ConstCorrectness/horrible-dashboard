@@ -347,6 +347,10 @@ pub struct App {
     /// refuses fifty-nine as "already owned", which looks identical to a menu
     /// that does not work.
     pending_buy: i32,
+    /// A clipboard read or write in flight for the crosshair page: a child
+    /// process on a worker thread, polled each frame so none waits on it.
+    /// `paste` says which, since both report text.
+    clipboard: Option<(std::sync::mpsc::Receiver<Result<String, String>>, bool)>,
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
@@ -602,6 +606,7 @@ impl App {
             mode_state: None,
             buy_open: false,
             pending_buy: -1,
+            clipboard: None,
             you: None,
             flash: hassault_native::flashbang::FlashState::default(),
             hud: Hud::default(),
@@ -2878,27 +2883,64 @@ impl App {
     fn crosshair(&self) -> Crosshair {
         let mut c = self.settings.crosshair;
         if let Some(v) = self.cvars.number("draw.crosshair.size") {
-            c.size = v.clamp(1.0, 12.0);
+            c.size = v as f64;
         }
         if let Some(v) = self.cvars.number("draw.crosshair.gap") {
-            c.gap = v.clamp(0.0, 20.0);
+            c.gap = v as f64;
         }
         if let Some(v) = self.cvars.number("draw.crosshair.thickness") {
-            c.thickness = v.clamp(0.2, 3.0);
+            c.thickness = v as f64;
         }
         if let Some(v) = self.cvars.string("draw.crosshair.style") {
-            c.style = CrosshairStyle::parse(v);
+            c.style = CrosshairStyle::parse(v).unwrap_or_default();
         }
         if let Some(v) = self.cvars.boolean("draw.crosshair.outline") {
-            c.outline = v;
+            c.outline = if v {
+                self.settings.crosshair_outline.max(0.1)
+            } else {
+                0.0
+            };
         }
         if let Some(v) = self.cvars.boolean("draw.crosshair.dot") {
             c.dot = v;
         }
         if let Some(v) = self.cvars.number("draw.crosshair.alpha") {
-            c.alpha = v.clamp(0.15, 1.0);
+            c.alpha = v as f64;
         }
-        c
+        // The spec's own clamps and quanta, so a console override draws exactly
+        // what the same value saved as a setting would.
+        c.normalized()
+    }
+
+    /// Land a finished clipboard read or write from the crosshair page.
+    fn poll_clipboard(&mut self) {
+        let Some((rx, paste)) = &self.clipboard else { return };
+        let paste = *paste;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("no answer".into()),
+        };
+        self.clipboard = None;
+        self.menu.note = Some(match (paste, result) {
+            (true, Ok(text)) => match hassault_native::crosshair::decode(&text) {
+                Ok(spec) => {
+                    menu::set_crosshair(&mut self.settings, spec);
+                    for key in hassault_native::crosshair::KEYS {
+                        if let Some(value) = self.settings.value_for(key) {
+                            self.writer.save(key, value);
+                        }
+                    }
+                    ("APPLIED FROM THE CLIPBOARD".to_string(), true)
+                }
+                Err(e) => (e.message().to_string(), false),
+            },
+            (false, Ok(_)) => ("COPIED TO THE CLIPBOARD".to_string(), true),
+            (_, Err(e)) => {
+                eprintln!("hassault: clipboard: {e}");
+                ("THE CLIPBOARD COULD NOT BE REACHED".to_string(), false)
+            }
+        });
     }
 
     /// Queue a purchase for the next command.
@@ -3314,6 +3356,14 @@ impl App {
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
             }
             Action::Back => self.menu.back(),
+            Action::CrosshairPaste => {
+                self.menu.note = Some(("READING THE CLIPBOARD".to_string(), true));
+                self.clipboard = Some((hassault_native::clipboard::paste_async(), true));
+            }
+            Action::CrosshairCopy => {
+                let code = hassault_native::crosshair::encode(self.settings.crosshair);
+                self.clipboard = Some((hassault_native::clipboard::copy_async(code), false));
+            }
             Action::Restart => {
                 // Every pending write reaches the node first: the new process
                 // reads the GPU choice back from it, and a restart that races
@@ -4377,6 +4427,7 @@ impl ApplicationHandler for App {
         // added latency on the one thing in this loop that came from the server.
         self.wait_for_frame();
         self.pump_network(event_loop);
+        self.poll_clipboard();
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();

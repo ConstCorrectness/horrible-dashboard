@@ -649,3 +649,268 @@ fn training_falloff_matches_the_server() {
         );
     }
 }
+
+fn fixture(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/core/src/modules/hassault/__tests__")
+        .join(name);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{name} missing"));
+    serde_json::from_str(&text).unwrap_or_else(|_| panic!("{name} is not JSON"))
+}
+
+fn spec_of(v: &Value) -> hassault_native::crosshair::Spec {
+    use hassault_native::crosshair::{Color, Spec, Style};
+    let f = |k: &str| v[k].as_f64().unwrap_or(f64::NAN);
+    let rgb = v["rgb"].as_array().expect("rgb");
+    // The fixture carries out-of-range bytes on purpose (300, -4, 89.6); a
+    // `Spec` holds `u8`, so they arrive as the reference clamps them.
+    let byte = |i: usize| (rgb[i].as_f64().unwrap() + 0.5).floor().clamp(0.0, 255.0) as u8;
+    let color = v["color"].as_str().unwrap();
+    Spec {
+        style: Style::parse(v["style"].as_str().unwrap()).unwrap_or_default(),
+        size: f("size"),
+        gap: f("gap"),
+        thickness: f("thickness"),
+        outline: f("outline"),
+        alpha: f("alpha"),
+        dot: v["dot"].as_bool().unwrap(),
+        t_style: v["tStyle"].as_bool().unwrap(),
+        dynamic: v["dynamic"].as_bool().unwrap(),
+        color: if color == "custom" {
+            Color::Custom
+        } else {
+            Color::parse(color).unwrap_or(Color::White)
+        },
+        rgb: [byte(0), byte(1), byte(2)],
+    }
+}
+
+fn assert_spec(got: hassault_native::crosshair::Spec, want: &Value, what: &str) {
+    let tol = 1e-9;
+    let w = spec_of(want);
+    assert_eq!(got.style, w.style, "{what}: style");
+    for (name, g, e) in [
+        ("size", got.size, w.size),
+        ("gap", got.gap, w.gap),
+        ("thickness", got.thickness, w.thickness),
+        ("outline", got.outline, w.outline),
+        ("alpha", got.alpha, w.alpha),
+    ] {
+        assert!((g - e).abs() < tol, "{what}: {name} {g} != {e}");
+    }
+    assert_eq!(
+        (got.dot, got.t_style, got.dynamic, got.color, got.rgb),
+        (w.dot, w.t_style, w.dynamic, w.color, w.rgb),
+        "{what}"
+    );
+}
+
+/// The crosshair spec, its share code and its shapes, replayed from the fixture
+/// the Python reference generated (`scripts/gen_hassault_crosshair_vectors.py`).
+/// The browser replays the same file in `crosshair.test.ts`: this is what makes
+/// one share code draw the same rectangles in both clients.
+#[test]
+fn the_crosshair_matches_the_reference_and_the_browser_client() {
+    use hassault_native::crosshair::{self as xh, Geometry, Layer};
+    let v = fixture("crosshair-vectors.json");
+    let tol = 1e-9;
+    assert_eq!(v["prefix"].as_str().unwrap(), xh::PREFIX);
+    assert_eq!(v["version"].as_u64().unwrap() as u8, xh::VERSION);
+    assert_eq!(v["lumaFloor"].as_i64().unwrap(), xh::LUMA_FLOOR);
+    assert_eq!(v["outlineAlpha"].as_f64().unwrap(), xh::OUTLINE_ALPHA);
+    assert_eq!(v["pipAlpha"].as_f64().unwrap(), xh::PIP_ALPHA);
+    assert_eq!(v["conePxPerRad"].as_f64().unwrap(), xh::CONE_PX_PER_RAD);
+    let styles: Vec<&str> = xh::Style::ALL.iter().map(|s| s.key()).collect();
+    assert_eq!(v["styles"], serde_json::json!(styles));
+    for (name, rgb) in v["namedColors"].as_object().unwrap() {
+        let c = xh::Color::parse(name).expect("a named colour");
+        assert_eq!(serde_json::json!(c.named_rgb().unwrap()), *rgb, "{name}");
+    }
+    assert_spec(xh::Spec::default(), &v["default"], "default");
+    let presets: serde_json::Map<String, Value> = xh::PRESETS
+        .iter()
+        .map(|(n, c)| (n.to_lowercase(), Value::from(*c)))
+        .collect();
+    assert_eq!(v["presets"], Value::Object(presets));
+
+    for c in v["crc8"].as_array().unwrap() {
+        let bytes: Vec<u8> = c["bytes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(xh::crc8(&bytes) as u64, c["crc"].as_u64().unwrap());
+    }
+    for c in v["hudUnit"].as_array().unwrap() {
+        let got = xh::hud_unit(
+            c["height"].as_f64().unwrap(),
+            c["hudScale"].as_f64().unwrap(),
+        );
+        assert_eq!(got, c["unit"].as_f64().unwrap(), "{c}");
+    }
+    for c in v["coneGap"].as_array().unwrap() {
+        let got = xh::cone_gap_px(c["cone"].as_f64().unwrap(), c["unit"].as_f64().unwrap());
+        assert!((got - c["px"].as_f64().unwrap()).abs() < tol, "{c}");
+    }
+    for c in v["encode"].as_array().unwrap() {
+        let spec = spec_of(&c["spec"]);
+        assert_spec(spec.normalized(), &c["normalized"], "normalize");
+        assert_eq!(
+            xh::encode(spec),
+            c["code"].as_str().unwrap(),
+            "{}",
+            c["spec"]
+        );
+    }
+    for c in v["decode"].as_array().unwrap() {
+        let code = c["code"].as_str().unwrap();
+        let got = xh::decode(code).unwrap_or_else(|e| panic!("{code}: {e:?}"));
+        assert_spec(got, &c["spec"], code);
+    }
+    for c in v["rejects"].as_array().unwrap() {
+        let code = c["code"].as_str().unwrap();
+        let got = xh::decode(code).expect_err(code);
+        assert_eq!(got.reason(), c["reason"].as_str().unwrap(), "{code}");
+    }
+    for c in v["rects"].as_array().unwrap() {
+        let got = xh::crosshair_rects(
+            spec_of(&c["spec"]),
+            c["coneGap"].as_f64().unwrap(),
+            c["unit"].as_f64().unwrap(),
+        );
+        let want = c["shapes"].as_array().unwrap();
+        assert_eq!(got.len(), want.len(), "{}", c["spec"]);
+        for (g, w) in got.iter().zip(want) {
+            let n = |k: &str| w[k].as_f64().unwrap();
+            let layer = match g.layer {
+                Layer::Outline => "outline",
+                Layer::Fill => "fill",
+            };
+            assert_eq!(layer, w["layer"].as_str().unwrap());
+            assert!((g.alpha - n("alpha")).abs() < tol);
+            match g.geometry {
+                Geometry::Rect { x, y, w: rw, h } => {
+                    assert_eq!(w["kind"], "rect");
+                    for (got, k) in [(x, "x"), (y, "y"), (rw, "w"), (h, "h")] {
+                        assert!((got - n(k)).abs() < tol, "{k}: {got} vs {}", n(k));
+                    }
+                }
+                Geometry::Ring { r0, r1 } => {
+                    assert_eq!(w["kind"], "ring");
+                    assert!((r0 - n("r0")).abs() < tol && (r1 - n("r1")).abs() < tol);
+                }
+            }
+        }
+    }
+    for c in v["fromSettings"].as_array().unwrap() {
+        assert_spec(
+            xh::Spec::from_settings(&c["bag"]),
+            &c["spec"],
+            "fromSettings",
+        );
+    }
+    for c in v["toSettings"].as_array().unwrap() {
+        let rows: serde_json::Map<String, Value> = spec_of(&c["spec"])
+            .to_settings()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let want = c["rows"].as_object().unwrap();
+        assert_eq!(rows.len(), want.len(), "{}", c["spec"]);
+        for (k, w) in want {
+            let g = &rows[k];
+            match (g.as_f64(), w.as_f64()) {
+                (Some(a), Some(b)) => assert!((a - b).abs() < tol, "{k}"),
+                _ => assert_eq!(g, w, "{k}"),
+            }
+        }
+    }
+}
+
+/// The native client's reading of every `hassault.*` key it knows, against the
+/// served schema (`scripts/gen_hassault_settings_vectors.py`): defaults, clamps,
+/// snapped choices, enums and the old FOV row. The pane manifest is checked
+/// against the same file by `settings-schema.test.ts`.
+#[test]
+fn the_settings_clamps_are_the_schemas() {
+    use hassault_native::settings::Settings;
+    use serde_json::json;
+    let v = fixture("settings-vectors.json");
+    let read = |bag: Value, key: &str| {
+        Settings::from_values(&bag)
+            .value_for(key)
+            .unwrap_or_else(|| panic!("{key} has no native value"))
+    };
+    let same = |got: &Value, want: &Value, what: &str| match (got.as_f64(), want.as_f64()) {
+        (Some(a), Some(b)) => assert!((a - b).abs() < 1e-6, "{what}: {a} != {b}"),
+        _ => assert_eq!(got, want, "{what}"),
+    };
+    let mut checked = 0;
+    for row in v["settings"].as_array().unwrap() {
+        if !row["native"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        checked += 1;
+        let key = row["key"].as_str().unwrap();
+        let default = &row["default"];
+        same(&read(json!({}), key), default, &format!("{key} default"));
+        match row["type"].as_str().unwrap() {
+            "number" => {
+                let (lo, hi) = (row["min"].as_f64().unwrap(), row["max"].as_f64().unwrap());
+                let (below, above) = match row["choices"].as_array() {
+                    Some(c) => (c[0].clone(), c[c.len() - 1].clone()),
+                    None => (json!(lo), json!(hi)),
+                };
+                same(
+                    &read(json!({ key: lo - 1000.0 }), key),
+                    &below,
+                    &format!("{key} below"),
+                );
+                same(
+                    &read(json!({ key: hi + 1000.0 }), key),
+                    &above,
+                    &format!("{key} above"),
+                );
+                if let Some(choices) = row["choices"].as_array() {
+                    for c in choices {
+                        same(&read(json!({ key: c }), key), c, &format!("{key} = {c}"));
+                    }
+                }
+            }
+            "boolean" => {
+                let flipped = json!(!default.as_bool().unwrap());
+                same(&read(json!({ key: flipped }), key), &flipped, key);
+            }
+            _ => {
+                if let Some(values) = row["enum"].as_array() {
+                    for e in values {
+                        same(&read(json!({ key: e }), key), e, &format!("{key} = {e}"));
+                    }
+                    same(
+                        &read(json!({ key: "no-such-value" }), key),
+                        default,
+                        &format!("{key} unknown"),
+                    );
+                }
+                if row["hexColor"].as_bool().unwrap_or(false) {
+                    same(
+                        &read(json!({ key: "#ff8000" }), key),
+                        &json!("#ff8000"),
+                        key,
+                    );
+                }
+            }
+        }
+        for alias in row["aliases"].as_array().into_iter().flatten() {
+            let alias = alias.as_str().unwrap();
+            same(&read(json!({ alias: 100 }), key), &json!(100), alias);
+            same(
+                &read(json!({ alias: 100, key: 80 }), key),
+                &json!(80),
+                alias,
+            );
+        }
+    }
+    assert!(checked > 30, "only {checked} native keys in the schema");
+}

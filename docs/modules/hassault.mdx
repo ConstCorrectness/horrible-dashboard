@@ -1679,8 +1679,11 @@ derivation ever changes.
 Sensitivity is a multiplier on `LOOK_RADIANS_PER_PIXEL`, stored as the
 `hassault.sensitivity` setting and also adjustable live from the main menu and the
 pause menu — all three are the same value, so the settings page and the in-game
-sliders can never disagree. `hassault.fov`, `hassault.volume` and
-`hassault.crouchToggle` work the same way. FOV reaches the camera through the scene
+sliders can never disagree. `hassault.video.fov`, `hassault.volume` and
+`hassault.crouchToggle` work the same way. FOV is **one row for both clients**,
+60–110: the pane used to keep its own `hassault.fov`, which `useFov` (and the
+native `Settings::from_values`) still read while `hassault.video.fov` has never
+been saved — and the pane writes it across the first time it does. FOV reaches the camera through the scene
 handle rather than at construction, because it is a setting and can change while a
 match is running.
 
@@ -2988,15 +2991,79 @@ Three changes, each of which was a bug first:
 - **Every element is drawn twice**, once in near-black at `thick + 2 * outline`
   and then in colour. A one-colour reticle vanishes against any surface near its
   own brightness and the player finds out by missing.
-- **The hitmarker is drawn around the reticle rather than replacing it.** It used
-  to `return` early with an X in its place, so while spraying into somebody the
-  thing you aim with changed shape about ten times a second.
+- **The hitmarker is drawn around the reticle rather than replacing it**, and
+  never by recolouring it. It used to `return` early with an X in its place, and
+  then to tint the reticle amber; either way, while spraying into somebody the
+  thing you aim with changed under you about ten times a second. Both clients now
+  draw the marker as its own layer outside the arms.
 - **Elements are feathered** (`soft_rect`). The overlay pass has no MSAA and this
   painter has no texture, so the old `thickness.max(1.0)` pixel-snap turned the
   centre dot into a hard square at the default 0.6.
 
 `outline`, `dot` and `alpha` are settings and `draw.crosshair.*` cvars; `dot` is
 now independent of `style`, so choosing a ring no longer costs you the choice.
+
+#### Crosshair spec v1 and share codes
+
+The crosshair is one spec, defined once in Python and drawn identically by both
+clients:
+
+| Part | Where |
+| --- | --- |
+| Reference: spec, normalization, share code, geometry | `backend/modules/hassault/crosshair.py` |
+| Browser port | `packages/core/.../hassault/crosshair.ts`, drawn by `crosshair-view.tsx` |
+| Native port | `apps/native-fps/src/crosshair.rs`, drawn by `Painter::crosshair_at` |
+| Agreement | `crosshair-vectors.json` (`scripts/gen_hassault_crosshair_vectors.py`), replayed by `test_hassault_crosshair.py`, `crosshair.test.ts` and `tests/conformance.rs` |
+
+**Fields.** Style (`cross`, `crossDot`, `dot`, `circle`), size 1–12 and a
+**signed** gap −5–20 (both in halves), thickness 0.2–3 and outline width 0–2 (in
+tenths), opacity 0.15–1, centre dot, T-style (no top arm), `dynamic`, and a
+colour: one of six named colours or a custom `#rrggbb`. A custom colour may be
+any hue but not dark — one whose Rec. 709 luma is under 90/255 is lifted towards
+white, in integer arithmetic so all three ports land on the same bytes.
+
+`normalize` quantizes every field to what a code can carry. Both clients
+normalize what they read from the settings bag before drawing, so the picture a
+code produces is the picture its author saw. Every quantization is
+`floor(x * k + 0.5)` in f64: Python's `round` is banker's rounding, Rust's rounds
+half away from zero, and an f32 turns 1.45 into 1.4500000476 — any of those
+would give the two clients different codes for one slider position.
+
+**Share codes** look like `HXC1-0400A-1G80R-1NM00-00008-P`: a version byte, the
+fields in a fixed order, a CRC-8 (polynomial 0x07) over all of it, in Crockford
+base32 in groups of five. Decoding is forgiving about what a paste does (case,
+spaces, dashes, O/I/L for 0/1) and strict about the rest. A bad CRC or an unknown
+version is refused with a reason (`prefix`, `char`, `short`, `crc`, `version`).
+Bytes after the known fields are ignored, so a later writer can **append** a
+field under the same version and an older reader still decodes the rest; the
+version only moves for a layout an older reader would misread.
+
+**Geometry** is one pure function, `crosshair_rects(spec, cone_gap_px,
+hud_unit)`: rects (and, for the ring, annuli) around the centre, the outline
+layer first, each with its final opacity. The client picks colour by layer and
+nothing else. The unit is the native HUD's — `hud_unit(height, hudScale)`, whole
+pixels per 360 of height times the HUD scale — computed from the window height
+natively and from the game view's height in the pane, so a code is the same size
+in both. The cone opens the gap by `cone_gap_px(cone) = cone × 130 × unit`, the
+native client's old `spread × 260 × u × 0.5`.
+
+**`dynamic`** opens the arms with the cone the next shot will use
+(`residualSpread`); off draws the gap alone. Either way the shot goes where the
+cone says — it changes what you are shown, never where rounds land. The pane used
+to add its own movement and air bloom, which the native client never drew and the
+server never applied; it is gone, and the served movement cone (P3) is what will
+put movement back, in both.
+
+**The generator.** The pane's main and pause menus have a **Crosshair** page: the
+live reticle over three surfaces (sky, sandstone, shadow — the contrast cases),
+every field, a preview spread and a hitmarker toggle, presets, and the code to
+copy or paste. Applying a code writes the same rows the controls write, so a
+pasted crosshair is the player's crosshair in the native client too. The native
+pause menu's Crosshair page has the same fields, a preview panel drawn by the
+HUD's own painter, preset stepping, and **paste/copy code**. Natively the
+clipboard is the OS's own tool (`powershell Get-Clipboard` / `clip`, `pbpaste` /
+`pbcopy`, `wl-paste` / `xclip`) on a worker thread (`clipboard.rs`) — no
+clipboard crate, for the reason `console.rs` gives, and no frame waits on it.
 
 #### Mipmaps, anisotropy and supersampling
 
@@ -6824,7 +6891,7 @@ over.
 | Page | What is on it |
 | --- | --- |
 | Root | Resume, the three sub-pages, and Quit — labelled **Leave match** in a match, because a button that ends something you were winning should say so |
-| Crosshair | Style (cross / cross+dot / dot / circle), size, gap, thickness, colour |
+| Crosshair | Preset, style (cross / cross+pip / dot / ring), size, gap, thickness, colour, outline and its width, centre dot, T-style, dynamic, opacity, paste code, copy code — with a preview panel beside it |
 | Video | Display (fullscreen / windowed), resolution scale, field of view, quality, anti-aliasing, shadows, vsync, frame cap, show hitboxes |
 | Controls | Sensitivity |
 
@@ -6835,9 +6902,11 @@ somebody nudges a slider is a visible hitch, and a slider produces one per frame
 — and the in-memory value is authoritative for the session either way, so a node
 that is down costs a preference and never a frame.
 
-The crosshair's `gap` is the floor its arms open *from*, never a cap: it still
-widens with the weapon's cone. A reticle that could be configured to hide the
-hip-fire penalty would be a setting that wins gunfights.
+The crosshair's `gap` is the floor its arms open *from*, never a cap: with
+`dynamic` on (the default) it widens with the weapon's cone. Turning `dynamic`
+off is a choice to be shown less — the cone is the server's either way, so it
+changes nothing about where a shot lands. See
+[Crosshair spec v1 and share codes](#crosshair-spec-v1-and-share-codes).
 
 ### Fullscreen, resolution and quality
 
@@ -8048,12 +8117,25 @@ the two places a user is offered a way of working.
   pause menu. The control map (`hassault.controls`) rides the same setting
   storage but is not a declared `SettingDecl` row — see
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
+  **Every `hassault.*` key is in one schema**, `settings_schema.py`, served at
+  `GET /api/hassault/settings/schema` by the node and the game server: type,
+  range or snapped choices, enum, default, and **scope** — `account` (aim, FOV,
+  crosshair, binds, the practice overlays) or `machine` (GPU, API, monitor,
+  display mode, render and quality rows, the binary path). Account sync (P4) will
+  carry only `account` rows. `settings-vectors.json`
+  (`scripts/gen_hassault_settings_vectors.py`) pins it twice:
+  `settings-schema.test.ts` checks the manifest has a row per value with the same
+  type and default, and `conformance.rs` feeds every native key to
+  `Settings::from_values` below, above and inside its range. The preset rows'
+  defaults are what Medium writes (anisotropy 8, shadow quality medium), which is
+  what the native client always used; the manifest used to say 16 and high.
   Ranked play needs no setting: the entry point is a button, and the server it
   talks to is the one `games.serverUrl` already names for sign-in.
   `hassault.video.fullscreen` / `.renderScale` / `.fov` / `.quality` /
   `.antialias` / `.shadows` / `.vsync` / `.fpsLimit` and
-  `hassault.crosshair.style` / `.size` / `.gap` / `.thickness` / `.color` — what
-  the native client's pause menu edits; see
+  `hassault.crosshair.style` / `.size` / `.gap` / `.thickness` / `.outline` /
+  `.outlineThickness` / `.alpha` / `.dot` / `.tStyle` / `.dynamic` / `.color`
+  (a name or `#rrggbb`) — what the native client's pause menu edits; see
   [the rest of the video page](#the-rest-of-the-video-page) for what each of the
   video rows actually costs. Declared rows rather than a file beside
   the binary, so the pane's Settings page and the in-game menu write the same
