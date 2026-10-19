@@ -313,6 +313,17 @@ class WeaponOut(BaseModel):
     `spread` for a weapon with no pattern, so the client can read it
     unconditionally — the `hipfireSpread` rule."""
     residualSpread: float = 0.0  # noqa: N815
+    """Distance at which damage starts tapering toward half at `range`. Only the
+    training range reads it; in a match the server does the falloff."""
+    falloffStart: float | None = None  # noqa: N815
+    # The accuracy model's inputs (`weapons.shot_cone`). Every one has to be
+    # here as well as in `Weapon.to_dict`, or it is dropped on the wire.
+    firstShotSpread: float | None = None  # noqa: N815
+    moveInaccuracy: float = 0.0  # noqa: N815
+    airInaccuracy: float = 0.0  # noqa: N815
+    crouchScale: float = 1.0  # noqa: N815
+    perShotInaccuracy: float = 0.0  # noqa: N815
+    recoveryTime: float = 0.35  # noqa: N815
 
 
 class ThrowPhysicsOut(BaseModel):
@@ -540,6 +551,9 @@ class LaunchNativeRequest(BaseModel):
     #: trusted: it arrives from a browser.
     bots: int = 0
     bot_skill: str = "normal"
+    #: `mode="train"` only: an aim drill (`drills.py`) to start instead of the
+    #: free range. Checked against the drill table before it reaches an argv.
+    drill: str | None = None
     #: A wire label only — the backend plays you as your account's username.
     username: str | None = None
     fullscreen: bool = False

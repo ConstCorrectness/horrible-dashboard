@@ -25,13 +25,23 @@
 //!   a magazine down, reloads, and lights a hitmarker.
 
 use crate::api::{apply_spray, ItemReach, ItemRow, ItemSpec, WeaponSpec};
-use crate::physics::{spawn_at, Spawn};
+use crate::drills::{summarise, DrillEvent, DrillHit, DrillMover, DrillSpec, DrillStats};
+use crate::physics::{body_height, spawn_at, Spawn};
 use crate::protocol::{HitMarker, PlayerRow, SelfState};
 use crate::trace::{
-    aim_vector, damage_at, eye_position, falloff_start, ray_hits_body, raycast_world_face,
-    spread_vector, Vec3, BODY_HEIGHT, FACE_NONE, HEAD_BAND,
+    aim_vector, damage_at, eye_position, falloff_start, ray_hits_body_sized, raycast_world_face,
+    spread_vector, Vec3, FACE_NONE, HEAD_BAND,
 };
 use crate::world::World;
+
+/// A body's height mid-crouch, from the crouch fraction alone.
+fn crouched_height(crouch: f32) -> f32 {
+    let probe = crate::physics::PlayerState {
+        crouch,
+        ..Default::default()
+    };
+    body_height(&probe)
+}
 
 /// How many dummies the range puts out, at most.
 pub const MAX_TARGETS: usize = 6;
@@ -78,6 +88,69 @@ struct Target {
     alive: bool,
     /// Seconds until it stands back up; only meaningful while down.
     down_for: f32,
+    /// In a drill, the replayed body: its position, facing and crouch.
+    mover: Option<DrillMover>,
+}
+
+impl Target {
+    /// Standing, and shown by its schedule.
+    fn hittable(&self) -> bool {
+        self.alive && self.mover.as_ref().is_none_or(|m| m.visible())
+    }
+
+    fn crouch(&self) -> f32 {
+        self.mover.as_ref().map_or(0.0, |m| m.state.crouch)
+    }
+}
+
+/// How the shooter was moving when they fired: `RangeMotion` in
+/// `training.ts`. The default is standing still.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RangeMotion {
+    pub speed: f32,
+    pub airborne: bool,
+    pub crouch: f32,
+}
+
+/// Seconds of countdown before a drill's clock starts. `DRILL_COUNTDOWN` in
+/// `training.ts`.
+pub const DRILL_COUNTDOWN: f32 = 3.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrillPhase {
+    Countdown,
+    Running,
+    Done,
+}
+
+/// Where a drill is, for the clock and the results card.
+#[derive(Debug, Clone)]
+pub struct DrillStatus {
+    pub id: String,
+    pub name: String,
+    pub phase: DrillPhase,
+    /// Seconds left in the current phase; 0 once done.
+    pub remaining: f32,
+    pub stats: Option<DrillStats>,
+}
+
+/// The drill being run, if any. See `start_drill`.
+struct Drill {
+    spec: DrillSpec,
+    phase: DrillPhase,
+    countdown: f32,
+    tick_acc: f32,
+    ticks_done: u32,
+    events: Vec<DrillEvent>,
+    stats: Option<DrillStats>,
+    /// Which targets were hittable after the last tick, to log appear/hide.
+    shown: std::collections::HashSet<String>,
+}
+
+impl Drill {
+    fn clock(&self) -> f64 {
+        self.ticks_done as f64 / self.spec.tick_rate.max(1) as f64
+    }
 }
 
 /// A tiny xorshift, so a shotgun's cone does not need `rand` as a dependency.
@@ -141,6 +214,9 @@ pub struct TrainingRange {
     /// quantity `player.sim_time` is on the server.
     spray_index: usize,
     last_range_fire_at: f32,
+    /// The drill being run, if any. Its targets replace the free range's dummies
+    /// and move by replaying the served schedule (`drills.rs`).
+    drill: Option<Drill>,
 }
 
 /// One item the range will actually give you.
@@ -155,6 +231,156 @@ struct RangeItem {
 }
 
 impl TrainingRange {
+    /// Start `spec`. The targets stand still through the countdown and start
+    /// their schedules together when it ends — `startDrill` in `training.ts`.
+    pub fn start_drill(&mut self, spec: DrillSpec) {
+        let tick_dt = 1.0 / spec.tick_rate.max(1) as f32;
+        self.targets = spec
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let mover = DrillMover::new(t, tick_dt);
+                Target {
+                    id: t.id.clone(),
+                    name: format!("Target {}", i + 1),
+                    x: mover.state.x,
+                    y: mover.state.y,
+                    z: mover.state.z,
+                    hp: spec.hp,
+                    alive: true,
+                    down_for: 0.0,
+                    mover: Some(mover),
+                }
+            })
+            .collect();
+        self.drill = Some(Drill {
+            spec,
+            phase: DrillPhase::Countdown,
+            countdown: DRILL_COUNTDOWN,
+            tick_acc: 0.0,
+            ticks_done: 0,
+            events: Vec::new(),
+            stats: None,
+            shown: Default::default(),
+        });
+    }
+
+    /// Leave the drill, back to the free range (with no dummies until `place`).
+    pub fn stop_drill(&mut self) {
+        if self.drill.take().is_some() {
+            self.targets.clear();
+        }
+    }
+
+    /// The running drill's spec, for restarting it.
+    pub fn drill_spec(&self) -> Option<&DrillSpec> {
+        self.drill.as_ref().map(|d| &d.spec)
+    }
+
+    /// The drill's state for the clock and the results card, or `None`.
+    pub fn drill_status(&self) -> Option<DrillStatus> {
+        let drill = self.drill.as_ref()?;
+        let tick_dt = 1.0 / drill.spec.tick_rate.max(1) as f32;
+        let remaining = match drill.phase {
+            DrillPhase::Countdown => drill.countdown.max(0.0),
+            DrillPhase::Running => {
+                drill.spec.ticks.saturating_sub(drill.ticks_done) as f32 * tick_dt
+            }
+            DrillPhase::Done => 0.0,
+        };
+        Some(DrillStatus {
+            id: drill.spec.id.clone(),
+            name: drill.spec.name.clone(),
+            phase: drill.phase,
+            remaining,
+            stats: drill.stats.clone(),
+        })
+    }
+
+    /// Log `appear` and `hide` for every target whose hittability just changed.
+    fn note_visibility(&mut self) {
+        let Some(drill) = self.drill.as_mut() else {
+            return;
+        };
+        if drill.phase != DrillPhase::Running {
+            return;
+        }
+        let t = drill.clock();
+        for target in &self.targets {
+            let now = target.hittable();
+            let was = drill.shown.contains(&target.id);
+            if now && !was {
+                drill.shown.insert(target.id.clone());
+                drill.events.push(DrillEvent::Appear {
+                    t,
+                    target: target.id.clone(),
+                });
+            } else if !now && was {
+                drill.shown.remove(&target.id);
+                // A kill already ended this appearance in the log; only a
+                // schedule hiding a standing target is a `hide`.
+                if target.alive {
+                    drill.events.push(DrillEvent::Hide {
+                        t,
+                        target: target.id.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Advance the drill: its countdown, then its targets in whole fixed ticks.
+    /// Separate from `update` because it needs the world the targets walk on,
+    /// and the free range does not.
+    pub fn tick_drill(&mut self, dt: f32, world: &World) {
+        let Some(drill) = self.drill.as_mut() else {
+            return;
+        };
+        match drill.phase {
+            DrillPhase::Done => return,
+            DrillPhase::Countdown => {
+                drill.countdown -= dt;
+                if drill.countdown > 0.0 {
+                    return;
+                }
+                drill.phase = DrillPhase::Running;
+                self.note_visibility();
+                return;
+            }
+            DrillPhase::Running => {}
+        }
+        // Whole fixed ticks only, whatever the frame rate: that is what makes
+        // the schedule replay to the positions the server simulated.
+        let tick_dt = 1.0 / drill.spec.tick_rate.max(1) as f32;
+        drill.tick_acc += dt.min(0.25);
+        loop {
+            let Some(drill) = self.drill.as_mut() else {
+                return;
+            };
+            if drill.tick_acc < tick_dt || drill.ticks_done >= drill.spec.ticks {
+                break;
+            }
+            drill.tick_acc -= tick_dt;
+            drill.ticks_done += 1;
+            for target in &mut self.targets {
+                if let Some(mover) = target.mover.as_mut() {
+                    mover.advance(world);
+                    target.x = mover.state.x;
+                    target.y = mover.state.y;
+                    target.z = mover.state.z;
+                }
+            }
+            self.note_visibility();
+        }
+        if let Some(drill) = self.drill.as_mut() {
+            if drill.ticks_done >= drill.spec.ticks {
+                drill.phase = DrillPhase::Done;
+                drill.stats = Some(summarise(&drill.events, drill.spec.seconds as f64));
+            }
+        }
+    }
+
     pub fn set_weapons(&mut self, specs: &[WeaponSpec], slot: usize) {
         self.weapons = specs.to_vec();
         self.slot = slot.min(specs.len().saturating_sub(1));
@@ -282,6 +508,7 @@ impl TrainingRange {
             .iter()
             .enumerate()
             .map(|(i, p)| Target {
+                mover: None,
                 id: format!("dummy{i}"),
                 name: format!("Dummy {}", i + 1),
                 x: p.0,
@@ -358,6 +585,7 @@ impl TrainingRange {
                 self.finish_reload();
             }
         }
+        let drill_hp = self.drill.as_ref().map_or(TARGET_HP, |d| d.spec.hp);
         for target in &mut self.targets {
             if target.alive {
                 continue;
@@ -365,7 +593,7 @@ impl TrainingRange {
             target.down_for -= dt;
             if target.down_for <= 0.0 {
                 target.alive = true;
-                target.hp = TARGET_HP;
+                target.hp = drill_hp;
             }
         }
     }
@@ -410,6 +638,24 @@ impl TrainingRange {
         pitch: f32,
         scoped: i32,
     ) -> Option<RangeShot> {
+        self.fire_moving(world, x, y, z, eye, yaw, pitch, scoped, RangeMotion::default())
+    }
+
+    /// `fire`, with how the shooter was moving: the accuracy model's inputs
+    /// that only the caller knows. `fire` is this standing still.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fire_moving(
+        &mut self,
+        world: &World,
+        x: f32,
+        y: f32,
+        z: f32,
+        eye: f32,
+        yaw: f32,
+        pitch: f32,
+        scoped: i32,
+        motion: RangeMotion,
+    ) -> Option<RangeShot> {
         let weapon = self.weapons.get(self.slot)?.clone();
         if self.reload_in > 0.0 {
             return None;
@@ -421,25 +667,36 @@ impl TrainingRange {
             self.ammo[self.slot] -= 1;
         }
 
+        let heads_only = self.drill.as_ref().is_some_and(|d| d.spec.head_only);
+        let respawn = self
+            .drill
+            .as_ref()
+            .map_or(TARGET_RESPAWN, |d| d.spec.respawn);
+
         let origin = eye_position(x, y, z, eye);
         // **The recoil pattern applies here too, and it has to.** A range that
         // taught a different recoil than a match would be worse than no range:
         // learning the spray is the whole point of Train, and learning the wrong
         // one is the failure this cannot have — the same argument the cone below
         // already makes for the scope.
-        if self.clock - self.last_range_fire_at > weapon.spray_reset {
+        let since_last_shot = self.clock - self.last_range_fire_at;
+        if since_last_shot > weapon.spray_reset {
             self.spray_index = 0;
         }
         self.last_range_fire_at = self.clock;
-        let (aim_yaw, aim_pitch) =
-            apply_spray(yaw, pitch, weapon.spray_offset(self.spray_index));
+        let (aim_yaw, aim_pitch) = apply_spray(yaw, pitch, weapon.spray_offset(self.spray_index));
         self.spray_index += 1;
         let direction = aim_vector(aim_yaw, aim_pitch);
-        // The scope's whole mechanical effect, mirroring `effective_spread`
-        // server-side: which cone this pull uses. `residual_cone` is what a
-        // weapon with a pattern is left with — the full cone here would make the
-        // range's rifle five times less accurate than a match's.
-        let cone = weapon.residual_cone(scoped);
+        // The accuracy model, exactly as the server fires it
+        // (`weapons.shot_cone`). A range that let you run and gun would teach
+        // the one habit a match punishes.
+        let cone = weapon.shot_cone(&crate::trace::ShotContext {
+            speed: motion.speed,
+            airborne: motion.airborne,
+            crouch: motion.crouch,
+            scoped,
+            since_last_shot,
+        });
         let mut ends = Vec::new();
         let mut faces = Vec::new();
         let mut hits = Vec::new();
@@ -452,11 +709,19 @@ impl TrainingRange {
 
             let mut best: Option<(f32, usize)> = None;
             for (i, target) in self.targets.iter().enumerate() {
-                if !target.alive {
+                if !target.hittable() {
                     continue;
                 }
-                let Some(distance) = ray_hits_body(origin, dir, [target.x, target.y, target.z])
-                else {
+                // A crouching drill target is a shorter body, exactly as a
+                // crouching player is: the head moves.
+                let height = crouched_height(target.crouch());
+                let Some(distance) = ray_hits_body_sized(
+                    origin,
+                    dir,
+                    [target.x, target.y, target.z],
+                    crate::api::HitboxSpec::default().radius,
+                    height,
+                ) else {
                     continue;
                 };
                 // A body behind a wall is not a target: the wall is nearer, and
@@ -487,11 +752,17 @@ impl TrainingRange {
             let target = &mut self.targets[index];
             // Relative to the top of the body, so the head is where the head is
             // on a crouched target too.
-            let head = point[2] >= target.z + (BODY_HEIGHT - HEAD_BAND);
-            let nutshot = !head && point[2] >= target.z + (BODY_HEIGHT * 0.38) && point[2] <= target.z + (BODY_HEIGHT * 0.55);
-            let limbs = !head && !nutshot && point[2] < target.z + (BODY_HEIGHT * 0.38);
+            let tall = crouched_height(target.crouch());
+            let head = point[2] >= target.z + (tall - HEAD_BAND);
+            let nutshot = !head
+                && point[2] >= target.z + (tall * 0.38)
+                && point[2] <= target.z + (tall * 0.55);
+            let limbs = !head && !nutshot && point[2] < target.z + (tall * 0.38);
             let mult = if head {
                 weapon.head_multiplier
+            } else if heads_only {
+                // Still a hit in the log; it just does nothing.
+                0.0
             } else if nutshot {
                 1.5
             } else if limbs {
@@ -504,7 +775,7 @@ impl TrainingRange {
             let killed = target.hp <= 0.0;
             if killed {
                 target.alive = false;
-                target.down_for = TARGET_RESPAWN;
+                target.down_for = respawn;
             }
             hits.push(TargetHit {
                 id: target.id.clone(),
@@ -519,6 +790,26 @@ impl TrainingRange {
         }
 
         self.pending_hits.extend(hits.iter().cloned());
+        if let Some(drill) = self.drill.as_mut() {
+            if drill.phase == DrillPhase::Running {
+                let t = drill.clock();
+                drill.events.push(DrillEvent::Shot {
+                    t,
+                    hits: hits
+                        .iter()
+                        .map(|h| DrillHit {
+                            target: h.id.clone(),
+                            head: h.head,
+                            killed: h.killed,
+                        })
+                        .collect(),
+                });
+                // A kill ends the appearance in the log.
+                for h in hits.iter().filter(|h| h.killed) {
+                    drill.shown.remove(&h.id);
+                }
+            }
+        }
         Some(RangeShot {
             origin,
             ends,
@@ -566,6 +857,9 @@ impl TrainingRange {
     pub fn rows(&self) -> Vec<PlayerRow> {
         self.targets
             .iter()
+            // A pop-up hidden by its schedule is not drawn at all: a body
+            // standing there unhittable would be a target that lies.
+            .filter(|t| t.mover.as_ref().is_none_or(|m| m.visible()))
             .map(|t| PlayerRow {
                 id: t.id.clone(),
                 name: t.name.clone(),
@@ -575,6 +869,8 @@ impl TrainingRange {
                 x: t.x,
                 y: t.y,
                 z: t.z,
+                yaw: t.mover.as_ref().map_or(0.0, |m| m.state.yaw),
+                crouch: t.crouch(),
                 hp: t.hp.max(0.0),
                 alive: t.alive,
                 bot: true,
@@ -584,6 +880,7 @@ impl TrainingRange {
     }
 
     pub fn reset(&mut self) {
+        self.drill = None;
         self.targets.clear();
         self.pending_hits.clear();
         self.reload_in = 0.0;

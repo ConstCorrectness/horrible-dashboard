@@ -7925,6 +7925,712 @@
       }
     },
     {
+      "name": "walking on the ground moves at 52 per cent",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 16.16063484664008,
+        "y": 8.0,
+        "z": 0.0,
+        "velX": 11.437250173189762,
+        "velY": 0.0,
+        "velZ": 0.0,
+        "crouch": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a crouch outranks a walk",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "crouch": true,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 13.991820224827016,
+        "y": 8.0,
+        "z": 0.0,
+        "velX": 8.798356180395665,
+        "velY": 0.0,
+        "velZ": 0.0,
+        "crouch": 1.0,
+        "onGround": true
+      }
+    },
+    {
       "name": "crouching on the ground moves at 40 per cent",
       "world": "field",
       "start": {
@@ -11523,7 +12229,14 @@
       "hipfireSpread": 0.0,
       "spray": [],
       "sprayReset": 0.35,
-      "residualSpread": 0.0
+      "residualSpread": 0.0,
+      "falloffStart": 5.0,
+      "firstShotSpread": null,
+      "moveInaccuracy": 0.0,
+      "airInaccuracy": 0.0,
+      "crouchScale": 1.0,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35
     },
     "pistol": {
       "id": "pistol",
@@ -11544,7 +12257,14 @@
       "hipfireSpread": 0.013,
       "spray": [],
       "sprayReset": 0.35,
-      "residualSpread": 0.013
+      "residualSpread": 0.013,
+      "falloffStart": 60.0,
+      "firstShotSpread": 0.004,
+      "moveInaccuracy": 0.025,
+      "airInaccuracy": 0.1,
+      "crouchScale": 0.85,
+      "perShotInaccuracy": 0.02,
+      "recoveryTime": 0.3
     },
     "assault": {
       "id": "assault",
@@ -11662,7 +12382,14 @@
         ]
       ],
       "sprayReset": 0.35,
-      "residualSpread": 0.004
+      "residualSpread": 0.004,
+      "falloffStart": 80.0,
+      "firstShotSpread": 0.0015,
+      "moveInaccuracy": 0.05,
+      "airInaccuracy": 0.16,
+      "crouchScale": 0.75,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 0.35
     },
     "shotgun": {
       "id": "shotgun",
@@ -11683,7 +12410,14 @@
       "hipfireSpread": 0.075,
       "spray": [],
       "sprayReset": 0.35,
-      "residualSpread": 0.075
+      "residualSpread": 0.075,
+      "falloffStart": 14.0,
+      "firstShotSpread": null,
+      "moveInaccuracy": 0.015,
+      "airInaccuracy": 0.05,
+      "crouchScale": 0.9,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 1.0
     },
     "sniper": {
       "id": "sniper",
@@ -11707,7 +12441,14 @@
       "hipfireSpread": 0.055,
       "spray": [],
       "sprayReset": 0.35,
-      "residualSpread": 0.002
+      "residualSpread": 0.002,
+      "falloffStart": 320.0,
+      "firstShotSpread": null,
+      "moveInaccuracy": 0.08,
+      "airInaccuracy": 0.2,
+      "crouchScale": 1.0,
+      "perShotInaccuracy": 0.0,
+      "recoveryTime": 1.0
     }
   },
   "sprays": [
@@ -11901,6 +12642,113 @@
         ],
         "cone": 0.002
       }
+    }
+  ],
+  "falloffs": [
+    {
+      "weapon": "knife",
+      "distance": 0.0,
+      "expect": 55
+    },
+    {
+      "weapon": "knife",
+      "distance": 5.0,
+      "expect": 55
+    },
+    {
+      "weapon": "knife",
+      "distance": 10.0,
+      "expect": 55
+    },
+    {
+      "weapon": "pistol",
+      "distance": 0.0,
+      "expect": 14
+    },
+    {
+      "weapon": "pistol",
+      "distance": 60.0,
+      "expect": 14
+    },
+    {
+      "weapon": "pistol",
+      "distance": 100.0,
+      "expect": 10.5
+    },
+    {
+      "weapon": "pistol",
+      "distance": 140.0,
+      "expect": 7.0
+    },
+    {
+      "weapon": "pistol",
+      "distance": 280.0,
+      "expect": 7.0
+    },
+    {
+      "weapon": "assault",
+      "distance": 0.0,
+      "expect": 21
+    },
+    {
+      "weapon": "assault",
+      "distance": 80.0,
+      "expect": 21
+    },
+    {
+      "weapon": "assault",
+      "distance": 140.0,
+      "expect": 15.75
+    },
+    {
+      "weapon": "assault",
+      "distance": 200.0,
+      "expect": 10.5
+    },
+    {
+      "weapon": "assault",
+      "distance": 400.0,
+      "expect": 10.5
+    },
+    {
+      "weapon": "shotgun",
+      "distance": 0.0,
+      "expect": 11
+    },
+    {
+      "weapon": "shotgun",
+      "distance": 14.0,
+      "expect": 11
+    },
+    {
+      "weapon": "shotgun",
+      "distance": 31.0,
+      "expect": 8.25
+    },
+    {
+      "weapon": "shotgun",
+      "distance": 48.0,
+      "expect": 5.5
+    },
+    {
+      "weapon": "shotgun",
+      "distance": 96.0,
+      "expect": 5.5
+    },
+    {
+      "weapon": "sniper",
+      "distance": 0.0,
+      "expect": 72
+    },
+    {
+      "weapon": "sniper",
+      "distance": 320.0,
+      "expect": 72
+    },
+    {
+      "weapon": "sniper",
+      "distance": 640.0,
+      "expect": 72
     }
   ],
   "throwTolerance": 0.0001,

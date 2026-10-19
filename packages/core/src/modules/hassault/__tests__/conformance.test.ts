@@ -18,11 +18,13 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_HITBOX } from '../hitbox';
 import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
 import type { WeaponSpec } from '../api';
+import { falloffStart } from '../training';
 import { buildWorld, type WorldSpec } from './build-world';
 import {
   aimVector,
   applySpray,
   BODY_HEIGHT,
+  damageAt,
   raycastWorldFace,
   rayHitsBody,
   residualSpread,
@@ -45,6 +47,7 @@ interface Vectors {
       strafe?: number;
       jump?: boolean;
       crouch?: boolean;
+      walk?: boolean;
       yaw?: number;
       dt: number;
       /** An external kick, applied after the step — where the match server
@@ -88,6 +91,8 @@ interface Vectors {
   }[];
   /** The served weapon table, verbatim from `Weapon.to_dict`. */
   weapons: Record<string, WeaponSpec>;
+  /** `weapons.damage_at` at distances bracketing each weapon's falloff. */
+  falloffs: { weapon: string; distance: number; expect: number }[];
   sprays: {
     name: string;
     weapon: string;
@@ -171,6 +176,7 @@ describe('cross-language physics conformance', () => {
             strafe: raw.strafe ?? 0,
             jump: raw.jump ?? false,
             crouch: raw.crouch ?? false,
+            walk: raw.walk ?? false,
             noclip: false,
           },
           raw.dt,
@@ -310,6 +316,31 @@ describe('cross-language body hit conformance', () => {
         expect(hit).not.toBeNull();
         expect(hit as number).toBeCloseTo(testCase.expect, -Math.log10(vectors.tolerance));
       }
+    });
+  }
+});
+
+/**
+ * The training range does the falloff arithmetic the server does in a match, so
+ * its dummies take the damage a player would. It used to guess `falloffStart` as
+ * a third of the range, which agreed with the native client and with no weapon
+ * in the server's table.
+ */
+describe('cross-language falloff conformance', () => {
+  it('has falloff cases, and every served weapon carries its falloff start', () => {
+    expect(vectors.falloffs.length).toBeGreaterThan(0);
+    for (const weapon of Object.values(vectors.weapons)) {
+      expect(typeof weapon.falloffStart).toBe('number');
+    }
+  });
+
+  for (const testCase of vectors.falloffs) {
+    it(`${testCase.weapon} at ${testCase.distance}`, () => {
+      const weapon = vectors.weapons[testCase.weapon];
+      expect(damageAt(weapon, testCase.distance, falloffStart(weapon))).toBeCloseTo(
+        testCase.expect,
+        -Math.log10(vectors.tolerance),
+      );
     });
   }
 });

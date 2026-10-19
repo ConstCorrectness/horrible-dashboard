@@ -390,7 +390,6 @@ def _record_result(result: dict[str, Any]) -> None:
     deliberate: a disconnect handler that raised on a database write would leave
     the room holding a player who is not there.
     """
-    from backend.modules.games import server_auth
     from backend.modules.hassault import results
 
     # Not every leave is a match. Opening the pane, deploying and pressing Menu
@@ -402,8 +401,7 @@ def _record_result(result: dict[str, Any]) -> None:
         logger.debug("hassault: nothing to record for this session")
         return
 
-    account = server_auth.signed_in_account()
-    account_id = str((account or {}).get("account_id") or "local_player")
+    account_id = results.current_account_id()
     try:
         results.record(account_id, result)
         from backend.modules.hassault import rating

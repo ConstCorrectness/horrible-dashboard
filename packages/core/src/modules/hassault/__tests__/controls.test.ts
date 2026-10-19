@@ -47,10 +47,20 @@ describe('the Controls screen', () => {
 });
 
 describe('defaults', () => {
-  it('binds every declared action', () => {
+  it('binds every declared action, except the ones a match cannot honour', () => {
+    // Sprint is offline-only (the server never simulates it), so it ships
+    // unbound rather than on a key that mispredicts in every match. Listed by
+    // name so a new unbound action is a decision, not an accident.
+    const unboundByDesign = new Set(['sprint']);
     for (const doc of ACTIONS) {
-      expect(DEFAULT_CONTROLS[doc.action]?.length ?? 0).toBeGreaterThan(0);
+      const keys = DEFAULT_CONTROLS[doc.action]?.length ?? 0;
+      if (unboundByDesign.has(doc.action)) expect(keys).toBe(0);
+      else expect(keys).toBeGreaterThan(0);
     }
+  });
+
+  it('puts walk on shift, the CS convention', () => {
+    expect(DEFAULT_CONTROLS.walk).toEqual(['ShiftLeft', 'ShiftRight']);
   });
 
   it('hands out an independent copy, so editing one map cannot poison the next', () => {

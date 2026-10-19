@@ -4,6 +4,7 @@ import pytest
 
 from backend.modules.hassault import weapons
 from backend.modules.hassault.console import (
+    BUILTIN_MACROS,
     ConsoleExecRequest,
     ConsoleRegistry,
     console_registry,
@@ -294,27 +295,39 @@ def test_resolve_slot_accepts_the_three_things_a_person_types() -> None:
 
 
 @pytest.mark.anyio
-async def test_gameplay_cvars_and_reset(fresh_registry: ConsoleRegistry, room_with_player) -> None:
+async def test_gameplay_cvars_and_reset(
+    fresh_registry: ConsoleRegistry, room_with_player
+) -> None:
     room, player = room_with_player
     # 1. Modify gameplay cvars
-    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.damage_scale 2.5", room_id=room.id))
+    res = await fresh_registry.execute(
+        ConsoleExecRequest(command="gameplay.damage_scale 2.5", room_id=room.id)
+    )
     assert res.ok
     assert room.settings.damage_scale == 2.5
 
-    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.knife_speed_boost 1.30", room_id=room.id))
+    res = await fresh_registry.execute(
+        ConsoleExecRequest(command="gameplay.knife_speed_boost 1.30", room_id=room.id)
+    )
     assert res.ok
     assert room.settings.knife_speed_boost == 1.30
 
-    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.recoil_scale 0.5", room_id=room.id))
+    res = await fresh_registry.execute(
+        ConsoleExecRequest(command="gameplay.recoil_scale 0.5", room_id=room.id)
+    )
     assert res.ok
     assert room.settings.recoil_scale == 0.5
 
-    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.recoil_push 1.5", room_id=room.id))
+    res = await fresh_registry.execute(
+        ConsoleExecRequest(command="gameplay.recoil_push 1.5", room_id=room.id)
+    )
     assert res.ok
     assert room.settings.recoil_push == 1.5
 
     # 2. Reset gameplay cvars
-    res_reset = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.reset", room_id=room.id))
+    res_reset = await fresh_registry.execute(
+        ConsoleExecRequest(command="gameplay.reset", room_id=room.id)
+    )
     assert res_reset.ok
     assert room.settings.damage_scale == 1.0
     assert room.settings.knife_speed_boost == 1.10
@@ -323,12 +336,18 @@ async def test_gameplay_cvars_and_reset(fresh_registry: ConsoleRegistry, room_wi
 
 
 @pytest.mark.anyio
-async def test_god_mode_execution_and_invulnerability(fresh_registry: ConsoleRegistry, room_with_player) -> None:
+async def test_god_mode_execution_and_invulnerability(
+    fresh_registry: ConsoleRegistry, room_with_player
+) -> None:
     room, player = room_with_player
     assert not player.god
 
     # Test Python style: play.god = True
-    res = await fresh_registry.execute(ConsoleExecRequest(command="play.god = True", room_id=room.id, player_id=player.id))
+    res = await fresh_registry.execute(
+        ConsoleExecRequest(
+            command="play.god = True", room_id=room.id, player_id=player.id
+        )
+    )
     assert res.ok
     assert player.god is True
 
@@ -341,13 +360,68 @@ async def test_god_mode_execution_and_invulnerability(fresh_registry: ConsoleReg
     assert player.health == start_hp
 
     # Test Source style disable: player.god 0
-    res_off = await fresh_registry.execute(ConsoleExecRequest(command="player.god 0", room_id=room.id, player_id=player.id))
+    res_off = await fresh_registry.execute(
+        ConsoleExecRequest(command="player.god 0", room_id=room.id, player_id=player.id)
+    )
     assert res_off.ok
     assert player.god is False
 
     # Test bare "god" toggle
-    res_toggle = await fresh_registry.execute(ConsoleExecRequest(command="god", room_id=room.id, player_id=player.id))
+    res_toggle = await fresh_registry.execute(
+        ConsoleExecRequest(command="god", room_id=room.id, player_id=player.id)
+    )
     assert res_toggle.ok
     assert player.god is True
 
 
+# ---- builtin macros and bot freeze -------------------------------------------------
+#
+# The drills advertised things the server did not do: `bot_1v5` gave a "carbine"
+# that is not a weapon, and `server.timescale` / `server.bots.freeze` were
+# registered and never read by the match.
+
+
+def test_every_builtin_macro_names_real_weapons_and_cvars() -> None:
+    import re
+
+    registry = ConsoleRegistry()
+    for macro in BUILTIN_MACROS:
+        for weapon in re.findall(r'player\.give\("([^"]+)"\)', macro.code):
+            assert weapons.resolve_slot(weapon) is not None, (macro.name, weapon)
+        for name in re.findall(r"^([a-z_]+(?:\.[a-z_]+)+)\s*=", macro.code, re.M):
+            assert name in registry.cvars, (macro.name, name)
+
+
+def test_timescale_is_gone_rather_than_ignored() -> None:
+    assert "server.timescale" not in ConsoleRegistry().cvars
+
+
+@pytest.mark.anyio
+async def test_bot_freeze_reaches_the_room(
+    fresh_registry: ConsoleRegistry, room_with_player
+) -> None:
+    room, _player = room_with_player
+    for command in ("server.cheats 1", "server.bots.freeze 1"):
+        result = await fresh_registry.execute(
+            ConsoleExecRequest(command=command, room_id=room.id)
+        )
+        assert result.ok, result.error
+    assert room.bots_frozen is True
+
+
+def test_a_frozen_room_asks_no_bot_for_input(room_with_player) -> None:
+    room, player = room_with_player
+    asked: list[str] = []
+
+    class Brain:
+        def think(self, _room, p, _elapsed):
+            asked.append(p.id)
+            return None
+
+    player.brain = Brain()
+    room.bots_frozen = True
+    room._think(0.05)
+    assert asked == []
+    room.bots_frozen = False
+    room._think(0.05)
+    assert asked == [player.id]

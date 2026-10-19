@@ -130,13 +130,35 @@ def test_match_room_recorder_and_attachments():
         yaw=0.0,
         pitch=0.0,
         dt=0.05,
-        attachments={"optic": "red_dot", "barrel": "suppressor"},
+        attachments={"optic": "reflex_sight", "muzzle": "suppressor"},
     )
     room._handle_combat(p1, cmd, time.time(), time.time() * 1000)
-    assert p1.attachments == {"optic": "red_dot", "barrel": "suppressor"}
+    assert p1.attachments == {"optic": "reflex_sight", "muzzle": "suppressor"}
 
+    # Never on the public snapshot: nothing reads it there, and it was a way for
+    # one client to inflate every other player's snapshots.
     snap = p1.snapshot(time.monotonic())
-    assert snap.get("attachments") == {"optic": "red_dot", "barrel": "suppressor"}
+    assert "attachments" not in snap
+
+
+def test_parsed_attachments_are_catalogue_entries_in_their_own_slot():
+    from backend.modules.hassault.match import parse_command
+
+    junk = {f"k{i}": "x" * 40 for i in range(500)}
+    cmd = parse_command(
+        {
+            "seq": 1,
+            "dt": 0.05,
+            "attachments": {
+                **junk,
+                "optic": "acog_scope",
+                "mag": "suppressor",  # real id, wrong slot
+                "barrel": "red_dot",  # neither exists
+            },
+        }
+    )
+    assert cmd is not None
+    assert cmd.attachments == {"optic": "acog_scope"}
 
 
 @pytest.mark.anyio

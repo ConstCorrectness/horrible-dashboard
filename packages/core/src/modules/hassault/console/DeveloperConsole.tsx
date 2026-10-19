@@ -54,7 +54,7 @@ export function DeveloperConsole({
   const [wireframe, setWireframe] = useState<boolean>(consoleRegistry.getBool('draw.wireframe'));
   const [netGraph, setNetGraph] = useState<number>(consoleRegistry.getNumber('net.graph'));
   const [cheats, setCheats] = useState<boolean>(consoleRegistry.getBool('server.cheats'));
-  const [timescale, setTimescale] = useState<number>(consoleRegistry.getNumber('server.timescale', 1.0));
+  const [botsFrozen, setBotsFrozen] = useState<boolean>(consoleRegistry.getBool('server.bots.freeze'));
   const [godMode, setGodMode] = useState<boolean>(consoleRegistry.getBool('player.god'));
 
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -70,7 +70,7 @@ export function DeveloperConsole({
       if (name === 'draw.wireframe') setWireframe(Boolean(val));
       if (name === 'net.graph') setNetGraph(Number(val) || 0);
       if (name === 'server.cheats') setCheats(Boolean(val));
-      if (name === 'server.timescale') setTimescale(Number(val) || 1.0);
+      if (name === 'server.bots.freeze') setBotsFrozen(Boolean(val));
       if (name === 'player.god') setGodMode(Boolean(val));
     });
   }, []);
@@ -338,27 +338,12 @@ export function DeveloperConsole({
             🚫 Kick Bots
           </button>
 
-          <div style={styles.timescaleContainer}>
-            <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Speed:</span>
-            <button
-              onClick={() => void runCommand('server.timescale 0.35')}
-              style={{ ...styles.quickBtnSmall, ...(timescale === 0.35 ? styles.quickBtnActive : null) }}
-            >
-              0.35x
-            </button>
-            <button
-              onClick={() => void runCommand('server.timescale 1.0')}
-              style={{ ...styles.quickBtnSmall, ...(timescale === 1.0 ? styles.quickBtnActive : null) }}
-            >
-              1.0x
-            </button>
-            <button
-              onClick={() => void runCommand('server.timescale 2.0')}
-              style={{ ...styles.quickBtnSmall, ...(timescale === 2.0 ? styles.quickBtnActive : null) }}
-            >
-              2.0x
-            </button>
-          </div>
+          <button
+            onClick={() => void runCommand(`server.bots.freeze ${botsFrozen ? 0 : 1}`)}
+            style={{ ...styles.quickBtn, ...(botsFrozen ? styles.quickBtnActive : null) }}
+          >
+            Freeze Bots: {botsFrozen ? 'ON' : 'OFF'}
+          </button>
 
           <button
             onClick={() => void runCommand('macro.run("warmup")')}
@@ -675,14 +660,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '2px 5px',
     borderRadius: 3,
     cursor: 'pointer',
-  },
-  timescaleContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '3px',
-    background: 'rgba(30, 41, 59, 0.4)',
-    padding: '2px 5px',
-    borderRadius: 4,
   },
   bodyWrapper: {
     flex: 1,

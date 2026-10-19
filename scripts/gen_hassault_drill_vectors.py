@@ -1,0 +1,170 @@
+"""Generate `drill-vectors.json`: the training range's drills, pinned three ways.
+
+    PYTHONPATH=. uv run python scripts/gen_hassault_drill_vectors.py
+
+Two halves, both computed by `backend/modules/hassault/drills.py`:
+
+- **replays**: a target's input schedule and where it stands every half second
+  when that schedule is played through `physics.step` one fixed tick at a time.
+  The browser (`training-drill.test.ts`) and the native client
+  (`tests/drills.rs`) replay the same segments through their own physics ports and
+  must land on the same positions. That is the whole claim a served schedule
+  makes: the decisions are Python's, the movement is everybody's own.
+- **stats**: event logs and what `drills.summarise` scores them as, so the two
+  results cards cannot disagree with each other or with the reference.
+
+`backend/tests/test_hassault_drills.py` regenerates this in memory and fails if
+the committed file is stale.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import random
+from pathlib import Path
+from typing import Any
+
+from backend.modules.hassault import drills, physics
+from scripts.gen_hassault_vectors import build
+
+OUT = Path("packages/core/src/modules/hassault/__tests__/drill-vectors.json")
+
+#: An open room, big enough for a rail of half-width 6 with no wall in reach.
+WORLD = {
+    "ssize": 40,
+    "rects": [
+        {"x0": 2, "y0": 2, "x1": 37, "y1": 37, "type": 4, "floor": 0, "ceil": 24}
+    ],
+}
+
+#: Seconds of schedule per replay case. Long enough to cross the rail many times.
+SECONDS = 12
+SAMPLE_EVERY = drills.TICK_RATE // 2
+
+
+def _replays() -> list[dict[str, Any]]:
+    world = build(WORLD)
+    out = []
+    for i, pattern in enumerate(drills.PATTERNS):
+        # Facing back down the room toward a shooter at x = 5.
+        yaw = math.atan2(0.0, 5.0 - 20.5)
+        state = physics.PlayerState(x=20.5, y=20.5, z=0.0, yaw=yaw, on_ground=True)
+        start = {"x": state.x, "y": state.y, "z": state.z, "yaw": state.yaw}
+        segments, trace = drills.schedule(
+            world,
+            state,
+            6.0,
+            pattern,
+            SECONDS * drills.TICK_RATE,
+            random.Random(f"vectors:{pattern}:{i}"),
+            samples=SAMPLE_EVERY,
+        )
+        out.append(
+            {
+                "name": pattern,
+                "start": start,
+                "ticks": SECONDS * drills.TICK_RATE,
+                "segments": segments,
+                "samples": trace,
+            }
+        )
+    return out
+
+
+def _shot(t: float, *hits: tuple[str, bool, bool]) -> dict[str, Any]:
+    return {
+        "t": t,
+        "kind": "shot",
+        "hits": [{"target": tg, "head": hd, "killed": k} for tg, hd, k in hits],
+    }
+
+
+def _stats() -> list[dict[str, Any]]:
+    cases: list[tuple[str, float, list[dict[str, Any]]]] = [
+        ("nothing happened", 60.0, []),
+        (
+            "all misses",
+            30.0,
+            [{"t": 0.0, "kind": "appear", "target": "t0"}, _shot(0.5), _shot(0.9)],
+        ),
+        (
+            "two-shot kill, one head",
+            60.0,
+            [
+                {"t": 0.0, "kind": "appear", "target": "t0"},
+                _shot(0.4),
+                _shot(0.6, ("t0", False, False)),
+                _shot(0.75, ("t0", True, True)),
+            ],
+        ),
+        (
+            "reaction is measured from each appearance",
+            60.0,
+            [
+                {"t": 1.0, "kind": "appear", "target": "t0"},
+                {"t": 1.0, "kind": "appear", "target": "t1"},
+                _shot(1.3, ("t1", True, True)),
+                _shot(1.8, ("t0", False, False)),
+                {"t": 2.0, "kind": "hide", "target": "t0"},
+                {"t": 4.3, "kind": "appear", "target": "t1"},
+                _shot(4.5, ("t1", False, False)),
+                _shot(4.6, ("t1", False, True)),
+            ],
+        ),
+        (
+            "a shotgun blast is one shot and many hits",
+            60.0,
+            [
+                {"t": 0.0, "kind": "appear", "target": "t0"},
+                _shot(
+                    0.5, ("t0", False, False), ("t0", True, False), ("t0", False, True)
+                ),
+                _shot(1.0),
+            ],
+        ),
+        (
+            "a hit on a hidden target counts but times nothing",
+            45.0,
+            [
+                {"t": 0.0, "kind": "appear", "target": "t0"},
+                {"t": 0.5, "kind": "hide", "target": "t0"},
+                _shot(0.6, ("t0", True, False)),
+            ],
+        ),
+    ]
+    return [
+        {
+            "name": name,
+            "seconds": seconds,
+            "events": events,
+            "expect": drills.summarise(events, seconds),
+        }
+        for name, seconds, events in cases
+    ]
+
+
+def payload() -> dict[str, Any]:
+    return {
+        "_comment": (
+            "Generated by scripts/gen_hassault_drill_vectors.py from "
+            "backend/modules/hassault/drills.py. Do not edit by hand."
+        ),
+        "tickRate": drills.TICK_RATE,
+        # The three physics ports agree to 1e-9 on one step; this is 720 of them.
+        "tolerance": 1e-6,
+        # f32 in the native client, accumulated over the same 720 steps.
+        "nativeTolerance": 2e-3,
+        "world": WORLD,
+        "replays": _replays(),
+        "stats": _stats(),
+    }
+
+
+def main() -> None:
+    OUT.write_text(json.dumps(payload(), indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {OUT}")
+
+
+if __name__ == "__main__":
+    main()

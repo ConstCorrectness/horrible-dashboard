@@ -203,7 +203,13 @@ pub fn raycast_world_face(
 /// inside the height slab — so a shot straight up or straight down is not a
 /// special case needing its own branch.
 pub fn ray_hits_body(origin: Vec3, direction: Vec3, feet: Vec3) -> Option<f32> {
-    ray_hits_body_sized(origin, direction, feet, crate::api::HitboxSpec::default().radius, BODY_HEIGHT)
+    ray_hits_body_sized(
+        origin,
+        direction,
+        feet,
+        crate::api::HitboxSpec::default().radius,
+        BODY_HEIGHT,
+    )
 }
 
 pub fn ray_hits_body_sized(
@@ -262,22 +268,49 @@ pub fn ray_hits_body_sized(
     Some(enter.max(0.0))
 }
 
-/// Where a weapon's damage starts dropping off.
+/// Where a weapon's damage starts dropping off: the served `falloffStart`.
 ///
-/// **Not served.** The wire has never carried it because in a match the server
-/// does this arithmetic, and widening the API for a number only the training
-/// range reads would be the tail wagging the dog. Approximated from what *is*
-/// served — full damage out to a third of the weapon's range — exactly as
-/// `training.ts` approximates it, so the two ranges agree with each other even
-/// though neither agrees exactly with the server's table.
-///
-/// The sniper and the knife are flat in the real table and stay flat here,
-/// because their falloff begins at their range.
+/// Both ranges used to approximate it as a third of the weapon's range, which
+/// agreed between the two clients and with no weapon in the server's table, so
+/// a dummy took different damage than the same shot in a match. The guess
+/// survives only for a backend older than the field, the same way
+/// `falloffStart` in `training.ts` keeps it.
 pub fn falloff_start(weapon: &WeaponSpec) -> f32 {
+    if let Some(start) = weapon.falloff_start {
+        return start;
+    }
     if weapon.id == "sniper" || weapon.id == "knife" {
         weapon.range
     } else {
         weapon.range / 3.0
+    }
+}
+
+/// `weapons.ACCURATE_SPEED_SCALE`: at or under this share of a run, moving is free.
+pub const ACCURATE_SPEED_SCALE: f32 = 0.34;
+
+/// What about the shooter the cone depends on. `weapons.ShotContext`.
+#[derive(Debug, Clone, Copy)]
+pub struct ShotContext {
+    /// Horizontal speed, cubes per second.
+    pub speed: f32,
+    pub airborne: bool,
+    /// The crouch animation, 0 standing to 1 crouched.
+    pub crouch: f32,
+    pub scoped: i32,
+    /// Seconds since this shooter's previous shot; large if none.
+    pub since_last_shot: f32,
+}
+
+impl Default for ShotContext {
+    fn default() -> ShotContext {
+        ShotContext {
+            speed: 0.0,
+            airborne: false,
+            crouch: 0.0,
+            scoped: 0,
+            since_last_shot: 999.0,
+        }
     }
 }
 

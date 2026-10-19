@@ -21,6 +21,8 @@ import {
   listTacticals,
   getItems,
   listWeapons,
+  listDrills,
+  getDrill,
   ONLINE_HOST,
   type TacticalSpec,
   type ThrowPhysics,
@@ -182,7 +184,9 @@ import {
   type TierSpec,
 } from './graphics';
 import { GrenadeController } from './utility';
-import { TrainingRange } from './training';
+import { TrainingRange, type DrillStatus } from './training';
+import { readBests, recordBest, type DrillSummary } from './training-drill';
+import { DrillCard, DrillClock } from './panels/DrillCard';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
@@ -539,6 +543,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * redraw a number that did not move.
    */
   const [localYou, setLocalYou] = useState<SelfState | null>(null);
+  /** The aim drills offered on the loaded map (`drills.py`). */
+  const [drills, setDrills] = useState<DrillSummary[]>([]);
+  /**
+   * The running drill's phase and whole seconds left, mirrored out of the range
+   * the way `localYou` is: pushed only when one of them changes.
+   */
+  const [drillStatus, setDrillStatus] = useState<DrillStatus | null>(null);
+  const drillKeyRef = useRef('');
+  /** Whether the finished run beat this browser's stored best. */
+  const [drillBest, setDrillBest] = useState(false);
   /**
    * Current zoom step, mirrored out of `ShotController` for the view.
    *
@@ -1111,6 +1125,22 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // otherwise watch.
     sceneRef.current?.setFov(fov / (shotsRef.current?.magnification() ?? 1));
   }, [fov, scoped, progress.renderer]);
+
+  // The drills this map offers. A failure is an empty list: Train still works
+  // as the free range, which is all a backend older than the route can give.
+  useEffect(() => {
+    let cancelled = false;
+    void listDrills(mapName)
+      .then((list) => {
+        if (!cancelled) setDrills(list);
+      })
+      .catch(() => {
+        if (!cancelled) setDrills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapName]);
 
   // The loadout, fetched rather than hardcoded: the client needs each weapon's
   // fire interval so it does not send input the server would only discard, and a
@@ -2007,6 +2037,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             strafe,
             jump: alive && keys.has('jump'),
             crouch: alive && crouchRef.current,
+            walk: alive && keys.has('walk'),
             // Noclip is a local sightseeing tool. The server has no such move, so
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
@@ -2119,6 +2150,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // again for the HUD would consume the markers the controller was
             // handed and show none of them.
             const self = range?.selfState() ?? null;
+            const drill = range?.drillStatus() ?? null;
+            const drillKey = drill
+              ? `${drill.id}:${drill.phase}:${Math.ceil(drill.remaining)}`
+              : '';
+            if (drillKey !== drillKeyRef.current) {
+              drillKeyRef.current = drillKey;
+              setDrillStatus(drill);
+              if (drill?.phase === 'done' && drill.stats) {
+                setDrillBest(recordBest(drill.id, drill.stats));
+                // The card has buttons; a locked pointer cannot reach them.
+                if (document.pointerLockElement) document.exitPointerLock?.();
+              }
+            }
             const intent = shots?.frame(now, 0, self) ?? NO_SHOT;
             // Training has no server to throw at, so the intent is drained and
             // dropped. Draining it matters anyway: without it the press stays
@@ -2168,6 +2212,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 Math.random,
                 rapierRef.current ?? undefined,
                 world3dRef.current ?? undefined,
+                // The accuracy model's inputs, from the body that just stepped.
+                {
+                  speed: Math.hypot(player.velX, player.velY),
+                  airborne: !player.onGround,
+                  crouch: player.crouch,
+                },
               );
               if (shot) {
                 if (shot.shatteredWindows && shot.shatteredWindows.length > 0) {
@@ -3583,9 +3633,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     }
   }, [launcher.result]);
 
-  const train = useCallback(() => {
+  const train = useCallback(
+    (drillId: string | null = null) => {
     if (nativeClient) {
-      void launchNative({ mode: 'train' });
+      void launchNative(drillId ? { mode: 'train', drill: drillId } : { mode: 'train' });
       return;
     }
     sessionRef.current?.leave();
@@ -3605,8 +3656,30 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         range.placeItems(info.items, itemTable.kinds, itemTable.reach);
       }
     }
+    drillKeyRef.current = '';
+    setDrillStatus(null);
+    setDrillBest(false);
+    if (range && world && drillId) {
+      const at = playerRef.current;
+      void getDrill(drillId, mapName, at.x, at.y)
+        .then((spec) => {
+          range.startDrill(spec, world);
+          // A station has a place to stand. Cube maps only: a modelled map's
+          // body is Rapier's, and the any-map drill has no station anyway.
+          if (spec.shooter && !world3dRef.current) {
+            const p = createPlayer(spec.shooter.x, spec.shooter.y, spec.shooter.z, spec.shooter.yaw);
+            p.onGround = true;
+            playerRef.current = p;
+          }
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    }
     deploy();
-  }, [deploy, weapons, nativeClient, launchNative, itemTable, info]);
+    },
+    [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName],
+  );
 
   /**
    * Open the map designer, seeded from the selected map or (`blank`) from solid
@@ -4610,6 +4683,21 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           />
         )}
 
+        {/* The aim drill: its clock while it runs, its score once it ends. Train
+            only — online there is no range, and `drillStatus` stays null. */}
+        {phase === 'playing' && !online && drillStatus && drillStatus.phase !== 'done' && (
+          <DrillClock status={drillStatus} />
+        )}
+        {phase === 'playing' && !online && drillStatus?.phase === 'done' && (
+          <DrillCard
+            status={drillStatus}
+            best={drillBest}
+            onAgain={() => train(drillStatus.id)}
+            onFree={() => train(null)}
+            onMenu={exitToMenu}
+          />
+        )}
+
         {phase !== 'playing' && !nativeRunning && (
           <BootOverlay
             phase={phase}
@@ -4637,6 +4725,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 botSkill={botSkill}
                 onBotSkill={setBotSkill}
                 onTrain={train}
+                drills={drills}
+                drillBests={readBests()}
                 onHost={host}
                 onEditMap={editMap}
                 onQuickPlay={quickPlay}

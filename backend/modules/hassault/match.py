@@ -268,6 +268,8 @@ class Command:
     pitch: float
     dt: float
     crouch: bool = False
+    #: Hold to walk: slower, and silent. See `physics.WALK_SPEED_SCALE`.
+    walk: bool = False
     fire: bool = False
     alt_fire: bool = False
     reload: bool = False
@@ -459,6 +461,8 @@ class MatchPlayer:
     # bounded by the same budget as movement, so it cannot outrun real time.
     sim_time: float = 0.0
     last_fire_at: float = -999.0
+    #: Whether the last simulated command held walk. Silences footsteps.
+    walking: bool = False
     #: How many shots into the current burst this player is.
     #:
     #: Indexes the weapon's spray pattern (`weapons.ASSAULT_SPRAY`). Reset when
@@ -670,8 +674,10 @@ class MatchPlayer:
             # the avatar is drawn to this height and a shot is rewound against it.
             "crouch": round(self.state.crouch, 2),
         }
-        if self.attachments:
-            snap["attachments"] = self.attachments
+        # `attachments` is deliberately absent. It was echoed here, so whatever a
+        # client put in its command rode every other player's snapshot every
+        # tick, and nothing reads it. If attachments ever change what a gun does,
+        # the server derives that; the snapshot carries the result, not the ask.
         return snap
 
     def private_view(self, now: float) -> dict[str, Any]:
@@ -913,6 +919,8 @@ class MatchRoom:
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
         self.rng = random.Random(room_id)
+        #: `server.bots.freeze`: bots produce no input while set (see `_think`).
+        self.bots_frozen = False
         from backend.modules.hassault.replay import ReplayRecorder
 
         # `None` when the server hosting the room keeps no replays — the public
@@ -1185,6 +1193,8 @@ class MatchRoom:
                 player.state.yaw = command.yaw
                 player.state.pitch = command.pitch
                 if player.alive:
+                    # Read by `_movement_consequences`: a walk is silent.
+                    player.walking = command.walk
                     before = (player.state.x, player.state.y)
                     was_airborne = not player.state.on_ground
                     physics.step(
@@ -1195,6 +1205,7 @@ class MatchRoom:
                             strafe=command.strafe,
                             jump=command.jump,
                             crouch=command.crouch,
+                            walk=command.walk,
                             yaw=command.yaw,
                             pitch=command.pitch,
                             dt=dt,
@@ -1714,9 +1725,10 @@ class MatchRoom:
         state = player.state
 
         # Footsteps, by distance covered rather than by time. Crouching makes none
-        # at all — which is the whole reason the crouch speed penalty is a trade.
+        # at all — which is the whole reason the crouch speed penalty is a trade —
+        # and nor does walking, CS's silent move.
         travelled = math.hypot(state.x - before[0], state.y - before[1])
-        if state.on_ground and state.crouch <= 0.5:
+        if state.on_ground and state.crouch <= 0.5 and not player.walking:
             player.stride += travelled
             if player.stride >= noise.STRIDE_DISTANCE:
                 player.stride = 0.0
@@ -1853,6 +1865,10 @@ class MatchRoom:
         budgeted and simulated by the same code as a browser — there is exactly
         one simulation, and a bot cannot do anything a player could not.
         """
+        if self.bots_frozen:
+            # `server.bots.freeze`: no input at all, so a bot stands where it is
+            # and does not turn, aim or fire. It is still a body that can be shot.
+            return
         for player in self.players.values():
             if player.brain is None:
                 continue
@@ -2081,7 +2097,8 @@ class MatchRoom:
         # disagree with the fire-rate check above about how much time passed
         # inside one tick and pin every shot at pattern index 0. `last_throw_at`
         # documents the identical reasoning for grenades.
-        if player.sim_time - player.last_fire_at > weapon.spray_reset:
+        since_last_shot = player.sim_time - player.last_fire_at
+        if since_last_shot > weapon.spray_reset:
             player.spray_index = 0
         player.last_fire_at = player.sim_time
         # Shooting forfeits spawn protection. Otherwise it is not protection, it
@@ -2148,11 +2165,19 @@ class MatchRoom:
             direction,
             targets,
             self.rng,
-            # The residual cone, not the full one: for a weapon with a pattern
-            # the pattern is doing the aiming and the cone is only what keeps it
-            # counterable rather than solved. Falls back to `effective_spread`
-            # for the four weapons that have no pattern.
-            spread=weapons.residual_spread(weapon, command.scoped),
+            # The accuracy model: the residual cone (scope and pattern applied),
+            # then first-shot, crouch, movement, air and bloom, all from this
+            # server's own state after the step that carried the shot.
+            spread=weapons.shot_cone(
+                weapon,
+                weapons.ShotContext(
+                    speed=math.hypot(player.state.vel_x, player.state.vel_y),
+                    airborne=not player.state.on_ground,
+                    crouch=player.state.crouch,
+                    scoped=command.scoped,
+                    since_last_shot=since_last_shot,
+                ),
+            ),
             rewound_ms=max(0.0, now_ms - rewind_to),
             heights=heights,
             penetration=pen,
@@ -3190,6 +3215,24 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def _parse_attachments(raw: Any) -> dict[str, str] | None:
+    """`{slot: attachment_id}`, keeping only real catalogue entries in their own
+    slot.
+
+    Length caps on each key and value used to be the only bound, so a command
+    could carry any number of entries. Keyed by slot against the catalogue, the
+    dict can hold at most one entry per slot that exists.
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, str] = {}
+    for slot, att_id in raw.items():
+        att = weapons.ATTACHMENTS_BY_ID.get(str(att_id))
+        if att is not None and att.slot == str(slot):
+            out[att.slot] = att.id
+    return out
+
+
 def parse_command(raw: Any) -> Command | None:
     if not isinstance(raw, dict):
         return None
@@ -3220,6 +3263,7 @@ def parse_command(raw: Any) -> Command | None:
         strafe=_clamp(_num(raw.get("strafe")), -1.0, 1.0),
         jump=bool(raw.get("jump")),
         crouch=bool(raw.get("crouch")),
+        walk=bool(raw.get("walk")),
         yaw=_num(raw.get("yaw")),
         pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
         dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),
@@ -3283,14 +3327,6 @@ def parse_command(raw: Any) -> Command | None:
             else None
         ),
         ping=ping_val,
-        attachments=(
-            {
-                str(k): str(v)
-                for k, v in raw.get("attachments").items()
-                if len(str(k)) <= 24 and len(str(v)) <= 48
-            }
-            if isinstance(raw.get("attachments"), dict)
-            else None
-        ),
+        attachments=_parse_attachments(raw.get("attachments")),
         subtick=_clamp(_num(raw.get("subtick")), 0.0, 0.999),
     )

@@ -31,6 +31,8 @@ pub mod demo;
 pub mod detail;
 pub mod display;
 pub mod divergence;
+pub mod drill_hud;
+pub mod drills;
 pub mod editor;
 pub mod effects;
 pub mod flashbang;

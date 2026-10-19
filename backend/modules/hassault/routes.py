@@ -576,6 +576,37 @@ async def get_weapons() -> list[WeaponOut]:
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
+@router.get("/drills")
+async def list_drills(map: str | None = None) -> list[dict[str, Any]]:
+    """The training range's aim drills: those on `map`, plus the any-map ones.
+
+    Plain dicts rather than a response model on purpose: a model silently drops
+    a field it does not declare, which is the `WeaponOut` trap.
+    """
+    from backend.modules.hassault import drills
+
+    return [d.to_dict() for d in drills.drills_for(map)]
+
+
+@router.get("/drills/{drill_id}")
+async def get_drill(
+    drill_id: str,
+    map: str | None = None,
+    x: float | None = None,
+    y: float | None = None,
+) -> dict[str, Any]:
+    """One drill, expanded: where the shooter stands, and every target's start
+    and input schedule (see `drills.py`). `map`, `x` and `y` are only needed by
+    the any-map drill, whose targets stand on the spawns nearest `(x, y)`."""
+    from backend.modules.hassault import drills
+
+    near = (x, y) if x is not None and y is not None else None
+    try:
+        return drills.expand(drill_id, map, near)
+    except drills.DrillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/weapons/attachments")
 async def get_weapon_attachments() -> list[dict[str, Any]]:
     """Modular weapon attachments catalog (Optics, Muzzle devices, Magazines)."""
@@ -1025,10 +1056,9 @@ def _account_id() -> str:
     a match filed under one id and read back under another is a debrief that
     never appears — with nothing anywhere reporting a failure.
     """
-    from backend.modules.games import server_auth
+    from backend.modules.hassault import results
 
-    account = server_auth.signed_in_account()
-    return str((account or {}).get("account_id") or "local_player")
+    return results.current_account_id()
 
 
 ACTIVE_GAME_PROCESSES: dict[str, Any] = {}
@@ -1474,6 +1504,12 @@ async def _launch_now(
         if count:
             connect_args.append(f"--bots={count}")
             connect_args.append(f"--bot-skill={req.bot_skill}")
+    if req.mode == "train" and req.drill:
+        from backend.modules.hassault import drills
+
+        # Only a drill that exists reaches the argv: this arrives from a browser.
+        if req.drill in drills.DRILL_BY_ID:
+            connect_args.append(f"--drill={req.drill}")
     if req.username:
         # A wire label only. The backend takes the real name from the signed-in
         # account and ignores this, which is why it is not worth defaulting to
@@ -1821,7 +1857,9 @@ async def calibrate_ranked_match(payload: dict[str, Any]) -> dict[str, Any]:
     import time
     from backend.modules.hassault import ranked_mmr
 
-    account_id = payload.get("accountId") or _account_id()
+    # The signed-in account, never one named in the body. Taking `accountId`
+    # from the request let any caller write a rating row for anybody.
+    account_id = _account_id()
     match_id = payload.get("matchId", f"match_{int(time.time())}")
     map_name = payload.get("mapName", "hd_mirage")
     result = payload.get("result", {})

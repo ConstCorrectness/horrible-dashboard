@@ -39,6 +39,7 @@ fn test_knife_speed_and_acceleration_boost() {
         strafe: 0.0,
         jump: false,
         crouch: false,
+        walk: false,
         sprint: false,
         knife: false,
     };
@@ -47,6 +48,7 @@ fn test_knife_speed_and_acceleration_boost() {
         strafe: 0.0,
         jump: false,
         crouch: false,
+        walk: false,
         sprint: false,
         knife: true,
     };

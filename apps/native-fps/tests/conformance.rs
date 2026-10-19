@@ -30,7 +30,9 @@ use hassault_native::api::{apply_spray, Entity, MapInfo, ThrowPhysics, WeaponSpe
 use hassault_native::arc;
 use hassault_native::summary::{MatchTally, Summary};
 use hassault_native::physics::{apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn};
-use hassault_native::trace::{aim_vector, ray_hits_body_sized, raycast_world_face, BODY_HEIGHT};
+use hassault_native::trace::{
+    aim_vector, damage_at, falloff_start, ray_hits_body_sized, raycast_world_face, BODY_HEIGHT,
+};
 use hassault_native::world::{World, LADDER_ENTITY, SOLID, SPACE};
 use serde_json::Value;
 
@@ -164,6 +166,7 @@ fn movement_matches_the_server_and_the_browser_client() {
                     strafe: f(raw, "strafe", 0.0),
                     jump: b(raw, "jump", false),
                     crouch: b(raw, "crouch", false),
+                    walk: b(raw, "walk", false),
                     sprint: false,
                     knife: false,
                 },
@@ -616,5 +619,33 @@ fn the_flash_curve_matches_the_server_and_the_browser_client() {
             assert!((state.fade - w("fade")).abs() < loose, "step {i}: fade");
             assert!((state.alpha() - w("alpha")).abs() < loose, "step {i}: alpha");
         }
+    }
+}
+
+/// The training range does the falloff arithmetic the server does in a match.
+/// It used to guess the falloff start as a third of the range, which agreed with
+/// the browser and with no weapon in the server's table.
+#[test]
+fn training_falloff_matches_the_server() {
+    let vectors = vectors();
+    let table = vectors["weapons"].as_object().expect("served weapons");
+    let cases = vectors["falloffs"].as_array().expect("falloffs");
+    assert!(!cases.is_empty(), "the fixture lost its falloff cases");
+
+    for case in cases {
+        let id = case["weapon"].as_str().expect("a weapon id");
+        let weapon: WeaponSpec =
+            serde_json::from_value(table[id].clone()).expect("a served weapon");
+        assert!(
+            weapon.falloff_start.is_some(),
+            "{id}: `falloffStart` did not deserialize; check the rename"
+        );
+        let distance = f(case, "distance", 0.0);
+        let got = damage_at(&weapon, distance, falloff_start(&weapon));
+        let want = f(case, "expect", -1.0);
+        assert!(
+            (got - want).abs() < 1e-3,
+            "{id} at {distance}: {got} != server {want}"
+        );
     }
 }

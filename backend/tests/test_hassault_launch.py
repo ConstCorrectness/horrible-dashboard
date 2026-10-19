@@ -133,6 +133,17 @@ def test_train_says_so(client: TestClient) -> None:
     assert "--mode=train" in args_for(client, mode="train")
 
 
+def test_a_drill_travels_with_train_and_only_a_real_one(client: TestClient) -> None:
+    """`--drill` is read by Train alone, and it arrives from a browser, so only
+    an id in the drill table reaches the argv."""
+    assert "--drill=aim_strafe" in args_for(client, mode="train", drill="aim_strafe")
+    for args in (
+        args_for(client, mode="train", drill="nope; rm -rf"),
+        args_for(client, mode="host", drill="aim_strafe"),
+    ):
+        assert not any(a.startswith("--drill=") for a in args), args
+
+
 def test_a_bot_count_only_travels_with_host(client: TestClient) -> None:
     """`add_bot` is host-only on the channel, so a count on a join is an
     instruction the server would refuse."""

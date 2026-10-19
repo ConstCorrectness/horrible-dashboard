@@ -81,6 +81,7 @@ pub const KEY_ROWS: &[(controls::Action, &str, KeyGroup)] = {
         (A::Right, "STRAFE RIGHT", Movement),
         (A::Jump, "JUMP", Movement),
         (A::Crouch, "CROUCH", Movement),
+        (A::Walk, "WALK", Movement),
         (A::Sprint, "SPRINT", Movement),
         (A::Reload, "RELOAD", Combat),
         (A::Inspect, "INSPECT WEAPON", Combat),

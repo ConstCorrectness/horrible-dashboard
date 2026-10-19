@@ -74,7 +74,7 @@ use crate::app::App;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
     /// One player, one map, **no socket at all** — the browser client's Train,
-    /// minus its dummy range, which lives in `training.ts` and has no port yet.
+    /// dummy range included (`training.rs`, the port of `training.ts`).
     Train,
     /// Open (or join) a match here and field bots in it.
     Host,
@@ -122,6 +122,8 @@ struct Args {
     /// Bots to field, `--mode=host` only.
     bots: u32,
     bot_skill: String,
+    /// `--mode=train` only: an aim drill to start instead of the free range.
+    drill: Option<String>,
     /// Multiplies the turn per unit of raw mouse movement.
     /// `None` unless the launcher passed one, in which case it outranks the
     /// stored setting — it *is* the stored setting, as the pane last saw it.
@@ -167,6 +169,7 @@ impl Default for Args {
             game: String::new(),
             bots: 0,
             bot_skill: "normal".into(),
+            drill: None,
             sensitivity: None,
             headless: false,
             check_only: false,
@@ -203,6 +206,8 @@ fn parse_args() -> Args {
             }
         } else if let Some(v) = arg.strip_prefix("--bot-skill=") {
             args.bot_skill = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--drill=") {
+            args.drill = Some(v.to_string());
         } else if let Some(v) = arg.strip_prefix("--game=") {
             args.game = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--room=") {
@@ -264,6 +269,7 @@ fn parse_args() -> Args {
                    \x20                   ranked (the game server adjudicates)\n\
                    --bots=<n>          bots to field, --mode=host only\n\
                    --bot-skill=<s>     easy, normal or hard (default normal)\n\
+                   --drill=<id>        --mode=train: run this aim drill (see /api/hassault/drills)\n\
                    --game=<mode>       dm, tdm, ctf or defuse (ignored with --room)\n\
                    --room=<id>         join a specific room rather than any on the map\n\
                    --host=<node id>    that room is on a friend's node\n\
@@ -678,6 +684,15 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         // host-only on the channel — which is why the launcher only ever sends a
         // count with `--mode=host`.
         app.queue_bots(args.bots, args.bot_skill.clone());
+    }
+    if let (Mode::Train, Some(drill)) = (args.mode, args.drill.as_deref()) {
+        // Fetched here rather than inside the app, like the loadout: the
+        // app's constructor is where Train places the player, and the drill
+        // starts from wherever that put them.
+        match node.drill(drill, &args.map, app.offline_position()) {
+            Ok(spec) => app.set_drill(spec),
+            Err(e) => eprintln!("hassault: no drill {drill} ({e}); free range instead"),
+        }
     }
     event_loop.run_app(&mut app)?;
     Ok(())

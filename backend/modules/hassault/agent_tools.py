@@ -485,7 +485,7 @@ def register_hassault_tools() -> None:
         name="hassault.console_exec",
         description=(
             "Execute a developer console command, CVar assignment/query, or Python script "
-            "in hAssault (e.g. 'draw.hitboxes 1', 'server.timescale 0.5', 'player.give carbine')."
+            "in hAssault (e.g. 'draw.hitboxes 1', 'server.bots.freeze 1', 'player.give assault')."
         ),
         handler=console_exec_tool,
         group="hassault",

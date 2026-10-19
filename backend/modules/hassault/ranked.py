@@ -271,14 +271,13 @@ def _record(result: dict[str, Any]) -> None:
     reported is the referee's call, and second-guessing it here would mean a
     ranked match the server counted quietly vanishing from the local history.
     """
-    from backend.modules.games import server_auth
     from backend.modules.hassault import results
 
-    account = server_auth.signed_in_account()
-    account_id = str((account or {}).get("account_id") or "local_player")
+    account_id = results.current_account_id()
     try:
         results.record(account_id, result, authority="server")
         from backend.modules.hassault import rating
+
         rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record a ranked result")

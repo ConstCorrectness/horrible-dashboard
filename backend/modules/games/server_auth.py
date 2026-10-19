@@ -151,6 +151,17 @@ def signed_in_account() -> dict[str, Any] | None:
     }
 
 
+def signed_in_account_id() -> str | None:
+    """The signed-in account's id, or None.
+
+    One spelling, because the dict's key is `id` and three hassault call sites
+    once read `account_id` from it — which is never set, so every match, skin and
+    rating on a node was silently filed under the signed-out stand-in instead.
+    """
+    account = signed_in_account()
+    return account["id"] if account else None
+
+
 def signed_in_name() -> str | None:
     account = signed_in_account()
     return account["display_name"] if account else None

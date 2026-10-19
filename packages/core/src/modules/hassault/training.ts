@@ -20,8 +20,15 @@
  */
 import type { ItemReach, ItemSpec, WeaponSpec } from './api';
 import type { ItemRow, PickedItem, PlayerRow, SelfState } from './net';
-import { currentHitbox } from './hitbox';
+import { currentHitbox, heightAt } from './hitbox';
 import { spawnAt } from './player';
+import {
+  DrillMover,
+  summarise,
+  type DrillEvent,
+  type DrillSpec,
+  type DrillStats,
+} from './training-drill';
 import {
   aimVector,
   damageAt,
@@ -30,7 +37,7 @@ import {
   FACE_NONE,
   raycastWorldFace,
   applySpray,
-  residualSpread,
+  shotCone,
   spreadVector,
   sprayOffset,
   type Vec,
@@ -47,18 +54,15 @@ export const TARGET_RESPAWN = 3.0;
 export const TARGET_HP = 100;
 
 /**
- * Falloff start per weapon id.
+ * Falloff start: the served `falloffStart`.
  *
- * The wire does not carry `falloffStart` — the browser never needed it, because
- * in a match the server does this arithmetic. Rather than widen the API for a
- * number only the range reads, it is approximated from what *is* served: full
- * damage out to a third of the weapon's range. The sniper and knife are flat in
- * the real table and stay flat here because their falloff begins at their range.
- *
- * This is the one number in this file that is a deliberate approximation of the
- * server's, and it is only ever used to colour a damage figure on a dummy.
+ * The range used to guess it as a third of the weapon's range, which matched no
+ * weapon in the server's table (the rifle falls off from 80, not range/3), so a
+ * dummy took different damage than the same shot in a match. The guess survives
+ * only for a backend older than the field.
  */
-function falloffStart(weapon: WeaponSpec): number {
+export function falloffStart(weapon: WeaponSpec): number {
+  if (typeof weapon.falloffStart === 'number') return weapon.falloffStart;
   if (weapon.id === 'sniper' || weapon.id === 'knife') return weapon.range;
   return weapon.range / 3;
 }
@@ -98,6 +102,37 @@ interface Target {
   alive: boolean;
   /** Seconds until it stands back up; only meaningful while down. */
   downFor: number;
+  /** In a drill, the replayed body: its position, facing and crouch. */
+  mover?: DrillMover;
+}
+
+/** How the shooter was moving when they fired: `ShotContext` minus the parts
+ * the range already knows (the scope, the time since its last shot). */
+export interface RangeMotion {
+  speed: number;
+  airborne: boolean;
+  crouch: number;
+}
+
+const STANDING: RangeMotion = { speed: 0, airborne: false, crouch: 0 };
+
+/** Seconds of countdown before a drill's clock starts. */
+export const DRILL_COUNTDOWN = 3;
+
+/** Where a drill is: counting down, running, or finished with a score. */
+export interface DrillStatus {
+  id: string;
+  name: string;
+  phase: 'countdown' | 'running' | 'done';
+  /** Seconds left in the current phase; 0 once done. */
+  remaining: number;
+  /** Set once `phase` is `done`. */
+  stats: DrillStats | null;
+}
+
+/** A target can be shot: standing, and shown by its schedule. */
+function hittable(target: Target): boolean {
+  return target.alive && (target.mover?.visible ?? true);
 }
 
 /**
@@ -131,6 +166,135 @@ export class TrainingRange {
   private reach: ItemReach | null = null;
   private clock = 0;
   private pendingPickups: PickedItem[] = [];
+
+  /**
+   * The drill being run, if any. Its targets replace the free range's dummies
+   * and move by replaying the served schedule (`training-drill.ts`); its event
+   * log is what the results card is scored from.
+   */
+  private drill: DrillSpec | null = null;
+  private drillWorld: World | null = null;
+  private drillPhase: DrillStatus['phase'] = 'countdown';
+  private countdown = 0;
+  private tickAcc = 0;
+  private ticksDone = 0;
+  private events: DrillEvent[] = [];
+  private stats: DrillStats | null = null;
+  /** Which targets were hittable after the last tick, to log appear/hide. */
+  private shown = new Set<string>();
+
+  /**
+   * Start `spec` on `world`. The targets stand still through the countdown and
+   * start their schedules together when it ends.
+   */
+  startDrill(spec: DrillSpec, world: World): void {
+    const tickDt = 1 / spec.tickRate;
+    this.drill = spec;
+    this.drillWorld = world;
+    this.drillPhase = 'countdown';
+    this.countdown = DRILL_COUNTDOWN;
+    this.tickAcc = 0;
+    this.ticksDone = 0;
+    this.events = [];
+    this.stats = null;
+    this.shown.clear();
+    this.targets = spec.targets.map((t, i) => {
+      const mover = new DrillMover(t, tickDt);
+      return {
+        id: t.id,
+        name: `Target ${i + 1}`,
+        x: mover.state.x,
+        y: mover.state.y,
+        z: mover.state.z,
+        hp: spec.hp,
+        alive: true,
+        downFor: 0,
+        mover,
+      };
+    });
+  }
+
+  /** Leave the drill, back to the free range (with no dummies until `place`). */
+  stopDrill(): void {
+    this.drill = null;
+    this.drillWorld = null;
+    this.targets = [];
+    this.events = [];
+    this.stats = null;
+    this.shown.clear();
+  }
+
+  /** The drill's state for the HUD and the results card, or `null` if none. */
+  drillStatus(): DrillStatus | null {
+    const drill = this.drill;
+    if (!drill) return null;
+    const tickDt = 1 / drill.tickRate;
+    const remaining =
+      this.drillPhase === 'countdown'
+        ? this.countdown
+        : this.drillPhase === 'running'
+          ? Math.max(0, (drill.ticks - this.ticksDone) * tickDt)
+          : 0;
+    return { id: drill.id, name: drill.name, phase: this.drillPhase, remaining, stats: this.stats };
+  }
+
+  /** Seconds since the drill's clock started: the time every event is stamped with. */
+  private get drillClock(): number {
+    return this.drill ? this.ticksDone / this.drill.tickRate : 0;
+  }
+
+  /** Log `appear` and `hide` for every target whose hittability just changed. */
+  private noteVisibility(): void {
+    if (this.drillPhase !== 'running') return;
+    const t = this.drillClock;
+    for (const target of this.targets) {
+      const now = hittable(target);
+      const was = this.shown.has(target.id);
+      if (now && !was) {
+        this.shown.add(target.id);
+        this.events.push({ t, kind: 'appear', target: target.id });
+      } else if (!now && was) {
+        this.shown.delete(target.id);
+        // A kill already ended this appearance in the log; only a schedule
+        // hiding a standing target is a `hide`.
+        if (target.alive) this.events.push({ t, kind: 'hide', target: target.id });
+      }
+    }
+  }
+
+  private updateDrill(dt: number): void {
+    const drill = this.drill;
+    const world = this.drillWorld;
+    if (!drill || !world || this.drillPhase === 'done') return;
+    if (this.drillPhase === 'countdown') {
+      this.countdown -= dt;
+      if (this.countdown > 0) return;
+      this.drillPhase = 'running';
+      this.noteVisibility();
+      return;
+    }
+    // Whole fixed ticks only, whatever the frame rate: that is what makes the
+    // schedule replay to the positions the server simulated.
+    const tickDt = 1 / drill.tickRate;
+    this.tickAcc += Math.min(dt, 0.25);
+    while (this.tickAcc >= tickDt && this.ticksDone < drill.ticks) {
+      this.tickAcc -= tickDt;
+      for (const target of this.targets) {
+        const mover = target.mover;
+        if (!mover) continue;
+        mover.advance(world);
+        target.x = mover.state.x;
+        target.y = mover.state.y;
+        target.z = mover.state.z;
+      }
+      this.ticksDone += 1;
+      this.noteVisibility();
+    }
+    if (this.ticksDone >= drill.ticks) {
+      this.drillPhase = 'done';
+      this.stats = summarise(this.events, drill.seconds);
+    }
+  }
 
   setWeapons(specs: WeaponSpec[], slot: number): void {
     this.weapons = specs;
@@ -305,9 +469,10 @@ export class TrainingRange {
       target.downFor -= dt;
       if (target.downFor <= 0) {
         target.alive = true;
-        target.hp = TARGET_HP;
+        target.hp = this.drill?.hp ?? TARGET_HP;
       }
     }
+    this.updateDrill(dt);
   }
 
   private finishReload(): void {
@@ -340,6 +505,11 @@ export class TrainingRange {
     rand: () => number = Math.random,
     physics3d?: import('./physics-rapier').RapierPhysicsWorld,
     world3d?: import('./world3d').World3D,
+    /**
+     * How the shooter was moving, for the accuracy model. Omitted is standing
+     * still, which is what every caller that predates the model meant.
+     */
+    motion: RangeMotion = STANDING,
   ): RangeShot | null {
     const weapon = this.weapons[this.slot];
     if (!weapon) return null;
@@ -358,18 +528,25 @@ export class TrainingRange {
     // The index is kept here rather than in `ShotController` because the range
     // is the server as well as the client — there is nobody to adopt it from.
     // The reset gate is the served `sprayReset`, on the range's own clock.
-    if (this.clock - this.lastRangeFireAt > (weapon.sprayReset ?? 0)) {
+    const sinceLastShot = this.clock - this.lastRangeFireAt;
+    if (sinceLastShot > (weapon.sprayReset ?? 0)) {
       this.sprayIndex = 0;
     }
     this.lastRangeFireAt = this.clock;
     const [aimYaw, aimPitch] = applySpray(yaw, pitch, sprayOffset(weapon, this.sprayIndex));
     this.sprayIndex += 1;
     const direction = aimVector(aimYaw, aimPitch);
-    // The scope's whole mechanical effect, mirroring `effective_spread`
-    // server-side: which cone this pull uses. `residualSpread` is what a weapon
-    // with a pattern is left with — the full cone here would make the range's
-    // rifle five times less accurate than a match's.
-    const cone = residualSpread(weapon, scoped);
+    // The accuracy model, exactly as the server fires it (`weapons.shot_cone`):
+    // the residual cone with the scope and pattern applied, then first-shot,
+    // crouch, movement, air and bloom. A range that let you run and gun would
+    // teach the one habit a match punishes.
+    const cone = shotCone(weapon, {
+      speed: motion.speed,
+      airborne: motion.airborne,
+      crouch: motion.crouch,
+      scoped,
+      sinceLastShot,
+    });
     const ends: Vec[] = [];
     const faces: number[] = [];
     const hits: TargetHit[] = [];
@@ -400,20 +577,24 @@ export class TrainingRange {
           }
         }
       } else {
-        const res = raycastWorldFace(
-          world,
-          origin,
-          [pdx, pdy, pdz],
-          weapon.range,
-        );
+        const res = raycastWorldFace(world, origin, [pdx, pdy, pdz], weapon.range);
         wall = res.distance;
         face = res.face;
       }
 
       let best: { distance: number; target: Target } | null = null;
       for (const target of this.targets) {
-        if (!target.alive) continue;
-        const distance = rayHitsBody(origin, [pdx, pdy, pdz], [target.x, target.y, target.z]);
+        if (!hittable(target)) continue;
+        // A crouching drill target is a shorter body, exactly as a crouching
+        // player is: the head moves, which is what the crouch-peek drill is for.
+        const height = heightAt(target.mover?.state.crouch ?? 0);
+        const distance = rayHitsBody(
+          origin,
+          [pdx, pdy, pdz],
+          [target.x, target.y, target.z],
+          undefined,
+          height,
+        );
         // A body behind an impenetrable wall is not a target. If penetrated, damage carries through!
         if (distance === null) continue;
         if (distance >= wall && penFactor <= 0.05) continue;
@@ -432,21 +613,36 @@ export class TrainingRange {
         origin[1] + pdy * distance,
         origin[2] + pdz * distance,
       ];
-      // Relative to the top of the body, so the head is where the head is.
+      // Relative to the top of the body, so the head is where the head is,
+      // standing or crouched.
       const spec = currentHitbox();
-      const head = point[2] >= target.z + (spec.standingHeight - spec.headBand);
-      const nutshot = !head && point[2] >= target.z + spec.standingHeight * 0.38 && point[2] <= target.z + spec.standingHeight * 0.55;
-      const limbs = !head && !nutshot && point[2] < target.z + spec.standingHeight * 0.38;
-      const mult = head ? weapon.headMultiplier : nutshot ? 1.5 : limbs ? 0.75 : 1.0;
+      const tall = heightAt(target.mover?.state.crouch ?? 0);
+      const head = point[2] >= target.z + (tall - spec.headBand);
+      const nutshot =
+        !head && point[2] >= target.z + tall * 0.38 && point[2] <= target.z + tall * 0.55;
+      const limbs = !head && !nutshot && point[2] < target.z + tall * 0.38;
+      // A heads-only drill still counts a body shot as a hit; it just does nothing.
+      const bodyCounts = !(this.drill?.headOnly ?? false);
+      const mult = head
+        ? weapon.headMultiplier
+        : !bodyCounts
+          ? 0
+          : nutshot
+            ? 1.5
+            : limbs
+              ? 0.75
+              : 1.0;
       const wallbangHit = pelletWallbang || distance > wall;
       if (wallbangHit) hadWallbang = true;
       const finalDamageFactor = distance > wall ? penFactor : 1.0;
-      const amount = Math.round(damageAt(weapon, distance, falloffStart(weapon)) * mult * finalDamageFactor);
+      const amount = Math.round(
+        damageAt(weapon, distance, falloffStart(weapon)) * mult * finalDamageFactor,
+      );
       target.hp -= amount;
       const killed = target.hp <= 0;
       if (killed) {
         target.alive = false;
-        target.downFor = TARGET_RESPAWN;
+        target.downFor = this.drill?.respawn ?? TARGET_RESPAWN;
       }
       hits.push({ id: target.id, damage: amount, head, killed, wallbang: wallbangHit });
       ends.push(point);
@@ -454,6 +650,15 @@ export class TrainingRange {
     }
 
     if (hits.length > 0) this.pendingHits.push(...hits);
+    if (this.drill && this.drillPhase === 'running') {
+      this.events.push({
+        t: this.drillClock,
+        kind: 'shot',
+        hits: hits.map((h) => ({ target: h.id, head: h.head, killed: h.killed })),
+      });
+      // A kill ends the appearance in the log; the target is no longer shown.
+      for (const h of hits) if (h.killed) this.shown.delete(h.id);
+    }
     return {
       origin,
       ends,
@@ -508,7 +713,10 @@ export class TrainingRange {
 
   /** The dummies as bodies the avatar pool can draw. */
   rows(): PlayerRow[] {
-    return this.targets.map((target) => ({
+    // A pop-up hidden by its schedule is not drawn at all: a body standing there
+    // unhittable would be a target that lies.
+    const drawn = this.targets.filter((t) => t.mover?.visible ?? true);
+    return drawn.map((target) => ({
       id: target.id,
       name: target.name,
       // Team 1 throughout: they render in the opposing colour, which is the
@@ -517,7 +725,7 @@ export class TrainingRange {
       x: target.x,
       y: target.y,
       z: target.z,
-      yaw: 0,
+      yaw: target.mover?.state.yaw ?? 0,
       pitch: 0,
       ground: true,
       stale: false,
@@ -528,11 +736,12 @@ export class TrainingRange {
       kills: 0,
       deaths: 0,
       bot: true,
-      crouch: 0,
+      crouch: target.mover?.state.crouch ?? 0,
     }));
   }
 
   reset(): void {
+    this.stopDrill();
     this.targets = [];
     this.pendingHits = [];
     this.reloadIn = 0;

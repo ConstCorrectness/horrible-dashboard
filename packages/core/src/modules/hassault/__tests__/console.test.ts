@@ -7,7 +7,8 @@ describe('hAssault Developer Console: CVar Registry', () => {
     expect(consoleRegistry.get('net.graph')).toBe(0);
     expect(consoleRegistry.get('draw.hitboxes')).toBe(false);
     expect(consoleRegistry.get('draw.fov')).toBe(75);
-    expect(consoleRegistry.get('server.timescale')).toBe(1.0);
+    expect(consoleRegistry.get('server.bots.freeze')).toBe(false);
+    expect(consoleRegistry.get('server.timescale')).toBeUndefined();
   });
 
   it('sets and coerces CVar values with min/max clamping', () => {
@@ -57,11 +58,11 @@ describe('hAssault Developer Console: Executor & History', () => {
     executor.historyIndex = -1;
 
     executor.recordHistory('draw.hitboxes 1');
-    executor.recordHistory('server.timescale 0.5');
+    executor.recordHistory('server.bots.freeze 1');
 
-    expect(executor.historyPrev()).toBe('server.timescale 0.5');
+    expect(executor.historyPrev()).toBe('server.bots.freeze 1');
     expect(executor.historyPrev()).toBe('draw.hitboxes 1');
-    expect(executor.historyNext()).toBe('server.timescale 0.5');
+    expect(executor.historyNext()).toBe('server.bots.freeze 1');
     expect(executor.historyNext()).toBe('');
   });
 

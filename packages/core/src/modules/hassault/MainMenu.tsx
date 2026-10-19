@@ -31,6 +31,7 @@ import type {
 } from './api';
 import { installNativeClient, nativeClientStatus } from './api';
 import { useNativeLaunch } from './native-launch';
+import type { DrillStats, DrillSummary } from './training-drill';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -88,8 +89,15 @@ export interface MainMenuProps {
   invites: MatchInvite[];
   botSkill: string;
   onBotSkill: (skill: string) => void;
-  /** Enter the world alone: no match and no server, against static dummies. */
-  onTrain: () => void;
+  /**
+   * Enter the world alone: no match and no server. With a drill id, run that aim
+   * drill (`drills.py`); with `null`, the free range's static dummies.
+   */
+  onTrain: (drill: string | null) => void;
+  /** The aim drills offered on `mapName`. Empty when the backend has none. */
+  drills: DrillSummary[];
+  /** This browser's best run on each drill, by id. */
+  drillBests: Record<string, DrillStats>;
   /** Host a match on `mapName` and enter it, optionally with bots already in. */
   onHost: (bots: number) => void;
   /**
@@ -436,6 +444,10 @@ const BOT_COUNTS = [0, 1, 3, 5, 7];
  */
 function PlaySection(props: MainMenuProps) {
   const [bots, setBots] = useState(3);
+  // '' is the free range. Reset when the map changes and the drill is not on it.
+  const [drill, setDrill] = useState('');
+  const offered = props.drills.some((d) => d.id === drill) ? drill : '';
+  const best = offered ? props.drillBests[offered] : undefined;
   const bundled = props.maps.filter((m) => m.source === 'bundled');
   // A rated match needs a map the *server* has. Checked against the server's own
   // list rather than against `source === 'bundled'` locally: the two agree today
@@ -524,12 +536,34 @@ function PlaySection(props: MainMenuProps) {
       <div style={panel.row}>
         <div style={panel.rowMain}>
           <span>Train</span>
+          {best && (
+            <span style={{ ...panel.dim, fontFamily: 'var(--font-mono, monospace)' }}>
+              best {best.killsPerMinute.toFixed(1)} kills/min,{' '}
+              {Math.round(best.accuracy * 100)}% accuracy
+            </span>
+          )}
         </div>
-        {/* Plain, not accented: exactly one thing on this screen should look
-            like the thing to press, and Quick play is it. */}
-        <button onClick={props.onTrain} disabled={!props.ready}>
-          Enter
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <select
+            value={offered}
+            onChange={(e) => setDrill(e.target.value)}
+            aria-label="Drill"
+            title={props.drills.find((d) => d.id === offered)?.description}
+            style={{ width: 160, padding: '0 0.4rem' }}
+          >
+            <option value="">Free practice</option>
+            {props.drills.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          {/* Plain, not accented: exactly one thing on this screen should look
+              like the thing to press, and Quick play is it. */}
+          <button onClick={() => props.onTrain(offered || null)} disabled={!props.ready}>
+            Enter
+          </button>
+        </div>
       </div>
 
       <div style={panel.row}>

@@ -162,6 +162,9 @@ pub struct App {
     socket: Option<MatchSocket>,
     /// Bots to field once the welcome names a room, `--mode=host` only.
     pending_bots: Option<(u32, String)>,
+    /// The aim drill this Train was launched into (`--drill`), kept so the
+    /// results card can run it again.
+    drill: Option<hassault_native::drills::DrillSpec>,
     /// Where we believe we are, ahead of the server. The camera reads this.
     prediction: Prediction,
     camera: Camera,
@@ -428,6 +431,7 @@ struct Keys {
     right: bool,
     jump: bool,
     crouch: bool,
+    walk: bool,
     sprint: bool,
     fire: bool,
     /// Whether the scoreboard is being held open. A held key rather than a
@@ -520,6 +524,7 @@ impl App {
             spawn_index: None,
             socket,
             pending_bots: None,
+            drill: None,
             prediction: Prediction::default(),
             camera: Camera::default(),
             shake: Shake::default(),
@@ -1463,6 +1468,44 @@ impl App {
         self.own_room = own;
     }
 
+    /// Where Train put the player, for a drill that places targets near it.
+    pub fn offline_position(&self) -> (f32, f32) {
+        (self.prediction.state.x, self.prediction.state.y)
+    }
+
+    /// Run `spec` on the range. See `begin_drill`.
+    pub fn set_drill(&mut self, spec: hassault_native::drills::DrillSpec) {
+        self.drill = Some(spec);
+        self.begin_drill();
+    }
+
+    /// (Re)start the drill: restock, stand at its station, count down.
+    ///
+    /// A station is a place to stand on a cube map only. A modelled map's
+    /// body is Rapier's, and the any-map drill has no station anyway.
+    fn begin_drill(&mut self) {
+        let Some(spec) = self.drill.clone() else {
+            return;
+        };
+        if let (Some(at), None) = (spec.shooter, self.world3d.as_ref()) {
+            self.camera.yaw = at.yaw.to_degrees();
+            self.camera.pitch = 0.0;
+            self.prediction.reset(at.x, at.y, at.z, at.yaw, 0.0);
+            self.follow_prediction();
+        }
+        self.range.reset();
+        self.range.start_drill(spec);
+        self.you = Some(self.range.self_state());
+    }
+
+    /// Leave the drill for the free range, dummies on the nearest spawns.
+    fn end_drill(&mut self) {
+        self.drill = None;
+        self.range.stop_drill();
+        let body = self.prediction.state;
+        self.range.place(&self.world, body.x, body.y);
+    }
+
     pub fn queue_bots(&mut self, count: u32, skill: String) {
         if count > 0 {
             self.pending_bots = Some((count, skill));
@@ -2209,6 +2252,7 @@ impl App {
             strafe: axis(self.keys.right, self.keys.left),
             jump: self.keys.jump,
             crouch: self.keys.crouch,
+            walk: self.keys.walk,
             sprint: self.keys.sprint,
             knife: is_knife,
         };
@@ -2236,6 +2280,7 @@ impl App {
         cmd.strafe = axis(self.keys.right, self.keys.left);
         cmd.jump = self.keys.jump;
         cmd.crouch = self.keys.crouch;
+        cmd.walk = self.keys.walk;
         // Firing rides on the movement command rather than being its own message,
         // which is the server's design: the shot then carries the exact angles and
         // sequence number of the frame it was fired on.
@@ -2373,6 +2418,7 @@ impl App {
     fn train(&mut self, dt: f32) {
         self.local_clock += dt;
         self.range.update(dt);
+        self.range.tick_drill(dt, &self.world);
         // After the step that produced this position, for the same reason the
         // server collects in `_movement_consequences`: you pick something up by
         // having moved onto it, and reading the position from before the step
@@ -2450,9 +2496,14 @@ impl App {
         let crouching = state.crouch > 0.5;
         let (yaw, pitch) = (self.camera.yaw.to_radians(), self.camera.pitch.to_radians());
         let scoped = self.scoped;
+        let motion = hassault_native::training::RangeMotion {
+            speed: state.vel_x.hypot(state.vel_y),
+            airborne: !state.on_ground,
+            crouch: state.crouch,
+        };
         let Some(shot) = self
             .range
-            .fire(&self.world, x, y, z, eye, yaw, pitch, scoped)
+            .fire_moving(&self.world, x, y, z, eye, yaw, pitch, scoped, motion)
         else {
             return;
         };
@@ -2636,6 +2687,21 @@ impl App {
         use hassault_native::controls::Action;
 
         let action = self.controls.action(code);
+        // The drill's results card answers to R and F while it is up. Checked
+        // before the key map, because R is also reload and a finished drill
+        // has nothing to reload for.
+        if down && self.socket.is_none() {
+            let done = self
+                .range
+                .drill_status()
+                .is_some_and(|s| s.phase == hassault_native::training::DrillPhase::Done);
+            if done && code == KeyCode::KeyR {
+                return self.begin_drill();
+            }
+            if done && code == KeyCode::KeyF {
+                return self.end_drill();
+            }
+        }
         match code {
             // F3 steps the *fallback*, and clears any override so the key the
             // player is pressing is the thing they see. Stepping a private field
@@ -2681,6 +2747,7 @@ impl App {
             Action::Left => self.keys.left = down,
             Action::Right => self.keys.right = down,
             Action::Jump => self.keys.jump = down,
+            Action::Walk => self.keys.walk = down,
             Action::Sprint => self.keys.sprint = down,
             Action::Crouch => self.keys.crouch = down,
             Action::Scores => self.keys.scores = down,
@@ -4220,6 +4287,16 @@ impl ApplicationHandler for App {
                 // Last, so it is over everything: the card is the only thing on
                 // screen once it is up, and the menu it was reached from has
                 // already closed itself.
+                if self.socket.is_none() && !self.menu.open {
+                    if let Some(status) = self.range.drill_status() {
+                        hassault_native::drill_hud::build(
+                            &status,
+                            view.width as f32,
+                            view.height as f32,
+                            &mut overlay,
+                        );
+                    }
+                }
                 if self.summary.open {
                     let summary = self.build_summary();
                     self.summary.build(

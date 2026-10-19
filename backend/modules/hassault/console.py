@@ -6,7 +6,7 @@ typed, hierarchical variable and macro execution system.
 Namespaces:
 - `net.*`: Network latency simulation, NetGraph HUD, packet loss/jitter, prediction controls
 - `draw.*`: Visual debugging, hitboxes, trajectories, wireframe, FPS, FOV, crosshair
-- `server.*`: Match hosting, map rotation, timescale slow-mo, sv_cheats, bot orchestration
+- `server.*`: Match hosting, map rotation, sv_cheats, bot orchestration (add, kick, freeze)
 - `player.*`: Noclip, godmode, weapon giving, health, coordinates, respawning
 - `physics.*` / `hitbox.*`: World physics constants and live hitbox specification tuning
 - `macro.*`: Script management, execution, and keybindings
@@ -139,7 +139,7 @@ BUILTIN_MACROS: list[MacroDefinition] = [
             "server.cheats = True\n"
             "server.bots.kick_all()\n"
             'server.bots.add(count=5, skill="hard", team="RVSF")\n'
-            'player.give("carbine")\n'
+            'player.give("assault")\n'
             'print("[macro] 1v5 Bot Challenge Drill started against 5 Hard RVSF bots!")'
         ),
         builtin=True,
@@ -169,12 +169,14 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         builtin=True,
     ),
     MacroDefinition(
-        name="slowmo_duel",
-        description="Slow motion Matrix-style firefight (0.35x timescale)",
+        name="frozen_targets",
+        description="Aim drill: 5 bots that stand still where they spawned",
         code=(
             "server.cheats = True\n"
-            "server.timescale = 0.35\n"
-            'print("[macro] Matrix Slow-Mo enabled (Timescale: 0.35x)")'
+            "server.bots.kick_all()\n"
+            'server.bots.add(count=5, skill="easy")\n'
+            "server.bots.freeze = True\n"
+            'print("[macro] 5 frozen bots spawned. server.bots.freeze = False lets them move.")'
         ),
         builtin=True,
     ),
@@ -494,19 +496,12 @@ class ConsoleRegistry:
             "server",
             "boolean",
             False,
-            "Allow cheat-protected commands (godmode, noclip, give, timescale) in hosted match",
+            "Allow cheat-protected commands (godmode, noclip, give, bot freeze) in hosted match",
             flags=["server", "replicated"],
         )
-        self._register_cvar(
-            "server.timescale",
-            "server",
-            "number",
-            1.0,
-            "Simulation speed multiplier (0.05x matrix slow-mo to 5.0x fast-forward)",
-            min_val=0.05,
-            max_val=5.0,
-            flags=["server", "cheat", "replicated"],
-        )
+        # No `server.timescale`. It was registered and never read: a client
+        # predicts its own movement in real time, so a server-side scale would
+        # mispredict every tick. Removed rather than left as a control that lies.
         self._register_cvar(
             "server.max_players",
             "server",
@@ -1531,6 +1526,9 @@ class ConsoleRegistry:
             return
         if not room:
             return
+        if name == "server.bots.freeze":
+            room.bots_frozen = bool(val)
+            return
         settings = getattr(room, "settings", None)
         if not settings:
             return
@@ -2365,7 +2363,9 @@ class ConsoleExecutionContext:
                     coerced = self._ctx.registry._coerce_cvar_value(cvar, str(value))
                     cvar.current_value = coerced
                     self._ctx.affected_cvars[full_name] = coerced
-                    self._ctx.registry._apply_cvar_to_game(self._ctx, full_name, coerced)
+                    self._ctx.registry._apply_cvar_to_game(
+                        self._ctx, full_name, coerced
+                    )
                     self._ctx.print(f"[set] {full_name} = {coerced}")
                     return
                 super().__setattr__(item, value)

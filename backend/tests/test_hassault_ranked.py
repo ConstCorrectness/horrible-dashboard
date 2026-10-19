@@ -78,7 +78,10 @@ def _isolated(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.modules.games.server_auth.signed_in_account",
-        lambda: {"account_id": "acct-rob"},
+        # The real shape (`server_auth.signed_in_account`). This mock once said
+        # `{"account_id": ...}` — the same wrong key the code read, so the suite
+        # agreed with the bug that filed every account under `local_player`.
+        lambda: {"id": "acct-rob", "display_name": "rob", "handle": "rob"},
     )
     # The join path refuses a node with no username before it ever reaches the
     # ranked branch — identity is the account's, never the wire's.

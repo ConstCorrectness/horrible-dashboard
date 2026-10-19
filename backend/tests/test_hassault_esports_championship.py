@@ -112,8 +112,16 @@ def test_ranked_extended_leaderboard():
 
 
 @pytest.mark.anyio
-async def test_ranked_routes_api():
+async def test_ranked_routes_api(monkeypatch):
     """Verify REST endpoints for ranked profiles, seasons, and calibration."""
+    from backend.modules.games import server_auth
+
+    signed_in = f"acc_self_{time.time_ns()}"
+    monkeypatch.setattr(
+        server_auth,
+        "signed_in_account",
+        lambda: {"id": signed_in, "display_name": "me", "handle": "me"},
+    )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -137,7 +145,8 @@ async def test_ranked_routes_api():
         assert prof_data["accountId"] == test_acc
         assert not prof_data["isCalibrated"]
 
-        # Calibrate match endpoint
+        # Calibrate files the result under the signed-in account. The body's
+        # `accountId` is ignored: it used to let a caller write anybody's rating.
         r_calib = await client.post(
             "/api/hassault/ranked/calibrate",
             json={
@@ -149,6 +158,11 @@ async def test_ranked_routes_api():
         assert r_calib.status_code == 200
         calib_res = r_calib.json()
         assert calib_res["matchesPlayed"] == 1
+        r_victim = await client.get(f"/api/hassault/ranked/profile/{test_acc}")
+        assert not r_victim.json()["isCalibrated"]
+        assert r_victim.json()["matchesPlayed"] == 0
+        r_self = await client.get(f"/api/hassault/ranked/profile/{signed_in}")
+        assert r_self.json()["matchesPlayed"] == 1
 
 
 # ============================================================================

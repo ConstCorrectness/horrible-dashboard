@@ -55,6 +55,8 @@ pub const CROUCH_EYE_HEIGHT: f32 = PLAYER_EYE_HEIGHT * CROUCH_EYE_SCALE;
 pub const CROUCH_HEIGHT: f32 = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 /// AC's `chspeed`. The cost that makes moving silently a trade, not an upgrade.
 pub const CROUCH_SPEED_SCALE: f32 = 0.4;
+/// Holding walk: slower and silent. `WALK_SPEED_SCALE` in `physics.py`.
+pub const WALK_SPEED_SCALE: f32 = 0.52;
 /// Seconds for a full stand↔crouch transition.
 pub const CROUCH_TRANSITION: f32 = 0.15;
 
@@ -182,6 +184,8 @@ pub struct MoveInput {
     pub strafe: f32,
     pub jump: bool,
     pub crouch: bool,
+    /// Hold to walk: slower and silent.
+    pub walk: bool,
     pub sprint: bool,
     pub knife: bool,
 }
@@ -472,6 +476,8 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
         WATER_SPEED_SCALE
     } else if player.crouch > 0.5 && (player.on_ground || !player.crouched_in_air) {
         CROUCH_SPEED_SCALE
+    } else if input.walk {
+        WALK_SPEED_SCALE
     } else {
         1.0
     };

@@ -17,6 +17,7 @@
  */
 import type { WeaponSpec } from './api';
 import { currentHitbox } from './hitbox';
+import { MOVE_SPEED } from './player';
 import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, type World } from './world';
 
 /** Total body height — what the collision code reserves and the avatar is drawn to. */
@@ -226,11 +227,8 @@ export function rayHitsBody(
 /**
  * Damage after falloff: full out to `falloffStart`, tapering to half at `range`.
  *
- * `falloffStart` is not served — the browser has never needed it, because the
- * server does this arithmetic in a match. The training range does need it, and
- * rather than widen the wire for a number only training reads, it is derived
- * from the two that *are* served. Weapons whose falloff begins at their range
- * (the sniper, the knife) are flat either way, which is the case that matters.
+ * In a match the server does this arithmetic; the training range does it here,
+ * with the served `falloffStart` (see `falloffStart` in `training.ts`).
  */
 export function damageAt(weapon: WeaponSpec, distance: number, falloffStart: number): number {
   if (distance <= falloffStart || weapon.range <= falloffStart) return weapon.damage;
@@ -278,11 +276,7 @@ export function sprayOffset(weapon: WeaponSpec, index: number): [number, number]
  * can never reach it, but a table edited to something silly should bend the aim
  * rather than flip it over the pole.
  */
-export function applySpray(
-  yaw: number,
-  pitch: number,
-  offset: [number, number],
-): [number, number] {
+export function applySpray(yaw: number, pitch: number, offset: [number, number]): [number, number] {
   const limit = Math.PI / 2 - 1e-4;
   return [yaw + offset[0], Math.max(-limit, Math.min(limit, pitch + offset[1]))];
 }
@@ -302,6 +296,44 @@ export function residualSpread(weapon: WeaponSpec, scoped = 0): number {
   // narrowed. No weapon is both scoped and patterned today; the rule is stated
   // rather than assumed.
   return Math.min(weapon.residualSpread, own);
+}
+
+/** `weapons.ACCURATE_SPEED_SCALE`: at or under this share of a run, moving is free. */
+export const ACCURATE_SPEED_SCALE = 0.34;
+
+/** What about the shooter the cone depends on. `weapons.ShotContext`. */
+export interface ShotContext {
+  /** Horizontal speed, cubes per second. */
+  speed: number;
+  airborne: boolean;
+  /** The crouch animation, 0 standing to 1 crouched. */
+  crouch: number;
+  scoped: number;
+  /** Seconds since this shooter's previous shot; large if none. */
+  sinceLastShot: number;
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+/**
+ * The cone a trigger pull uses: a port of `weapons.shot_cone`, pinned by
+ * `accuracy-vectors.json`. The training range fires through it, so it teaches
+ * the same thing about stopping to shoot that a match does.
+ */
+export function shotCone(weapon: WeaponSpec, ctx: ShotContext): number {
+  let base = residualSpread(weapon, ctx.scoped);
+  const recovery = weapon.recoveryTime ?? 0.35;
+  const recovering = recovery > 0 ? clamp01(1 - ctx.sinceLastShot / recovery) : 0;
+  const first = weapon.firstShotSpread;
+  if (recovering <= 0 && typeof first === 'number') base = Math.min(base, first);
+  base *= 1 + ((weapon.crouchScale ?? 1) - 1) * clamp01(ctx.crouch);
+
+  const accurate = MOVE_SPEED * ACCURATE_SPEED_SCALE;
+  const moving = clamp01((ctx.speed - accurate) / (MOVE_SPEED - accurate));
+  let cone = base + (weapon.moveInaccuracy ?? 0) * moving;
+  if (ctx.airborne) cone += weapon.airInaccuracy ?? 0;
+  cone += (weapon.perShotInaccuracy ?? 0) * recovering;
+  return cone;
 }
 
 export function spreadVector(

@@ -44,6 +44,7 @@ from typing import Any
 
 from backend.modules.hassault import hitbox
 from backend.modules.hassault.physics import (
+    MOVE_SPEED,
     PLAYER_EYE_HEIGHT,
     World,
 )
@@ -219,6 +220,32 @@ class Weapon:
     """
     residual_spread: float | None = None
 
+    # -- the accuracy model (see `shot_cone`) ------------------------------------
+    #
+    # Every default is "no change", so a weapon nobody has tuned fires exactly as
+    # it did before the model existed.
+
+    """The cone of a shot fired **at rest**: after `recovery_time` without
+    firing. `None` keeps the weapon's own cone. A tap is a different shot from a
+    spam, which is the whole of first-shot accuracy."""
+    first_shot_spread: float | None = None
+    """Radians added at full running speed. Zero at or under `ACCURATE_SPEED`,
+    rising linearly to this at `MOVE_SPEED`, so stopping (or walking) is what
+    buys the shot. Counter-strafing's braking finally has an accuracy payoff."""
+    move_inaccuracy: float = 0.0
+    """Radians added while off the ground. A jump-shot is a gamble, not a tech."""
+    air_inaccuracy: float = 0.0
+    """Multiplier on the base cone when fully crouched, interpolated through the
+    crouch animation. Below 1 is steadier."""
+    crouch_scale: float = 1.0
+    """Radians added to a shot fired straight after another, fading to nothing
+    over `recovery_time`. A pattern weapon's recoil is its pattern; this is for
+    the ones without, so spamming a pistol is not the same as tapping it."""
+    per_shot_inaccuracy: float = 0.0
+    """Seconds without firing for the weapon to settle: bloom gone, and the next
+    shot is a first shot again."""
+    recovery_time: float = 0.35
+
     @property
     def interval(self) -> float:
         return 60.0 / self.rpm
@@ -258,6 +285,18 @@ class Weapon:
             "residualSpread": (
                 self.spread if self.residual_spread is None else self.residual_spread
             ),
+            # Served for the training range, which does the falloff arithmetic
+            # itself because it has no server to ask. Both clients guessed it as
+            # a third of the range, which is wrong for every gun in the table.
+            "falloffStart": self.falloff_start,
+            # The accuracy model's inputs. Served so the training range and the
+            # dynamic crosshair evaluate the same cone the server fires.
+            "firstShotSpread": self.first_shot_spread,
+            "moveInaccuracy": self.move_inaccuracy,
+            "airInaccuracy": self.air_inaccuracy,
+            "crouchScale": self.crouch_scale,
+            "perShotInaccuracy": self.per_shot_inaccuracy,
+            "recoveryTime": self.recovery_time,
         }
 
 
@@ -419,7 +458,9 @@ ATTACHMENTS: tuple[WeaponAttachment, ...] = (
 ATTACHMENTS_BY_ID: dict[str, WeaponAttachment] = {a.id: a for a in ATTACHMENTS}
 
 
-def apply_attachments(base: Weapon, attachment_ids: list[str] | tuple[str, ...]) -> Weapon:
+def apply_attachments(
+    base: Weapon, attachment_ids: list[str] | tuple[str, ...]
+) -> Weapon:
     """Derive a modified weapon instance with attachments applied."""
     if not attachment_ids:
         return base
@@ -460,7 +501,6 @@ def apply_attachments(base: Weapon, attachment_ids: list[str] | tuple[str, ...])
         zoom_levels=new_zooms,
         spray=new_spray,
     )
-
 
 
 # The loadout. AssaultCube-flavoured rather than AssaultCube-derived: these are
@@ -547,6 +587,13 @@ WEAPONS: tuple[Weapon, ...] = (
         falloff_start=60.0,
         auto=False,
         kickback=0.0,
+        # Accurate when tapped and standing; a spam or a run-and-gun is not.
+        first_shot_spread=0.004,
+        move_inaccuracy=0.025,
+        air_inaccuracy=0.10,
+        crouch_scale=0.85,
+        per_shot_inaccuracy=0.02,
+        recovery_time=0.30,
     ),
     Weapon(
         id="assault",
@@ -567,6 +614,11 @@ WEAPONS: tuple[Weapon, ...] = (
         # About a fifth of the cone the pattern replaces. Not zero — see
         # `Weapon.residual_spread`.
         residual_spread=0.004,
+        # The pattern is its recoil, so no bloom; moving is what costs it.
+        first_shot_spread=0.0015,
+        move_inaccuracy=0.05,
+        air_inaccuracy=0.16,
+        crouch_scale=0.75,
     ),
     Weapon(
         id="shotgun",
@@ -583,6 +635,12 @@ WEAPONS: tuple[Weapon, ...] = (
         falloff_start=14.0,
         auto=False,
         kickback=9.5,
+        # Small next to an 0.075 cone. Enough that a jumping blast is worse, not
+        # enough to take the shoot-jump away.
+        move_inaccuracy=0.015,
+        air_inaccuracy=0.05,
+        crouch_scale=0.9,
+        recovery_time=1.0,
     ),
     Weapon(
         id="sniper",
@@ -608,6 +666,10 @@ WEAPONS: tuple[Weapon, ...] = (
         # weapon as well as the best long-range one; this is what makes the scope
         # the thing you give up mobility for rather than a free magnifier.
         hipfire_spread=0.055,
+        # A scoped shot on the move is a miss. The scope is bought with stillness.
+        move_inaccuracy=0.08,
+        air_inaccuracy=0.20,
+        recovery_time=1.0,
     ),
 )
 
@@ -770,8 +832,6 @@ def spread_vector(
     return (ox / length, oy / length, oz / length)
 
 
-
-
 def spray_offset(weapon: Weapon, index: int) -> tuple[float, float]:
     """The absolute `(yaw, pitch)` offset for the `index`-th shot of a burst.
 
@@ -815,6 +875,64 @@ def residual_spread(weapon: Weapon, scoped: int = 0) -> float:
     # and it has no scope), but the rule is stated rather than assumed: scoping
     # tightens, and it must never *loosen* a cone the pattern already narrowed.
     return min(weapon.residual_spread, effective_spread(weapon, scoped))
+
+
+#: At or under this horizontal speed a shot pays no movement penalty: about a
+#: third of a run, CS's own threshold. Walking (`physics.WALK_SPEED_SCALE`) is
+#: above it on purpose, so a walk is steadier than a run but not free.
+ACCURATE_SPEED_SCALE = 0.34
+
+
+@dataclass(frozen=True, slots=True)
+class ShotContext:
+    """What about the shooter, at the instant of the shot, the cone depends on.
+
+    The server builds it from its own state after the step that carried the
+    shot (`MatchRoom._handle_combat`), never from anything the client claims
+    except `scoped`, which is clamped per weapon anyway.
+    """
+
+    #: Horizontal speed, cubes per second.
+    speed: float = 0.0
+    airborne: bool = False
+    #: The crouch animation, 0 standing to 1 crouched.
+    crouch: float = 0.0
+    scoped: int = 0
+    #: Simulated seconds since this shooter's previous shot; large if none.
+    since_last_shot: float = 999.0
+
+
+def shot_cone(weapon: Weapon, ctx: ShotContext) -> float:
+    """The cone this trigger pull uses: the accuracy model, in one place.
+
+    1. The base is `residual_spread` (the scope and the pattern already applied).
+    2. At rest, `first_shot_spread` replaces it if tighter.
+    3. Crouching scales the base by `crouch_scale`.
+    4. Speed above `ACCURATE_SPEED_SCALE * MOVE_SPEED` adds up to
+       `move_inaccuracy`; leaving the ground adds `air_inaccuracy`.
+    5. A shot inside `recovery_time` of the last adds a fading
+       `per_shot_inaccuracy`.
+
+    Pure, and pinned by `accuracy-vectors.json`, because the browser and native
+    training ranges evaluate it too, and a range that taught a different cone
+    from a match would teach the wrong thing about stopping to shoot.
+    """
+    base = residual_spread(weapon, ctx.scoped)
+    recovering = 0.0
+    if weapon.recovery_time > 0.0:
+        recovering = max(0.0, min(1.0, 1.0 - ctx.since_last_shot / weapon.recovery_time))
+    if recovering <= 0.0 and weapon.first_shot_spread is not None:
+        base = min(base, weapon.first_shot_spread)
+    crouch = max(0.0, min(1.0, ctx.crouch))
+    base *= 1.0 + (weapon.crouch_scale - 1.0) * crouch
+
+    accurate = MOVE_SPEED * ACCURATE_SPEED_SCALE
+    moving = max(0.0, min(1.0, (ctx.speed - accurate) / (MOVE_SPEED - accurate)))
+    cone = base + weapon.move_inaccuracy * moving
+    if ctx.airborne:
+        cone += weapon.air_inaccuracy
+    cone += weapon.per_shot_inaccuracy * recovering
+    return cone
 
 
 #: Which face of the world a shot stopped against, as an index.
@@ -1103,7 +1221,12 @@ class PositionHistory:
 
     def _bracket_4(
         self, t_ms: float
-    ) -> tuple[HistoryFrame, HistoryFrame, float, HistoryFrame | None, HistoryFrame | None] | None:
+    ) -> (
+        tuple[
+            HistoryFrame, HistoryFrame, float, HistoryFrame | None, HistoryFrame | None
+        ]
+        | None
+    ):
         """The bracket plus prior and subsequent frames for sub-tick Catmull-Rom interpolation."""
         if not self.frames:
             return None
@@ -1313,13 +1436,11 @@ def resolve_shot(
         hit_zone = (
             "head"
             if head
-            else (
-                "groin"
-                if nutshot
-                else ("chest" if rel_z > 0.54 * tall else "legs")
-            )
+            else ("groin" if nutshot else ("chest" if rel_z > 0.54 * tall else "legs"))
         )
-        base_dmg = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
+        base_dmg = damage_at(weapon, distance) * (
+            weapon.head_multiplier if head else 1.0
+        )
         amount = base_dmg * (0.6 if is_wallbang else 1.0)
         hits.append(
             PelletHit(
@@ -1390,4 +1511,3 @@ def calculate_material_penetration(
     penetration_ratio = 1.0 - (thickness / max_thickness) * 0.4
     damage_factor = max(0.1, min(0.9, base_falloff * mat_factor * penetration_ratio))
     return True, round(damage_factor, 3)
-

@@ -1,0 +1,353 @@
+{
+  "title": "Aim Range",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 7,
+  "waterlevel": -100,
+  "ambient": 60,
+  "modes": [
+    "dm"
+  ],
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [
+        4,
+        4,
+        120,
+        94
+      ],
+      "floor": 0,
+      "ceil": 24,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [
+        16,
+        31,
+        104,
+        2
+      ],
+      "wtex": 47
+    },
+    {
+      "op": "solid",
+      "rect": [
+        16,
+        64,
+        104,
+        2
+      ],
+      "wtex": 47
+    },
+    {
+      "op": "room",
+      "rect": [
+        7,
+        14,
+        6,
+        7
+      ],
+      "floor": 1,
+      "ceil": 24,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [
+        7,
+        45,
+        6,
+        7
+      ],
+      "floor": 1,
+      "ceil": 24,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [
+        7,
+        78,
+        6,
+        7
+      ],
+      "floor": 1,
+      "ceil": 24,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    }
+  ],
+  "drills": [
+    {
+      "id": "close",
+      "label": "Close lane: 10 and 25 cubes",
+      "shooter": [
+        10,
+        17
+      ],
+      "posts": [
+        [
+          20,
+          13,
+          3
+        ],
+        [
+          20,
+          21,
+          3
+        ],
+        [
+          35,
+          10,
+          4
+        ],
+        [
+          35,
+          17,
+          4
+        ],
+        [
+          35,
+          24,
+          4
+        ]
+      ]
+    },
+    {
+      "id": "gallery",
+      "label": "Strafe gallery: 30 and 45 cubes",
+      "shooter": [
+        10,
+        48
+      ],
+      "posts": [
+        [
+          40,
+          38,
+          5
+        ],
+        [
+          40,
+          48,
+          5
+        ],
+        [
+          40,
+          58,
+          5
+        ],
+        [
+          55,
+          43,
+          5
+        ],
+        [
+          55,
+          53,
+          5
+        ]
+      ]
+    },
+    {
+      "id": "long",
+      "label": "Long lane: 50 and 100 cubes",
+      "shooter": [
+        10,
+        81
+      ],
+      "posts": [
+        [
+          60,
+          76,
+          6
+        ],
+        [
+          60,
+          86,
+          6
+        ],
+        [
+          110,
+          81,
+          8
+        ]
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "type": "playerstart",
+      "x": 10,
+      "y": 17,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 10,
+      "y": 48,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 10,
+      "y": 81,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 10,
+      "y": 92,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 116,
+      "y": 17,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 116,
+      "y": 48,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 116,
+      "y": 81,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 116,
+      "y": 10,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "light",
+      "x": 30,
+      "y": 17,
+      "radius": 96,
+      "color": [
+        255,
+        240,
+        214
+      ]
+    },
+    {
+      "type": "light",
+      "x": 45,
+      "y": 48,
+      "radius": 110,
+      "color": [
+        255,
+        240,
+        214
+      ]
+    },
+    {
+      "type": "light",
+      "x": 60,
+      "y": 81,
+      "radius": 120,
+      "color": [
+        255,
+        240,
+        214
+      ]
+    },
+    {
+      "type": "light",
+      "x": 105,
+      "y": 81,
+      "radius": 96,
+      "color": [
+        214,
+        226,
+        255
+      ]
+    },
+    {
+      "type": "light",
+      "x": 105,
+      "y": 30,
+      "radius": 96,
+      "color": [
+        214,
+        226,
+        255
+      ]
+    },
+    {
+      "type": "ammo",
+      "x": 12,
+      "y": 22,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 12,
+      "y": 53,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 12,
+      "y": 86,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 80,
+      "y": 17,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 80,
+      "y": 48,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 80,
+      "y": 81,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 110,
+      "y": 24,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 110,
+      "y": 92,
+      "z": 0
+    },
+    {
+      "type": "armour",
+      "x": 96,
+      "y": 48,
+      "z": 0
+    }
+  ]
+}

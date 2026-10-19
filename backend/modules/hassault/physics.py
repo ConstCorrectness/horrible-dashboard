@@ -99,6 +99,10 @@ CROUCH_HEIGHT = hitbox.DEFAULT.crouch_height
 # AC's `chspeed`. Slow enough to be a real cost, which is what makes silent
 # movement (see `noise.py`) a trade rather than a free upgrade.
 CROUCH_SPEED_SCALE = 0.4
+# Holding walk: CS's 130 of 250. Silent like a crouch (`noise.py`), and quicker
+# than one, but above `weapons.ACCURATE_SPEED_SCALE`, so a walking shot is
+# steadier than a running one without being free.
+WALK_SPEED_SCALE = 0.52
 # Seconds for a full stand↔crouch transition. AC animates the eye height rather
 # than snapping it, and the animation is not cosmetic: it is why crouch-jumping
 # has a rhythm to learn instead of being a binary state flip.
@@ -412,6 +416,8 @@ class MoveInput:
     strafe: float = 0.0
     jump: bool = False
     crouch: bool = False
+    #: Hold to walk: slower and silent. See `WALK_SPEED_SCALE`.
+    walk: bool = False
     # Deliberately absent: noclip. It is a local debugging affordance on the
     # client and must never be something a packet can ask the server for.
     yaw: float = 0.0
@@ -666,6 +672,8 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
         scale = WATER_SPEED_SCALE
     elif player.crouch > 0.5 and (player.on_ground or not player.crouched_in_air):
         scale = CROUCH_SPEED_SCALE
+    elif move.walk:
+        scale = WALK_SPEED_SCALE
     if ladder is not None:
         # Damped, not stopped: strafing off is one of the two ways to leave.
         scale *= LADDER_HORIZONTAL_SCALE

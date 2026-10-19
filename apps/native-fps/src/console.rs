@@ -728,22 +728,7 @@ impl Console {
             }
         };
         let god_on = self.server_view.get("player.god").map(truthy);
-        let speed = self
-            .server_view
-            .get("server.timescale")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0);
-        // 0.35 -> 1.0 -> 2.0 -> 0.35, the browser's three buttons as one
-        // cycle. Compared with a tolerance rather than by equality: this
-        // value has been through JSON, and `0.35f64` is not the number that
-        // comes back out of every encoder.
-        let next_speed = if (speed - 0.35).abs() < 0.01 {
-            1.0
-        } else if (speed - 1.0).abs() < 0.01 {
-            2.0
-        } else {
-            0.35
-        };
+        let frozen_on = self.server_view.get("server.bots.freeze").map(truthy);
         vec![
             toggle("F1", "HITBOXES", "draw.hitboxes"),
             toggle("F2", "WIREFRAME", "draw.wireframe"),
@@ -775,13 +760,20 @@ impl Console {
                 honored: true,
                 command: "server.bots.kick_all()".to_string(),
             },
+            // F7 was SPEED, cycling a `server.timescale` the match never read
+            // (a client predicts in real time, so it could not have). It is now
+            // the one bot control that does something a drill wants.
             QuickAction {
                 key: "F7",
-                label: "SPEED",
-                state: Some(format!("{speed:.2}x")),
-                active: (speed - 1.0).abs() >= 0.01,
+                label: "FREEZE BOTS",
+                // `None` until the server has said, the same rule as GOD.
+                state: frozen_on.map(|on| if on { "ON" } else { "OFF" }.to_string()),
+                active: frozen_on.unwrap_or(false),
                 honored: true,
-                command: format!("server.timescale {next_speed}"),
+                command: format!(
+                    "server.bots.freeze {}",
+                    if frozen_on.unwrap_or(false) { 0 } else { 1 }
+                ),
             },
             QuickAction {
                 key: "F8",
@@ -1409,10 +1401,10 @@ mod tests {
                 // a name, and a fixture missing them would exercise the
                 // "unknown cvar" path instead of the one under test.
                 CVarDef {
-                    name: "server.timescale".into(),
-                    kind: "number".into(),
-                    default_value: json!(1.0),
-                    current_value: json!(1.0),
+                    name: "server.bots.freeze".into(),
+                    kind: "boolean".into(),
+                    default_value: json!(false),
+                    current_value: json!(false),
                     flags: vec!["server".into(), "cheat".into()],
                     ..Default::default()
                 },
@@ -1860,18 +1852,16 @@ mod tests {
     }
 
     #[test]
-    fn the_speed_action_cycles_rather_than_setting_one_value() {
-        // The browser has three buttons; there is one key here, so it has to
-        // walk the same three values.
+    fn the_freeze_action_toggles_on_what_the_server_said() {
         let (mut c, cvars) = console();
-        let speed_index = 6;
+        let freeze_index = 6;
         assert_eq!(
-            c.quick_command(speed_index, &cvars).as_deref(),
-            Some("server.timescale 2"),
-            "from the default 1.0 the next step is 2x"
+            c.quick_command(freeze_index, &cvars).as_deref(),
+            Some("server.bots.freeze 1"),
+            "unfrozen (or not yet told), the key freezes"
         );
         let mut affected = serde_json::Map::new();
-        affected.insert("server.timescale".into(), json!(2.0));
+        affected.insert("server.bots.freeze".into(), json!(true));
         let mut sink = ClientCvars::default();
         c.on_response(
             &crate::protocol::ConsoleResponse {
@@ -1882,9 +1872,9 @@ mod tests {
             &mut sink,
         );
         assert_eq!(
-            c.quick_command(speed_index, &cvars).as_deref(),
-            Some("server.timescale 0.35"),
-            "and 2x wraps back to the slow one"
+            c.quick_command(freeze_index, &cvars).as_deref(),
+            Some("server.bots.freeze 0"),
+            "and once the server reports it frozen, the key thaws"
         );
     }
 

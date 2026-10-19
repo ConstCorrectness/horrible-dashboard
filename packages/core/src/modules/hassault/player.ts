@@ -57,6 +57,8 @@ export const CROUCH_EYE_HEIGHT = PLAYER_EYE_HEIGHT * CROUCH_EYE_SCALE;
 export const CROUCH_HEIGHT = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 /** AC's `chspeed`. The cost that makes moving silently a trade, not an upgrade. */
 export const CROUCH_SPEED_SCALE = 0.4;
+/** Holding walk: slower and silent. `WALK_SPEED_SCALE` in `physics.py`. */
+export const WALK_SPEED_SCALE = 0.52;
 /** Seconds for a full stand↔crouch transition. */
 export const CROUCH_TRANSITION = 0.15;
 
@@ -140,6 +142,8 @@ export interface MoveInput {
   strafe: number; // -1..1
   jump: boolean;
   crouch: boolean;
+  /** Hold to walk: slower and silent. */
+  walk?: boolean;
   sprint?: boolean;
   /** Ignore gravity and walls — useful for looking around a map. */
   noclip: boolean;
@@ -484,6 +488,7 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   if (wet) scale = WATER_SPEED_SCALE;
   else if (player.crouch > 0.5 && (player.onGround || !player.crouchedInAir))
     scale = CROUCH_SPEED_SCALE;
+  else if (input.walk) scale = WALK_SPEED_SCALE;
   // Damped, not stopped: strafing off is one of the two ways to leave a ladder.
   if (ladder) scale *= LADDER_HORIZONTAL_SCALE;
   const speedCap = MOVE_SPEED * scale;

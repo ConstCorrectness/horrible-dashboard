@@ -338,6 +338,26 @@ pub struct WeaponSpec {
     /// rather than like a missing field.
     #[serde(rename = "residualSpread", default)]
     pub residual_spread: f32,
+    /// Distance at which damage starts tapering toward half at `range`; only the
+    /// training range reads it. `None` from a backend older than the field,
+    /// which `trace::falloff_start` covers with the old guess.
+    #[serde(rename = "falloffStart", default)]
+    pub falloff_start: Option<f32>,
+    /// The accuracy model's inputs (`trace::shot_cone`). **`camelCase` on the
+    /// wire**, every one: read as zero, `recoveryTime` would make every shot a
+    /// first shot, and nothing would say why.
+    #[serde(rename = "firstShotSpread", default)]
+    pub first_shot_spread: Option<f32>,
+    #[serde(rename = "moveInaccuracy", default)]
+    pub move_inaccuracy: f32,
+    #[serde(rename = "airInaccuracy", default)]
+    pub air_inaccuracy: f32,
+    #[serde(rename = "crouchScale", default = "default_one")]
+    pub crouch_scale: f32,
+    #[serde(rename = "perShotInaccuracy", default)]
+    pub per_shot_inaccuracy: f32,
+    #[serde(rename = "recoveryTime", default = "default_recovery")]
+    pub recovery_time: f32,
     /// Active equipped attachments on this weapon.
     #[serde(default)]
     pub attachments: Vec<String>,
@@ -369,6 +389,11 @@ pub struct WeaponAttachmentSpec {
     pub flash_hidden: bool,
 }
 
+/// `Weapon.recovery_time`'s default, for a backend that sends no accuracy model.
+fn default_recovery() -> f32 {
+    0.35
+}
+
 fn default_one() -> f32 {
     1.0
 }
@@ -390,6 +415,32 @@ impl WeaponSpec {
     ///
     /// Falls back to the weapon's own cone for anything with no pattern, so this
     /// is the one function every caller can ask. `weapons.residual_spread`.
+    /// The cone a trigger pull uses: a port of `weapons.shot_cone`, pinned by
+    /// `accuracy-vectors.json`. See `trace::ShotContext`.
+    pub fn shot_cone(&self, ctx: &crate::trace::ShotContext) -> f32 {
+        let clamp01 = |v: f32| v.clamp(0.0, 1.0);
+        let mut base = self.residual_cone(ctx.scoped);
+        let recovering = if self.recovery_time > 0.0 {
+            clamp01(1.0 - ctx.since_last_shot / self.recovery_time)
+        } else {
+            0.0
+        };
+        if recovering <= 0.0 {
+            if let Some(first) = self.first_shot_spread {
+                base = base.min(first);
+            }
+        }
+        base *= 1.0 + (self.crouch_scale - 1.0) * clamp01(ctx.crouch);
+        let move_speed = crate::physics::MOVE_SPEED;
+        let accurate = move_speed * crate::trace::ACCURATE_SPEED_SCALE;
+        let moving = clamp01((ctx.speed - accurate) / (move_speed - accurate));
+        let mut cone = base + self.move_inaccuracy * moving;
+        if ctx.airborne {
+            cone += self.air_inaccuracy;
+        }
+        cone + self.per_shot_inaccuracy * recovering
+    }
+
     pub fn residual_cone(&self, scoped: i32) -> f32 {
         let own = if scoped > 0 {
             self.spread
@@ -731,6 +782,22 @@ impl NodeApi {
         self.get("/api/hassault/hitbox")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// One aim drill, expanded for a run (`drills.expand`). `at` is where the
+    /// player stands, which only the any-map drill reads.
+    pub fn drill(
+        &self,
+        id: &str,
+        map: &str,
+        at: (f32, f32),
+    ) -> Result<crate::drills::DrillSpec, ApiError> {
+        self.get(&format!(
+            "/api/hassault/drills/{id}?map={map}&x={:.2}&y={:.2}",
+            at.0, at.1
+        ))?
+        .into_json()
+        .map_err(|e| ApiError::Decode(e.to_string()))
     }
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {

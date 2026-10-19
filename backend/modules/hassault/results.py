@@ -173,6 +173,108 @@ def init_results_db() -> None:
         _ensure_column(conn, "objectives", "INTEGER NOT NULL DEFAULT 0")
 
 
+#: Who a node's rows belong to when nobody is signed in.
+LOCAL_ACCOUNT = "local_player"
+
+#: Every table that files rows under an account. The adoption below walks this,
+#: so a new account-keyed table that is not listed here is one whose old rows a
+#: player loses on sign-in.
+ACCOUNT_TABLES = (
+    "hassault_matches",
+    "hassault_skins",
+    "hassault_drop_claims",
+    "hassault_ratings",
+    "hassault_ranked_history",
+)
+
+#: Databases whose adoption has already been settled this process, so resolving
+#: the account — which every skins and history route does — is not a write each.
+_adoption_settled: set[str] = set()
+
+
+def current_account_id() -> str:
+    """The account this node's rows are filed under: the signed-in one, else
+    `LOCAL_ACCOUNT`.
+
+    The first time an account is seen, the rows already under `LOCAL_ACCOUNT` are
+    handed to it (see `adopt_local_rows`).
+    """
+    from backend.modules.games import server_auth
+
+    account_id = server_auth.signed_in_account_id()
+    if not account_id:
+        return LOCAL_ACCOUNT
+    adopt_local_rows(account_id)
+    return account_id
+
+
+def adopt_local_rows(account_id: str) -> bool:
+    """Re-file this node's `LOCAL_ACCOUNT` rows under `account_id`, once per node.
+
+    **Why it exists.** Until the identity fix, `signed_in_account()["account_id"]`
+    was read where the key is `id`, so every match, skin, drop claim and rating
+    recorded while signed in landed under `LOCAL_ACCOUNT`. Those rows are this
+    node's player's, and the first account to sign in after the fix is the one
+    that played them. A second account signing in later gets nothing: by then
+    the rows have an owner.
+
+    **The marker row is the guard**, inserted before anything moves — the same
+    shape as `hassault_drop_claims`. Two requests that race here both try the
+    INSERT; only one of them moves rows.
+
+    Collisions (the account already has a rating, or already claimed a level) are
+    `UPDATE OR IGNORE`d: the account's own row wins, and the stand-in's stays
+    where it was rather than overwriting it.
+
+    Returns whether this call moved anything.
+    """
+    key = f"{ensure_app_db_dir()}::{account_id}"
+    if key in _adoption_settled:
+        return False
+    moved = False
+    with get_db_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hassault_adoptions (
+                from_account TEXT PRIMARY KEY,
+                to_account   TEXT NOT NULL,
+                adopted_at   REAL NOT NULL
+            )
+            """
+        )
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO hassault_adoptions VALUES (?, ?, ?)",
+            (LOCAL_ACCOUNT, account_id, time.time()),
+        ).rowcount
+        if claimed:
+            existing = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            for table in ACCOUNT_TABLES:
+                if table not in existing:
+                    continue
+                n = conn.execute(
+                    f"UPDATE OR IGNORE {table} SET account_id = ? WHERE account_id = ?",
+                    (account_id, LOCAL_ACCOUNT),
+                ).rowcount
+                if n:
+                    moved = True
+                    logger.info(
+                        "hassault: adopted %d %s row(s) into %s", n, table, account_id
+                    )
+    _adoption_settled.add(key)
+    if moved:
+        # The skins manager caches inventories by account; both ids just changed.
+        from backend.modules.hassault.skins import skin_manager
+
+        skin_manager._inventories.pop(LOCAL_ACCOUNT, None)
+        skin_manager._inventories.pop(account_id, None)
+    return moved
+
+
 def _ensure_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
     """Add one column to `hassault_matches` if this install predates it."""
     columns = {r[1] for r in conn.execute("PRAGMA table_info(hassault_matches)")}

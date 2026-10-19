@@ -92,6 +92,7 @@ fn test_rapier_step_player() {
         strafe: 0.0,
         jump: false,
         crouch: false,
+        walk: false,
         sprint: false,
         knife: false,
     };

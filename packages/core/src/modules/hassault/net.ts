@@ -52,6 +52,8 @@ export interface Command {
   strafe: number;
   jump: boolean;
   crouch: boolean;
+  /** Hold to walk: slower and silent. Omitted when false. */
+  walk?: boolean;
   yaw: number;
   pitch: number;
   dt: number;
@@ -845,6 +847,7 @@ export class Predictor {
       pitch: player.pitch,
       dt: clamped,
     };
+    if (input.walk) command.walk = true;
     // Only when there is something to say. Combat fields ride on movement
     // commands so a shot carries the exact angles of the frame it happened on,
     // but most frames are not shots and an empty field is bytes on the wire
@@ -952,6 +955,7 @@ export class Predictor {
           strafe: command.strafe,
           jump: command.jump,
           crouch: command.crouch,
+          walk: command.walk ?? false,
           noclip: false,
         },
         command.dt,

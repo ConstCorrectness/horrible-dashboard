@@ -27,6 +27,7 @@ pub enum Action {
     Right,
     Jump,
     Crouch,
+    Walk,
     Sprint,
     Quickswitch,
     Reload,
@@ -61,7 +62,9 @@ pub const DEFAULTS: &[(Action, &str, &[&str])] = &[
     (Action::Right, "right", &["KeyD", "ArrowRight"]),
     (Action::Jump, "jump", &["Space"]),
     (Action::Crouch, "crouch", &["ControlLeft", "KeyC"]),
-    (Action::Sprint, "sprint", &["ShiftLeft", "ShiftRight"]),
+    (Action::Walk, "walk", &["ShiftLeft", "ShiftRight"]),
+    // Unbound: the server never simulates sprint. See `controls.ts`.
+    (Action::Sprint, "sprint", &[]),
     (Action::Quickswitch, "quickswitch", &["KeyQ"]),
     (Action::Reload, "reload", &["KeyR"]),
     (Action::Inspect, "inspect", &["KeyF"]),

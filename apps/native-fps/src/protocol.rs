@@ -108,6 +108,9 @@ pub struct Command {
     pub dt: f32,
     #[serde(default)]
     pub crouch: bool,
+    /// Hold to walk: slower and silent. `false` is the server's default.
+    #[serde(default)]
+    pub walk: bool,
     #[serde(default)]
     pub fire: bool,
     #[serde(default)]

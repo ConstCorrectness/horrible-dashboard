@@ -230,6 +230,12 @@ They are ours, CC0, and named `hd_*`. All nine are modelled `gltf` maps:
 `apps/assault-web/src/maps.ts` lists the same nine with their key art, and
 `lore.py` has a brief for each.
 
+A tenth, **`hd_aim`**, is the aim range: a brush-built Cube map rather than a
+GLB, three lanes walled apart (close, gallery, long) with its drill stations
+declared in the source under a top-level `drills` key. It is a training map, so
+the web client's match list leaves it out; see [Aim drills](#aim-drills). It
+passes the same playability bar as the rest (spawns, items, reachability).
+
 **What was removed on 2026-10-03.** Two catalogs used to sit beside these:
 
 - **An AssaultCube install's maps.** `hassault.installPath` (or a probe of the
@@ -243,7 +249,7 @@ They are ours, CC0, and named `hd_*`. All nine are modelled `gltf` maps:
   adds that directory through `HASSAULT_EXTRA_MAP_DIRS`
   (`mapsource.EXTRA_MAP_DIRS_ENV`). They are in the catalog during tests and
   nowhere else. `test_the_lore_route_serves_both_factions_and_the_map_briefs`
-  pins the shipped directory at exactly nine.
+  checks every shipped map has a brief.
 
 Read a map source through `mapsource.source_path(name)`, never
 `MAPS_DIR / f"{name}.json"`: the second misses the fixture directory, which is
@@ -3491,6 +3497,29 @@ Note the arrow back. `deployed` is a **flag the panel can clear**, not a one-way
 latch, because a game you can only enter is a game you have to close the pane to
 leave.
 
+### Whose rows these are
+
+Every account-keyed row on a node (matches, skins, drop claims, rating, ranked
+history) is filed under `results.current_account_id()`: the signed-in account's
+`id`, or `local_player` when nobody is signed in. It is the only spelling, and
+`server_auth.signed_in_account_id()` is the only read of the id.
+
+It needed one because three call sites read `signed_in_account()["account_id"]`,
+a key that dict never has, so everything recorded while signed in landed under
+`local_player`. The ranked tests mocked the same wrong key, so they agreed with
+the bug. To give those rows back, **the first account to sign in on a node adopts
+every `local_player` row**, once (`results.adopt_local_rows`):
+
+- A marker row in `hassault_adoptions`, keyed by the stand-in, is inserted before
+  anything moves. Two requests racing here both try that INSERT and only one of
+  them moves rows, the same shape as `hassault_drop_claims`.
+- Collisions are `UPDATE OR IGNORE`d: if the account already has a rating, or
+  already claimed a level, its own row wins.
+- A second account signing in later gets nothing. By then the rows have an owner.
+
+`/ranked/calibrate` also stopped taking `accountId` from the request body, which
+let any caller write a rating row for anybody.
+
 ## The native HUD
 
 `apps/native-fps/src/hud.rs` is a vertex buffer and a hand-rolled 5×7 bitmap font.
@@ -5840,10 +5869,12 @@ tests pin correctness. The DDA is the part that needed it — a dozen lines wher
 off-by-one on a cell boundary stops shots a fraction early, reports nothing, and
 quietly teaches a player the wrong thing about their own aim.
 
-One number is a deliberate approximation rather than a port: `falloffStart` is not
-served, because in a match the server does that arithmetic and the browser never
-needed it. Rather than widen the wire for a number only training reads, the range
-derives it from what *is* served. It only ever colours a damage figure on a dummy.
+`falloffStart` is served on every weapon for the range's sake. It used to be
+guessed as a third of the weapon's range in both clients, which agreed between
+them and with no weapon in the server's table (the rifle falls off from 80), so a
+dummy took different damage than the same shot in a match. The `falloffs` block
+of `physics-vectors.json` now pins both ranges' damage against the server's
+`damage_at`; the guess survives only for a backend older than the field.
 
 ### A gunless game is never a quiet state
 
@@ -5859,6 +5890,56 @@ So the error is surfaced: a red line in the main menu and on the click-to-play
 hint, and **Host is disabled** while it stands — a match nobody can fire in wastes
 everyone's time, not just yours. Training stays open, because practising the
 movement without a gun is still practising the movement.
+
+### Aim drills
+
+The free range's dummies stand still. A drill is a minute against targets that
+**move the way players do**: strafing end to end of a rail, AD-spamming,
+jiggle-peeking, crouch-peeking, or popping up for about a second. Pick one from
+the drill list beside **Train**, which offers the loaded map's own drills plus
+`spawn_strafe`, the one that runs anywhere. A three-second countdown, a timer,
+then a results card: kills per minute, accuracy, headshot share, median reaction
+and median time to kill. A personal best per drill is kept in browser storage.
+
+The design question was where the targets live, and the answer is **the client,
+on a schedule the server writes**:
+
+- **`drills.py` makes every decision.** Each target gets a list of input
+  segments, `[tick, strafe, crouch, jump, visible]`, at a fixed 60 Hz. When a
+  target turns back at the end of its rail, how long an AD hold lasts and when a
+  pop-up shows are all decided there, by simulating the same `physics.step`
+  ticks the client is about to run. Neither client ports an RNG or a turn-back
+  rule.
+- **Each client moves the target with its own movement code.** `DrillMover`
+  (`training-drill.ts`, `drills.rs`) feeds the segment for each tick through
+  that client's `step`, in whole fixed ticks whatever the frame rate. A target
+  accelerates, brakes and counter-strafes exactly like a player because it runs
+  the same legs. `drill-vectors.json` pins that a replayed schedule lands on the
+  positions the Python saw, in all three suites.
+- **Server bots were the alternative, and lost.** Reaction time and time to kill
+  are the whole point of the card, and a target seen through snapshot
+  interpolation is 100 ms or more in the past. The range also has to work
+  offline and as a guest, and a drill costs the one-machine game server nothing
+  this way.
+
+Scoring is `drills.summarise`, ported to both clients and pinned by the same
+fixture's `stats` cases. Accuracy is per trigger pull (a shotgun blast landing
+one pellet is a hit); headshot share is per pellet. Reaction runs from a target
+appearing to its first hit, and time to kill from that first hit to the kill. A
+heads-only drill still counts a body shot as a hit; it just does no damage.
+**A drill never feeds XP, credits or a rank.** It is scored by the client that ran
+it, so its numbers are a personal record, the same rule as `authority = local`.
+
+Two rules the range follows in a drill that are easy to break:
+
+- **A hidden pop-up is not drawn at all.** A body standing there unhittable
+  would be a target that lies.
+- **A crouching target is a shorter body.** The hit test and the head band use
+  the crouched height, so the head moves, which is what crouch-peek is for.
+
+The routes are `GET /api/hassault/drills?map=` and `/drills/{id}?map=&x=&y=`
+(the position only matters to `spawn_strafe`), on the node and the game server
+alike, returning plain dicts so no response model can drop a field.
 
 ## Bots
 
@@ -6363,8 +6444,9 @@ Four rules in that translation are load-bearing:
   "solo room" is not expressible: the roomless join is join-*or*-create, so
   solitude cannot be requested, only stumbled into. `App::new` with `socket: None`
   places the player with the same `physics::spawn_at` the conformance fixture pins
-  and steps `physics::step` directly each frame. It is Train minus the dummy range
-  (`training.ts`), which has no Rust port yet.
+  and steps `physics::step` directly each frame. The dummy range is
+  `training.rs`, a port of `training.ts` bound to it by the same fixtures; see
+  [Training, natively](#training-natively).
 - **A bot count only travels with `host`.** `add_bot` is host-only on the channel,
   so a count on a join is an instruction the server would refuse — and it is
   *absent* rather than `0`, because a zero is a request the client would act on.
@@ -6659,6 +6741,15 @@ One consequence of getting this right, worth knowing before it looks like a bug:
 sits at 4.5, a body is 5.2 tall, and the head band is its top cube — 4.2 to 5.2.
 The server agrees, so a rifle kills a dummy in one shot, not two.
 
+[Aim drills](#aim-drills) run natively too. The pane's drill picker launches the
+client with `--drill=<id>` (the node passes it only with `--mode=train`, and only
+for an id in the drill table). `main.rs` fetches the expanded drill once Train
+has placed the player and calls `App::set_drill`. The clock and the results card
+are `drill_hud.rs`. The card answers to the keyboard, **R** to run again and
+**F** for the free range, because Train keeps the pointer captured and a card
+you had to free the mouse for would have worse controls than the game around
+it.
+
 ### The pause menu
 
 Escape used to release the pointer and nothing else. It now opens a menu, which
@@ -6731,7 +6822,7 @@ rows underneath it.
 | | Low | Medium | High | Ultra |
 | --- | --- | --- | --- | --- |
 | Shading | flat | hemisphere + sun | + fill | + fill |
-| Fog | ×2 | ×1.36 | the map's own | the map's own |
+| Fog | the map's own | the map's own | the map's own | the map's own |
 | MSAA | off | off | 4× | 8×, where supported |
 | Anisotropy | 4× | 8× | 16× | 16× |
 | Textures (per layer) | 128 | 256 | 256 | 512 |
@@ -6740,9 +6831,12 @@ rows underneath it.
 | Sky dome | no | yes | yes | yes |
 | Bloom | off | off | off | 50% |
 
-**High uses the map's own fog density.** That is not a value picked to look
-close: it is the level at which the two clients are meant to draw the same
-picture, and the lower levels trade distance for fill rate from there. Low
+**Every level uses the map's own fog density.** Low and Medium used to thicken
+it (×2 and ×1.36) to save fill rate, which let a player on a weak GPU lose a
+gunfight to fog a stronger machine did not draw; see
+[What a graphics setting may not change](#what-a-graphics-setting-may-not-change).
+Fill rate now comes out of the render scale, the light count and the shadow
+taps. Low
 returns the surface *flat*, with no hemisphere, sun or shadow. That is the level's
 choice, not a cheaper approximation of the same picture, so a screenshot taken at
 Low beside a browser screenshot is not evidence the clients diverge.
@@ -8223,11 +8317,11 @@ standalone dashboard panel (**HorribleAssault: Open Developer Console** / `hassa
 +---------------------------------------------------------------------------------------+
 | ~ DEV CONSOLE   [ROOM: rm_8f3 (hd_atrium)]   [PING: 24ms]   [CHEATS: ON]              |
 +---------------------------------------------------------------------------------------+
-| [🎯 Hitboxes: ON] [🕸️ Wireframe: OFF] [📊 NetGraph: L2] [Speed: 0.35x 1.0x 2.0x]       |
+| [🎯 Hitboxes: ON] [🕸️ Wireframe: OFF] [📊 NetGraph: L2] [Freeze Bots: OFF]             |
 +-----------------------------------------------------------------------+---------------+
 | [04:30:12] net.graph = 2                                              | Python Macros |
 | [04:30:15] draw.hitboxes = true                                       | ------------- |
-| [04:30:18] server.timescale = 0.5                                     | ▶ warmup      |
+| [04:30:18] server.bots.freeze = true                                  | ▶ warmup      |
 | [04:30:22] > server.bots.add(count=3, skill="hard")                   | ▶ bot_1v5     |
 | [04:30:22] [bots] Added 3 bot(s) (skill=hard) to room rm_8f3           | ▶ net_stress  |
 +-----------------------------------------------------------------------+---------------+
@@ -8242,14 +8336,14 @@ native Python expression/statement syntax. The console parser automatically
 differentiates between the two:
 
 1. **Source / Quake Command Syntax**:
-   - Set CVar: `net.graph 2`, `draw.hitboxes 1`, `server.timescale 0.5`
+   - Set CVar: `net.graph 2`, `draw.hitboxes 1`, `server.bots.freeze 1`
    - Query CVar: `draw.fov`, `net.simulate_lag`
    - Command with keyword params: `server.start map:hd_dust2 bots:3 skill:hard`
    - Command chaining: `server.cheats 1; draw.hitboxes 1; net.graph 2`
    - Client binds & aliases: `bind F1 "macro.run('warmup')"`, `alias prac "server.cheats 1; draw.hitboxes 1"`
 
 2. **Python Sandbox Syntax**:
-   - Property assignment: `draw.wireframe = True`, `server.timescale = 0.35`
+   - Property assignment: `draw.wireframe = True`, `server.bots.freeze = True`
    - Function invocation: `server.bots.add(count=2, skill="hard")`
    - Multi-line scripting & loops:
      ```python
@@ -8291,7 +8385,6 @@ Every CVar and ConCommand is strictly structured into modular namespaces:
 | Name | Type | Description |
 |---|---|---|
 | `server.cheats` | `bool` CVar | Allows cheat commands (`player.god`, `player.noclip`, `give`) |
-| `server.timescale` | `float` CVar | Simulation speed multiplier (0.05 to 5.0) |
 | `server.max_players` | `int` CVar | Max client capacity per match room |
 | `server.start(map, bots, skill)` | Command | Spawns a new server room with optional bots |
 | `server.stop()` | Command | Terminates current match session |
@@ -8299,7 +8392,7 @@ Every CVar and ConCommand is strictly structured into modular namespaces:
 | `server.restart()` | Command | Resets match scores, timer, and positions |
 | `server.bots.add(count, skill)` | Command | Spawns reactive AI bots into the match |
 | `server.bots.kick_all()` | Command | Removes all active bots |
-| `server.bots.freeze(frozen)` | Command | Halts bot movement and weapon logic |
+| `server.bots.freeze` | `bool` CVar | Bots produce no input while set: they stand, never turn or fire, and can still be shot |
 
 #### `player.*` — Movement, State & Loadout
 | Name | Type | Description |
@@ -8352,13 +8445,20 @@ to be told.
 
 ### Built-in Macros & Drills
 
-The console ships with five pre-configured training and diagnostic drills:
+The console ships with five drills. They run against a **server room** (Host),
+not offline Train, and `test_every_builtin_macro_names_real_weapons_and_cvars`
+checks that each one names only weapons and cvars that exist:
 
-1. **`warmup`**: Enables cheats, infinite ammo, spawns 3 easy bots, and activates bullet tracers.
-2. **`bot_1v5`**: Spawns 5 hard AI bots with god mode enabled for high-intensity target acquisition.
-3. **`smoke_practice`**: Warps to high vantage point with noclip and slow-motion timescale (0.4x).
-4. **`net_stress_test`**: Injects 120ms artificial latency and 5% packet loss with full NetGraph breakdown.
-5. **`slowmo_duel`**: Matrix-style 0.35x timescale sniper challenge against an elite bot.
+1. **`warmup`**: cheats, god mode, hitboxes and tracers on, plus 3 normal bots.
+2. **`bot_1v5`**: kicks every bot, adds 5 hard ones on RVSF, and hands you the assault rifle.
+3. **`smoke_practice`**: cheats, god mode, hitboxes and the grenade arc on, for throwing lineups.
+4. **`net_stress_test`**: 120 ms of artificial latency and 5% loss, with NetGraph level 2.
+5. **`frozen_targets`**: 5 easy bots, frozen with `server.bots.freeze`, as standing targets.
+
+`server.timescale` and the `slowmo_duel` drill were removed. The cvar was
+registered and never read: a client predicts its own movement in real time, so
+a server-side scale would mispredict every tick. `bot_1v5` used to give a
+"carbine" that is not a weapon here.
 
 
 ---
@@ -8475,7 +8575,7 @@ The console is fully exposed to AI pair-programming agents via two structured to
 
 - **`hassault.console_exec`**:
   ```python
-  await agent_tools.hassault_console_exec(command="draw.hitboxes 1; server.timescale 0.5")
+  await agent_tools.hassault_console_exec(command="draw.hitboxes 1; server.bots.freeze 1")
   ```
 - **`hassault.run_macro`**:
   ```python
@@ -8933,10 +9033,13 @@ The skin system provides distinct faction styling and collectible operator skins
   unattenuated, which reads as the smoke being thinner than it is.
 
 
-- **Ranked is XP and a logged result, not a rating.** ELO applies to two seats
-  facing each other, and a free-for-all people come and go from is not that
-  shape; a 1v1 duel mode is where a hassault rating belongs. Until then the
-  ladder is untouched and the debrief shows no rank.
+- **The rank shown is self-reported.** The game server's ladder is untouched:
+  ELO applies to two seats facing each other, and a free-for-all people come and
+  go from is not that shape. But the node *does* keep a Glicko-2 rating
+  (`rating.py`, `ranked_mmr.py`, CS-style tier names) and updates it after every
+  recorded match, local ones included, scored against an imagined opponent at the
+  default rating. Nothing comparative may be built on it. A real rating between
+  two players belongs to a server-run 1v1 duel mode.
 - **Nothing binds keys yet.** The native client's controls are fixed (WASD,
   space, shift, R, 1–5, 6–9 to ready a grenade, G to throw and H to lob, right
   mouse to scope, Escape for the menu); the pane's

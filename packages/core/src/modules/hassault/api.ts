@@ -3,6 +3,7 @@
  * `backend/modules/hassault/models.py`; the backend stays the source of truth.
  */
 import { apiDelete, apiGet, apiPost } from '../../api';
+import type { DrillSpec, DrillSummary } from './training-drill';
 import type { ItemRow } from './net';
 import { apiUrl } from '../../origin';
 
@@ -253,6 +254,23 @@ export interface WeaponSpec {
    * server is new enough to send it at all.
    */
   residualSpread?: number;
+  /**
+   * Distance at which damage starts tapering toward half at `range`. Only the
+   * training range reads it, since in a match the server does the falloff.
+   * Optional because a backend older than the field does not send it; see
+   * `falloffStart` in `training.ts` for the fallback.
+   */
+  falloffStart?: number;
+  /**
+   * The accuracy model's inputs (`shotCone` in `trace.ts`). Optional because a
+   * backend older than the model sends none, and every default is "no change".
+   */
+  firstShotSpread?: number | null;
+  moveInaccuracy?: number;
+  airInaccuracy?: number;
+  crouchScale?: number;
+  perShotInaccuracy?: number;
+  recoveryTime?: number;
 }
 
 /**
@@ -410,6 +428,8 @@ export interface LaunchNativeOptions {
   /** Bots to field. `host` only — `add_bot` is host-only on the channel. */
   bots?: number;
   bot_skill?: string;
+  /** `train` only: start this aim drill (`drills.py`) instead of the free range. */
+  drill?: string;
 }
 
 export interface LaunchNativeResult {
@@ -767,6 +787,21 @@ export function getCatalogStatus(): Promise<CatalogStatus> {
 
 export function listMaps(): Promise<MapSummary[]> {
   return apiGet<MapSummary[]>('/hassault/maps');
+}
+
+/** The aim drills a player on `map` can start: its own, plus the any-map ones. */
+export function listDrills(map: string): Promise<DrillSummary[]> {
+  return apiGet<DrillSummary[]>(`/hassault/drills?map=${encodeURIComponent(map)}`);
+}
+
+/**
+ * One drill, expanded for a run (`drills.expand`). `x`/`y` are where the player
+ * stands, which only the any-map drill reads: its targets go on the spawns
+ * nearest it.
+ */
+export function getDrill(id: string, map: string, x: number, y: number): Promise<DrillSpec> {
+  const query = `map=${encodeURIComponent(map)}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`;
+  return apiGet<DrillSpec>(`/hassault/drills/${encodeURIComponent(id)}?${query}`);
 }
 
 export function getMapInfo(name: string): Promise<MapInfo> {

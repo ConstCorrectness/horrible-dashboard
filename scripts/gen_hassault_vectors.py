@@ -38,6 +38,7 @@ from backend.modules.hassault.weapons import (
     WEAPONS,
     aim_vector,
     apply_spray,
+    damage_at,
     ray_hits_body,
     raycast_world_face,
     residual_spread,
@@ -447,6 +448,19 @@ CASES = [
         "start": {"x": 6.0, "y": 6.0, "z": 0.0, "yaw": 0.8, "on_ground": True},
         "steps": repeat(30, forward=1.0, dt=1 / 60)
         + repeat(90, forward=1.0, jump=True, dt=1 / 60),
+    },
+    # -- walking ----------------------------------------------------------
+    {
+        "name": "walking on the ground moves at 52 per cent",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(60, forward=1.0, walk=True, dt=1 / 60),
+    },
+    {
+        "name": "a crouch outranks a walk",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(60, forward=1.0, walk=True, crouch=True, dt=1 / 60),
     },
     # -- crouching --------------------------------------------------------
     {
@@ -986,6 +1000,7 @@ def main() -> None:
                 strafe=raw.get("strafe", 0.0),
                 jump=raw.get("jump", False),
                 crouch=raw.get("crouch", False),
+                walk=raw.get("walk", False),
             )
             step(world, player, move, raw["dt"])
             # Applied *after* the step, which is where the match server applies
@@ -1148,6 +1163,22 @@ def main() -> None:
         # this design refuses.
         "weapons": {w.id: w.to_dict() for w in WEAPONS},
         "sprays": out_sprays,
+        # Damage after falloff, from the server's own `damage_at`, for the two
+        # training ranges that do this arithmetic offline. Distances bracket the
+        # served `falloffStart`: inside it, at it, mid-taper, at range, past it.
+        "falloffs": [
+            {"weapon": w.id, "distance": d, "expect": damage_at(w, d)}
+            for w in WEAPONS
+            for d in sorted(
+                {
+                    0.0,
+                    w.falloff_start,
+                    (w.falloff_start + w.range) / 2,
+                    w.range,
+                    w.range * 2,
+                }
+            )
+        ],
         # The throw preview. **A looser tolerance than the rest of this file, on
         # purpose**: the global 1e-9 is right for a single movement step and
         # wrong for an integrator run for two seconds, where the three ports'

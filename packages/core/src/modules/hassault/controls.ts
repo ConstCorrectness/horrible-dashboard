@@ -28,6 +28,7 @@ export type GameAction =
   | 'right'
   | 'jump'
   | 'crouch'
+  | 'walk'
   | 'sprint'
   | 'quickswitch'
   | 'reload'
@@ -97,10 +98,16 @@ export const ACTIONS: readonly ActionDoc[] = [
     note: 'Silent, shorter, and steadier — for 40% of your speed. Crouching in mid-air costs nothing.',
   },
   {
+    action: 'walk',
+    label: 'Walk',
+    group: 'Movement',
+    note: 'Hold it. Silent, and a steadier shot than a run, for 48% of your speed.',
+  },
+  {
     action: 'sprint',
     label: 'Sprint',
     group: 'Movement',
-    note: 'Fast sprint (1.35x speed). Drains stamina pool. Crouch while sprinting to power-slide!',
+    note: 'Offline on modelled maps only; a match does not simulate it. Unbound by default.',
   },
   {
     action: 'quickswitch',
@@ -189,7 +196,10 @@ export const DEFAULT_CONTROLS: Bindings = {
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
   crouch: ['ControlLeft', 'KeyC'],
-  sprint: ['ShiftLeft', 'ShiftRight'],
+  // Shift is walk, the CS convention. Sprint was there, and the server has never
+  // simulated it, so online it was a mispredict on every press.
+  walk: ['ShiftLeft', 'ShiftRight'],
+  sprint: [],
   quickswitch: ['KeyQ'],
   reload: ['KeyR'],
   inspect: ['KeyF'],

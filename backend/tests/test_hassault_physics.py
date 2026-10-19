@@ -605,6 +605,7 @@ def test_conformance_vector(index: int):
                 strafe=raw.get("strafe", 0.0),
                 jump=raw.get("jump", False),
                 crouch=raw.get("crouch", False),
+                walk=raw.get("walk", False),
             ),
             raw["dt"],
         )

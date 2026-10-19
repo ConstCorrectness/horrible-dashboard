@@ -152,6 +152,17 @@ class MapBrief:
 
 
 MAP_BRIEFS: dict[str, MapBrief] = {
+    "hd_aim": MapBrief(
+        map_name="hd_aim",
+        site="Calibration Hall, Relay Training Annex",
+        tagline="Every target here was built to be missed.",
+        brief=(
+            "A gutted hangar the relay crews use to zero their rifles. Three lanes "
+            "split by waist-high ridges: a close lane at ten and twenty-five cubes, "
+            "a strafe gallery, and a long lane out to a hundred. The targets move "
+            "the way people do, because they run the same legs."
+        ),
+    ),
     "hd_dust2": MapBrief(
         map_name="hd_dust2",
         site="Citadel Relay, Dust Basin",

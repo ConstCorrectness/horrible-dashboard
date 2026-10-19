@@ -224,7 +224,9 @@ def test_the_lore_route_serves_both_factions_and_the_map_briefs():
     from backend.modules.hassault import mapsource
 
     shipped = sorted(p.stem for p in mapsource.MAPS_DIR.glob("hd_*.json"))
-    assert len(shipped) == 9
+    # Nine modelled maps plus the brush-built aim range. Counted rather than
+    # asserted as a list so a new map fails here only if it has no brief.
+    assert len(shipped) >= 10
     for name in shipped:
         assert body["mapBriefs"][name]["site"], name
 
