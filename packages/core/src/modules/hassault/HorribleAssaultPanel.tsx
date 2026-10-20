@@ -48,6 +48,7 @@ import { restoreGeneratedSurfaces, upgradePhotoSurfaces } from './photo-surfaces
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu, MoneyCounter } from './panels/BuyMenu';
+import { PostChain } from './post-chain';
 import { DuelQueueBanner, RatingResult } from './panels/DuelPanels';
 import { buyGroups, pressBuyKey } from './buy-menu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
@@ -672,6 +673,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // A ref the render loop reads, so moving the slider mid-match applies on the
   // next frame without rebuilding the scene.
   const brightnessRef = useRef(1);
+  /** Bloom and sharpening (`post-chain.ts`): the native client's two machine
+   * settings, read live by the render loop. Both 0 skips the chain entirely. */
+  const postRef = useRef({ bloom: 0, sharpen: 0 });
+  postRef.current = {
+    bloom: Number(useSetting<number>('hassault.video.bloom') ?? 0) || 0,
+    sharpen: Number(useSetting<number>('hassault.video.sharpen') ?? 0) || 0,
+  };
   brightnessRef.current = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   /** The loadout to carry per side (`loadout.ts`), sent on every welcome. */
@@ -1664,10 +1672,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // `antialias` is the one tier knob three only reads here, at creation;
       // `auto` keeps it on, since the tier it resolves to is only known once
       // this context can be asked what GPU it is on.
+      const canvasAntialias =
+        graphicsOverridesRef.current.antialias ?? graphicsChoiceRef.current !== 'low';
       const renderer = new THREE.WebGLRenderer({
-        antialias: graphicsOverridesRef.current.antialias ?? graphicsChoiceRef.current !== 'low',
+        antialias: canvasAntialias,
         powerPreference: 'high-performance',
       });
+      // Bloom and sharpening after the scene, as the native client has them.
+      const post = new PostChain(THREE, renderer);
       const hints = {
         devicePixelRatio: window.devicePixelRatio || 1,
         renderer: rendererName(renderer.getContext()),
@@ -2894,7 +2906,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }
         const exposure = baseExposure * brightnessRef.current;
         if (renderer.toneMappingExposure !== exposure) renderer.toneMappingExposure = exposure;
-        renderer.render(scene, camera);
+        // Through the post chain, which is a plain `renderer.render` while bloom
+        // and sharpening are both off; on, the scene's MSAA follows the canvas's.
+        post.render(scene, camera, postRef.current, canvasAntialias);
         // Straight after the render, in the same frame: the afterimage is a copy
         // of the canvas just drawn, and the drawing buffer is gone by the next task.
         flashLayer.frame(dt, renderer.domElement);
@@ -3004,6 +3018,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         for (const lamp of lampPool) lamp.dispose();
         material.dispose();
         detail.dispose();
+        post.dispose();
         renderer.dispose();
         renderer.domElement.remove();
         sceneRef.current = null;

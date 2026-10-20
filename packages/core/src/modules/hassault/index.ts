@@ -397,7 +397,7 @@ export const hassaultModule: ModuleManifest = {
     },
     {
       key: 'hassault.video.bloom',
-      title: 'Native client: bloom',
+      title: 'Bloom',
       description:
         '0 (off) to 1. A glow on what is already near white — lamps, screens, the sun, a muzzle flash — not a haze over the scene.',
       type: 'number',
@@ -413,7 +413,7 @@ export const hassaultModule: ModuleManifest = {
     },
     {
       key: 'hassault.video.sharpen',
-      title: 'Native client: sharpening',
+      title: 'Sharpening',
       description:
         '0 (off) to 1, contrast-adaptive. Gives back the edge contrast a resolution scale below 100% takes away, without ringing on detail that is already sharp.',
       type: 'number',

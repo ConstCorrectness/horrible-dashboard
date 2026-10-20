@@ -7344,6 +7344,18 @@ four that no preset touches:
   lamps, flames and sunlit highlights glow.
 - **Sharpening** (`sharpen`): contrast-adaptive, in the final composite. Most
   useful below a render scale of 100%.
+
+**The browser runs the same chain** (`post-chain.ts`), from the same two
+settings: the same threshold, knee and five levels, the same 13-tap down and
+tent up, the same screen blend and CAS, which `browser_parity.rs` pins in both
+sources. three tone maps inside each material only when drawing to the canvas,
+so with the chain on the scene goes to a linear half-float target and a display
+pass applies three's own ACES and sRGB curve. The clear colour is the one thing
+three never tone maps on the canvas, so the chain pre-distorts it
+(`inverseAces`) and the sky comes out unchanged: verified pixel-exact against
+the plain render in a browser. With both settings at 0, the default at every
+browser tier as at every native tier below Ultra, the chain is skipped and the
+frame is the plain `renderer.render` it always was.
 - **Brightness** (`brightness`): a multiplier on the map's exposure.
 - **Frame latency** (`frameLatency`): 1 to 3 frames queued, passed to the surface
   as `desired_maximum_frame_latency`. One is the lowest input lag, three the

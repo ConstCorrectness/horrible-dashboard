@@ -970,3 +970,43 @@ fn both_clients_give_a_player_the_same_light_floor_at_every_level() {
         "the skin shader takes its detail from the quality level again"
     );
 }
+
+// -- the post chain ------------------------------------------------------------
+
+const POST_CHAIN_TS: &str =
+    include_str!("../../../packages/core/src/modules/hassault/post-chain.ts");
+const POST_RS: &str = include_str!("../src/post.rs");
+const POST_WGSL: &str = include_str!("../src/post.wgsl");
+
+#[test]
+fn both_clients_bloom_and_sharpen_with_the_same_numbers() {
+    // The browser's chain is a port of this one (`post-chain.ts`), and a bloom
+    // that started lower in one client would make a sunlit wall glow there
+    // and not here. The constants, the filter weights and the blends are text
+    // in both, so the load-bearing pieces are pinned.
+    for (native, browser) in [
+        ("const LEVELS: usize = 5;", "export const LEVELS = 5;"),
+        ("const THRESHOLD: f32 = 0.82;", "export const THRESHOLD = 0.82;"),
+        ("const KNEE: f32 = 0.12;", "export const KNEE = 0.12;"),
+    ] {
+        assert!(POST_RS.contains(native), "post.rs lost `{native}`");
+        assert!(POST_CHAIN_TS.contains(browser), "post-chain.ts lost `{browser}`");
+    }
+    for needle in [
+        // The 13-tap downsample's weights.
+        "0.03125",
+        "0.0625",
+        "0.125",
+        // The tent upsample's normalisation.
+        "/ 16.0",
+        // CAS: the lobe's range, and the headroom term.
+        "mix(8.0, 5.0, amount)",
+        "(1.0) - hi",
+        // The soft knee and the screen blend.
+        "soft * soft / (4.0 *",
+        "(1.0) - (vec3",
+    ] {
+        assert!(POST_WGSL.contains(needle), "post.wgsl lost `{needle}`");
+        assert!(POST_CHAIN_TS.contains(needle), "post-chain.ts lost `{needle}`");
+    }
+}
