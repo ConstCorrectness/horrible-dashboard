@@ -2805,14 +2805,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     } else {
         (
             vec![
-                SpawnPoint { x: 48.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 57.0, y: 24.0, z: 0.6, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 72.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 84.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 78.0, y: 144.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 111.0, y: 115.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 120.0, y: 114.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 78.0, y: 156.0, z: 0.0, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 48.0, y: 21.0, z: 0.54, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 57.0, y: 24.0, z: 0.6, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 72.0, y: 21.0, z: 0.54, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 84.0, y: 21.0, z: 0.54, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 78.0, y: 144.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 111.0, y: 115.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 120.0, y: 114.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 78.0, y: 156.0, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
                 ItemRow { id: 1, kind: "health".into(), x: 42.0, y: 18.0, z: 0.54 },

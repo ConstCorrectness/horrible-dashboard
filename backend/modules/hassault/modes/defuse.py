@@ -48,20 +48,20 @@ in it.
 - **Attacker and defender are derived from `(team, half)`, never stored.** Stored,
   the half-time swap needs two updates and one of them gets forgotten.
 
-## The swap changes roles, not teams
+## The swap changes roles, and the role picks the spawn
 
-Counter-Strike moves the players: your team changes sides, so you inherit the
-other side's spawns and the other half of the map. Here the swap flips one
-boolean and `attackers` is derived from it — nobody's `team` changes, nobody
-moves spawn, and `wins` stays indexed by the people who earned it, so no score
-has to be reversed either.
+The swap flips one boolean and `attackers` is derived from it: nobody's `team`
+changes, and `wins` stays indexed by the people who earned it, so no score has
+to be reversed. But a spawn belongs to an *end of the map*, not to a team, the
+way it does in Counter-Strike: the map's team-1 spawns (`ATTACKER_SPAWNS`) are
+the attackers' end, far from the sites, and its team-0 spawns are the
+defenders', beside them. `spawn_options` and the buy zones follow the role, so
+at half time the players move ends.
 
-That is a real deviation and it is only sound because of how the bundled maps are
-built: the sites are placed *neutrally*, equidistant from both sides, precisely so
-that attacking is not easier from one end. On a map with a defender-favouring
-site, keeping your spawn across the swap would mean one team attacks the hard
-site twice. If such a map is ever added, that is the moment to move players
-instead — and `maplint` is where the rule would go.
+The swap used to keep everyone's spawn, which was sound only while sites sat
+neutrally between the two ends. The rebuilt maps do not: CT reach a site in two
+or three seconds and T in seven to nine, so in every first half the attackers
+started beside the sites.
 """
 
 from __future__ import annotations
@@ -76,6 +76,10 @@ from .objectives import Site
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..match import Command, MatchPlayer, MatchRoom
+
+#: The spawns (`attr2`) the attacking team uses, whichever team that is: every
+#: bundled defuse map puts its team-1 spawns at the far end from the sites.
+ATTACKER_SPAWNS = 1
 
 #: Rounds a side must win to take the match.
 ROUNDS_TO_WIN = 5
@@ -573,16 +577,29 @@ class Defuse(GameMode):
 
     def attach(self, room: MatchRoom) -> None:
         self.sites = list(room.objectives.sites)
-        #: Where each team may buy: a `BUY_ZONE_RADIUS` circle `(x, y, r)`
-        #: round each of its spawn points. Maps declare no zones of their own yet.
+        #: Where each end of the map may buy, keyed by the spawns' own team
+        #: (`attr2`): a `BUY_ZONE_RADIUS` circle `(x, y, r)` round each of its
+        #: spawn points. Maps declare no zones of their own yet. Who buys where
+        #: follows the role (`spawn_end`), not the team.
         self.buy_zones: dict[int, list[tuple[float, float, float]]] = {
-            team: [
+            end: [
                 (float(e.x), float(e.y), BUY_ZONE_RADIUS)
                 for e in room.spawns
-                if e.attr2 == team
+                if e.attr2 == end
             ]
-            for team in (0, 1)
+            for end in (0, 1)
         }
+
+    def spawn_end(self, team: int) -> int:
+        """Which end of the map `team` spawns and buys at this round: the
+        attackers' (`ATTACKER_SPAWNS`) while it attacks, the other while it
+        defends. So the half-time swap moves both teams."""
+        attacking = team == self.state.attackers
+        return ATTACKER_SPAWNS if attacking else 1 - ATTACKER_SPAWNS
+
+    def spawn_options(self, room: MatchRoom, team: int) -> list[Any] | None:
+        end = self.spawn_end(team)
+        return [e for e in room.spawns if e.attr2 == end] or None
 
     # -- buying -------------------------------------------------------------
 
@@ -597,9 +614,10 @@ class Defuse(GameMode):
         return 0.0
 
     def in_buy_zone(self, player: MatchPlayer) -> bool:
-        """Whether a body stands in one of its own team's buy zones. A team
-        with none at all (a map with no spawns for it) may buy anywhere."""
-        zones = getattr(self, "buy_zones", {}).get(player.team) or []
+        """Whether a body stands in one of the buy zones of the end its team
+        spawns at this round. An end with none at all (a map with no spawns
+        there) may buy anywhere."""
+        zones = getattr(self, "buy_zones", {}).get(self.spawn_end(player.team)) or []
         if not zones:
             return True
         x, y = player.state.x, player.state.y

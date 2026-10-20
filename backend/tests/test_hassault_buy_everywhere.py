@@ -150,7 +150,8 @@ def test_each_weapon_pays_its_own_kill_reward(game):
 
 def test_buying_needs_the_buy_zone_once_alive(game):
     room, t, _ = game
-    zones = room.mode.buy_zones[0]
+    # The zones of the end this player spawns at this round: the role's, not the team's.
+    zones = room.mode.buy_zones[room.mode.spawn_end(t.team)]
     assert zones, "a map with T spawns has T buy zones"
     far = max(
         (

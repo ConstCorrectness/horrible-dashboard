@@ -518,13 +518,13 @@ spawns to each site, with the number of distinct routes in brackets.
 | `hd_nuke` | 8.0 s (3) | 6.8 s (2) | 2.3 s | 4.7 s | Done. |
 | `hd_office` | 8.2 s (3) | 7.9 s (3) | 3.1 s | 1.8 s | Done. |
 | `hd_bank` | 6.6 s (2) | 6.7 s (3) | 2.8 s | 3.0 s | Done, not cut (see above). |
-| `hd_assault` | 1.5 s (5) | 2.1 s (3) | 6.2 s | 3.9 s | **To do.** Broken the way Office and Bank were: T spawn next to both sites and CT are the side far from them. |
+| `hd_assault` | 6.2 s (4) | 3.9 s (3) | 1.5 s | 2.1 s | **To do.** Its two spawn sets were labelled the wrong way round (T 1.5 s from A); they are swapped, but T still reach B in under 4 s. |
 
 Still open, in the order they would be done:
 
-- **Rebuild Assault** as Office and Bank were: put the sides where the sites
-  make sense (the attackers far from both), give each site two ways in, then
-  cut if the walk is still short. Its materials already have rules waiting:
+- **Rebuild Assault** as Office and Bank were: its spawn sets are now the right
+  way round, but B is under 4 s from the attackers' end, so give each site two
+  ways in and lengthen the approach (cut if need be). Its materials already have rules waiting:
   `assault_asphalt` (yard asphalt), `assault_concrete`, `assault_warehouse_floor`,
   `assault_container_`, `assault_warehouse_wall`, `assault_diamond_plate`,
   `assault_steel_catwalk`, `assault_office_floor`, `assault_office_wall`,
@@ -2716,13 +2716,16 @@ Rules with a reason:
   ever having attacked, which makes the map's balance the entire result. One
   short of winning means the swap always happens. This is CS's structure and the
   same arithmetic is why.
-- **The swap changes roles, not teams.** CS moves the players; here it flips one
-  boolean and `attackers` is derived from it, so nobody's `team` changes, nobody
-  moves spawn, and `wins` stays indexed by the people who earned it — no score to
-  reverse. That is sound *only* because the bundled maps place their sites
-  neutrally, equidistant from both sides. On a map with a defender-favouring
-  site, keeping your spawn across the swap would mean one team attacks the hard
-  site twice, and that is the moment to move players instead.
+- **The swap changes roles, and the role picks the spawn.** It flips one boolean
+  and `attackers` is derived from it, so nobody's `team` changes and `wins` stays
+  indexed by the people who earned it — no score to reverse. But a spawn belongs
+  to an end of the map: the team-1 spawns (`defuse.ATTACKER_SPAWNS`) are the
+  attackers' end, far from the sites, and the team-0 spawns the defenders', beside
+  them. `Defuse.spawn_options` and the buy zones follow the role, so at half time
+  both teams move ends, as in CS. The swap used to keep everyone's spawn, which
+  only works while sites sit neutrally between the ends; the rebuilt maps put CT
+  two or three seconds from a site and T seven to nine, so every first half was
+  played with the attackers starting beside the sites.
 - **A plant swaps the round clock for the fuse**, which is what makes planting
   with four seconds left a winning play rather than a wasted one.
 - **Wiping the attackers after a plant does not win the round.** It only means
