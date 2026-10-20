@@ -2650,14 +2650,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     } else if info.name == "hd_bank" {
         (
             vec![
-                SpawnPoint { x: 36.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 72.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 108.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 144.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 31.5, y: 160.5, z: 2.55, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 60.0, y: 159.0, z: 2.4, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 132.0, y: 157.5, z: 0.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 106.5, y: 135.5, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 24.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 72.0, y: 24.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 108.0, y: 24.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 144.0, y: 24.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 93.0, y: 171.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 106.0, y: 171.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 93.0, y: 154.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 100.0, y: 152.0, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
                 ItemRow { id: 1, kind: "health".into(), x: 30.0, y: 42.0, z: 0.0 },
@@ -2755,14 +2755,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     } else if info.name == "hd_office" {
         (
             vec![
-                SpawnPoint { x: 202.0, y: 90.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 202.0, y: 100.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 202.0, y: 118.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 202.0, y: 138.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 20.0, y: 99.0, z: 0.0, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 20.0, y: 111.0, z: 0.0, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 30.0, y: 98.0, z: 0.0, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 30.0, y: 112.0, z: 0.0, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 202.0, y: 90.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 202.0, y: 100.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 202.0, y: 118.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 202.0, y: 138.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 20.0, y: 99.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 20.0, y: 111.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 30.0, y: 98.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 30.0, y: 112.0, z: 0.0, yaw: 0.0, team: 0 },
             ],
             vec![
                 ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 183.0, z: 0.0 },

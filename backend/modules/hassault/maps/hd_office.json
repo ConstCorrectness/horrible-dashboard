@@ -5571,24 +5571,24 @@
     }
   ],
   "spawns": [
-    {"x": 20, "y": 99, "z": 0, "yaw": 90, "team": 0},
-    {"x": 20, "y": 111, "z": 0, "yaw": 90, "team": 0},
-    {"x": 30, "y": 98, "z": 0, "yaw": 90, "team": 0},
-    {"x": 30, "y": 112, "z": 0, "yaw": 90, "team": 0},
-    {"x": 202, "y": 90, "z": 0, "yaw": 270, "team": 1},
-    {"x": 202, "y": 100, "z": 0, "yaw": 270, "team": 1},
-    {"x": 202, "y": 118, "z": 0, "yaw": 270, "team": 1},
-    {"x": 202, "y": 138, "z": 0, "yaw": 270, "team": 1}
+    {"x": 20, "y": 99, "z": 0, "yaw": 0, "team": 0},
+    {"x": 20, "y": 111, "z": 0, "yaw": 0, "team": 0},
+    {"x": 30, "y": 98, "z": 0, "yaw": 0, "team": 0},
+    {"x": 30, "y": 112, "z": 0, "yaw": 0, "team": 0},
+    {"x": 202, "y": 90, "z": 0, "yaw": 180, "team": 1},
+    {"x": 202, "y": 100, "z": 0, "yaw": 180, "team": 1},
+    {"x": 202, "y": 118, "z": 0, "yaw": 180, "team": 1},
+    {"x": 202, "y": 138, "z": 0, "yaw": 180, "team": 1}
   ],
   "entities": [
-    {"type": "playerstart", "x": 20, "y": 99, "z": 0, "yaw": 90, "team": 0},
-    {"type": "playerstart", "x": 20, "y": 111, "z": 0, "yaw": 90, "team": 0},
-    {"type": "playerstart", "x": 30, "y": 98, "z": 0, "yaw": 90, "team": 0},
-    {"type": "playerstart", "x": 30, "y": 112, "z": 0, "yaw": 90, "team": 0},
-    {"type": "playerstart", "x": 202, "y": 90, "z": 0, "yaw": 270, "team": 1},
-    {"type": "playerstart", "x": 202, "y": 100, "z": 0, "yaw": 270, "team": 1},
-    {"type": "playerstart", "x": 202, "y": 118, "z": 0, "yaw": 270, "team": 1},
-    {"type": "playerstart", "x": 202, "y": 138, "z": 0, "yaw": 270, "team": 1},
+    {"type": "playerstart", "x": 20, "y": 99, "z": 0, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 20, "y": 111, "z": 0, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 30, "y": 98, "z": 0, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 30, "y": 112, "z": 0, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 202, "y": 90, "z": 0, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 202, "y": 100, "z": 0, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 202, "y": 118, "z": 0, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 202, "y": 138, "z": 0, "yaw": 180, "team": 1},
     {"type": "health", "x": 18, "y": 183, "z": 0},
     {"type": "health", "x": 15, "y": 24, "z": 0},
     {"type": "health", "x": 202, "y": 75, "z": 0},
@@ -6139,9 +6139,9 @@
   },
   "collision": "baked",
   "duelSpawns": [
-    {"x": 64, "y": 115, "yaw": 90, "team": 0},
-    {"x": 64, "y": 123, "yaw": 90, "team": 0},
-    {"x": 132, "y": 115, "yaw": 270, "team": 1},
-    {"x": 132, "y": 123, "yaw": 270, "team": 1}
+    {"x": 64, "y": 115, "yaw": 0, "team": 0},
+    {"x": 64, "y": 123, "yaw": 0, "team": 0},
+    {"x": 132, "y": 115, "yaw": 180, "team": 1},
+    {"x": 132, "y": 123, "yaw": 180, "team": 1}
   ]
 }

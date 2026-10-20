@@ -306,3 +306,64 @@ def test_a_doorway_on_office_can_be_walked_through(office, name):
     dist, _ = routes_tool.dijkstra(world, cells, [a])
     assert b in dist, f"{name}: the two sides are not joined"
     assert dist[b] < 2.5 * hop, f"{name}: the way through is {dist[b]:.0f} cubes"
+
+
+# --- Bank -------------------------------------------------------------------
+# Bank had its sides the wrong way round: T spawned beside the vault (A, 1.1 s
+# away) and the front door was the only way in from the street. T come off the
+# street now, CT hold the rear offices, B is the north-west offices, and the
+# facade's two side doors and a breach in the vault's west wall give T a second
+# way to each site. Not cut: the walk is already in the band.
+
+BANK = MAP.with_name("hd_bank.json")
+
+
+@pytest.fixture(scope="module")
+def bank():
+    return routes_tool.measure(str(BANK))
+
+
+def test_every_team_can_walk_to_every_site_on_bank(bank):
+    routes, _, _ = bank
+    assert set(routes) == {(t, s) for t in (0, 1) for s in ("A", "B")}
+    for pair, times in routes.items():
+        assert times, f"{pair} cannot be reached on foot"
+
+
+def test_t_has_two_ways_to_each_site_on_bank(bank):
+    # A: the vault corridor, and the breach from the rear corridor.
+    # B: the hall's west door, and round through the rear offices.
+    routes, _, _ = bank
+    for site in ("A", "B"):
+        assert len(routes[(1, site)]) >= 2, routes[(1, site)]
+
+
+def test_the_attackers_walk_is_in_the_band_of_the_other_large_maps_on_bank(bank):
+    # 6.7 s to each, Nuke's B; it was 1.1 s to A and 2.5 s to B.
+    routes, _, _ = bank
+    for site in ("A", "B"):
+        assert routes[(1, site)][0] > 6.0, routes[(1, site)]
+        assert routes[(1, site)][0] > 2 * routes[(0, site)][0]
+
+
+# (x, y) of a doorway's centre in cubes, and the axis its wall runs along.
+BANK_DOORS = {
+    "the front door": ((96, 60), "x"),
+    "the facade's west door": ((40, 60), "x"),
+    "the facade's east door": ((152, 60), "x"),
+    "the hall's west door to B": ((39, 142), "x"),
+    "the vault breach": ((120, 150), "y"),
+}
+
+
+@pytest.mark.parametrize("name", BANK_DOORS)
+def test_a_doorway_on_bank_can_be_walked_through(bank, name):
+    _, world, cells = bank
+    (x, y), along = BANK_DOORS[name]
+    hop = 9
+    dx, dy = (0, hop) if along == "x" else (hop, 0)
+    a = routes_tool.nearest(cells, x - dx, y - dy)
+    b = routes_tool.nearest(cells, x + dx, y + dy)
+    dist, _ = routes_tool.dijkstra(world, cells, [a])
+    assert b in dist, f"{name}: the two sides are not joined"
+    assert dist[b] < 2.5 * hop, f"{name}: the way through is {dist[b]:.0f} cubes"

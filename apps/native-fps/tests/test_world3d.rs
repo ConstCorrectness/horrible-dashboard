@@ -131,8 +131,8 @@ fn test_bank_3d_generation() {
     // Verify Rapier collision
     let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
 
-    // Ray down onto street
-    let (hit_street, dist_street, _) = physics.cast_ray([60.0, 24.0, 15.0], [0.0, 0.0, -1.0], 30.0);
+    // Ray down onto street, west of the SWAT van (parked out in the street now)
+    let (hit_street, dist_street, _) = physics.cast_ray([30.0, 24.0, 15.0], [0.0, 0.0, -1.0], 30.0);
     assert!(hit_street, "ray downwards onto street should hit floor at z=0");
     assert!((dist_street - 15.0).abs() < 0.6);
 

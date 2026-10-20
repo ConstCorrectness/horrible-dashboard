@@ -117,105 +117,105 @@ def setup_materials():
     mats = {}
 
     # Stone, Marble & Masonry
-    mats["Marble_White"] = create_pbr_material("Mat_Marble_White", (0.88, 0.88, 0.86), metallic=0.04, roughness=0.16)
-    mats["Marble_Black"] = create_pbr_material("Mat_Marble_Black", (0.12, 0.13, 0.15), metallic=0.06, roughness=0.18)
-    mats["Marble_Cream"] = create_pbr_material("Mat_Marble_Cream", (0.84, 0.80, 0.72), metallic=0.04, roughness=0.20)
-    mats["Marble_Column"] = create_pbr_material("Mat_Marble_Column", (0.90, 0.89, 0.87), metallic=0.03, roughness=0.20)
-    mats["Limestone_Facade"] = create_pbr_material("Mat_Limestone_Facade", (0.76, 0.73, 0.67), metallic=0.02, roughness=0.65)
-    mats["Limestone_Dark"] = create_pbr_material("Mat_Limestone_Dark", (0.58, 0.55, 0.50), metallic=0.02, roughness=0.70)
-    mats["Concrete_Sidewalk"] = create_pbr_material("Mat_Concrete_Sidewalk", (0.60, 0.58, 0.55), metallic=0.0, roughness=0.85)
-    mats["Granite_Curb"] = create_pbr_material("Mat_Granite_Curb", (0.42, 0.40, 0.38), metallic=0.05, roughness=0.70)
-    mats["Asphalt_Street"] = create_pbr_material("Mat_Asphalt_Street", (0.16, 0.16, 0.18), metallic=0.02, roughness=0.88)
-    mats["Perimeter_Concrete"] = create_pbr_material("Mat_Perimeter_Concrete", (0.28, 0.29, 0.32), metallic=0.05, roughness=0.80)
-    mats["Plaster_Ceiling"] = create_pbr_material("Mat_Plaster_Ceiling", (0.92, 0.91, 0.88), metallic=0.0, roughness=0.75)
-    mats["Brick_Commercial_Red"] = create_pbr_material("Mat_Brick_Commercial_Red", (0.52, 0.25, 0.18), metallic=0.02, roughness=0.88)
-    mats["Storefront_Bronze"] = create_pbr_material("Mat_Storefront_Bronze", (0.22, 0.18, 0.14), metallic=0.78, roughness=0.32)
-    mats["Awning_Canvas_Green"] = create_pbr_material("Mat_Awning_Canvas_Green", (0.12, 0.32, 0.18), metallic=0.0, roughness=0.85)
-    mats["Awning_Canvas_Burgundy"] = create_pbr_material("Mat_Awning_Canvas_Burgundy", (0.42, 0.10, 0.14), metallic=0.0, roughness=0.85)
+    mats["Marble_White"] = create_pbr_material("Mat_Bank_Marble_White", (0.88, 0.88, 0.86), metallic=0.04, roughness=0.16)
+    mats["Marble_Black"] = create_pbr_material("Mat_Bank_Marble_Black", (0.12, 0.13, 0.15), metallic=0.06, roughness=0.18)
+    mats["Marble_Cream"] = create_pbr_material("Mat_Bank_Marble_Cream", (0.84, 0.80, 0.72), metallic=0.04, roughness=0.20)
+    mats["Marble_Column"] = create_pbr_material("Mat_Bank_Marble_Column", (0.90, 0.89, 0.87), metallic=0.03, roughness=0.20)
+    mats["Limestone_Facade"] = create_pbr_material("Mat_Bank_Limestone_Facade", (0.76, 0.73, 0.67), metallic=0.02, roughness=0.65)
+    mats["Limestone_Dark"] = create_pbr_material("Mat_Bank_Limestone_Dark", (0.58, 0.55, 0.50), metallic=0.02, roughness=0.70)
+    mats["Concrete_Sidewalk"] = create_pbr_material("Mat_Bank_Concrete_Sidewalk", (0.60, 0.58, 0.55), metallic=0.0, roughness=0.85)
+    mats["Granite_Curb"] = create_pbr_material("Mat_Bank_Granite_Curb", (0.42, 0.40, 0.38), metallic=0.05, roughness=0.70)
+    mats["Asphalt_Street"] = create_pbr_material("Mat_Bank_Asphalt_Street", (0.16, 0.16, 0.18), metallic=0.02, roughness=0.88)
+    mats["Perimeter_Concrete"] = create_pbr_material("Mat_Bank_Perimeter_Concrete", (0.28, 0.29, 0.32), metallic=0.05, roughness=0.80)
+    mats["Plaster_Ceiling"] = create_pbr_material("Mat_Bank_Plaster_Ceiling", (0.92, 0.91, 0.88), metallic=0.0, roughness=0.75)
+    mats["Brick_Commercial_Red"] = create_pbr_material("Mat_Bank_Brick_Commercial_Red", (0.52, 0.25, 0.18), metallic=0.02, roughness=0.88)
+    mats["Storefront_Bronze"] = create_pbr_material("Mat_Bank_Storefront_Bronze", (0.22, 0.18, 0.14), metallic=0.78, roughness=0.32)
+    mats["Awning_Canvas_Green"] = create_pbr_material("Mat_Bank_Awning_Canvas_Green", (0.12, 0.32, 0.18), metallic=0.0, roughness=0.85)
+    mats["Awning_Canvas_Burgundy"] = create_pbr_material("Mat_Bank_Awning_Canvas_Burgundy", (0.42, 0.10, 0.14), metallic=0.0, roughness=0.85)
 
     # Road & Tactical Markings
-    mats["Road_Yellow"] = create_pbr_material("Mat_Road_Yellow_Stripe", (0.94, 0.80, 0.10), metallic=0.05, roughness=0.55)
-    mats["Road_White"] = create_pbr_material("Mat_Road_White_Stripe", (0.92, 0.92, 0.94), metallic=0.05, roughness=0.55)
+    mats["Road_Yellow"] = create_pbr_material("Mat_Bank_Road_Yellow_Stripe", (0.94, 0.80, 0.10), metallic=0.05, roughness=0.55)
+    mats["Road_White"] = create_pbr_material("Mat_Bank_Road_White_Stripe", (0.92, 0.92, 0.94), metallic=0.05, roughness=0.55)
 
     # Metals & Vault Steel
-    mats["Vault_Steel"] = create_pbr_material("Mat_Vault_Steel", (0.30, 0.32, 0.36), metallic=0.80, roughness=0.32)
-    mats["Vault_Steel_Dark"] = create_pbr_material("Mat_Vault_Steel_Dark", (0.18, 0.20, 0.22), metallic=0.85, roughness=0.28)
-    mats["Chrome_Polished"] = create_pbr_material("Mat_Chrome_Polished", (0.92, 0.93, 0.95), metallic=0.98, roughness=0.06)
-    mats["Deposit_Box_Steel"] = create_pbr_material("Mat_Deposit_Box_Steel", (0.65, 0.68, 0.72), metallic=0.88, roughness=0.22)
-    mats["Brass_Polished"] = create_pbr_material("Mat_Brass_Polished", (0.92, 0.78, 0.28), metallic=0.88, roughness=0.20)
-    mats["Bronze_Architectural"] = create_pbr_material("Mat_Bronze_Architectural", (0.45, 0.34, 0.20), metallic=0.82, roughness=0.30)
-    mats["Steel_Structural"] = create_pbr_material("Mat_Steel_Structural", (0.32, 0.34, 0.38), metallic=0.70, roughness=0.42)
-    mats["Cast_Iron_Dark"] = create_pbr_material("Mat_Cast_Iron_Dark", (0.14, 0.14, 0.16), metallic=0.60, roughness=0.68)
-    mats["Bronze_Bushing"] = create_pbr_material("Mat_Bronze_Bushing", (0.75, 0.55, 0.25), metallic=0.85, roughness=0.25)
-    mats["Picture_Frame_Gold"] = create_pbr_material("Mat_Picture_Frame_Gold", (0.86, 0.72, 0.22), metallic=0.90, roughness=0.18)
-    mats["Steel_Banding_Strap"] = create_pbr_material("Mat_Steel_Banding_Strap", (0.85, 0.86, 0.88), metallic=0.95, roughness=0.12)
+    mats["Vault_Steel"] = create_pbr_material("Mat_Bank_Vault_Steel", (0.30, 0.32, 0.36), metallic=0.80, roughness=0.32)
+    mats["Vault_Steel_Dark"] = create_pbr_material("Mat_Bank_Vault_Steel_Dark", (0.18, 0.20, 0.22), metallic=0.85, roughness=0.28)
+    mats["Chrome_Polished"] = create_pbr_material("Mat_Bank_Chrome_Polished", (0.92, 0.93, 0.95), metallic=0.98, roughness=0.06)
+    mats["Deposit_Box_Steel"] = create_pbr_material("Mat_Bank_Deposit_Box_Steel", (0.65, 0.68, 0.72), metallic=0.88, roughness=0.22)
+    mats["Brass_Polished"] = create_pbr_material("Mat_Bank_Brass_Polished", (0.92, 0.78, 0.28), metallic=0.88, roughness=0.20)
+    mats["Bronze_Architectural"] = create_pbr_material("Mat_Bank_Bronze_Architectural", (0.45, 0.34, 0.20), metallic=0.82, roughness=0.30)
+    mats["Steel_Structural"] = create_pbr_material("Mat_Bank_Steel_Structural", (0.32, 0.34, 0.38), metallic=0.70, roughness=0.42)
+    mats["Cast_Iron_Dark"] = create_pbr_material("Mat_Bank_Cast_Iron_Dark", (0.14, 0.14, 0.16), metallic=0.60, roughness=0.68)
+    mats["Bronze_Bushing"] = create_pbr_material("Mat_Bank_Bronze_Bushing", (0.75, 0.55, 0.25), metallic=0.85, roughness=0.25)
+    mats["Picture_Frame_Gold"] = create_pbr_material("Mat_Bank_Picture_Frame_Gold", (0.86, 0.72, 0.22), metallic=0.90, roughness=0.18)
+    mats["Steel_Banding_Strap"] = create_pbr_material("Mat_Bank_Steel_Banding_Strap", (0.85, 0.86, 0.88), metallic=0.95, roughness=0.12)
 
     # Wealth: 24k Gold & Paper Currency
-    mats["Gold_Bullion"] = create_pbr_material("Mat_Gold_Bullion", (0.98, 0.82, 0.18), metallic=0.95, roughness=0.12)
-    mats["Gold_Bullion_Dark"] = create_pbr_material("Mat_Gold_Bullion_Dark", (0.86, 0.70, 0.14), metallic=0.92, roughness=0.18)
-    mats["Currency_Green"] = create_pbr_material("Mat_Currency_Green", (0.24, 0.52, 0.28), metallic=0.0, roughness=0.72)
-    mats["Currency_Band"] = create_pbr_material("Mat_Currency_Band", (0.92, 0.88, 0.78), metallic=0.0, roughness=0.65)
-    mats["Pallet_Wood"] = create_pbr_material("Mat_Pallet_Wood", (0.52, 0.40, 0.26), metallic=0.0, roughness=0.82)
-    mats["Painting_Canvas_1"] = create_pbr_material("Mat_Painting_Canvas_1", (0.32, 0.22, 0.16), metallic=0.0, roughness=0.85)
-    mats["Painting_Canvas_2"] = create_pbr_material("Mat_Painting_Canvas_2", (0.18, 0.28, 0.36), metallic=0.0, roughness=0.85)
-    mats["Painting_Canvas_3"] = create_pbr_material("Mat_Painting_Canvas_3", (0.40, 0.32, 0.20), metallic=0.0, roughness=0.85)
+    mats["Gold_Bullion"] = create_pbr_material("Mat_Bank_Gold_Bullion", (0.98, 0.82, 0.18), metallic=0.95, roughness=0.12)
+    mats["Gold_Bullion_Dark"] = create_pbr_material("Mat_Bank_Gold_Bullion_Dark", (0.86, 0.70, 0.14), metallic=0.92, roughness=0.18)
+    mats["Currency_Green"] = create_pbr_material("Mat_Bank_Currency_Green", (0.24, 0.52, 0.28), metallic=0.0, roughness=0.72)
+    mats["Currency_Band"] = create_pbr_material("Mat_Bank_Currency_Band", (0.92, 0.88, 0.78), metallic=0.0, roughness=0.65)
+    mats["Pallet_Wood"] = create_pbr_material("Mat_Bank_Pallet_Wood", (0.52, 0.40, 0.26), metallic=0.0, roughness=0.82)
+    mats["Painting_Canvas_1"] = create_pbr_material("Mat_Bank_Painting_Canvas_1", (0.32, 0.22, 0.16), metallic=0.0, roughness=0.85)
+    mats["Painting_Canvas_2"] = create_pbr_material("Mat_Bank_Painting_Canvas_2", (0.18, 0.28, 0.36), metallic=0.0, roughness=0.85)
+    mats["Painting_Canvas_3"] = create_pbr_material("Mat_Bank_Painting_Canvas_3", (0.40, 0.32, 0.20), metallic=0.0, roughness=0.85)
 
     # Woods, Leather & Fabrics
-    mats["Mahogany_Polished"] = create_pbr_material("Mat_Mahogany_Polished", (0.30, 0.14, 0.08), metallic=0.0, roughness=0.25)
-    mats["Mahogany_Dark"] = create_pbr_material("Mat_Mahogany_Dark", (0.20, 0.09, 0.05), metallic=0.0, roughness=0.30)
-    mats["Oak_Desk"] = create_pbr_material("Mat_Oak_Desk", (0.42, 0.28, 0.16), metallic=0.0, roughness=0.55)
-    mats["Leather_Oxblood"] = create_pbr_material("Mat_Leather_Oxblood", (0.38, 0.08, 0.10), metallic=0.04, roughness=0.38)
-    mats["Leather_Black"] = create_pbr_material("Mat_Leather_Black", (0.12, 0.12, 0.14), metallic=0.04, roughness=0.45)
-    mats["Velvet_Crimson"] = create_pbr_material("Mat_Velvet_Crimson", (0.68, 0.06, 0.10), metallic=0.0, roughness=0.85)
-    mats["Carpet_Burgundy"] = create_pbr_material("Mat_Carpet_Burgundy", (0.45, 0.10, 0.14), metallic=0.0, roughness=0.90)
-    mats["Chesterfield_Leather"] = create_pbr_material("Mat_Chesterfield_Leather", (0.32, 0.08, 0.06), metallic=0.05, roughness=0.38)
+    mats["Mahogany_Polished"] = create_pbr_material("Mat_Bank_Mahogany_Polished", (0.30, 0.14, 0.08), metallic=0.0, roughness=0.25)
+    mats["Mahogany_Dark"] = create_pbr_material("Mat_Bank_Mahogany_Dark", (0.20, 0.09, 0.05), metallic=0.0, roughness=0.30)
+    mats["Oak_Desk"] = create_pbr_material("Mat_Bank_Oak_Desk", (0.42, 0.28, 0.16), metallic=0.0, roughness=0.55)
+    mats["Leather_Oxblood"] = create_pbr_material("Mat_Bank_Leather_Oxblood", (0.38, 0.08, 0.10), metallic=0.04, roughness=0.38)
+    mats["Leather_Black"] = create_pbr_material("Mat_Bank_Leather_Black", (0.12, 0.12, 0.14), metallic=0.04, roughness=0.45)
+    mats["Velvet_Crimson"] = create_pbr_material("Mat_Bank_Velvet_Crimson", (0.68, 0.06, 0.10), metallic=0.0, roughness=0.85)
+    mats["Carpet_Burgundy"] = create_pbr_material("Mat_Bank_Carpet_Burgundy", (0.45, 0.10, 0.14), metallic=0.0, roughness=0.90)
+    mats["Chesterfield_Leather"] = create_pbr_material("Mat_Bank_Chesterfield_Leather", (0.32, 0.08, 0.06), metallic=0.05, roughness=0.38)
 
     # Glass & Glazing
-    mats["Security_Glass"] = create_pbr_material("Mat_Security_Glass", (0.80, 0.92, 0.96), transmission=0.90, roughness=0.04, alpha=0.30)
-    mats["Smoked_Glass"] = create_pbr_material("Mat_Smoked_Glass", (0.18, 0.22, 0.26), transmission=0.78, roughness=0.08, alpha=0.55)
-    mats["Green_Glass_Banker"] = create_pbr_material("Mat_Green_Glass_Banker", (0.10, 0.65, 0.25), transmission=0.85, roughness=0.10, alpha=0.45, emission_color=(0.1, 0.6, 0.2), emission_strength=1.5)
-    mats["Water_Bottle_Blue"] = create_pbr_material("Mat_Water_Bottle_Blue", (0.30, 0.65, 0.95), transmission=0.85, roughness=0.08, alpha=0.40)
+    mats["Security_Glass"] = create_pbr_material("Mat_Bank_Security_Glass", (0.80, 0.92, 0.96), transmission=0.90, roughness=0.04, alpha=0.30)
+    mats["Smoked_Glass"] = create_pbr_material("Mat_Bank_Smoked_Glass", (0.18, 0.22, 0.26), transmission=0.78, roughness=0.08, alpha=0.55)
+    mats["Green_Glass_Banker"] = create_pbr_material("Mat_Bank_Green_Glass_Banker", (0.10, 0.65, 0.25), transmission=0.85, roughness=0.10, alpha=0.45, emission_color=(0.1, 0.6, 0.2), emission_strength=1.5)
+    mats["Water_Bottle_Blue"] = create_pbr_material("Mat_Bank_Water_Bottle_Blue", (0.30, 0.65, 0.95), transmission=0.85, roughness=0.08, alpha=0.40)
 
     # Electronics & Illuminations
-    mats["Chandelier_Lamp"] = create_pbr_material("Mat_Chandelier_Lamp_Glow", (1.0, 0.96, 0.85), emission_color=(1.0, 0.94, 0.80), emission_strength=8.0)
-    mats["Sconce_Lamp"] = create_pbr_material("Mat_Sconce_Lamp_Glow", (1.0, 0.92, 0.78), emission_color=(1.0, 0.90, 0.72), emission_strength=6.0)
-    mats["Fluorescent_Troffer_Glow"] = create_pbr_material("Mat_Fluorescent_Troffer_Glow", (1.0, 0.98, 0.92), emission_color=(1.0, 0.98, 0.92), emission_strength=7.0)
-    mats["Monitor_Plastic"] = create_pbr_material("Mat_Monitor_Plastic", (0.10, 0.11, 0.13), metallic=0.15, roughness=0.45)
-    mats["Monitor_Screen_CCTV"] = create_pbr_material("Mat_Monitor_Screen_CCTV", (0.14, 0.38, 0.48), emission_color=(0.18, 0.45, 0.58), emission_strength=3.0)
-    mats["ATM_Screen"] = create_pbr_material("Mat_ATM_Screen", (0.10, 0.68, 0.98), emission_color=(0.10, 0.68, 0.98), emission_strength=3.5)
-    mats["ATM_Blue_Shell"] = create_pbr_material("Mat_ATM_Blue_Shell", (0.10, 0.35, 0.82), metallic=0.35, roughness=0.30)
-    mats["LED_Green"] = create_pbr_material("Mat_LED_Green", (0.10, 0.95, 0.20), emission_color=(0.10, 0.95, 0.20), emission_strength=6.0)
-    mats["LED_Amber"] = create_pbr_material("Mat_LED_Amber", (0.95, 0.65, 0.05), emission_color=(0.95, 0.65, 0.05), emission_strength=6.0)
-    mats["LED_Blue"] = create_pbr_material("Mat_LED_Blue", (0.10, 0.45, 0.98), emission_color=(0.10, 0.45, 0.98), emission_strength=6.0)
-    mats["Emergency_Red"] = create_pbr_material("Mat_Emergency_Red_Glow", (0.98, 0.08, 0.08), emission_color=(1.0, 0.08, 0.08), emission_strength=9.0)
-    mats["Emergency_Blue"] = create_pbr_material("Mat_Emergency_Blue_Glow", (0.08, 0.35, 1.0), emission_color=(0.08, 0.35, 1.0), emission_strength=9.0)
+    mats["Chandelier_Lamp"] = create_pbr_material("Mat_Bank_Chandelier_Lamp_Glow", (1.0, 0.96, 0.85), emission_color=(1.0, 0.94, 0.80), emission_strength=8.0)
+    mats["Sconce_Lamp"] = create_pbr_material("Mat_Bank_Sconce_Lamp_Glow", (1.0, 0.92, 0.78), emission_color=(1.0, 0.90, 0.72), emission_strength=6.0)
+    mats["Fluorescent_Troffer_Glow"] = create_pbr_material("Mat_Bank_Fluorescent_Troffer_Glow", (1.0, 0.98, 0.92), emission_color=(1.0, 0.98, 0.92), emission_strength=7.0)
+    mats["Monitor_Plastic"] = create_pbr_material("Mat_Bank_Monitor_Plastic", (0.10, 0.11, 0.13), metallic=0.15, roughness=0.45)
+    mats["Monitor_Screen_CCTV"] = create_pbr_material("Mat_Bank_Monitor_Screen_CCTV", (0.14, 0.38, 0.48), emission_color=(0.18, 0.45, 0.58), emission_strength=3.0)
+    mats["ATM_Screen"] = create_pbr_material("Mat_Bank_ATM_Screen", (0.10, 0.68, 0.98), emission_color=(0.10, 0.68, 0.98), emission_strength=3.5)
+    mats["ATM_Blue_Shell"] = create_pbr_material("Mat_Bank_ATM_Blue_Shell", (0.10, 0.35, 0.82), metallic=0.35, roughness=0.30)
+    mats["LED_Green"] = create_pbr_material("Mat_Bank_LED_Green", (0.10, 0.95, 0.20), emission_color=(0.10, 0.95, 0.20), emission_strength=6.0)
+    mats["LED_Amber"] = create_pbr_material("Mat_Bank_LED_Amber", (0.95, 0.65, 0.05), emission_color=(0.95, 0.65, 0.05), emission_strength=6.0)
+    mats["LED_Blue"] = create_pbr_material("Mat_Bank_LED_Blue", (0.10, 0.45, 0.98), emission_color=(0.10, 0.45, 0.98), emission_strength=6.0)
+    mats["Emergency_Red"] = create_pbr_material("Mat_Bank_Emergency_Red_Glow", (0.98, 0.08, 0.08), emission_color=(1.0, 0.08, 0.08), emission_strength=9.0)
+    mats["Emergency_Blue"] = create_pbr_material("Mat_Bank_Emergency_Blue_Glow", (0.08, 0.35, 1.0), emission_color=(0.08, 0.35, 1.0), emission_strength=9.0)
 
     # Hazard & Tactical
-    mats["Hazard_Yellow"] = create_pbr_material("Mat_Hazard_Yellow", (0.95, 0.82, 0.08), metallic=0.05, roughness=0.40)
-    mats["Hazard_Black"] = create_pbr_material("Mat_Hazard_Black", (0.08, 0.08, 0.10), metallic=0.10, roughness=0.50)
-    mats["Tactical_Site_Stencil"] = create_pbr_material("Mat_Tactical_Site_Stencil", (0.88, 0.18, 0.12), metallic=0.05, roughness=0.55)
-    mats["Foliage_Green"] = create_pbr_material("Mat_Foliage_Green", (0.16, 0.42, 0.16), metallic=0.0, roughness=0.65)
-    mats["SWAT_Vehicle_Navy"] = create_pbr_material("Mat_SWAT_Vehicle_Navy", (0.10, 0.12, 0.18), metallic=0.40, roughness=0.40)
-    mats["Police_Cruiser_White"] = create_pbr_material("Mat_Police_Cruiser_White", (0.90, 0.90, 0.92), metallic=0.35, roughness=0.35)
+    mats["Hazard_Yellow"] = create_pbr_material("Mat_Bank_Hazard_Yellow", (0.95, 0.82, 0.08), metallic=0.05, roughness=0.40)
+    mats["Hazard_Black"] = create_pbr_material("Mat_Bank_Hazard_Black", (0.08, 0.08, 0.10), metallic=0.10, roughness=0.50)
+    mats["Tactical_Site_Stencil"] = create_pbr_material("Mat_Bank_Tactical_Site_Stencil", (0.88, 0.18, 0.12), metallic=0.05, roughness=0.55)
+    mats["Foliage_Green"] = create_pbr_material("Mat_Bank_Foliage_Green", (0.16, 0.42, 0.16), metallic=0.0, roughness=0.65)
+    mats["SWAT_Vehicle_Navy"] = create_pbr_material("Mat_Bank_SWAT_Vehicle_Navy", (0.10, 0.12, 0.18), metallic=0.40, roughness=0.40)
+    mats["Police_Cruiser_White"] = create_pbr_material("Mat_Bank_Police_Cruiser_White", (0.90, 0.90, 0.92), metallic=0.35, roughness=0.35)
     # Additional Architecture & Prop Materials
-    mats["Aluminum_Brushed"] = create_pbr_material("Mat_Aluminum_Brushed", (0.84, 0.85, 0.88), metallic=0.80, roughness=0.22)
-    mats["Tire_Rubber"] = create_pbr_material("Mat_Tire_Rubber", (0.07, 0.07, 0.08), metallic=0.02, roughness=0.92)
-    mats["Amber_Reflector"] = create_pbr_material("Mat_Amber_Reflector", (0.95, 0.55, 0.05), metallic=0.10, roughness=0.25, emission_color=(0.95, 0.55, 0.05), emission_strength=4.0)
-    mats["Cork_Bulletin"] = create_pbr_material("Mat_Cork_Bulletin", (0.60, 0.46, 0.30), metallic=0.0, roughness=0.88)
-    mats["Paper_White"] = create_pbr_material("Mat_Paper_White", (0.92, 0.92, 0.90), metallic=0.0, roughness=0.70)
-    mats["Stainless_Steel"] = create_pbr_material("Mat_Stainless_Steel", (0.80, 0.82, 0.84), metallic=0.92, roughness=0.18)
-    mats["Oak_Cabinet"] = create_pbr_material("Mat_Oak_Cabinet", (0.50, 0.38, 0.25), metallic=0.0, roughness=0.50)
-    mats["Terracotta_Urn"] = create_pbr_material("Mat_Terracotta_Urn", (0.72, 0.38, 0.22), metallic=0.02, roughness=0.75)
-    mats["Frosted_Glass"] = create_pbr_material("Mat_Frosted_Glass", (0.85, 0.90, 0.92), transmission=0.60, roughness=0.35, alpha=0.55)
-    mats["Leather_Burgundy"] = create_pbr_material("Mat_Leather_Burgundy", (0.35, 0.08, 0.10), metallic=0.04, roughness=0.36)
-    mats["Book_Spine_Red"] = create_pbr_material("Mat_Book_Spine_Red", (0.55, 0.12, 0.14), metallic=0.05, roughness=0.60)
-    mats["Book_Spine_Green"] = create_pbr_material("Mat_Book_Spine_Green", (0.12, 0.40, 0.20), metallic=0.05, roughness=0.60)
-    mats["Book_Spine_Blue"] = create_pbr_material("Mat_Book_Spine_Blue", (0.15, 0.22, 0.48), metallic=0.05, roughness=0.60)
-    mats["Book_Spine_Gold"] = create_pbr_material("Mat_Book_Spine_Gold", (0.78, 0.65, 0.22), metallic=0.70, roughness=0.35)
-    mats["Canvas_Bag"] = create_pbr_material("Mat_Canvas_Bag", (0.78, 0.72, 0.60), metallic=0.0, roughness=0.88)
-    mats["Sandstone_Sill"] = create_pbr_material("Mat_Sandstone_Sill", (0.82, 0.78, 0.68), metallic=0.02, roughness=0.70)
-    mats["Bus_Shelter_Glass"] = create_pbr_material("Mat_Bus_Shelter_Glass", (0.75, 0.85, 0.90), transmission=0.85, roughness=0.08, alpha=0.40)
-    mats["Vending_Glass"] = create_pbr_material("Mat_Vending_Glass", (0.80, 0.90, 0.95), transmission=0.80, roughness=0.05, alpha=0.35)
+    mats["Aluminum_Brushed"] = create_pbr_material("Mat_Bank_Aluminum_Brushed", (0.84, 0.85, 0.88), metallic=0.80, roughness=0.22)
+    mats["Tire_Rubber"] = create_pbr_material("Mat_Bank_Tire_Rubber", (0.07, 0.07, 0.08), metallic=0.02, roughness=0.92)
+    mats["Amber_Reflector"] = create_pbr_material("Mat_Bank_Amber_Reflector", (0.95, 0.55, 0.05), metallic=0.10, roughness=0.25, emission_color=(0.95, 0.55, 0.05), emission_strength=4.0)
+    mats["Cork_Bulletin"] = create_pbr_material("Mat_Bank_Cork_Bulletin", (0.60, 0.46, 0.30), metallic=0.0, roughness=0.88)
+    mats["Paper_White"] = create_pbr_material("Mat_Bank_Paper_White", (0.92, 0.92, 0.90), metallic=0.0, roughness=0.70)
+    mats["Stainless_Steel"] = create_pbr_material("Mat_Bank_Stainless_Steel", (0.80, 0.82, 0.84), metallic=0.92, roughness=0.18)
+    mats["Oak_Cabinet"] = create_pbr_material("Mat_Bank_Oak_Cabinet", (0.50, 0.38, 0.25), metallic=0.0, roughness=0.50)
+    mats["Terracotta_Urn"] = create_pbr_material("Mat_Bank_Terracotta_Urn", (0.72, 0.38, 0.22), metallic=0.02, roughness=0.75)
+    mats["Frosted_Glass"] = create_pbr_material("Mat_Bank_Frosted_Glass", (0.85, 0.90, 0.92), transmission=0.60, roughness=0.35, alpha=0.55)
+    mats["Leather_Burgundy"] = create_pbr_material("Mat_Bank_Leather_Burgundy", (0.35, 0.08, 0.10), metallic=0.04, roughness=0.36)
+    mats["Book_Spine_Red"] = create_pbr_material("Mat_Bank_Book_Spine_Red", (0.55, 0.12, 0.14), metallic=0.05, roughness=0.60)
+    mats["Book_Spine_Green"] = create_pbr_material("Mat_Bank_Book_Spine_Green", (0.12, 0.40, 0.20), metallic=0.05, roughness=0.60)
+    mats["Book_Spine_Blue"] = create_pbr_material("Mat_Bank_Book_Spine_Blue", (0.15, 0.22, 0.48), metallic=0.05, roughness=0.60)
+    mats["Book_Spine_Gold"] = create_pbr_material("Mat_Bank_Book_Spine_Gold", (0.78, 0.65, 0.22), metallic=0.70, roughness=0.35)
+    mats["Canvas_Bag"] = create_pbr_material("Mat_Bank_Canvas_Bag", (0.78, 0.72, 0.60), metallic=0.0, roughness=0.88)
+    mats["Sandstone_Sill"] = create_pbr_material("Mat_Bank_Sandstone_Sill", (0.82, 0.78, 0.68), metallic=0.02, roughness=0.70)
+    mats["Bus_Shelter_Glass"] = create_pbr_material("Mat_Bank_Bus_Shelter_Glass", (0.75, 0.85, 0.90), transmission=0.85, roughness=0.08, alpha=0.40)
+    mats["Vending_Glass"] = create_pbr_material("Mat_Bank_Vending_Glass", (0.80, 0.90, 0.95), transmission=0.80, roughness=0.05, alpha=0.35)
 
     return mats
 
@@ -586,8 +586,15 @@ def build_bank_scene():
     # 3. MONUMENTAL NEOCLASSICAL FACADE & COLONNADE (y: 18.0..22.0)
     # =========================================================================
     # South Exterior Facade Walls
-    add_box(c_facade, "Facade_Wall_West", (4.0, 18.0, 0.0), (26.0, 22.0, 14.0), mats["Limestone_Facade"])
-    add_box(c_facade, "Facade_Wall_East", (38.0, 18.0, 0.0), (60.0, 22.0, 14.0), mats["Limestone_Facade"])
+    # A side door at each end, between two columns, so the attackers on the
+    # street have three ways in and not one: the front door was the only one,
+    # and every route to either site began in the same 12 m.
+    add_box(c_facade, "Facade_Wall_West", (4.0, 18.0, 0.0), (12.5, 22.0, 14.0), mats["Limestone_Facade"])
+    add_box(c_facade, "Facade_Wall_West_Door_E", (14.5, 18.0, 0.0), (26.0, 22.0, 14.0), mats["Limestone_Facade"])
+    add_box(c_facade, "Facade_Wall_West_Door_Lintel", (12.5, 18.0, 3.2), (14.5, 22.0, 14.0), mats["Limestone_Facade"])
+    add_box(c_facade, "Facade_Wall_East", (38.0, 18.0, 0.0), (49.5, 22.0, 14.0), mats["Limestone_Facade"])
+    add_box(c_facade, "Facade_Wall_East_Door_E", (51.5, 18.0, 0.0), (60.0, 22.0, 14.0), mats["Limestone_Facade"])
+    add_box(c_facade, "Facade_Wall_East_Door_Lintel", (49.5, 18.0, 3.2), (51.5, 22.0, 14.0), mats["Limestone_Facade"])
     add_box(c_facade, "Facade_Wall_Upper_Lintel", (26.0, 18.0, 8.0), (38.0, 22.0, 14.0), mats["Limestone_Facade"])
 
     # Heavy Entrance Stone Canopy / Portico Overhang (Tactical Skill Jump Platform, z=4.80m)
@@ -657,12 +664,15 @@ def build_bank_scene():
         add_fluted_column(c_lobby, f"Hall_Pillar_{pi+1}", (px, py, 0.0), radius=1.05, height=14.0, material=mats["Marble_Column"], base_material=mats["Marble_Black"])
 
     # Rich Mahogany Wainscoting & Classical Wall Pilasters (z: 0.0..1.45m)
-    add_box(c_arch, "Wainscot_Base_S_L", (4.0, 22.0, 0.0), (26.0, 22.25, 1.45), mats["Mahogany_Polished"], bevel=True, bevel_width=0.02)
-    add_box(c_arch, "Wainscot_Base_S_R", (38.0, 22.0, 0.0), (60.0, 22.25, 1.45), mats["Mahogany_Polished"], bevel=True, bevel_width=0.02)
-    add_box(c_arch, "Wainscot_Base_N", (4.0, 45.75, 0.0), (60.0, 46.0, 1.45), mats["Mahogany_Polished"], bevel=True, bevel_width=0.02)
-    add_box(c_arch, "Wainscot_Chair_Rail_S_L", (4.0, 22.0, 1.45), (26.0, 22.30, 1.55), mats["Mahogany_Dark"], is_collider=False)
-    add_box(c_arch, "Wainscot_Chair_Rail_S_R", (38.0, 22.0, 1.45), (60.0, 22.30, 1.55), mats["Mahogany_Dark"], is_collider=False)
-    add_box(c_arch, "Wainscot_Chair_Rail_N", (4.0, 45.70, 1.45), (60.0, 46.0, 1.55), mats["Mahogany_Dark"], is_collider=False)
+    # The wainscot stops at every doorway. It used to run across the hall's three
+    # north doors, a 1.45 m rail every way north had to be jumped.
+    south = [(4.0, 12.5), (14.5, 26.0), (38.0, 49.5), (51.5, 60.0)]
+    north = [(4.0, 10.0), (16.0, 28.0), (36.0, 43.5), (54.0, 60.0)]
+    for side, y0, y1, spans in (("S", 22.0, 22.25, south), ("N", 45.75, 46.0, north)):
+        for wi, (x0, x1) in enumerate(spans):
+            add_box(c_arch, f"Wainscot_Base_{side}_{wi}", (x0, y0, 0.0), (x1, y1, 1.45), mats["Mahogany_Polished"], bevel=True, bevel_width=0.02)
+            ry0, ry1 = (22.0, 22.30) if side == "S" else (45.70, 46.0)
+            add_box(c_arch, f"Wainscot_Chair_Rail_{side}_{wi}", (x0, ry0, 1.45), (x1, ry1, 1.55), mats["Mahogany_Dark"], is_collider=False)
 
     # Grand Beaux-Arts 2-Story Arched Windows on East Hall Wall (x = 59.85, y: 22.0..46.0)
     # Eliminating flat grey void with monumental bronze-mullioned arched windows
@@ -1089,7 +1099,13 @@ def build_bank_scene():
     # =========================================================================
     # 7. THE VAULT (Site A - x: 40.0..60.0, y: 46.0..60.0)
     # =========================================================================
-    add_box(c_arch, "Vault_Reinforced_Wall_W", (39.0, 49.0, 0.0), (41.0, 60.0, 10.0), mats["Vault_Steel"])
+    # A breach blown through the vault's west wall from the rear corridor, past
+    # the kitchenette: the vault's second way in. With the blast door the only
+    # one, every route to A ran down the one vault corridor.
+    add_box(c_arch, "Vault_Reinforced_Wall_W", (39.0, 51.0, 0.0), (41.0, 60.0, 10.0), mats["Vault_Steel"])
+    add_box(c_arch, "Vault_Breach_Lintel", (39.0, 49.0, 2.6), (41.0, 51.0, 10.0), mats["Vault_Steel"])
+    for bi, (bx, by, bz) in enumerate([(38.2, 49.4, 0.0), (41.6, 50.7, 0.0), (38.6, 50.5, 0.0)]):
+        add_box(c_arch, f"Vault_Breach_Rubble_{bi}", (bx, by, bz), (bx + 0.35, by + 0.25, bz + 0.12), mats["Perimeter_Concrete"], is_collider=False)
 
     # Reinforced Vault Concrete Ceiling at z=8.0m (Extending from y=46.0 across vault corridor!)
     add_box(c_vault, "Vault_Ceiling_Concrete", (40.0, 46.0, 8.0), (60.0, 60.0, 8.3), mats["Vault_Steel_Dark"], is_collider=False)
@@ -1721,6 +1737,14 @@ def build_bank_scene():
                 lz_lug = 0.45 + math.sin(lang) * 0.18
                 add_cylinder(c_street, f"SWAT_Lug_{side_name}_{int(wy)}_{li}", (rim_x, lx_lug, lz_lug), radius=0.02, height=0.14, material=mats["Chrome_Polished"], segments=6, is_collider=False)
 
+    # The truck is authored parked on the sidewalk, 2 m off the facade: its side,
+    # the column at x = 22 and the wall made a pocket open only to the west, and
+    # a bot that steered into it never left. Out in the street instead, so the
+    # sidewalk is a lane past it.
+    for obj in c_street.objects:
+        if obj.name.startswith("SWAT_"):
+            obj.data.transform(Matrix.Translation((0.0, -2.5, 0.0)))
+
     # Police Squad Patrol Cruiser (x: 42.0..46.0, y: 10.0..14.0, z: 0.0..1.60m)
     add_box(c_street, "Police_Cruiser_Body", (42.0, 10.0, 0.0), (46.0, 14.0, 1.60), mats["Police_Cruiser_White"], bevel=True, bevel_width=0.04)
     add_box(c_street, "Police_Cruiser_Windshield", (42.2, 11.2, 0.95), (45.8, 11.6, 1.45), mats["Smoked_Glass"], is_collider=False)
@@ -1759,10 +1783,12 @@ def build_bank_scene():
     add_box(c_street, "Jersey_Barrier_Concrete", (30.0, 8.0, 0.0), (34.0, 9.8, 1.20), mats["Limestone_Facade"], bevel=True, bevel_width=0.03)
     add_box(c_street, "Jersey_Barrier_Yellow_Top_Stripe", (30.0, 8.0, 1.15), (34.0, 9.8, 1.25), mats["Hazard_Yellow"], is_collider=False)
 
-    # Sidewalk Concrete Planters with Trimmed Boxwood Hedges
+    # Sidewalk Concrete Planters with Trimmed Boxwood Hedges, along the curb: a
+    # planter 3 m deep stood across each side door, with a slot to the wall too
+    # narrow for a body, and bots heading for the door wedged beside it.
     for px in [14.0, 48.0]:
-        add_box(c_street, f"Sidewalk_Planter_{int(px)}", (px, 14.5, 0.20), (px + 2.8, 17.5, 0.70), mats["Granite_Curb"], bevel=True, bevel_width=0.02)
-        add_box(c_street, f"Sidewalk_Hedge_{int(px)}_Foliage", (px + 0.2, 14.7, 0.70), (px + 2.6, 17.3, 1.65), mats["Foliage_Green"], is_collider=False)
+        add_box(c_street, f"Sidewalk_Planter_{int(px)}", (px, 14.0, 0.20), (px + 2.8, 15.2, 0.70), mats["Granite_Curb"], bevel=True, bevel_width=0.02)
+        add_box(c_street, f"Sidewalk_Hedge_{int(px)}_Foliage", (px + 0.2, 14.1, 0.70), (px + 2.6, 15.1, 1.65), mats["Foliage_Green"], is_collider=False)
 
     # Cast-Iron Victorian Streetlamps with Luminous Globes
     for lx in [12.0, 52.0]:
@@ -1866,9 +1892,9 @@ def build_lights():
     The street is open to a morning sky; everything under the roof slab is lit
     by its chandeliers, sconces and troffers, which until now only glowed.
     """
-    maplib.lights_from_emitters("Mat_Chandelier_Lamp_Glow", color=(255, 226, 180), radius=14.0, intensity=2.2, spacing=6.0, drop=0.4)
-    maplib.lights_from_emitters("Mat_Sconce_Lamp_Glow", color=(255, 214, 160), radius=6.0, intensity=1.6, spacing=4.0, drop=0.2)
-    maplib.lights_from_emitters("Mat_Fluorescent_Troffer_Glow", color=(240, 244, 255), radius=8.0, intensity=1.4, spacing=5.0, drop=0.3)
+    maplib.lights_from_emitters("Mat_Bank_Chandelier_Lamp_Glow", color=(255, 226, 180), radius=14.0, intensity=2.2, spacing=6.0, drop=0.4)
+    maplib.lights_from_emitters("Mat_Bank_Sconce_Lamp_Glow", color=(255, 214, 160), radius=6.0, intensity=1.6, spacing=4.0, drop=0.2)
+    maplib.lights_from_emitters("Mat_Bank_Fluorescent_Troffer_Glow", color=(240, 244, 255), radius=8.0, intensity=1.4, spacing=5.0, drop=0.3)
     maplib.set_atmosphere("coastal_morning", hemiSky=0xD8D4CC, hemiGround=0x6A5A48, hemiIntensity=1.45)
 
 
