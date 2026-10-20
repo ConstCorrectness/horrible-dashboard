@@ -177,6 +177,12 @@ class GameMode:
         """Whether a dead player whose timer has expired comes back now."""
         return True
 
+    def spawn_options(self, room: MatchRoom, team: int) -> list[Any] | None:
+        """The spawn entities `team` may use, or `None` for the room's own rule
+        (every spawn for that team). A duel narrows it to spawns that see the
+        other side's."""
+        return None
+
     def respawn_delay(self, room: MatchRoom, player: MatchPlayer) -> float:
         """Seconds from a death to the respawn timer expiring. An arena answers
         with almost none; the default is the room's."""

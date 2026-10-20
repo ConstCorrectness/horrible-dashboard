@@ -62,8 +62,11 @@ MAX_COMMANDS_PER_MESSAGE = 64
 
 logger = logging.getLogger(__name__)
 
-#: Where duels are fought, in order of preference: small, symmetric, bundled.
-DUEL_MAPS = ("hd_pit", "hd_atrium", "hd_aim")
+#: Where duels are fought, in order of preference. hd_office first: of the
+#: bundled maps it has the closest spawns where every T spawn sees every CT
+#: spawn (2 by 3, about 66 cubes apart; `modes/duel.duel_spawns`), which the
+#: duel test pins. hd_aim, the old choice, puts its spawns in walled lanes.
+DUEL_MAPS = ("hd_office", "hd_pit", "hd_atrium", "hd_aim")
 #: The duel queue's rating window: ±this to start, +step every step_s waited.
 DUEL_WINDOW = 100.0
 DUEL_WINDOW_STEP = 100.0

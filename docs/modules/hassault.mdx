@@ -2450,6 +2450,14 @@ migration `_m14_hassault_glicko`, cap `hassault_duel`).
   `DUEL_SWEEP_S` while anyone waits. A pair gets a `duel` room on the served duel
   map (`duelMap` on `/hassault/maps` and `/api/hassault/ranked/maps`; both clients
   load it before they queue, because the native client builds its world first).
+- **The duel map is hd_office, and duel spawns always see each other.** Random
+  team spawns on the bundled maps had a clear line for at most about half of the
+  pairs (none at all on Nuke). `duel.duel_spawns` finds, once per room, the
+  largest sets of T and CT spawns in which *every* pair has a clear line at eye
+  height through the server's own hitscan ray, and `Duel.spawn_options`
+  restricts spawning to them. On hd_office that is 2 T by 3 CT spawns about 66
+  cubes apart, the closest of any map; `DUEL_MAPS` puts it first and the duel test
+  pins both the choice and the sightlines.
 - **The end is reported once**, through `room.on_over`; a forfeit carries the
   leaver's seat. `rate_match` inserts the `hassault_rated_matches` row first, so a
   second report of the same match rates nothing, then moves both players with

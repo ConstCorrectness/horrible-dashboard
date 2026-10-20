@@ -975,7 +975,11 @@ class MatchRoom:
         Not every map has spawns for both teams (and a few community maps have
         none at all), so each fallback is a real case rather than paranoia.
         """
-        options = [e for e in self.spawns if e.attr2 == team] or self.spawns
+        options = (
+            self.mode.spawn_options(self, team)
+            or [e for e in self.spawns if e.attr2 == team]
+            or self.spawns
+        )
         if not options:
             mid = self.world.ssize / 2
             return PlayerState(x=mid, y=mid, z=self.world.floor_at(int(mid), int(mid)))

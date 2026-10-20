@@ -216,3 +216,45 @@ def test_the_node_writes_no_rating_of_its_own():
 
     assert "update_player_rating" not in inspect.getsource(channel)
     assert "update_player_rating" not in inspect.getsource(ranked)
+
+
+# ---- the duel map ---------------------------------------------------------------
+
+
+def test_the_served_duel_map_has_a_clear_line_between_every_pair_of_duel_spawns():
+    """The map a duel is fought on must let the two players see each other from
+    any pair of spawns the room can hand them. hd_aim, the first choice, put
+    them in walled lanes; random team spawns on any bundled map were clear for
+    at most about half of the pairs."""
+    from backend.games_server.hassault_rooms import HassaultReferee
+    from backend.modules.hassault import assets, mapsource, physics
+
+    referee = HassaultReferee()
+    name = referee.duel_map()
+    assert name in mapsource.bundled_names()
+    assert name == "hd_office"
+    cmap = assets.load_map(name)
+    world = physics.World.from_map(cmap)
+    sets = duel.duel_spawns(world, cmap.spawns())
+    assert sets[0] and sets[1], "both sides need somewhere to duel from"
+    for a in sets[0]:
+        for b in sets[1]:
+            clear, reach = duel.sightline(world, a, b)
+            assert clear, f"no line from ({a.x}, {a.y}) to ({b.x}, {b.y})"
+            assert reach < 120.0, "a duel across the whole map is a sniper standoff"
+
+
+def test_a_duel_room_only_spawns_where_the_other_side_is_in_sight():
+    room = MatchServer(record_replays=False).create("hd_office", mode="duel")
+    sets = room.mode.spawns_by_team
+    allowed = {
+        team: {(round(e.x + 0.5, 1), round(e.y + 0.5, 1)) for e in sets[team]}
+        for team in (0, 1)
+    }
+    a = room.add("a", None, team=0)
+    b = room.add("b", None, team=1)
+    for _ in range(25):
+        for p in (a, b):
+            room.respawn(p)
+            here = (round(p.state.x, 1), round(p.state.y, 1))
+            assert here in allowed[p.team], (p.team, here)

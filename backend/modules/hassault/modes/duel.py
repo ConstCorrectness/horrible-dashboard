@@ -19,6 +19,8 @@ which is how the game server's referee learns to rate it
 
 from __future__ import annotations
 
+import math
+from itertools import combinations
 from typing import TYPE_CHECKING, Any
 
 from .base import GameMode
@@ -33,6 +35,59 @@ TIME_LIMIT = 180.0
 WARMUP = "warmup"
 LIVE = "live"
 OVER = "over"
+
+#: Eye height above the floor, in cubes, for the spawn sightline check.
+EYE_HEIGHT = 4.5
+#: Brute force covers at most this many spawns a side (2^n subsets each).
+MAX_SPAWNS_SEARCHED = 8
+
+
+def sightline(world: Any, a: Any, b: Any) -> tuple[bool, float]:
+    """Whether two spawn entities see each other at eye height, through the
+    server's own hitscan ray, and how far apart they are."""
+    from .. import weapons
+
+    ax, ay = a.x + 0.5, a.y + 0.5
+    bx, by = b.x + 0.5, b.y + 0.5
+    az = world.floor_at(int(ax), int(ay)) + EYE_HEIGHT
+    bz = world.floor_at(int(bx), int(by)) + EYE_HEIGHT
+    dx, dy, dz = bx - ax, by - ay, bz - az
+    reach = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if reach < 1e-6:
+        return True, 0.0
+    hit = weapons.raycast_world(
+        world, (ax, ay, az), (dx / reach, dy / reach, dz / reach), reach
+    )
+    return hit >= reach - 1.0, reach
+
+
+def duel_spawns(world: Any, spawns: list[Any]) -> dict[int, list[Any]]:
+    """The largest sets of team-0 and team-1 spawns in which **every** pair has
+    a clear line: whichever two the room's RNG draws, the players can see each
+    other. Largest by the smaller side first, then pairs, then the shortest
+    mean distance. Empty when no pair at all is clear.
+
+    A brute-force biclique search, which is fine at the four or so spawns a
+    side these maps have; it runs once, when the room opens.
+    """
+    a = [e for e in spawns if e.attr2 == 0][:MAX_SPAWNS_SEARCHED]
+    b = [e for e in spawns if e.attr2 == 1][:MAX_SPAWNS_SEARCHED]
+    sees = {(i, j): sightline(world, s, t) for i, s in enumerate(a) for j, t in enumerate(b)}
+    best: tuple[tuple[int, int, float], tuple[int, ...], tuple[int, ...]] | None = None
+    for na in range(1, len(a) + 1):
+        for sa in combinations(range(len(a)), na):
+            for nb in range(1, len(b) + 1):
+                for sb in combinations(range(len(b)), nb):
+                    pairs = [sees[(i, j)] for i in sa for j in sb]
+                    if not all(clear for clear, _ in pairs):
+                        continue
+                    mean = sum(r for _, r in pairs) / len(pairs)
+                    key = (min(na, nb), na * nb, -mean)
+                    if best is None or key > best[0]:
+                        best = (key, sa, sb)
+    if best is None:
+        return {0: [], 1: []}
+    return {0: [a[i] for i in best[1]], 1: [b[j] for j in best[2]]}
 
 
 class Duel(GameMode):
@@ -50,6 +105,14 @@ class Duel(GameMode):
         self.reason = ""
 
     # -- lifecycle ----------------------------------------------------------
+
+    def attach(self, room: MatchRoom) -> None:
+        #: The spawns each side duels from: a set in which every pair sees the
+        #: other (`duel_spawns`), or none, which falls back to the room's rule.
+        self.spawns_by_team = duel_spawns(room.world, list(room.spawns))
+
+    def spawn_options(self, room: MatchRoom, team: int) -> list[Any] | None:
+        return getattr(self, "spawns_by_team", {}).get(team) or None
 
     def reset(self, room: MatchRoom) -> None:
         self.phase = WARMUP
