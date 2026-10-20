@@ -47,9 +47,10 @@ function world(...names: string[]): THREE.Group {
 afterEach(() => vi.restoreAllMocks());
 
 describe('photo surface kinds', () => {
-  it('are exactly the fourteen promised, each with a stand-in', () => {
-    // Nine for the desert and Italian maps, five for Nuke's concrete and steel.
-    expect(PHOTO_KINDS).toHaveLength(14);
+  it('are exactly the twenty promised, each with a stand-in', () => {
+    // Nine for the desert and Italian maps, five for Nuke's concrete and steel,
+    // six for Office's, Bank's and Assault's interiors and yard.
+    expect(PHOTO_KINDS).toHaveLength(20);
     for (const kind of PHOTO_KINDS) {
       expect(isPhotoKind(kind)).toBe(true);
       expect(PHOTO_FALLBACK[kind], kind).toBeTruthy();
@@ -116,6 +117,21 @@ describe('photo surface kinds', () => {
     expect(classifySurface('mat_nuke_sandbag')).toBe('burlap');
     expect(isPhotoKind(classifySurface('mat_nuke_hazard_yellow'))).toBe(false);
     expect(isPhotoKind(classifySurface('mat_nuke_reactor_glow_cyan'))).toBe(false);
+    // Office's, Bank's and Assault's own.
+    expect(classifySurface('mat_office_carpet_tile')).toBe('carpet_tile');
+    expect(classifySurface('mat_office_marble_floor')).toBe('polished_marble');
+    expect(classifySurface('mat_office_wall_drywall')).toBe('wall_plaster');
+    expect(classifySurface('Mat_Bank_Marble_White')).toBe('polished_marble');
+    expect(classifySurface('Mat_Bank_Brick_Commercial_Red')).toBe('red_brick');
+    expect(classifySurface('Mat_Bank_Asphalt_Street')).toBe('yard_asphalt');
+    expect(classifySurface('Mat_Bank_Plaster_Ceiling')).toBe('wall_plaster');
+    expect(classifySurface('Mat_Assault_Asphalt')).toBe('yard_asphalt');
+    expect(classifySurface('Mat_Assault_Office_Floor')).toBe('ceramic_tile');
+    expect(classifySurface('Mat_Assault_Brick_Base')).toBe('red_brick');
+    expect(classifySurface('Mat_Assault_Container_Red')).toBe('corrugated');
+    expect(classifySurface('Mat_Assault_Steel_Catwalk')).toBe('tread_plate');
+    expect(isPhotoKind(classifySurface('mat_office_fluorescent'))).toBe(false);
+    expect(isPhotoKind(classifySurface('Mat_Bank_Fluorescent_Troffer_Glow'))).toBe(false);
     // Mirage and the rest reuse these names, minus the infix, and must not change.
     for (const other of [
       'mat_sandstone_ochre',
@@ -127,6 +143,12 @@ describe('photo surface kinds', () => {
       'mat_concrete_wall',
       'mat_container_red',
       'mat_steel_grate',
+      'mat_marble_floor',
+      'mat_carpet_tile',
+      'Mat_Marble_White',
+      'Mat_Brick_Commercial_Red',
+      'Mat_Office_Floor',
+      'Mat_Asphalt',
     ]) {
       expect(isPhotoKind(classifySurface(other)), other).toBe(false);
     }
@@ -142,7 +164,10 @@ describe('photo surface kinds', () => {
           lower.includes('dust2_') ||
             lower.includes('mirage_') ||
             lower.includes('inferno_') ||
-            lower.includes('nuke_'),
+            lower.includes('nuke_') ||
+            lower.includes('office_') ||
+            lower.includes('bank_') ||
+            lower.includes('assault_'),
           row.name,
         ).toBe(true);
       }

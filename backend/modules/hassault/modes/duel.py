@@ -61,6 +61,41 @@ def sightline(world: Any, a: Any, b: Any) -> tuple[bool, float]:
     return hit >= reach - 1.0, reach
 
 
+def candidates(map_name: str, spawns: list[Any]) -> list[Any]:
+    """The spawns a duel on `map_name` may use: the map's own `duelSpawns` when
+    its source declares them, else its team spawns.
+
+    A defuse map's team spawns are a map apart on purpose (Office's are 55 m and
+    three walls), so a map that hosts duels names a pair of places facing each
+    other across one room, `{x, y, yaw, team}` in cubes like a `playerstart`.
+    They are still put through `duel_spawns`, so a declared spawn with no line
+    to the other side is dropped rather than trusted.
+    """
+    import json
+
+    from .. import mapsource
+    from ..cgz import PLAYERSTART, MapEntity
+
+    path = mapsource.source_path(map_name) if map_name else None
+    if path is None:
+        return spawns
+    declared = json.loads(path.read_text(encoding="utf-8")).get("duelSpawns")
+    if not isinstance(declared, list) or not declared:
+        return spawns
+    return [
+        MapEntity(
+            type=PLAYERSTART,
+            name="playerstart",
+            x=int(s["x"]),
+            y=int(s["y"]),
+            z=0,
+            attr1=round(float(s.get("yaw", 0)) % 360.0 * 10),
+            attr2=1 if s.get("team") == 1 else 0,
+        )
+        for s in declared
+    ]
+
+
 def duel_spawns(world: Any, spawns: list[Any]) -> dict[int, list[Any]]:
     """The largest sets of team-0 and team-1 spawns in which **every** pair has
     a clear line: whichever two the room's RNG draws, the players can see each
@@ -109,7 +144,10 @@ class Duel(GameMode):
     def attach(self, room: MatchRoom) -> None:
         #: The spawns each side duels from: a set in which every pair sees the
         #: other (`duel_spawns`), or none, which falls back to the room's rule.
-        self.spawns_by_team = duel_spawns(room.world, list(room.spawns))
+        #: Drawn from the map's `duelSpawns` when it has them (`candidates`).
+        self.spawns_by_team = duel_spawns(
+            room.world, candidates(getattr(room, "map_name", ""), list(room.spawns))
+        )
 
     def spawn_options(self, room: MatchRoom, team: int) -> list[Any] | None:
         return getattr(self, "spawns_by_team", {}).get(team) or None

@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_`, Inferno's own `inferno_` and Nuke's own `nuke_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_`, Inferno's own `inferno_`, Nuke's own `nuke_`, Office's own `office_`, Bank's own `bank_` and Assault's own `assault_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -59,7 +59,7 @@
     },
     {
       "kind": "souk_crate",
-      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate", "nuke_wood_crate"]
+      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate", "nuke_wood_crate", "assault_wood_crate"]
     },
     {
       "kind": "rust_iron",
@@ -75,23 +75,47 @@
     },
     {
       "kind": "cast_concrete",
-      "match": ["nuke_concrete_wall", "nuke_concrete_dark"]
+      "match": ["nuke_concrete_wall", "nuke_concrete_dark", "assault_concrete"]
     },
     {
       "kind": "slab_concrete",
-      "match": ["nuke_concrete_floor"]
+      "match": ["nuke_concrete_floor", "assault_warehouse_floor", "bank_concrete_sidewalk"]
     },
     {
       "kind": "corrugated",
-      "match": ["nuke_container_"]
+      "match": ["nuke_container_", "assault_container_", "assault_warehouse_wall"]
     },
     {
       "kind": "painted_metal",
-      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue"]
+      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue", "assault_drum_", "assault_rack_"]
     },
     {
       "kind": "tread_plate",
-      "match": ["nuke_steel_grate"]
+      "match": ["nuke_steel_grate", "assault_diamond_plate", "assault_steel_catwalk"]
+    },
+    {
+      "kind": "yard_asphalt",
+      "match": ["assault_asphalt", "bank_asphalt_street"]
+    },
+    {
+      "kind": "carpet_tile",
+      "match": ["office_carpet_tile", "bank_carpet_"]
+    },
+    {
+      "kind": "ceramic_tile",
+      "match": ["assault_office_floor", "office_server_floor"]
+    },
+    {
+      "kind": "polished_marble",
+      "match": ["office_marble_floor", "bank_marble_"]
+    },
+    {
+      "kind": "red_brick",
+      "match": ["assault_brick_", "bank_brick_"]
+    },
+    {
+      "kind": "wall_plaster",
+      "match": ["office_wall_drywall", "office_wall_accent", "assault_office_wall", "bank_plaster_"]
     },
     {
       "kind": "site_a",
@@ -235,7 +259,13 @@
     "slab_concrete": 4,
     "corrugated": 3,
     "painted_metal": 3,
-    "tread_plate": 1.5
+    "tread_plate": 1.5,
+    "yard_asphalt": 4,
+    "carpet_tile": 2,
+    "ceramic_tile": 2,
+    "polished_marble": 3,
+    "red_brick": 2,
+    "wall_plaster": 4
   },
   "detailMean": 0.6667,
   "detailGain": 1.5,
@@ -253,7 +283,13 @@
     "slab_concrete",
     "corrugated",
     "painted_metal",
-    "tread_plate"
+    "tread_plate",
+    "yard_asphalt",
+    "carpet_tile",
+    "ceramic_tile",
+    "polished_marble",
+    "red_brick",
+    "wall_plaster"
   ],
   "photoNormalScale": {
     "limewash": 0.5,
@@ -269,6 +305,12 @@
     "slab_concrete": 0.6,
     "corrugated": 1.2,
     "painted_metal": 0.8,
-    "tread_plate": 1.2
+    "tread_plate": 1.2,
+    "yard_asphalt": 0.8,
+    "carpet_tile": 1.0,
+    "ceramic_tile": 0.8,
+    "polished_marble": 0.4,
+    "red_brick": 1.2,
+    "wall_plaster": 0.5
   }
 }

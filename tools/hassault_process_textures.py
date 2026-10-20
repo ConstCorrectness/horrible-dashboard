@@ -50,6 +50,14 @@ KINDS = {
     "corrugated": ("CorrugatedSteel007A", "corrugated container steel"),
     "painted_metal": ("PaintedMetal004", "chipped painted steel"),
     "tread_plate": ("DiamondPlate003", "diamond tread plate"),
+    # Office, Bank and Assault (`office_`, `bank_`, `assault_` materials):
+    # indoors and a warehouse yard, which the desert and plant kinds cannot be.
+    "yard_asphalt": ("Asphalt033", "yard and road asphalt"),
+    "carpet_tile": ("Carpet016", "office carpet tile"),
+    "ceramic_tile": ("Tiles141", "ceramic floor and wall tile"),
+    "polished_marble": ("Marble012", "polished marble"),
+    "red_brick": ("Bricks085", "red brick walls"),
+    "wall_plaster": ("PaintedPlaster017", "painted interior plaster"),
 }
 
 

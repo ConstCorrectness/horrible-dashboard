@@ -24,6 +24,12 @@ attribution required. They are credited here anyway.
 | `corrugated`               | CorrugatedSteel007A | Nuke's shipping containers       |
 | `painted_metal`            | PaintedMetal004     | Nuke's steel, pipes and drums    |
 | `tread_plate`              | DiamondPlate003     | Nuke's catwalks and grating      |
+| `yard_asphalt`             | Asphalt033          | Bank's street, Assault's yard    |
+| `carpet_tile`              | Carpet016           | Office and Bank carpet           |
+| `ceramic_tile`             | Tiles141            | server floor, Assault's offices  |
+| `polished_marble`          | Marble012           | Office's floor, Bank's marble    |
+| `red_brick`                | Bricks085           | Bank's and Assault's brick       |
+| `wall_plaster`             | PaintedPlaster017   | Office, Bank, Assault walls      |
 
 Each set is the 1K JPG download, cut down by `tools/hassault_process_textures.py`
 to three 512 px WebP files per kind: `<kind>_c.webp` (albedo, normalised so a
@@ -33,4 +39,4 @@ edit `KINDS` in that script, and run it again (naming kinds after the output
 directory processes only those, so the other sets need not be downloaded).
 
 They are matched only by a map's own infixed material names (`dust2_`, `mirage_`,
-`inferno_`, `nuke_`), so no other map changes. See "The modelled maps" in `docs/modules/hassault.mdx`.
+`inferno_`, `nuke_`, `office_`, `bank_`, `assault_`), so no other map changes. See "The modelled maps" in `docs/modules/hassault.mdx`.

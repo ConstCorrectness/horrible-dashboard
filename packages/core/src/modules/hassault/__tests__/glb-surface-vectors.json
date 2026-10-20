@@ -822,24 +822,8 @@
       "kind": "wood"
     },
     {
-      "name": "mat_acoustic_felt",
-      "kind": "carpet"
-    },
-    {
-      "name": "mat_black_metal",
-      "kind": "vault_steel"
-    },
-    {
       "name": "mat_bronze_bell",
       "kind": "vault_steel"
-    },
-    {
-      "name": "mat_carpet_tile",
-      "kind": "carpet"
-    },
-    {
-      "name": "mat_ceiling_tile",
-      "kind": "plaster"
     },
     {
       "name": "mat_dust2_canopy_crimson",
@@ -896,10 +880,6 @@
     {
       "name": "mat_dust2_wood_crate",
       "kind": "souk_crate"
-    },
-    {
-      "name": "mat_fluorescent",
-      "kind": "none"
     },
     {
       "name": "mat_fountain_water",
@@ -964,14 +944,6 @@
     {
       "name": "mat_lantern_glow",
       "kind": "none"
-    },
-    {
-      "name": "mat_mahogany",
-      "kind": "wood"
-    },
-    {
-      "name": "mat_marble_floor",
-      "kind": "marble"
     },
     {
       "name": "mat_metal_scaffolding",
@@ -1110,28 +1082,76 @@
       "kind": "souk_crate"
     },
     {
+      "name": "mat_office_acoustic_felt",
+      "kind": "carpet"
+    },
+    {
+      "name": "mat_office_bin_plastic",
+      "kind": "none"
+    },
+    {
+      "name": "mat_office_black_metal",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "mat_office_cardboard_box",
+      "kind": "concrete"
+    },
+    {
+      "name": "mat_office_carpet_tile",
+      "kind": "carpet_tile"
+    },
+    {
+      "name": "mat_office_ceiling_tile",
+      "kind": "plaster"
+    },
+    {
+      "name": "mat_office_fluorescent",
+      "kind": "none"
+    },
+    {
+      "name": "mat_office_mahogany",
+      "kind": "wood"
+    },
+    {
+      "name": "mat_office_marble_floor",
+      "kind": "polished_marble"
+    },
+    {
       "name": "mat_office_plant_leaves",
       "kind": "none"
     },
     {
-      "name": "mat_palm_fronds",
+      "name": "mat_office_screen_display",
       "kind": "none"
     },
     {
-      "name": "mat_screen_display",
+      "name": "mat_office_server_floor",
+      "kind": "ceramic_tile"
+    },
+    {
+      "name": "mat_office_server_leds",
       "kind": "none"
     },
     {
-      "name": "mat_server_leds",
-      "kind": "none"
-    },
-    {
-      "name": "mat_smoked_glass",
+      "name": "mat_office_smoked_glass",
       "kind": "glass"
     },
     {
-      "name": "mat_stainless",
+      "name": "mat_office_stainless",
       "kind": "vault_steel"
+    },
+    {
+      "name": "mat_office_wall_accent",
+      "kind": "wall_plaster"
+    },
+    {
+      "name": "mat_office_wall_drywall",
+      "kind": "wall_plaster"
+    },
+    {
+      "name": "mat_palm_fronds",
+      "kind": "none"
     },
     {
       "name": "mat_terracotta_roof",
@@ -1144,14 +1164,6 @@
     {
       "name": "mat_van_metal_olive",
       "kind": "vault_steel"
-    },
-    {
-      "name": "mat_wall_accent",
-      "kind": "plaster"
-    },
-    {
-      "name": "mat_wall_drywall",
-      "kind": "plaster"
     },
     {
       "name": "mat_wrought_iron",

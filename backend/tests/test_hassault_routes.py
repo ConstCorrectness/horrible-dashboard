@@ -237,3 +237,72 @@ def test_the_vent_drops_from_a_into_b_and_does_not_climb_back_on_nuke(nuke):
     assert down[pit] < 30, f"the vent is {down[pit]:.0f} cubes, not a drop"
     up, _ = routes_tool.dijkstra(world, cells, [pit])
     assert up[hall] > 100, "B climbs back up into A through the vent"
+
+
+# --- Office -----------------------------------------------------------------
+# Office was one open floor plate with B in the cubicles beside T's spawn: T
+# reached B in 0.7 s and both sides had one way to A. A is the boardroom and B
+# the server room now, CT arrive by the elevators between them, T up the east
+# stairwell, and a corridor along each glass façade is a third way to each site.
+# Cut to 66 x 62 m.
+
+OFFICE = MAP.with_name("hd_office.json")
+
+
+@pytest.fixture(scope="module")
+def office():
+    return routes_tool.measure(str(OFFICE))
+
+
+def test_every_team_can_walk_to_every_site_on_office(office):
+    routes, _, _ = office
+    assert set(routes) == {(t, s) for t in (0, 1) for s in ("A", "B")}
+    for pair, times in routes.items():
+        assert times, f"{pair} cannot be reached on foot"
+
+
+def test_t_has_three_ways_to_each_site_on_office(office):
+    # A: the north corridor, the mid lane's double doors, round by the elevators.
+    # B: the south corridor's door, the mid door, round by the elevators.
+    routes, _, _ = office
+    for site in ("A", "B"):
+        assert len(routes[(1, site)]) >= 3, routes[(1, site)]
+
+
+def test_the_attackers_walk_is_in_the_band_of_the_other_large_maps_on_office(office):
+    routes, _, _ = office
+    for site in ("A", "B"):
+        assert routes[(1, site)][0] > 7.0, routes[(1, site)]
+        assert routes[(1, site)][0] > 2 * routes[(0, site)][0]
+
+
+def test_ct_holds_both_sites_from_the_elevators_on_office(office):
+    routes, _, _ = office
+    assert routes[(0, "A")][0] < 4.0
+    assert routes[(0, "B")][0] < 3.0
+
+
+# (x, y) of a doorway's centre in cubes, and the axis its wall runs along.
+OFFICE_DOORS = {
+    "the boardroom's double doors": ((66, 162), "y"),
+    "the boardroom's CT door": ((26, 132), "x"),
+    "the gap by the north glass into A": ((66, 195), "y"),
+    "the server room's south door": ((66, 21), "y"),
+    "the server room's mid door": ((66, 72), "y"),
+    "the server room's CT door": ((18, 87), "x"),
+    "the north corridor's door": ((99, 182), "x"),
+    "the south corridor's door": ((99, 28), "x"),
+}
+
+
+@pytest.mark.parametrize("name", OFFICE_DOORS)
+def test_a_doorway_on_office_can_be_walked_through(office, name):
+    _, world, cells = office
+    (x, y), along = OFFICE_DOORS[name]
+    hop = 9
+    dx, dy = (0, hop) if along == "x" else (hop, 0)
+    a = routes_tool.nearest(cells, x - dx, y - dy)
+    b = routes_tool.nearest(cells, x + dx, y + dy)
+    dist, _ = routes_tool.dijkstra(world, cells, [a])
+    assert b in dist, f"{name}: the two sides are not joined"
+    assert dist[b] < 2.5 * hop, f"{name}: the way through is {dist[b]:.0f} cubes"

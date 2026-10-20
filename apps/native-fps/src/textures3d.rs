@@ -23,10 +23,10 @@ pub const TEXTURE_SIZE: u32 = 256;
 /// The generated surfaces, then the photographed ones' albedo, then their detail.
 pub const GENERATED_LAYERS: u32 = 18;
 /// Surfaces backed by photographed CC0 maps (`apps/web/public/maps/textures/`).
-pub const PHOTO_COUNT: u32 = 14;
+pub const PHOTO_COUNT: u32 = 20;
 /// Base layer index for the 18 procedural normal + micro-roughness detail layers.
 pub const GENERATED_DETAIL_BASE: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
-/// Every layer of the array: 18 generated albedos, 14 photo albedos, 14 photo
+/// Every layer of the array: 18 generated albedos, 20 photo albedos, 20 photo
 /// details, and 18 generated normal+roughness detail layers. The generated
 /// albedos never move; `shader.wgsl` hardcodes the photo range, the photo detail
 /// offset and the generated detail base, so a new photo kind changes those three.
@@ -860,7 +860,8 @@ pub enum MaterialKind {
     Carpet = 17,
     Brick = 18,
     // Photographed surfaces, matched only by a map's own infixed material names
-    // (`dust2_`, `mirage_`, `inferno_`, `nuke_`). Kind `18 + n` has its albedo
+    // (`dust2_`, `mirage_`, `inferno_`, `nuke_`, `office_`, `bank_`, `assault_`).
+    // Kind `18 + n` has its albedo
     // in layer `17 + n` and its normal and roughness in layer `17 + n + PHOTO_COUNT`.
     Limewash = 19,
     Sandstone = 20,
@@ -877,6 +878,13 @@ pub enum MaterialKind {
     Corrugated = 30,
     PaintedMetal = 31,
     TreadPlate = 32,
+    // Office's, Bank's and Assault's: indoors, and a warehouse yard.
+    YardAsphalt = 33,
+    CarpetTile = 34,
+    CeramicTile = 35,
+    PolishedMarble = 36,
+    RedBrick = 37,
+    WallPlaster = 38,
 }
 
 impl MaterialKind {
@@ -916,6 +924,12 @@ impl MaterialKind {
             "corrugated" => MaterialKind::Corrugated,
             "painted_metal" => MaterialKind::PaintedMetal,
             "tread_plate" => MaterialKind::TreadPlate,
+            "yard_asphalt" => MaterialKind::YardAsphalt,
+            "carpet_tile" => MaterialKind::CarpetTile,
+            "ceramic_tile" => MaterialKind::CeramicTile,
+            "polished_marble" => MaterialKind::PolishedMarble,
+            "red_brick" => MaterialKind::RedBrick,
+            "wall_plaster" => MaterialKind::WallPlaster,
             _ => return None,
         })
     }
@@ -959,6 +973,12 @@ impl MaterialKind {
             MaterialKind::Corrugated => 0.55,
             MaterialKind::PaintedMetal => 0.5,
             MaterialKind::TreadPlate => 0.4,
+            MaterialKind::YardAsphalt => 0.85,
+            MaterialKind::CarpetTile => 0.95,
+            MaterialKind::CeramicTile => 0.3,
+            MaterialKind::PolishedMarble => 0.15,
+            MaterialKind::RedBrick => 0.8,
+            MaterialKind::WallPlaster => 0.7,
         }
     }
 
@@ -987,6 +1007,12 @@ impl MaterialKind {
             MaterialKind::Corrugated => 0.45,
             MaterialKind::PaintedMetal => 0.55,
             MaterialKind::TreadPlate => 0.85,
+            MaterialKind::CarpetTile => 0.0,
+            MaterialKind::PolishedMarble => 0.04,
+            MaterialKind::YardAsphalt
+            | MaterialKind::CeramicTile
+            | MaterialKind::RedBrick
+            | MaterialKind::WallPlaster => 0.02,
             MaterialKind::Limewash
             | MaterialKind::Sandstone
             | MaterialKind::Paving
@@ -1186,6 +1212,12 @@ const PHOTO_KINDS: [MaterialKind; PHOTO_COUNT as usize] = [
     MaterialKind::Corrugated,
     MaterialKind::PaintedMetal,
     MaterialKind::TreadPlate,
+    MaterialKind::YardAsphalt,
+    MaterialKind::CarpetTile,
+    MaterialKind::CeramicTile,
+    MaterialKind::PolishedMarble,
+    MaterialKind::RedBrick,
+    MaterialKind::WallPlaster,
 ];
 
 /// In `MaterialKind` order, from Limewash.
@@ -1204,6 +1236,12 @@ static PHOTO_SETS: [PhotoSet; PHOTO_COUNT as usize] = [
     photo_set!("corrugated"),
     photo_set!("painted_metal"),
     photo_set!("tread_plate"),
+    photo_set!("yard_asphalt"),
+    photo_set!("carpet_tile"),
+    photo_set!("ceramic_tile"),
+    photo_set!("polished_marble"),
+    photo_set!("red_brick"),
+    photo_set!("wall_plaster"),
 ];
 
 /// Decode an embedded WebP to RGBA8 at `size` x `size`.
@@ -1758,6 +1796,12 @@ mod tests {
             "corrugated",
             "painted_metal",
             "tread_plate",
+            "yard_asphalt",
+            "carpet_tile",
+            "ceramic_tile",
+            "polished_marble",
+            "red_brick",
+            "wall_plaster",
         ]
         .iter()
         .enumerate()
@@ -1824,6 +1868,20 @@ mod tests {
         assert!(!MaterialKind::from_name("mat_nuke_coolant_blue").is_photo());
         assert!(!MaterialKind::from_name("mat_concrete_wall").is_photo());
         assert!(!MaterialKind::from_name("mat_container_red").is_photo());
+        // Office's, Bank's and Assault's own.
+        assert_eq!(MaterialKind::from_name("mat_office_carpet_tile"), MaterialKind::CarpetTile);
+        assert_eq!(MaterialKind::from_name("mat_office_marble_floor"), MaterialKind::PolishedMarble);
+        assert_eq!(MaterialKind::from_name("mat_office_wall_drywall"), MaterialKind::WallPlaster);
+        assert_eq!(MaterialKind::from_name("Mat_Bank_Marble_White"), MaterialKind::PolishedMarble);
+        assert_eq!(MaterialKind::from_name("Mat_Bank_Brick_Commercial_Red"), MaterialKind::RedBrick);
+        assert_eq!(MaterialKind::from_name("Mat_Bank_Asphalt_Street"), MaterialKind::YardAsphalt);
+        assert_eq!(MaterialKind::from_name("Mat_Assault_Asphalt"), MaterialKind::YardAsphalt);
+        assert_eq!(MaterialKind::from_name("Mat_Assault_Office_Floor"), MaterialKind::CeramicTile);
+        assert_eq!(MaterialKind::from_name("Mat_Assault_Concrete"), MaterialKind::CastConcrete);
+        assert_eq!(MaterialKind::from_name("Mat_Assault_Diamond_Plate"), MaterialKind::TreadPlate);
+        assert!(!MaterialKind::from_name("mat_marble_floor").is_photo());
+        assert!(!MaterialKind::from_name("Mat_Marble_White").is_photo());
+        assert!(!MaterialKind::from_name("Mat_Office_Floor").is_photo());
         // And its foliage and ironwork keep what they had.
         assert!(!MaterialKind::from_name("mat_mirage_palm_fronds").is_photo());
         assert!(!MaterialKind::from_name("mat_wrought_iron").is_photo());

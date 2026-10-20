@@ -193,6 +193,13 @@ SOFTEN_BY_KIND = {
     "corrugated": (0.025, 0.15),
     "painted_metal": (0.025, 0.15),
     "tread_plate": (0.025, 0.15),
+    # Office's, Bank's and Assault's: each rounds as the generated kind it replaces.
+    "yard_asphalt": (0.04, 0.2),
+    "carpet_tile": (0.03, 0.3),
+    "ceramic_tile": (0.03, 0.15),
+    "polished_marble": (0.03, 0.15),
+    "red_brick": (0.06, 0.2),
+    "wall_plaster": (0.12, 0.25),
 }
 #: A material the table does not classify.
 SOFTEN_DEFAULT = (0.04, 0.2)

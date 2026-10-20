@@ -225,7 +225,8 @@ def test_the_served_duel_map_has_a_clear_line_between_every_pair_of_duel_spawns(
     """The map a duel is fought on must let the two players see each other from
     any pair of spawns the room can hand them. hd_aim, the first choice, put
     them in walled lanes; random team spawns on any bundled map were clear for
-    at most about half of the pairs."""
+    at most about half of the pairs. Office, rebuilt as a defuse map, put its
+    team spawns a map apart, so it declares a duel pair across its mid."""
     from backend.games_server.hassault_rooms import HassaultReferee
     from backend.modules.hassault import assets, mapsource, physics
 
@@ -235,8 +236,9 @@ def test_the_served_duel_map_has_a_clear_line_between_every_pair_of_duel_spawns(
     assert name == "hd_office"
     cmap = assets.load_map(name)
     world = physics.World.from_map(cmap)
-    sets = duel.duel_spawns(world, cmap.spawns())
+    sets = duel.duel_spawns(world, duel.candidates(name, cmap.spawns()))
     assert sets[0] and sets[1], "both sides need somewhere to duel from"
+    assert min(len(sets[0]), len(sets[1])) >= 2, "one spawn a side is a fixed angle"
     for a in sets[0]:
         for b in sets[1]:
             clear, reach = duel.sightline(world, a, b)

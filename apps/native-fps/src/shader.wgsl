@@ -217,6 +217,11 @@ fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
         case 30u: { return vec2<f32>(0.55, 0.45); } // Corrugated
         case 31u: { return vec2<f32>(0.50, 0.55); } // PaintedMetal
         case 32u: { return vec2<f32>(0.40, 0.85); } // TreadPlate
+        case 33u: { return vec2<f32>(0.85, 0.02); } // YardAsphalt
+        case 34u: { return vec2<f32>(0.95, 0.00); } // CarpetTile
+        case 35u: { return vec2<f32>(0.30, 0.02); } // CeramicTile
+        case 36u: { return vec2<f32>(0.15, 0.04); } // PolishedMarble
+        case 37u, 38u: { return vec2<f32>(0.75, 0.02); } // RedBrick, WallPlaster
         default: { return vec2<f32>(0.70, 0.04); }
     }
 }
@@ -274,12 +279,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let props = get_pbr_properties(mat_id);
             roughness = props.x;
             metalness = props.y;
-            if (layer_idx >= 18u && layer_idx < 32u) {
+            if (layer_idx >= 18u && layer_idx < 38u) {
                 // A photographed kind (`PHOTO_COUNT` of them, from layer 18):
                 // its detail layer is `PHOTO_COUNT` on from its
                 // albedo. Red and green are the normal's x and y (stored encoded
                 // in an sRGB array, so sampled back exactly), blue is roughness.
-                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 14u));
+                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 20u));
                 let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
                 let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
                 normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
@@ -287,8 +292,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 roughness = d.b;
             } else if (layer_idx < 18u && detail > 0.5) {
                 // Procedural generated surface detail layer (normal + micro-roughness at
-                // `GENERATED_DETAIL_BASE` = 18 + 2 * PHOTO_COUNT = 46, + layer_idx)
-                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 46u));
+                // `GENERATED_DETAIL_BASE` = 18 + 2 * PHOTO_COUNT = 58, + layer_idx)
+                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 58u));
                 let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
                 let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
                 normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
