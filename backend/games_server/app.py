@@ -740,6 +740,10 @@ def _mount_hassault_content() -> None:
     from backend.games_server.hassault_wallet import router as wallet_router
 
     app.include_router(wallet_router)
+    # Trades between players and the credit market (`hassault_trading.py`).
+    from backend.games_server.hassault_trading import router as trading_router
+
+    app.include_router(trading_router)
 
 
 _mount_hassault_content()

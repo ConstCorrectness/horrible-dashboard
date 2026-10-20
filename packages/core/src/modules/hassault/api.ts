@@ -864,6 +864,97 @@ export interface Wallet {
   history: { delta: number; kind: string; ref: string; at: number }[];
 }
 
+/** Whether this account may trade, and why not (`hassault_trading.py`). */
+export interface TradeEligibility {
+  accountId: string;
+  eligible: boolean;
+  reasons: string[];
+  level: number;
+  serverMatches: number;
+}
+
+/** One trade. `give` is what `from` hands over, `want` what `to` does. */
+export interface Trade {
+  tradeId: string;
+  from: string;
+  to: string;
+  give: string[];
+  want: string[];
+  /** offered | accepted | done | declined | cancelled | expired | failed */
+  state: string;
+  reason: string;
+  createdAt: number;
+  /** When an accepted trade's confirm arms (epoch seconds). */
+  armsAt: number | null;
+}
+
+/** An item a partner could trade, or one listed on the market. */
+export type TradableItem =
+  | (SkinInstance & { kind: 'skin' })
+  | { instanceId: string; kind: 'case' | 'key'; defId: string };
+
+export interface Listing {
+  listingId: string;
+  price: number;
+  sellerId: string;
+  listedAt: number;
+  kind: string;
+  item: SkinInstance | { instanceId: string; defId: string };
+}
+
+export function getTradeEligibility(): Promise<TradeEligibility> {
+  return apiGet<TradeEligibility>('/hassault/trade/eligibility');
+}
+
+export function getTradeLink(rotate = false): Promise<{ token: string }> {
+  return apiGet<{ token: string }>(`/hassault/trade/link?rotate=${rotate}`);
+}
+
+export function getPartnerItems(partnerId: string, token = ''): Promise<TradableItem[]> {
+  return apiGet<TradableItem[]>(
+    `/hassault/trade/partner/${encodeURIComponent(partnerId)}?token=${encodeURIComponent(token)}`,
+  );
+}
+
+export function listTrades(): Promise<Trade[]> {
+  return apiGet<Trade[]>('/hassault/trades');
+}
+
+export function offerTrade(offer: {
+  to: string;
+  give: string[];
+  want: string[];
+  token?: string;
+}): Promise<Trade> {
+  return apiPost<Trade>('/hassault/trades', offer);
+}
+
+export function actOnTrade(
+  tradeId: string,
+  action: 'accept' | 'confirm' | 'decline' | 'cancel',
+): Promise<Trade> {
+  return apiPost<Trade>(`/hassault/trades/${encodeURIComponent(tradeId)}/${action}`, {});
+}
+
+export function listMarket(skinId?: string): Promise<Listing[]> {
+  const query = skinId ? `?skin_id=${encodeURIComponent(skinId)}` : '';
+  return apiGet<Listing[]>(`/hassault/market${query}`);
+}
+
+export function listForSale(
+  instanceId: string,
+  price: number,
+): Promise<{ listingId: string; price: number; fee: number }> {
+  return apiPost<{ listingId: string; price: number; fee: number }>('/hassault/market/list', {
+    instanceId,
+    price,
+  });
+}
+
+export function actOnListing(listingId: string, action: 'buy' | 'cancel'): Promise<unknown> {
+  return apiPost<unknown>(`/hassault/market/${encodeURIComponent(listingId)}/${action}`, {});
+}
+
 export function listCases(): Promise<CaseSpec[]> {
   return apiGet<CaseSpec[]>('/hassault/cases');
 }

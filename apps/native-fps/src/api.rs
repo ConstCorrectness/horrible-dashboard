@@ -464,6 +464,31 @@ pub struct Wallet {
     pub cases: Vec<OwnedCase>,
 }
 
+/// One market listing (`hassault_trading.listings`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Listing {
+    #[serde(rename = "listingId", default)]
+    pub listing_id: String,
+    #[serde(default)]
+    pub price: i64,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub item: serde_json::Value,
+}
+
+impl Listing {
+    /// A name for the row: the skin's, else the case or key id.
+    pub fn name(&self) -> String {
+        self.item
+            .pointer("/definition/name")
+            .or_else(|| self.item.get("defId"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("item")
+            .replace('_', " ")
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct OwnedCase {
     #[serde(rename = "instanceId", default)]
@@ -914,6 +939,23 @@ impl NodeApi {
         self.get("/api/hassault/wallet")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The market's active listings, cheapest first (the game server's).
+    pub fn market(&self) -> Result<Vec<Listing>, ApiError> {
+        self.get("/api/hassault/market?limit=12")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// Buy one listing with credits.
+    pub fn buy_listing(&self, listing_id: &str) -> Result<serde_json::Value, ApiError> {
+        let url = format!(
+            "{}/api/hassault/market/{}/buy",
+            self.base,
+            urlencode(listing_id)
+        );
+        self.send(self.agent.post(&url).send_json(ureq::json!({})), "market/buy")
     }
 
     /// Spend credits on a key.

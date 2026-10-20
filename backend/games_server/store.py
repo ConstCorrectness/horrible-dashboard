@@ -624,6 +624,64 @@ def _m15_hassault_wallet(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m16_hassault_trading(conn: sqlite3.Connection) -> None:
+    """hassault trades and the market.
+
+    A trade is a row that moves through states (offered, accepted, done, or one
+    of the ways it ends); its items are lists of instance ids fixed at offer
+    time, and the swap re-checks every one of them under the write lock. A
+    listing marks its item `listed` (P4 reserved the state), so the item cannot
+    also be traded, equipped away or listed twice. Fees are burnt: no account
+    receives them, and `hassault_sinks` is the record that they were.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS hassault_trades (
+            trade_id    TEXT PRIMARY KEY,
+            from_id     TEXT NOT NULL,
+            to_id       TEXT NOT NULL,
+            give        TEXT NOT NULL,
+            want        TEXT NOT NULL,
+            state       TEXT NOT NULL,
+            reason      TEXT NOT NULL DEFAULT '',
+            created_at  REAL NOT NULL,
+            arms_at     REAL,
+            done_at     REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_hassault_trades_to
+            ON hassault_trades(to_id, state);
+        CREATE INDEX IF NOT EXISTS idx_hassault_trades_from
+            ON hassault_trades(from_id, created_at);
+        CREATE TABLE IF NOT EXISTS hassault_trade_links (
+            account_id TEXT PRIMARY KEY,
+            token      TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS hassault_listings (
+            listing_id  TEXT PRIMARY KEY,
+            instance_id TEXT NOT NULL,
+            def_id      TEXT NOT NULL,
+            seller_id   TEXT NOT NULL,
+            price       INTEGER NOT NULL,
+            state       TEXT NOT NULL,
+            buyer_id    TEXT,
+            created_at  REAL NOT NULL,
+            closed_at   REAL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_hassault_listings_live_item
+            ON hassault_listings(instance_id) WHERE state = 'active';
+        CREATE INDEX IF NOT EXISTS idx_hassault_listings_def
+            ON hassault_listings(def_id, state, price);
+        CREATE TABLE IF NOT EXISTS hassault_sinks (
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind   TEXT NOT NULL,
+            ref    TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            at     REAL NOT NULL
+        );
+        """
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -640,6 +698,7 @@ MIGRATIONS: list[Any] = [
     _m13_hassault_equips,
     _m14_hassault_glicko,
     _m15_hassault_wallet,
+    _m16_hassault_trading,
 ]
 
 

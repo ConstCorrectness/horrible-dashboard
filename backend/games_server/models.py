@@ -23,6 +23,7 @@ SERVER_CAPS: list[str] = [
     "hassault_account",  # hassault settings, inventory, XP ledger and import on /api/hassault/account
     "hassault_modes",  # hassault rooms take a `mode` on join (defuse and its economy run here)
     "hassault_wallet",  # earned credits, keys, cases and StatTrak on /api/hassault/account/{wallet,keys,cases}
+    "hassault_trading",  # trades (offer/accept/armed confirm) and the credit market on /api/hassault/{account/trade*,market}
     "hassault_duel",  # rated 1v1 duel queue (duel_queue/duel_cancel) and Glicko-2 on /api/hassault/rating
     "trace",  # accepts move_trace uploads into the match replay
     "replays",  # persists replays + serves them over /replays HTTP

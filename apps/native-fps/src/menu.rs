@@ -41,6 +41,8 @@ pub enum Page {
     Loadout,
     /// Credits, keys and cases (`hassault_wallet.py`, through the node).
     Store,
+    /// The cheapest market listings (`hassault_trading.py`, through the node).
+    Market,
 }
 
 /// The key pages, grouped as the pane's Controls screen groups them
@@ -189,6 +191,8 @@ pub enum Action {
     BuyKey,
     /// Open the owned case at this row of the store. The app owns the request.
     OpenCase(u8),
+    /// Buy the listing at this row of the market. The app owns the request.
+    BuyListing(u8),
 }
 
 /// What the STORE page shows. Filled by the app from the node's `/wallet`;
@@ -196,6 +200,8 @@ pub enum Action {
 #[derive(Debug, Clone, Default)]
 pub struct StoreTable {
     pub wallet: Option<crate::api::Wallet>,
+    /// The market page's listings, cheapest first; `None` until read.
+    pub listings: Option<Vec<crate::api::Listing>>,
 }
 
 /// One weapon the loadout page can offer: the served table, trimmed.
@@ -427,6 +433,10 @@ impl Menu {
                 self.store_available
                     .then(|| row("STORE", String::from(">"), Action::Open(Page::Store))),
             )
+            .chain(
+                self.store_available
+                    .then(|| row("MARKET", String::from(">"), Action::Open(Page::Market))),
+            )
             .chain([
                 row(
                     // A match is left by disconnecting; Train is left by closing.
@@ -438,6 +448,26 @@ impl Menu {
                 ),
             ])
             .collect(),
+            Page::Market => {
+                let mut rows = Vec::new();
+                match &self.store.listings {
+                    None => rows.push(row("LISTINGS", "...".into(), Action::Back)),
+                    Some(list) if list.is_empty() => {
+                        rows.push(row("NOTHING LISTED", String::new(), Action::Back))
+                    }
+                    Some(list) => {
+                        for (i, listing) in list.iter().enumerate().take(12) {
+                            rows.push(row(
+                                &format!("BUY {}", listing.name().to_uppercase()),
+                                listing.price.to_string(),
+                                Action::BuyListing(i as u8),
+                            ));
+                        }
+                    }
+                }
+                rows.push(row("BACK", String::new(), Action::Back));
+                rows
+            }
             Page::Store => {
                 let mut rows = Vec::new();
                 match &self.store.wallet {
@@ -738,6 +768,7 @@ impl Menu {
             Page::Keys(_) => "ENTER OR CLICK A ROW, THEN PRESS ITS NEW KEY",
             Page::Loadout => "EACH SIDE CARRIES ITS OWN - APPLIES AT YOUR NEXT SPAWN",
             Page::Store => "CREDITS ARE EARNED IN SERVER MATCHES - KEYS OPEN CASES",
+            Page::Market => "A SALE PAYS THE SELLER THE PRICE LESS A BURNT 10% FEE",
         }
     }
 
@@ -752,6 +783,7 @@ impl Menu {
             Page::Keys(group) => group.title(),
             Page::Loadout => "LOADOUT",
             Page::Store => "STORE",
+            Page::Market => "MARKET",
         }
     }
 
@@ -1013,7 +1045,7 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         // Documents, not settings this client interprets: `Menu::step_loadout`.
         Action::LoadoutPick(..) | Action::AgentPick(_) => vec![],
         // Requests to the node, made by the app on a worker thread.
-        Action::BuyKey | Action::OpenCase(_) => vec![],
+        Action::BuyKey | Action::OpenCase(_) | Action::BuyListing(_) => vec![],
         // The app owns the clipboard.
         Action::CrosshairPaste | Action::CrosshairCopy => vec![],
         Action::CrosshairPreset => {

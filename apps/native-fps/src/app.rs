@@ -3103,6 +3103,20 @@ impl App {
                     self.menu.store.wallet = None;
                     self.menu.note = Some((e, false));
                 }
+                StoreOutcome::Listings(Ok(list)) => {
+                    self.menu.store.listings = Some(list);
+                    self.menu.note = None;
+                }
+                StoreOutcome::Listings(Err(e)) => {
+                    self.menu.store.listings = None;
+                    self.menu.note = Some((e, false));
+                }
+                StoreOutcome::Purchased(result) => {
+                    self.menu.note = Some(match result {
+                        Ok(()) => ("BOUGHT - IT IS IN YOUR ARMOURY".to_string(), true),
+                        Err(e) => (e, false),
+                    });
+                }
                 StoreOutcome::Bought(result) => {
                     self.menu.note = Some(match result {
                         Ok(()) => ("KEY BOUGHT".to_string(), true),
@@ -3581,9 +3595,23 @@ impl App {
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
                 if page == menu::Page::Store {
                     self.store_job(StoreJob::Refresh);
+                } else if page == menu::Page::Market {
+                    self.store_job(StoreJob::Market);
                 }
             }
             Action::BuyKey => self.store_job(StoreJob::BuyKey),
+            Action::BuyListing(i) => {
+                let id = self
+                    .menu
+                    .store
+                    .listings
+                    .as_ref()
+                    .and_then(|l| l.get(i as usize))
+                    .map(|l| l.listing_id.clone());
+                if let Some(id) = id {
+                    self.store_job(StoreJob::Buy(id));
+                }
+            }
             Action::OpenCase(i) => {
                 let id = self
                     .menu
@@ -4781,12 +4809,16 @@ enum StoreJob {
     Refresh,
     BuyKey,
     Open(String),
+    Market,
+    Buy(String),
 }
 
 enum StoreOutcome {
     Wallet(Result<hassault_native::api::Wallet, String>),
     Bought(Result<(), String>),
     Opened(Result<hassault_native::api::SkinInstance, String>),
+    Listings(Result<Vec<hassault_native::api::Listing>, String>),
+    Purchased(Result<(), String>),
 }
 
 struct StoreJobs {
@@ -4818,6 +4850,11 @@ fn spawn_store_worker(server: &str) -> StoreJobs {
                 StoreJob::Open(id) => vec![
                     StoreOutcome::Opened(node.open_case(&id).map_err(explain)),
                     StoreOutcome::Wallet(node.wallet().map_err(explain)),
+                ],
+                StoreJob::Market => vec![StoreOutcome::Listings(node.market().map_err(explain))],
+                StoreJob::Buy(id) => vec![
+                    StoreOutcome::Purchased(node.buy_listing(&id).map(|_| ()).map_err(explain)),
+                    StoreOutcome::Listings(node.market().map_err(explain)),
                 ],
             };
             for outcome in outcomes {

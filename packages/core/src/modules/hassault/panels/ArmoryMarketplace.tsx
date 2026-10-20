@@ -15,6 +15,7 @@ import {
 } from '../api';
 import { onWeaponEquipped, requestWeaponInspect } from '../workspace-bus';
 import { CaseStore } from './CaseStore';
+import { TradeMarket } from './TradeMarket';
 import { WeaponSilhouette } from './WeaponSilhouettes';
 
 const RARITY_BG: Record<string, string> = {
@@ -28,7 +29,9 @@ const RARITY_BG: Record<string, string> = {
 };
 
 export function ArmoryMarketplace() {
-  const [tab, setTab] = useState<'inventory' | 'catalog' | 'tradeup' | 'store'>('inventory');
+  const [tab, setTab] = useState<'inventory' | 'catalog' | 'tradeup' | 'store' | 'trade'>(
+    'inventory',
+  );
   const [inventory, setInventory] = useState<SkinInstance[]>([]);
   const [catalog, setCatalog] = useState<SkinDefinition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,6 +245,13 @@ export function ArmoryMarketplace() {
             onClick={() => setTab('store')}
           >
             Store
+          </button>
+          <button
+            type="button"
+            className={tab === 'trade' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'}
+            onClick={() => setTab('trade')}
+          >
+            Trade &amp; Market
           </button>
         </div>
       </div>
@@ -689,6 +699,11 @@ export function ArmoryMarketplace() {
 
       {/* TAB 4: credits, keys and cases (the game server's). */}
       {tab === 'store' && <CaseStore onOpened={() => void refreshData()} />}
+
+      {/* TAB 5: trades and the credit market (the game server's). */}
+      {tab === 'trade' && (
+        <TradeMarket inventory={inventory} onChanged={() => void refreshData()} />
+      )}
 
       {/* TAB 3: 10-to-1 Trade-Up Contract */}
       {tab === 'tradeup' && (

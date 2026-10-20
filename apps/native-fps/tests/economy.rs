@@ -135,3 +135,29 @@ fn the_store_page_reads_the_wallet_and_offers_each_case() {
     assert_eq!(find("OPEN FIELD CASE").action, Action::OpenCase(0));
     assert_eq!(find("OPEN FIELD CASE").value, "1 KEY");
 }
+
+#[test]
+fn the_market_page_lists_the_cheapest_listings_to_buy() {
+    use hassault_native::api::Listing;
+    use hassault_native::controls::Controls;
+    use hassault_native::menu::{Action, Menu, Page};
+    use hassault_native::settings::Settings;
+
+    let listings: Vec<Listing> = serde_json::from_str(
+        r#"[{"listingId": "l1", "price": 120, "kind": "skin",
+             "item": {"instanceId": "i1", "definition": {"name": "Desert Fade"}}},
+            {"listingId": "l2", "price": 300, "kind": "case",
+             "item": {"instanceId": "i2", "defId": "field_case"}}]"#,
+    )
+    .unwrap();
+    let mut menu = Menu::default();
+    let (settings, keys) = (Settings::default(), Controls::default());
+    menu.store_available = true;
+    assert!(menu.rows(&settings, &keys, false).iter().any(|r| r.label == "MARKET"));
+    menu.page = Page::Market;
+    menu.store.listings = Some(listings);
+    let rows = menu.rows(&settings, &keys, false);
+    let skin = rows.iter().find(|r| r.label == "BUY DESERT FADE").unwrap();
+    assert_eq!((skin.value.as_str(), skin.action), ("120", Action::BuyListing(0)));
+    assert!(rows.iter().any(|r| r.label == "BUY FIELD CASE" && r.value == "300"));
+}

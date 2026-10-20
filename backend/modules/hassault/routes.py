@@ -577,7 +577,12 @@ async def get_weapons() -> list[WeaponOut]:
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
-async def _wallet_call(method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+async def _wallet_call(
+    method: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+    body: Any = None,
+) -> Any:
     """A wallet request, proxied to the game server.
 
     **There is no local wallet.** Credits are earned from matches the server
@@ -591,7 +596,7 @@ async def _wallet_call(method: str, path: str, params: dict[str, Any] | None = N
             status_code=409,
             detail="the wallet is kept on the game server: sign in to use it",
         )
-    answer = await account_sync.request(method, path, params=params)
+    answer = await account_sync.request(method, path, params=params, json=body)
     if answer is None:
         raise HTTPException(status_code=503, detail="could not reach the game server")
     status, body = answer
@@ -617,6 +622,88 @@ async def buy_key() -> dict[str, Any]:
 async def open_case(instance_id: str) -> dict[str, Any]:
     """Open an owned case with a key; the skin it made, inventory-shaped."""
     return await _wallet_call("POST", "/cases/open", {"instance_id": instance_id})
+
+
+# ---- trading and the market: the game server's, proxied (`hassault_trading.py`) ----
+
+
+@router.get("/trade/eligibility")
+async def trade_eligibility() -> dict[str, Any]:
+    """Whether this account may trade yet, and every reason it may not."""
+    return await _wallet_call("GET", "/trade/eligibility")
+
+
+@router.get("/trade/link")
+async def trade_link(rotate: bool = False) -> dict[str, Any]:
+    """This account's trade link token; `rotate` revokes the old one."""
+    return await _wallet_call("GET", "/trade/link", {"rotate": str(rotate).lower()})
+
+
+@router.get("/trade/partner/{partner_id}")
+async def trade_partner_items(partner_id: str, token: str = "") -> list[dict[str, Any]]:
+    """A friend's (or link holder's) tradable items, to pick what to ask for."""
+    return await _wallet_call("GET", f"/trade/partner/{partner_id}", {"token": token})
+
+
+@router.get("/trades")
+async def list_trades() -> list[dict[str, Any]]:
+    return await _wallet_call("GET", "/trades")
+
+
+@router.post("/trades")
+async def make_offer(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Offer a trade: `{to, give, want, token?}` instance ids."""
+    return await _wallet_call("POST", "/trades", body=body)
+
+
+@router.post("/trades/{trade_id}/{action}")
+async def act_on_trade(trade_id: str, action: str) -> dict[str, Any]:
+    """`accept`, `confirm`, `decline` or `cancel`."""
+    if action not in ("accept", "confirm", "decline", "cancel"):
+        raise HTTPException(status_code=404, detail="no such trade action")
+    return await _wallet_call("POST", f"/trades/{trade_id}/{action}")
+
+
+@router.get("/market")
+async def market(skin_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Active listings, cheapest first. A public read of the server's."""
+    from backend.modules.hassault import account_sync
+
+    # Only for an account already known to be on the service: a read here must
+    # never be what makes this node contact the server (the P7 lesson).
+    if account_sync.known_active() is None:
+        return []
+    params: dict[str, Any] = {"limit": limit}
+    if skin_id:
+        params["skin_id"] = skin_id
+    found = await account_sync.server_get("/market", params)
+    return found if isinstance(found, list) else []
+
+
+@router.get("/market/history")
+async def market_history(skin_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    from backend.modules.hassault import account_sync
+
+    if account_sync.known_active() is None:
+        return []
+    found = await account_sync.server_get(
+        "/market/history", {"skin_id": skin_id, "limit": limit}
+    )
+    return found if isinstance(found, list) else []
+
+
+@router.post("/market/list")
+async def list_for_sale(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """List an item: `{instanceId, price}`."""
+    return await _wallet_call("POST", "/market/list", body=body)
+
+
+@router.post("/market/{listing_id}/{action}")
+async def act_on_listing(listing_id: str, action: str) -> dict[str, Any]:
+    """`buy` or `cancel`."""
+    if action not in ("buy", "cancel"):
+        raise HTTPException(status_code=404, detail="no such market action")
+    return await _wallet_call("POST", f"/market/{listing_id}/{action}")
 
 
 @router.get("/cases")

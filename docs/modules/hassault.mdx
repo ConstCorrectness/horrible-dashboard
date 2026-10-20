@@ -3797,6 +3797,42 @@ rolled and only slides to it. The native client has a **STORE** menu page
 (`menu.rs` `Page::Store`), whose requests run on a worker thread so the frame
 never waits on one.
 
+### Trading and the market
+
+The first place an item leaves the account that earned it
+(`games_server/hassault_trading.py`, migration `_m16_hassault_trading`, cap
+`hassault_trading`), so most of it is reasons to refuse.
+
+- **Who may trade** (`eligibility`): a real account, not a guest or a bot,
+  `MIN_ACCOUNT_AGE` (7 days) old, at level `MIN_LEVEL` (5), with
+  `MIN_SERVER_MATCHES` (10) server-hosted matches. Every reason it may not is
+  returned, so the client can say all of them at once.
+- **What may move**: owned, in state `owned` (so not listed or consumed), past
+  its `tradable_after` hold. Imports have no hold date and never move; drops,
+  case openings, trades and purchases set one a week out.
+- **To whom**: an accepted friend (`friendships`), or anyone holding your trade
+  link token (`/account/trade/link`; rotating it revokes every old copy). The same
+  rule decides who may see your tradable items (`/account/trade/partner/{id}`).
+- **How**: an offer is fixed once made. The recipient accepts, which arms the
+  confirm `ARMING_DELAY` (10 s) later, then confirms. The swap re-checks every
+  item and the sender's eligibility under `BEGIN IMMEDIATE`; anything changed
+  since the offer (an item listed, consumed or traded) marks the trade `failed`
+  and moves nothing. Moved items lose their equips and get a fresh hold.
+- **The market** sells for credits only. A purchase debits the buyer the price,
+  credits the seller the price less `MARKET_FEE` (10%, at least `MIN_FEE`), and
+  burns the fee: no account receives it, and `hassault_sinks` records it. A listed
+  item is in state `listed`, so it cannot be equipped, traded or listed again; a
+  partial unique index stops two live listings of one item. Prices run
+  `MIN_PRICE` to `MAX_PRICE`, and `/market/history` serves past sales.
+- **Rate limits**: `OFFERS_PER_DAY` (30), `PENDING_PER_PAIR` (5),
+  `MAX_LISTINGS` (50), `PURCHASES_PER_DAY` (100).
+
+The node proxies all of it (`/api/hassault/trade*`, `/trades*`, `/market*`), and
+its public market reads only run for an account already known to be on the
+service. The browser shows it as the armoury's **Trade & Market** tab
+(`panels/TradeMarket.tsx`), with the arming countdown as a display of `armsAt`
+only; the native client has a **MARKET** menu page beside STORE.
+
 ### Whose rows these are
 
 Every account-keyed row on a node (matches, skins, drop claims, rating, ranked
