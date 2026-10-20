@@ -107,3 +107,31 @@ fn the_envelope_says_why_a_buy_would_be_refused() {
     );
     assert_eq!(notice(true, 3.0, true), "");
 }
+
+#[test]
+fn the_store_page_reads_the_wallet_and_offers_each_case() {
+    use hassault_native::api::Wallet;
+    use hassault_native::controls::Controls;
+    use hassault_native::menu::{Action, Menu, Page};
+    use hassault_native::settings::Settings;
+
+    let wallet: Wallet = serde_json::from_str(
+        r#"{"balance": 340, "keyPrice": 250, "keys": 1, "history": [],
+            "cases": [{"instanceId": "c1", "caseId": "field_case", "name": "Field Case"}]}"#,
+    )
+    .unwrap();
+    let mut menu = Menu::default();
+    let (settings, keys) = (Settings::default(), Controls::default());
+    assert!(!menu.rows(&settings, &keys, false).iter().any(|r| r.label == "STORE"));
+    menu.store_available = true;
+    assert!(menu.rows(&settings, &keys, false).iter().any(|r| r.label == "STORE"));
+
+    menu.page = Page::Store;
+    menu.store.wallet = Some(wallet);
+    let rows = menu.rows(&settings, &keys, false);
+    let find = |label: &str| rows.iter().find(|r| r.label == label).unwrap();
+    assert_eq!(find("CREDITS").value, "340");
+    assert_eq!(find("BUY KEY").action, Action::BuyKey);
+    assert_eq!(find("OPEN FIELD CASE").action, Action::OpenCase(0));
+    assert_eq!(find("OPEN FIELD CASE").value, "1 KEY");
+}

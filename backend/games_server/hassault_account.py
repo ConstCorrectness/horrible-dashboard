@@ -208,9 +208,10 @@ def _sides_by_item(conn: sqlite3.Connection, account_id: str) -> dict[str, list[
 def inventory(account_id: str) -> list[dict[str, Any]]:
     store.init_db()
     with store.get_conn() as conn:
+        # Skins only: cases and keys are items too, and live in the wallet.
         rows = conn.execute(
             "SELECT * FROM hassault_items WHERE owner_id = ? AND state = 'owned' "
-            "ORDER BY acquired_at",
+            "AND kind = 'skin' ORDER BY acquired_at",
             (account_id,),
         ).fetchall()
         sides = _sides_by_item(conn, account_id)
@@ -390,7 +391,7 @@ def trade_up(account_id: str, instance_ids: list[str]) -> dict[str, Any] | None:
     with store.get_conn() as conn:
         rows = conn.execute(
             f"SELECT * FROM hassault_items WHERE owner_id = ? AND state = 'owned' "
-            f"AND instance_id IN ({','.join('?' * 10)})",
+            f"AND kind = 'skin' AND instance_id IN ({','.join('?' * 10)})",
             (account_id, *instance_ids),
         ).fetchall()
         if len(rows) != 10:

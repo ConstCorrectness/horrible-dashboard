@@ -13,10 +13,8 @@ import {
   type SkinDefinition,
   type SkinInstance,
 } from '../api';
-import {
-  onWeaponEquipped,
-  requestWeaponInspect,
-} from '../workspace-bus';
+import { onWeaponEquipped, requestWeaponInspect } from '../workspace-bus';
+import { CaseStore } from './CaseStore';
 import { WeaponSilhouette } from './WeaponSilhouettes';
 
 const RARITY_BG: Record<string, string> = {
@@ -30,7 +28,7 @@ const RARITY_BG: Record<string, string> = {
 };
 
 export function ArmoryMarketplace() {
-  const [tab, setTab] = useState<'inventory' | 'catalog' | 'tradeup'>('inventory');
+  const [tab, setTab] = useState<'inventory' | 'catalog' | 'tradeup' | 'store'>('inventory');
   const [inventory, setInventory] = useState<SkinInstance[]>([]);
   const [catalog, setCatalog] = useState<SkinDefinition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -237,6 +235,13 @@ export function ArmoryMarketplace() {
             onClick={() => setTab('tradeup')}
           >
             ⚗ Trade-Up Contract ({selectedTradeUpIds.length}/10)
+          </button>
+          <button
+            type="button"
+            className={tab === 'store' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'}
+            onClick={() => setTab('store')}
+          >
+            Store
           </button>
         </div>
       </div>
@@ -516,7 +521,11 @@ export function ArmoryMarketplace() {
                               style={{ fontSize: '0.7rem', padding: '2px 8px', flex: 1 }}
                               onClick={() => toggleSide(item, side)}
                               aria-pressed={on}
-                              title={on ? `Take off for ${side.toUpperCase()}` : `Equip for ${side.toUpperCase()}`}
+                              title={
+                                on
+                                  ? `Take off for ${side.toUpperCase()}`
+                                  : `Equip for ${side.toUpperCase()}`
+                              }
                             >
                               {side.toUpperCase()}
                             </button>
@@ -677,6 +686,9 @@ export function ArmoryMarketplace() {
           ))}
         </div>
       )}
+
+      {/* TAB 4: credits, keys and cases (the game server's). */}
+      {tab === 'store' && <CaseStore onOpened={() => void refreshData()} />}
 
       {/* TAB 3: 10-to-1 Trade-Up Contract */}
       {tab === 'tradeup' && (
@@ -972,7 +984,9 @@ export function ArmoryMarketplace() {
                 style={{ flex: 1 }}
                 onClick={() => {
                   const isInstance = 'instanceId' in inspectItem;
-                  const weaponId = isInstance ? inspectItem.definition?.weaponId : inspectItem.weaponId;
+                  const weaponId = isInstance
+                    ? inspectItem.definition?.weaponId
+                    : inspectItem.weaponId;
                   const skinId = isInstance ? inspectItem.skinId : inspectItem.id;
                   const floatValue = isInstance ? inspectItem.floatValue : 0.03;
                   const patternSeed = isInstance ? inspectItem.patternSeed : 100;

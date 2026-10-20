@@ -2753,7 +2753,9 @@ mod tests {
                 base_color: "#38bdf8".into(),
                 accent_color: "#f43f5e".into(),
                 pattern_type: "solid".into(),
+                ..Default::default()
             }),
+            ..Default::default()
         };
         let map = equipped_skins(&[
             equipped("assault", true, true),

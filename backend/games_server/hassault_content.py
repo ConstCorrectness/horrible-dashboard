@@ -118,6 +118,7 @@ for _path, _handler, _model in (
     ("/lore", node.get_lore, LoreOut),
     ("/textures", node.get_textures, list[TextureOut]),
     ("/agents", node.list_agents, None),
+    ("/cases", node.list_cases, None),
     ("/drills", node.list_drills, None),
     ("/drills/{drill_id}", node.get_drill, None),
     ("/settings/schema", node.get_settings_schema, None),

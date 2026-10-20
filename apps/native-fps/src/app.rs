@@ -360,6 +360,8 @@ pub struct App {
     pending_drop: bool,
     /// The buy menu's open group (`buy_menu.rs`); `None` is the top level.
     buy_group: Option<usize>,
+    /// The STORE page's requests, on a thread of their own (`spawn_store_worker`).
+    store_jobs: Option<StoreJobs>,
     /// A clipboard read or write in flight for the crosshair page: a child
     /// process on a worker thread, polled each frame so none waits on it.
     /// `paste` says which, since both report text.
@@ -624,6 +626,7 @@ impl App {
             pending_sell: -1,
             pending_drop: false,
             buy_group: None,
+            store_jobs: None,
             clipboard: None,
             you: None,
             flash: hassault_native::flashbang::FlashState::default(),
@@ -3074,6 +3077,55 @@ impl App {
     }
 
     /// Land a finished clipboard read or write from the crosshair page.
+    /// Point the STORE page at a node. Called at launch with the node's URL.
+    pub fn set_store_node(&mut self, base: &str) {
+        self.store_jobs = Some(spawn_store_worker(base));
+        self.menu.store_available = true;
+    }
+
+    fn store_job(&mut self, job: StoreJob) {
+        if let Some(jobs) = &self.store_jobs {
+            self.menu.note = Some(("ASKING THE GAME SERVER".to_string(), true));
+            let _ = jobs.send.send(job);
+        }
+    }
+
+    /// Take whatever the store worker has finished. Never blocks the frame.
+    fn poll_store(&mut self) {
+        let Some(jobs) = &self.store_jobs else { return };
+        while let Ok(outcome) = jobs.recv.try_recv() {
+            match outcome {
+                StoreOutcome::Wallet(Ok(wallet)) => {
+                    self.menu.store.wallet = Some(wallet);
+                    self.menu.note = None;
+                }
+                StoreOutcome::Wallet(Err(e)) => {
+                    self.menu.store.wallet = None;
+                    self.menu.note = Some((e, false));
+                }
+                StoreOutcome::Bought(result) => {
+                    self.menu.note = Some(match result {
+                        Ok(()) => ("KEY BOUGHT".to_string(), true),
+                        Err(e) => (e, false),
+                    });
+                }
+                StoreOutcome::Opened(result) => {
+                    self.menu.note = Some(match result {
+                        Ok(skin) => {
+                            let name = skin
+                                .definition
+                                .as_ref()
+                                .map(|d| d.name.clone())
+                                .unwrap_or_else(|| skin.skin_id.clone());
+                            (format!("OPENED: {} ({:.3})", name.to_uppercase(), skin.float_value), true)
+                        }
+                        Err(e) => (e, false),
+                    });
+                }
+            }
+        }
+    }
+
     fn poll_clipboard(&mut self) {
         let Some((rx, paste)) = &self.clipboard else { return };
         let paste = *paste;
@@ -3527,6 +3579,22 @@ impl App {
             Action::Open(page) => {
                 self.menu.page = page;
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
+                if page == menu::Page::Store {
+                    self.store_job(StoreJob::Refresh);
+                }
+            }
+            Action::BuyKey => self.store_job(StoreJob::BuyKey),
+            Action::OpenCase(i) => {
+                let id = self
+                    .menu
+                    .store
+                    .wallet
+                    .as_ref()
+                    .and_then(|w| w.cases.get(i as usize))
+                    .map(|c| c.instance_id.clone());
+                if let Some(id) = id {
+                    self.store_job(StoreJob::Open(id));
+                }
             }
             Action::Back => self.menu.back(),
             Action::LoadoutPick(..) | Action::AgentPick(_) => {
@@ -4625,6 +4693,7 @@ impl ApplicationHandler for App {
         self.wait_for_frame();
         self.pump_network(event_loop);
         self.poll_clipboard();
+        self.poll_store();
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
@@ -4706,6 +4775,62 @@ enum EditOutcome {
         owners: Vec<u16>,
     },
     Failed(String),
+}
+
+enum StoreJob {
+    Refresh,
+    BuyKey,
+    Open(String),
+}
+
+enum StoreOutcome {
+    Wallet(Result<hassault_native::api::Wallet, String>),
+    Bought(Result<(), String>),
+    Opened(Result<hassault_native::api::SkinInstance, String>),
+}
+
+struct StoreJobs {
+    send: std::sync::mpsc::Sender<StoreJob>,
+    recv: std::sync::mpsc::Receiver<StoreOutcome>,
+}
+
+/// The node's wallet routes, on a thread: a request is a round trip to the
+/// game server, and a menu that waited for one would freeze the frame.
+fn spawn_store_worker(server: &str) -> StoreJobs {
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<StoreJob>();
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<StoreOutcome>();
+    let base = server.to_string();
+    std::thread::spawn(move || {
+        let node = NodeApi::new(&base);
+        let explain = |e: hassault_native::api::ApiError| match e {
+            hassault_native::api::ApiError::Status(409, _) => {
+                "NOT ENOUGH CREDITS, OR NO WALLET HERE (SIGN IN)".to_string()
+            }
+            other => format!("THE STORE IS UNAVAILABLE: {other}").to_uppercase(),
+        };
+        while let Ok(job) = job_rx.recv() {
+            let outcomes = match job {
+                StoreJob::Refresh => vec![StoreOutcome::Wallet(node.wallet().map_err(explain))],
+                StoreJob::BuyKey => vec![
+                    StoreOutcome::Bought(node.buy_key().map(|_| ()).map_err(explain)),
+                    StoreOutcome::Wallet(node.wallet().map_err(explain)),
+                ],
+                StoreJob::Open(id) => vec![
+                    StoreOutcome::Opened(node.open_case(&id).map_err(explain)),
+                    StoreOutcome::Wallet(node.wallet().map_err(explain)),
+                ],
+            };
+            for outcome in outcomes {
+                if out_tx.send(outcome).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    StoreJobs {
+        send: job_tx,
+        recv: out_rx,
+    }
 }
 
 struct EditJobs {

@@ -840,6 +840,51 @@ export function listMaps(): Promise<MapSummary[]> {
   return apiGet<MapSummary[]>('/hassault/maps');
 }
 
+/** One rarity's chance in a case. */
+export interface CaseOdds {
+  rarity: string;
+  /** 0..1. The case's odds sum to one. */
+  chance: number;
+}
+
+/** A weapon case as served (`cases.py`): what is in it and the odds it rolls at. */
+export interface CaseSpec {
+  id: string;
+  name: string;
+  odds: CaseOdds[];
+  contents: SkinDefinition[];
+}
+
+/** The account's wallet, kept on the game server (`hassault_wallet.py`). */
+export interface Wallet {
+  balance: number;
+  keyPrice: number;
+  cases: { instanceId: string; caseId: string; name: string }[];
+  keys: number;
+  history: { delta: number; kind: string; ref: string; at: number }[];
+}
+
+export function listCases(): Promise<CaseSpec[]> {
+  return apiGet<CaseSpec[]>('/hassault/cases');
+}
+
+export function getWallet(): Promise<Wallet> {
+  return apiGet<Wallet>('/hassault/wallet');
+}
+
+/** Spend credits on a key. Rejects (409) when they do not cover it. */
+export function buyCaseKey(): Promise<{ instanceId: string; balance: number }> {
+  return apiPost<{ instanceId: string; balance: number }>('/hassault/wallet/keys/buy', {});
+}
+
+/** Open an owned case with a key: the skin it made, inventory-shaped. */
+export function openCase(instanceId: string): Promise<SkinInstance & { caseId: string }> {
+  return apiPost<SkinInstance & { caseId: string }>(
+    `/hassault/wallet/cases/open?instance_id=${encodeURIComponent(instanceId)}`,
+    {},
+  );
+}
+
 /** The agents a player may wear, and on which sides (`cosmetics.py`). */
 export function listAgents(): Promise<AgentSpec[]> {
   return apiGet<AgentSpec[]>('/hassault/agents');

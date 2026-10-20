@@ -721,6 +721,8 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         Vec::new()
     });
     app.set_loadout_menu(agents, stored_agents);
+    // The STORE page asks the node, which proxies the game server's wallet.
+    app.set_store_node(&args.server);
     if let (Mode::Train, Some(drill)) = (args.mode, args.drill.as_deref()) {
         // Fetched here rather than inside the app, like the loadout: the
         // app's constructor is where Train places the player, and the drill

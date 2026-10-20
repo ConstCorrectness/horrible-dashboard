@@ -736,6 +736,10 @@ def _mount_hassault_content() -> None:
     from backend.games_server.hassault_rating import router as rating_router
 
     app.include_router(rating_router)
+    # Credits, keys, cases and StatTrak (`hassault_wallet.py`).
+    from backend.games_server.hassault_wallet import router as wallet_router
+
+    app.include_router(wallet_router)
 
 
 _mount_hassault_content()

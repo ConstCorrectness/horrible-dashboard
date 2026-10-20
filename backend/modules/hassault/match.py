@@ -451,6 +451,9 @@ class MatchPlayer:
     #: the debrief divides this by `kills` to show a percentage, and counting hits
     #: there would print numbers over 100%.
     head_kills: int = 0
+    #: Kills of *human* players, by `"side:weapon id"`, for StatTrak: a counter
+    #: on a skin counts people, and the side picks which equipped skin it was.
+    human_kills: dict[str, int] = field(default_factory=dict)
     nutshot_kills: int = 0
     first_bloods: int = 0
     total_spent: float = 0.0
@@ -1048,6 +1051,7 @@ class MatchRoom:
             return None
         others = [p for p in self.players.values() if p.id != player_id]
         opponents = len(others) or (1 if player.faced_opponents else 0)
+        human_opponents = sum(1 for p in others if not p.is_bot)
         won, mvp = self.mode.outcome_for(self, player)
         recordable = results.is_recordable(
             {
@@ -1101,6 +1105,10 @@ class MatchRoom:
             "mvp": recordable and mvp,
             "recordable": recordable,
             "opponents": opponents,
+            # Credits pay less with no human to beat (`hassault_wallet`), and
+            # StatTrak counts people, so both are the result's to carry.
+            "humanOpponents": human_opponents,
+            "humanKills": dict(player.human_kills),
             # Wall clock, so a summary can be told from a stale one. The room's
             # own clock starts when it opens, which is not when this player
             # joined it.
@@ -2448,6 +2456,16 @@ class MatchRoom:
         # included. Whether that team kill *scores* is a different question and
         # the mode answers it below, in what it does to `self.scores`.
         attacker.kills += 1
+        if (
+            not attacker.is_bot
+            and not victim.is_bot
+            and attacker.id != victim.id
+            and attacker.team != victim.team
+        ):
+            spec = weapon if isinstance(weapon, weapons.Weapon) else None
+            if spec is not None:
+                key = f"{weapons.side_of(attacker.team)}:{spec.id}"
+                attacker.human_kills[key] = attacker.human_kills.get(key, 0) + 1
         if head:
             attacker.head_kills += 1
         if nutshot:

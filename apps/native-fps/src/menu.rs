@@ -39,6 +39,8 @@ pub enum Page {
     Keys(KeyGroup),
     /// What each side carries and wears (`hassault.loadout`, `hassault.agents`).
     Loadout,
+    /// Credits, keys and cases (`hassault_wallet.py`, through the node).
+    Store,
 }
 
 /// The key pages, grouped as the pane's Controls screen groups them
@@ -183,6 +185,17 @@ pub enum Action {
     LoadoutPick(u8, u8),
     /// Step a side's agent.
     AgentPick(u8),
+    /// Spend credits on a key. The app owns the request.
+    BuyKey,
+    /// Open the owned case at this row of the store. The app owns the request.
+    OpenCase(u8),
+}
+
+/// What the STORE page shows. Filled by the app from the node's `/wallet`;
+/// `None` balance means not read yet, or not available (the note says why).
+#[derive(Debug, Clone, Default)]
+pub struct StoreTable {
+    pub wallet: Option<crate::api::Wallet>,
 }
 
 /// One weapon the loadout page can offer: the served table, trimmed.
@@ -330,6 +343,10 @@ pub struct Menu {
     pub note: Option<(String, bool)>,
     /// The LOADOUT page's table. Empty weapons hides the page.
     pub loadout: LoadoutTable,
+    /// The STORE page's table.
+    pub store: StoreTable,
+    /// Whether this client has a node to ask for a wallet (not a guest build).
+    pub store_available: bool,
 }
 
 impl Menu {
@@ -406,6 +423,10 @@ impl Menu {
                 (!self.loadout.weapons.is_empty())
                     .then(|| row("LOADOUT", String::from(">"), Action::Open(Page::Loadout))),
             )
+            .chain(
+                self.store_available
+                    .then(|| row("STORE", String::from(">"), Action::Open(Page::Store))),
+            )
             .chain([
                 row(
                     // A match is left by disconnecting; Train is left by closing.
@@ -417,6 +438,26 @@ impl Menu {
                 ),
             ])
             .collect(),
+            Page::Store => {
+                let mut rows = Vec::new();
+                match &self.store.wallet {
+                    None => rows.push(row("CREDITS", "...".into(), Action::Back)),
+                    Some(w) => {
+                        rows.push(row("CREDITS", w.balance.to_string(), Action::Back));
+                        rows.push(row("KEYS", w.keys.to_string(), Action::Back));
+                        rows.push(row("BUY KEY", w.key_price.to_string(), Action::BuyKey));
+                        for (i, case) in w.cases.iter().enumerate().take(12) {
+                            rows.push(row(
+                                &format!("OPEN {}", case.name.to_uppercase()),
+                                if w.keys > 0 { "1 KEY".into() } else { "NO KEY".into() },
+                                Action::OpenCase(i as u8),
+                            ));
+                        }
+                    }
+                }
+                rows.push(row("BACK", String::new(), Action::Back));
+                rows
+            }
             Page::Loadout => {
                 let table = &self.loadout;
                 let mut rows = Vec::new();
@@ -696,6 +737,7 @@ impl Menu {
             Page::Controls => "SENSITIVITY IS DIVIDED BY THE SCOPE ZOOM",
             Page::Keys(_) => "ENTER OR CLICK A ROW, THEN PRESS ITS NEW KEY",
             Page::Loadout => "EACH SIDE CARRIES ITS OWN - APPLIES AT YOUR NEXT SPAWN",
+            Page::Store => "CREDITS ARE EARNED IN SERVER MATCHES - KEYS OPEN CASES",
         }
     }
 
@@ -709,6 +751,7 @@ impl Menu {
             Page::Controls => "CONTROLS",
             Page::Keys(group) => group.title(),
             Page::Loadout => "LOADOUT",
+            Page::Store => "STORE",
         }
     }
 
@@ -969,6 +1012,8 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         | Action::ResetKeys => vec![],
         // Documents, not settings this client interprets: `Menu::step_loadout`.
         Action::LoadoutPick(..) | Action::AgentPick(_) => vec![],
+        // Requests to the node, made by the app on a worker thread.
+        Action::BuyKey | Action::OpenCase(_) => vec![],
         // The app owns the clipboard.
         Action::CrosshairPaste | Action::CrosshairCopy => vec![],
         Action::CrosshairPreset => {

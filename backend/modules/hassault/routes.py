@@ -577,6 +577,58 @@ async def get_weapons() -> list[WeaponOut]:
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
+async def _wallet_call(method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+    """A wallet request, proxied to the game server.
+
+    **There is no local wallet.** Credits are earned from matches the server
+    ran and spent on its own items, so a node that cannot reach the service
+    has nothing to show: it says so (409) rather than inventing a balance.
+    """
+    from backend.modules.hassault import account_sync
+
+    if await account_sync.active_account() is None:
+        raise HTTPException(
+            status_code=409,
+            detail="the wallet is kept on the game server: sign in to use it",
+        )
+    answer = await account_sync.request(method, path, params=params)
+    if answer is None:
+        raise HTTPException(status_code=503, detail="could not reach the game server")
+    status, body = answer
+    if status != 200:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        raise HTTPException(status_code=status, detail=detail or "refused")
+    return body
+
+
+@router.get("/wallet")
+async def get_wallet() -> dict[str, Any]:
+    """Credits, cases and keys, and the latest ledger rows (the server's)."""
+    return await _wallet_call("GET", "/wallet")
+
+
+@router.post("/wallet/keys/buy")
+async def buy_key() -> dict[str, Any]:
+    """Spend credits on a key. 409 when they do not cover it."""
+    return await _wallet_call("POST", "/keys/buy")
+
+
+@router.post("/wallet/cases/open")
+async def open_case(instance_id: str) -> dict[str, Any]:
+    """Open an owned case with a key; the skin it made, inventory-shaped."""
+    return await _wallet_call("POST", "/cases/open", {"instance_id": instance_id})
+
+
+@router.get("/cases")
+async def list_cases() -> list[dict[str, Any]]:
+    """Every weapon case: its contents and the odds it is rolled at
+    (`cases.py`). The game server opens them; this is what a player reads
+    first. Plain dicts, for the `WeaponOut` reason."""
+    from backend.modules.hassault import cases
+
+    return [c.to_dict() for c in cases.CASES]
+
+
 @router.get("/agents")
 async def list_agents() -> list[dict[str, Any]]:
     """The operator looks a player may wear, and on which side (`cosmetics.py`).

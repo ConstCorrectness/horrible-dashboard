@@ -582,6 +582,48 @@ def _m14_hassault_glicko(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m15_hassault_wallet(conn: sqlite3.Connection) -> None:
+    """hassault credits: a ledger, a balance that is its sum, and a floor.
+
+    Credits are earned only (never bought, never cashed out) and spent on keys.
+    `UNIQUE(account_id, kind, ref)` makes every earning idempotent on what paid
+    it (a match, a level, a week), and the trigger refuses any row that would
+    take a balance below zero, whatever code tried to write it. StatTrak gets a
+    ledger of its own, keyed per match and item, so a match counts once.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS hassault_wallet_ledger (
+            entry_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            delta      INTEGER NOT NULL,
+            kind       TEXT NOT NULL,
+            ref        TEXT NOT NULL,
+            at         REAL NOT NULL,
+            UNIQUE (account_id, kind, ref)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hassault_wallet_account
+            ON hassault_wallet_ledger(account_id, at);
+        CREATE TRIGGER IF NOT EXISTS hassault_wallet_no_overdraft
+        BEFORE INSERT ON hassault_wallet_ledger
+        WHEN NEW.delta < 0 AND (
+            SELECT COALESCE(SUM(delta), 0) FROM hassault_wallet_ledger
+            WHERE account_id = NEW.account_id
+        ) + NEW.delta < 0
+        BEGIN
+            SELECT RAISE(ABORT, 'insufficient credits');
+        END;
+        CREATE TABLE IF NOT EXISTS hassault_stattrak_ledger (
+            match_id    TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            kills       INTEGER NOT NULL,
+            at          REAL NOT NULL,
+            PRIMARY KEY (match_id, instance_id)
+        );
+        """
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -597,6 +639,7 @@ MIGRATIONS: list[Any] = [
     _m12_hassault_accounts,
     _m13_hassault_equips,
     _m14_hassault_glicko,
+    _m15_hassault_wallet,
 ]
 
 

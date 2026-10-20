@@ -3755,6 +3755,48 @@ bag. The standalone web client has no node, so once signed in its settings store
 persists straight to the account (`setSettingsBackend` in core `settings.ts`,
 `bindSettingsToAccount` in `apps/assault-web/src/auth.ts`).
 
+### Credits, cases and StatTrak
+
+Credits are **earned only**: never bought, never cashed out, never sent to
+another account. They live on the game server (`games_server/hassault_wallet.py`,
+migration `_m15_hassault_wallet`, cap `hassault_wallet`) and the node only proxies
+them (`/api/hassault/wallet`, `/wallet/keys/buy`, `/wallet/cases/open`). A node
+that cannot reach the service answers 409 rather than inventing a balance.
+
+**The balance is a sum.** `hassault_wallet_ledger` holds one row per credit or
+debit, and `UNIQUE(account_id, kind, ref)` makes every earning idempotent on what
+paid it. A `BEFORE INSERT` trigger refuses any row that would take a balance
+below zero, whichever code tried to write it, and every spend runs under
+`BEGIN IMMEDIATE`, so two spends cannot both read the same credits.
+
+| Earned from | `ref` | How much |
+| --- | --- | --- |
+| A server-hosted match | `match:<id>` | `MATCH_BASE` + `MATCH_PER_KILL` per kill + `MATCH_WIN`; a quarter with no human opponent; at most `DAILY_MATCH_CAP` a UTC day |
+| Each level reached | `level:<n>` | `LEVEL_REWARD` |
+| The week's first win | `week:<yyyy-ww>` | `WEEKLY_WIN_REWARD`, and a case |
+
+**Cases** (`cases.py`, served at `/api/hassault/cases` by node and server) hold
+their weapons' skins plus every Special, at odds that are `CASE_WEIGHTS`
+renormalised over the rarities the case holds, so a case missing a rarity keeps
+no share for it. Cases and keys are rows in `hassault_items` (`kind = case` /
+`key`), so trading (P9) can move them like skins; the inventory route lists
+skins only. **Keys** are the sink: `KEY_PRICE` credits each. **Opening** consumes
+the case and a key and makes the skin in one locked transaction, rolled with the
+server's `SystemRandom`, with a 10% StatTrak chance and every step logged in
+`hassault_item_events`.
+
+**StatTrak** counts human kills in server rooms. `MatchPlayer.human_kills` keys
+them by `side:weapon`; at match end the referee adds them to whichever skin was
+equipped for that weapon on that side, if it carries a counter, through
+`hassault_stattrak_ledger` keyed `(match, item)`, so a match counts once.
+
+The browser shows this as the armoury's **Store** tab (`panels/CaseStore.tsx`):
+the balance counting toward each change, keys, the cases you own, the odds per
+case, the ledger, and a reel that is built around the result the server already
+rolled and only slides to it. The native client has a **STORE** menu page
+(`menu.rs` `Page::Store`), whose requests run on a worker thread so the frame
+never waits on one.
+
 ### Whose rows these are
 
 Every account-keyed row on a node (matches, skins, drop claims, rating, ranked

@@ -673,11 +673,21 @@ class HassaultReferee:
         try:
             import uuid
 
-            from backend.games_server import hassault_account
+            from backend.games_server import hassault_account, hassault_wallet
 
-            hassault_account.grant_match_xp(
-                conn.account_id, str(result.get("matchId") or uuid.uuid4()), result
-            )
+            match_id = str(result.get("matchId") or uuid.uuid4())
+            before = hassault_account.progression(conn.account_id)["level"]
+            hassault_account.grant_match_xp(conn.account_id, match_id, result)
+            after = hassault_account.progression(conn.account_id)["level"]
+            # Credits for the match, each level it reached and the week's first
+            # win; then StatTrak, onto the skins that made the human kills.
+            hassault_wallet.on_match(conn.account_id, match_id, result, before, after)
+            kills = {
+                tuple(key.split(":", 1)): int(n)
+                for key, n in (result.get("humanKills") or {}).items()
+                if ":" in key
+            }
+            hassault_wallet.count_stattrak(conn.account_id, match_id, kills)
         except Exception:
             logger.exception("hassault: could not ledger XP for a server-hosted result")
 

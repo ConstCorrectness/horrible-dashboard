@@ -451,6 +451,43 @@ pub fn loadout_slots(
     }
 }
 
+/// The wallet (`hassault_wallet.py`): credits, keys, the cases owned.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Wallet {
+    #[serde(default)]
+    pub balance: i64,
+    #[serde(rename = "keyPrice", default)]
+    pub key_price: i64,
+    #[serde(default)]
+    pub keys: i64,
+    #[serde(default)]
+    pub cases: Vec<OwnedCase>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OwnedCase {
+    #[serde(rename = "instanceId", default)]
+    pub instance_id: String,
+    #[serde(rename = "caseId", default)]
+    pub case_id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Percent-encode a query value: instance ids are UUIDs today, but a query
+/// string built from a value is one that breaks on the first `&`.
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn default_one() -> f32 {
     1.0
 }
@@ -653,6 +690,9 @@ impl HitboxSpec {
 pub struct SkinDefinition {
     #[serde(default)]
     pub id: String,
+    /// The display name, for the store's "opened" note.
+    #[serde(default)]
+    pub name: String,
     #[serde(rename = "weaponId", default)]
     pub weapon_id: String,
     #[serde(rename = "baseColor", default)]
@@ -666,6 +706,8 @@ pub struct SkinDefinition {
 /// One item in the player's inventory.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SkinInstance {
+    #[serde(rename = "skinId", default)]
+    pub skin_id: String,
     #[serde(rename = "isEquipped", default)]
     pub is_equipped: bool,
     /// 0 Factory New … 1 Battle-Scarred. Visible on the model — see
@@ -865,6 +907,29 @@ impl NodeApi {
         ))?
         .into_json()
         .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The wallet, as the game server keeps it (through the node).
+    pub fn wallet(&self) -> Result<Wallet, ApiError> {
+        self.get("/api/hassault/wallet")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// Spend credits on a key.
+    pub fn buy_key(&self) -> Result<serde_json::Value, ApiError> {
+        let url = format!("{}/api/hassault/wallet/keys/buy", self.base);
+        self.send(self.agent.post(&url).send_json(ureq::json!({})), "wallet/keys/buy")
+    }
+
+    /// Open an owned case with a key: the skin it made, inventory-shaped.
+    pub fn open_case(&self, instance_id: &str) -> Result<SkinInstance, ApiError> {
+        let url = format!(
+            "{}/api/hassault/wallet/cases/open?instance_id={}",
+            self.base,
+            urlencode(instance_id)
+        );
+        self.send(self.agent.post(&url).send_json(ureq::json!({})), "wallet/cases/open")
     }
 
     /// The agents a player may wear, and on which sides (`cosmetics.py`).
