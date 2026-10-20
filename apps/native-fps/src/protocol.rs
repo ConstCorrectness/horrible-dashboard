@@ -1032,6 +1032,9 @@ pub struct Joined {
     pub room: String,
     #[serde(default)]
     pub player: PlayerRow,
+    /// How the newcomer looks (`cosmetics.rs`). Absent from an older server.
+    #[serde(default)]
+    pub cosmetics: Option<crate::cosmetics::Cosmetics>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -1098,6 +1101,9 @@ pub struct Welcome {
     pub snapshot_hz: f32,
     #[serde(default)]
     pub players: Vec<PlayerRow>,
+    /// How each player looks, by id (`cosmetics.rs`). Never in a snapshot.
+    #[serde(default)]
+    pub cosmetics: crate::cosmetics::CosmeticsMap,
     /// Which mode this room is running, and its static configuration.
     ///
     /// Rides once, like item placements: timings, prices and site positions do
@@ -1351,6 +1357,8 @@ pub enum Event {
     Joined(Box<Joined>),
     /// Somebody left.
     Left(Left),
+    /// Somebody's look changed: an equip, an agent, or a side's loadout.
+    Cosmetics(crate::cosmetics::CosmeticsChanged),
     /// Bots were fielded or kicked.
     Roster(Roster),
     Chat(ChatBroadcast),
@@ -1435,6 +1443,7 @@ pub fn classify(line: &str) -> Option<Event> {
             divergence::note_extra("joined", &j.extra);
             Event::Joined(Box::new(j))
         }
+        "cosmetics" => Event::Cosmetics(serde_json::from_value(env.data).unwrap_or_default()),
         "left" => {
             let l: Left = serde_json::from_value(env.data).unwrap_or_default();
             divergence::note_extra("left", &l.extra);

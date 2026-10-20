@@ -33,7 +33,8 @@ import { installNativeClient, nativeClientStatus } from './api';
 import { useNativeLaunch } from './native-launch';
 import type { DrillStats, DrillSummary } from './training-drill';
 import type { WeaponSpec } from './api';
-import { DEFAULT_LOADOUT, weaponsInSlot, type LoadoutChoice } from './loadout';
+import { DEFAULT_LOADOUT, weaponsInSlot, type Loadouts } from './loadout';
+import { SIDES, type AgentSpec, type Side } from './cosmetics';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -101,9 +102,13 @@ export interface MainMenuProps {
   onTrain: (drill: string | null) => void;
   /** The served loadout, for the loadout picker. */
   weapons: WeaponSpec[];
-  /** What this player chose to carry; `null` is the server's default. */
-  loadout: LoadoutChoice | null;
-  onLoadout: (choice: LoadoutChoice) => void;
+  /** What this player chose to carry, per side; `null` is the server's default. */
+  loadouts: Loadouts | null;
+  onLoadouts: (choice: Loadouts) => void;
+  /** The served agents (`GET /agents`), and which one each side wears. */
+  agents: AgentSpec[];
+  agentChoice: Partial<Record<Side, string>>;
+  onAgents: (choice: Partial<Record<Side, string>>) => void;
   /** The aim drills offered on `mapName`. Empty when the backend has none. */
   drills: DrillSummary[];
   /** This browser's best run on each drill, by id. */
@@ -579,30 +584,62 @@ function PlaySection(props: MainMenuProps) {
 
       {/* Before Host on purpose: what you carry is decided before the fight.
           Applied at your next spawn, in every mode without a buy menu. */}
-      {props.weapons.some((w) => w.slot) && (
-        <div style={panel.row}>
-          <div style={panel.rowMain}>
-            <span>Loadout</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            {(['primary', 'secondary'] as const).map((slot) => (
-              <select
-                key={slot}
-                value={props.loadout?.[slot] ?? DEFAULT_LOADOUT[slot]}
-                onChange={(e) => props.onLoadout({ ...props.loadout, [slot]: e.target.value })}
-                aria-label={slot === 'primary' ? 'Primary weapon' : 'Secondary weapon'}
-                style={{ width: 132, padding: '0 0.4rem' }}
-              >
-                {weaponsInSlot(props.weapons, slot).map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-            ))}
-          </div>
-        </div>
-      )}
+      {props.weapons.some((w) => w.slot) &&
+        SIDES.map((side) => {
+          const chosen = props.loadouts?.[side];
+          const sideAgents = props.agents.filter((a) => a.sides.includes(side));
+          return (
+            <div key={side} style={panel.row}>
+              <div style={panel.rowMain}>
+                <span>{side === 't' ? 'Loadout · T' : 'Loadout · CT'}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                {(['primary', 'secondary'] as const).map((slot) => {
+                  const offered = weaponsInSlot(props.weapons, slot, side);
+                  const wanted = chosen?.[slot];
+                  // A pick the other side carries shows as this side's default,
+                  // which is what the server will hand out.
+                  const value =
+                    wanted && offered.some((w) => w.id === wanted) ? wanted : DEFAULT_LOADOUT[slot];
+                  return (
+                    <select
+                      key={slot}
+                      value={value}
+                      onChange={(e) =>
+                        props.onLoadouts({
+                          ...props.loadouts,
+                          [side]: { ...chosen, [slot]: e.target.value },
+                        })
+                      }
+                      aria-label={`${side.toUpperCase()} ${slot} weapon`}
+                      style={{ width: 132, padding: '0 0.4rem' }}
+                    >
+                      {offered.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })}
+                {sideAgents.length > 1 && (
+                  <select
+                    value={props.agentChoice[side] ?? sideAgents[0].id}
+                    onChange={(e) => props.onAgents({ ...props.agentChoice, [side]: e.target.value })}
+                    aria-label={`${side.toUpperCase()} agent`}
+                    style={{ width: 132, padding: '0 0.4rem' }}
+                  >
+                    {sideAgents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          );
+        })}
 
       <div style={panel.row}>
         <div style={panel.rowMain}>

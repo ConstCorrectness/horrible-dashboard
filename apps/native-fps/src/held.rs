@@ -60,6 +60,7 @@ fn strip_scale(m: Mat4) -> Mat4 {
 
 /// One box of a weapon: half extents and an offset, in gun space — **+Z is down
 /// the barrel**, +Y is up, +X is right.
+#[derive(Clone, Copy)]
 struct Box {
     offset: Vec3,
     half: Vec3,
@@ -135,7 +136,15 @@ pub fn build(poses: &[ActorPose]) -> Vec<Vertex> {
             * Mat4::from_scale(Vec3::splat(GRIP_SCALE));
         let transform = strip_scale(grip) * local;
         for part in parts(pose.weapon) {
-            push_box(&mut out, transform, part);
+            match pose.prop_colors {
+                // A skin recolours the two materials the prop is made of, as
+                // the browser's `CharacterModel.setWeaponSkin` does.
+                Some((metal, trim)) => {
+                    let color = if part.color == GUN_METAL { metal } else { trim };
+                    push_box(&mut out, transform, &Box { color, ..*part });
+                }
+                None => push_box(&mut out, transform, part),
+            }
         }
     }
     out
@@ -246,6 +255,7 @@ mod tests {
             grip,
             weapon,
             team: 0,
+            ..Default::default()
         }
     }
 

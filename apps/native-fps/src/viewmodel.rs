@@ -175,8 +175,9 @@ struct Palette {
     accent: [f32; 3],
 }
 
-/// Grime. What a Battle-Scarred rifle is mixed toward.
-const WEAR_COLOR: [f32; 3] = [0.35, 0.33, 0.31];
+/// Grime. What a Battle-Scarred rifle is mixed toward: `#5a554e`, the
+/// browser's and the reference's (`cosmetics.py` `WEAR_COLOR`).
+const WEAR_COLOR: [f32; 3] = [0x5a as f32 / 255.0, 0x55 as f32 / 255.0, 0x4e as f32 / 255.0];
 const BLACK: [f32; 3] = [0.0, 0.0, 0.0];
 const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 
@@ -301,6 +302,13 @@ fn palette_for(skin: Option<&Skin>) -> Palette {
         grip: lift(mix(plain.grip, WEAR_COLOR, wear)),
         accent: lift(mix(plain.accent, WEAR_COLOR, wear)),
     }
+}
+
+/// A skin's palette as `[body, dark, grip, accent]`, for the parity fixture
+/// (`tests/cosmetics.rs`) and the third-person prop.
+pub fn palette_rgb(skin: Option<&Skin>) -> [[f32; 3]; 4] {
+    let p = palette_for(skin);
+    [p.body, p.dark, p.grip, p.accent]
 }
 
 /// The equipped skin for each weapon, keyed by weapon id.

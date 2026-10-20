@@ -37,6 +37,7 @@ See docs/modules/hassault.mdx.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from dataclasses import dataclass, field, replace
@@ -943,21 +944,57 @@ DEFAULT_LOADOUT: dict[str, str] = {
 }
 
 
-def loadout_for(choice: Any = None) -> dict[str, int]:
+def loadout_for(choice: Any = None, side: str | None = None) -> dict[str, int]:
     """A loadout as `{slot: weapon index}`, from a client's `{slot: id}`.
 
-    Validated rather than trusted, slot by slot: an unknown id, or a weapon
-    named for the wrong slot (a sniper as a sidearm), falls back to that slot's
-    default instead of failing the whole choice.
+    Validated rather than trusted, slot by slot: an unknown id, a weapon named
+    for the wrong slot (a sniper as a sidearm), or, given a `side`, a weapon the
+    other side carries, falls back to that slot's default instead of failing the
+    whole choice.
     """
     picked = choice if isinstance(choice, dict) else {}
     out: dict[str, int] = {}
     for slot in SLOTS:
         wanted = WEAPON_BY_ID.get(str(picked.get(slot) or ""))
-        if wanted is None or wanted.slot != slot:
+        if (
+            wanted is None
+            or wanted.slot != slot
+            or (side is not None and wanted.side not in ("any", side))
+        ):
             wanted = WEAPON_BY_ID[DEFAULT_LOADOUT[slot]]
         out[slot] = WEAPONS.index(wanted)
     return out
+
+
+#: The two sides, by team index: ARC (team 0) is `t`, HALON (team 1) is `ct`.
+SIDES: tuple[str, ...] = ("t", "ct")
+
+
+def side_of(team: int) -> str:
+    """The side a team plays: `t` for ARC (0), `ct` for HALON (1)."""
+    return "ct" if team == 1 else "t"
+
+
+def loadouts_for(choice: Any = None) -> dict[str, dict[str, int]]:
+    """A loadout per side, `{t: {slot: index}, ct: {...}}`.
+
+    Takes the stored `hassault.loadout` in either shape: the per-side
+    `{t: {primary, secondary}, ct: {...}}`, or the older flat
+    `{primary, secondary}`, which applies to both. A JSON string is parsed
+    first, because that is how the setting is kept. Each side is validated for
+    that side, so a T rifle in a flat choice is the default rifle on CT.
+    """
+    if isinstance(choice, str):
+        try:
+            choice = json.loads(choice) if choice.strip() else None
+        except ValueError:
+            choice = None
+    picked = choice if isinstance(choice, dict) else {}
+    per_side = any(isinstance(picked.get(s), dict) for s in SIDES)
+    return {
+        side: loadout_for(picked.get(side) if per_side else picked, side)
+        for side in SIDES
+    }
 
 
 def weapons_in_slot(slot: str) -> list[Weapon]:
@@ -1208,7 +1245,9 @@ def shot_cone(weapon: Weapon, ctx: ShotContext) -> float:
     base = residual_spread(weapon, ctx.scoped)
     recovering = 0.0
     if weapon.recovery_time > 0.0:
-        recovering = max(0.0, min(1.0, 1.0 - ctx.since_last_shot / weapon.recovery_time))
+        recovering = max(
+            0.0, min(1.0, 1.0 - ctx.since_last_shot / weapon.recovery_time)
+        )
     if recovering <= 0.0 and weapon.first_shot_spread is not None:
         base = min(base, weapon.first_shot_spread)
     crouch = max(0.0, min(1.0, ctx.crouch))

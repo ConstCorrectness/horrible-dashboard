@@ -9,6 +9,7 @@
  */
 import type * as THREE from 'three';
 
+import { agentFor, lookKey, skinFor, type Cosmetics } from './cosmetics';
 import { currentHitbox } from './hitbox';
 import {
   CharacterAnimator,
@@ -19,6 +20,7 @@ import {
   type OperatorAsset,
 } from './models';
 import type { PlayerRow } from './net';
+import { weaponIdAt } from './weapon-visuals';
 
 /**
  * The debug hitbox, and the band inside it that takes the head multiplier.
@@ -46,6 +48,8 @@ interface Avatar {
   group: THREE.Group;
   model: CharacterModel;
   animator: CharacterAnimator;
+  /** The agent it was built wearing (`cosmetics.lookKey`). */
+  lookKey: string;
   dispose: () => void;
 }
 
@@ -188,14 +192,20 @@ export class AvatarPool {
     }
   }
 
-  private create(row: PlayerRow, asset: OperatorAsset): Avatar {
+  private create(row: PlayerRow, asset: OperatorAsset): Omit<Avatar, 'lookKey'> {
     // Meshes receive shadow but never cast: the scene's shadow map is rendered
     // once per map and holds static world geometry only (see
     // `HorribleAssaultPanel`), so a casting avatar would leave its shadow
     // standing where it used to be — whereas *receiving* against a static map is
     // exact, and is what stops a player crossing a shaded doorway staying lit
     // like a cutout. `instantiateOperator` sets the flag as it walks the clone.
-    const model = new CharacterModel(this.three, asset, row.team, row.name);
+    const model = new CharacterModel(
+      this.three,
+      asset,
+      row.team,
+      row.name,
+      agentFor(this.looks[row.id], row.team),
+    );
     const animator = new CharacterAnimator(this.three, model, asset);
     const group = model.rootGroup;
     this.scene.add(group);
@@ -220,9 +230,18 @@ export class AvatarPool {
       const asset = isT ? (this.assetT ?? this.assetCT) : (this.assetCT ?? this.assetT);
       if (!asset) continue;
 
+      const look = this.looks[row.id];
+      const key = lookKey(agentFor(look, row.team));
       let avatar = this.avatars.get(row.id);
+      if (avatar && avatar.lookKey !== key) {
+        // A new agent, or a side swap: the wash is baked into the operator's
+        // materials, so it is rebuilt. Once a match, not once a frame.
+        avatar.dispose();
+        this.avatars.delete(row.id);
+        avatar = undefined;
+      }
       if (!avatar) {
-        avatar = this.create(row, asset);
+        avatar = { ...this.create(row, asset), lookKey: key };
         this.avatars.set(row.id, avatar);
       }
 
@@ -238,6 +257,7 @@ export class AvatarPool {
 
       // Clip selection, crossfades, aim pitch, weapon and stale fade.
       avatar.animator.update(dt, row);
+      avatar.model.setWeaponSkin(skinFor(look, row.team, weaponIdAt(row.weapon ?? -1)));
     }
 
     for (const [id, avatar] of this.avatars) {
@@ -247,6 +267,13 @@ export class AvatarPool {
     }
 
     if (this.showHitboxes) this.syncHitboxes(rows, seen);
+  }
+
+  /** How each player looks, by id: the session's copy (`cosmetics.ts`). */
+  private looks: Record<string, Cosmetics> = {};
+
+  setLooks(looks: Record<string, Cosmetics>): void {
+    this.looks = looks;
   }
 
   /**

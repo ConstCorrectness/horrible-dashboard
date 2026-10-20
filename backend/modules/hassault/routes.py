@@ -577,6 +577,18 @@ async def get_weapons() -> list[WeaponOut]:
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
+@router.get("/agents")
+async def list_agents() -> list[dict[str, Any]]:
+    """The operator looks a player may wear, and on which side (`cosmetics.py`).
+
+    Chosen per side in the `hassault.agents` setting. Plain dicts, for the
+    `WeaponOut` reason.
+    """
+    from backend.modules.hassault import cosmetics
+
+    return [a.to_dict() for a in cosmetics.AGENTS]
+
+
 @router.get("/drills")
 async def list_drills(map: str | None = None) -> list[dict[str, Any]]:
     """The training range's aim drills: those on `map`, plus the any-map ones.
@@ -2030,15 +2042,20 @@ async def get_skin_pack_file(pack_id: str, name: str) -> FileResponse:
 
 
 @router.post("/skins/equip")
-async def equip_skin(instance_id: str) -> dict[str, bool]:
-    """Equip an item instance to its weapon loadout slot."""
+async def equip_skin(instance_id: str, side: str | None = None) -> dict[str, bool]:
+    """Equip an item instance to its weapon, for one side (`t`, `ct`) or both.
+
+    Per side only where the game server keeps the account: a node's own
+    inventory has one equip per weapon, so locally `side` is ignored.
+    """
     from backend.modules.hassault import account_sync
     from backend.modules.hassault.skins import skin_manager
 
     if await account_sync.active_account():
-        answer = await account_sync.request(
-            "POST", "/equip", params={"instance_id": instance_id}
-        )
+        params = {"instance_id": instance_id}
+        if side:
+            params["side"] = side
+        answer = await account_sync.request("POST", "/equip", params=params)
         if answer is not None and answer[0] == 200:
             return {"ok": bool(answer[1].get("ok"))}
 
@@ -2048,6 +2065,22 @@ async def equip_skin(instance_id: str) -> dict[str, bool]:
     if ok:
         await skin_manager.sync_to_atlas(account_id)
     return {"ok": ok}
+
+
+@router.post("/skins/unequip")
+async def unequip_skin(weapon_id: str, side: str | None = None) -> dict[str, bool]:
+    """Take the skin off a weapon for one side or both. Server-kept accounts
+    only; a node's own inventory has no unequip, so this answers `ok: false`."""
+    from backend.modules.hassault import account_sync
+
+    if await account_sync.active_account():
+        params = {"weapon_id": weapon_id}
+        if side:
+            params["side"] = side
+        answer = await account_sync.request("POST", "/unequip", params=params)
+        if answer is not None and answer[0] == 200:
+            return {"ok": bool(answer[1].get("ok"))}
+    return {"ok": False}
 
 
 @router.get("/skins/drops")

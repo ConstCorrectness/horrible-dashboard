@@ -84,8 +84,13 @@ struct Overlay {
 }
 
 /// What the renderer needs to draw one player.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ActorPose {
+    /// Whose pose this is, so a look (`cosmetics.rs`) can be laid over it.
+    pub id: String,
+    /// The held prop's metal and trim, when the player's weapon wears a skin.
+    /// `None` is bare metal (`held.rs`).
+    pub prop_colors: Option<([f32; 3], [f32; 3])>,
     /// One skinning matrix per bone, already in world space.
     pub bones: Vec<Mat4>,
     /// `rgb` the team wash, `a` unused today — kept because the shader's tint
@@ -143,6 +148,12 @@ impl Squad {
     /// of the whole `Squad` across everything in between.
     pub fn poses(&self) -> &[ActorPose] {
         &self.poses
+    }
+
+    /// The last `update`'s poses, to lay each player's look over
+    /// (`App::dress_squad`): the agent's wash and the held skin.
+    pub fn poses_mut(&mut self) -> &mut [ActorPose] {
+        &mut self.poses
     }
 
     /// Somebody fired: kick their upper body.
@@ -332,6 +343,8 @@ impl Actor {
         };
 
         ActorPose {
+            id: row.id.clone(),
+            prop_colors: None,
             bones,
             tint: armor.extend(TINT_STRENGTH),
             grip: self.pose.bone_matrix(operator, "RightHand", model),

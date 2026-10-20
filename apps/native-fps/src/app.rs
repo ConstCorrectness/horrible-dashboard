@@ -47,6 +47,7 @@ use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::chat::{ChatChannel, ChatState};
+use hassault_native::cosmetics::Cosmetics;
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
 use hassault_native::decals::{DecalPool, MarkKind, MARK_COLOR};
@@ -333,6 +334,9 @@ pub struct App {
     /// like the loadout: this process is launched per match, so there is no
     /// moment during one when the armoury could change under it.
     skins: HashMap<String, Skin>,
+    /// How each player looks, by id (`cosmetics.rs`): the welcome's copy, then
+    /// every `joined` and `cosmetics` event. Never in a snapshot.
+    looks: HashMap<String, Cosmetics>,
     /// Team scores from the last snapshot. Two numbers, and they are the only
     /// statement of who is winning anywhere in this client.
     scores: Vec<i32>,
@@ -532,6 +536,7 @@ impl App {
             socket,
             pending_bots: None,
             loadout: None,
+            looks: HashMap::new(),
             drill: None,
             prediction: Prediction::default(),
             camera: Camera::default(),
@@ -893,9 +898,12 @@ impl App {
             } else {
                 &self.drawn
             };
-            let rows = visual_rows(&self.weapons, rows);
+            let real: HashMap<&str, (i32, i32)> =
+                rows.iter().map(|r| (r.id.as_str(), (r.team, r.weapon))).collect();
+            let visual = visual_rows(&self.weapons, rows);
             if let Some(squad) = self.squad.as_mut() {
-                squad.update(dt, &rows, &self.self_id);
+                squad.update(dt, &visual, &self.self_id);
+                dress_squad(squad, &self.looks, &self.weapons, &real);
             }
         }
         // Drawn as the base model it borrows (`WeaponSpec::visual`).
@@ -936,7 +944,18 @@ impl App {
             }
             self.last_display_weapon = display_weapon.clone();
         }
-        let equipped_skin = self.skins.get(&display_weapon);
+        // Online, the server's bundle for the side we are on now, keyed by the
+        // gun's own id: it is what everyone else sees us holding. Offline, or
+        // from an older server, the inventory's equips as before.
+        let own_skin = self.looks.get(&self.self_id).and_then(|look| {
+            let team = self.players.iter().find(|p| p.id == self.self_id)?.team;
+            look.skin_for(team, self.held().map(|w| w.id.as_str()).unwrap_or(""))
+        });
+        let equipped_skin = if self.looks.contains_key(&self.self_id) {
+            own_skin.as_ref()
+        } else {
+            self.skins.get(&display_weapon)
+        };
         self.viewmodel.set_weapon(&display_weapon, equipped_skin);
         // One rule for which knife a skin is, shared with the inspect that
         // knife runs — see `inspects::knife_archetype`.
@@ -1521,23 +1540,37 @@ impl App {
     /// and applied to the range now, through the same fallback rule the server
     /// uses (`loadout_for`), so Train and a match hand you the same guns.
     pub fn set_loadout(&mut self, choice: serde_json::Value) {
-        let pick = |slot: &str, fallback: &str| -> i32 {
-            let wanted = choice.get(slot).and_then(|v| v.as_str()).unwrap_or("");
-            let find = |id: &str| self.weapons.iter().position(|w| w.id == id);
-            match find(wanted) {
-                Some(i) if self.weapons[i].slot == slot => i as i32,
-                _ => find(fallback).unwrap_or(0) as i32,
-            }
-        };
         if self.weapons.iter().any(|w| !w.slot.is_empty()) {
-            self.range.set_loadout(hassault_native::protocol::LoadoutSlots {
-                primary: pick("primary", "assault"),
-                secondary: pick("secondary", "pistol"),
-                melee: pick("melee", "knife"),
-            });
+            // The range has no sides; its shooter carries the T pick, as the
+            // browser's does.
+            self.range
+                .set_loadout(hassault_native::api::loadout_slots(&self.weapons, &choice, "t"));
             self.you = Some(self.range.self_state());
         }
+        self.menu.loadout.choice = choice.clone();
         self.loadout = Some(choice);
+    }
+
+    /// Fill the LOADOUT page: the served weapons, the agents on offer, and the
+    /// stored agent choice. Called once at launch.
+    pub fn set_loadout_menu(
+        &mut self,
+        agents: Vec<hassault_native::menu::LoadoutAgent>,
+        agent_choice: serde_json::Value,
+    ) {
+        self.menu.loadout.weapons = self
+            .weapons
+            .iter()
+            .filter(|w| w.slot == "primary" || w.slot == "secondary")
+            .map(|w| hassault_native::menu::LoadoutWeapon {
+                id: w.id.clone(),
+                name: w.name.clone(),
+                slot: w.slot.clone(),
+                side: w.side.clone(),
+            })
+            .collect();
+        self.menu.loadout.agents = agents;
+        self.menu.loadout.agent_choice = agent_choice;
     }
 
     pub fn queue_bots(&mut self, count: u32, skill: String) {
@@ -1820,6 +1853,7 @@ impl App {
                     // real bomb on the *first* frame rather than a blank one
                     // until the next snapshot.
                     self.mode_state = w.mode.as_ref().map(|m| m.state.clone());
+                    self.looks = w.cosmetics.clone();
                     self.joined = true;
                     // A new room is a new match. The tally is for the whole of
                     // one, so it survives a death and not a join.
@@ -2176,7 +2210,15 @@ impl App {
                         eprintln!("hassault: {} invite(s) waiting", list.invites.len());
                     }
                 }
+                Incoming::Event(Event::Cosmetics(changed)) => {
+                    if let Some(look) = changed.cosmetics {
+                        self.looks.insert(changed.player_id, look);
+                    }
+                }
                 Incoming::Event(Event::Joined(joined)) => {
+                    if let Some(look) = joined.cosmetics.clone() {
+                        self.looks.insert(joined.player.id.clone(), look);
+                    }
                     if joined.player.id != self.self_id {
                         let name = name_or_id(&joined.player.name, &joined.player.id);
                         self.hud.note(format!("{name} joined"), false);
@@ -2195,6 +2237,7 @@ impl App {
                     if left.player_id != self.self_id {
                         self.hud.note(format!("{name} left"), false);
                     }
+                    self.looks.remove(&left.player_id);
                 }
                 Incoming::Event(Event::Roster(roster)) => {
                     if !roster.added.is_empty() {
@@ -3419,6 +3462,24 @@ impl App {
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
             }
             Action::Back => self.menu.back(),
+            Action::LoadoutPick(..) | Action::AgentPick(_) => {
+                let Some((key, raw)) = self.menu.step_loadout(row.action, step) else {
+                    return;
+                };
+                self.writer.save(key, serde_json::Value::String(raw.clone()));
+                if key == "hassault.loadout" {
+                    if let Ok(choice) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        // Live now: the range re-arms, and a match hears the pick
+                        // for the next spawn (the server validates it).
+                        if let Some(socket) = self.socket.as_ref() {
+                            if let Err(e) = socket.send_loadout(&choice) {
+                                eprintln!("hassault: could not send the loadout ({e})");
+                            }
+                        }
+                        self.set_loadout(choice);
+                    }
+                }
+            }
             Action::CrosshairPaste => {
                 self.menu.note = Some(("READING THE CLIPBOARD".to_string(), true));
                 self.clipboard = Some((hassault_native::clipboard::paste_async(), true));
@@ -4669,6 +4730,37 @@ fn refetch(
 /// `rows` with each weapon index swapped for the base-model slot it is drawn
 /// from (`api::visual_slot`). The body and prop builders know five weapons;
 /// the roster has more.
+/// Lay each player's look (`cosmetics.rs`) over the poses `Squad::update` just
+/// made: the agent's wash in place of the team's, and the held gun's skin as
+/// the prop's two colours. `real` is each row's team and *wire* weapon index,
+/// because the poses were built from visual rows and a skin belongs to the gun,
+/// not to the model it borrows.
+fn dress_squad(
+    squad: &mut Squad,
+    looks: &HashMap<String, Cosmetics>,
+    weapons: &[WeaponSpec],
+    real: &HashMap<&str, (i32, i32)>,
+) {
+    for pose in squad.poses_mut() {
+        let (Some(look), Some(&(team, weapon))) = (looks.get(&pose.id), real.get(pose.id.as_str()))
+        else {
+            continue;
+        };
+        if let Some(armor) = look.armor(team) {
+            pose.tint = glam::Vec3::from(armor).extend(pose.tint.w);
+        }
+        let id = usize::try_from(weapon)
+            .ok()
+            .and_then(|i| weapons.get(i))
+            .map(|w| w.id.as_str())
+            .unwrap_or("");
+        pose.prop_colors = look.skin_for(team, id).map(|skin| {
+            let [body, _, _, accent] = hassault_native::viewmodel::palette_rgb(Some(&skin));
+            (body, accent)
+        });
+    }
+}
+
 fn visual_rows(weapons: &[WeaponSpec], rows: &[PlayerRow]) -> Vec<PlayerRow> {
     rows.iter()
         .map(|r| PlayerRow {

@@ -177,7 +177,19 @@ async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> 
     conn = PeerPlayerConn(hub, session.info.node_id, client)
     _hosted[key] = conn
 
-    player = room.add(name, conn)
+    # The guest's node says what its player carries and wears. Both are
+    # claims, like the name: the loadout is validated slot by slot as any pick
+    # is, and the look goes through `clean_bundle`, which keeps only what can be
+    # drawn and takes agent colours from our own catalogue.
+    from backend.modules.hassault import cosmetics, weapons
+
+    look = cosmetics.clean_bundle(data.get("cosmetics"))
+    player = room.add(
+        name,
+        conn,
+        loadouts=weapons.loadouts_for(data.get("loadout")),
+        cosmetics=look,
+    )
     match_server.membership[id(conn)] = (room.id, player.id)
     match_server.ensure_running()
 
@@ -189,7 +201,11 @@ async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> 
     await match_server.broadcast_event(
         room,
         "joined",
-        {"room": room.id, "player": player.snapshot(time.monotonic())},
+        {
+            "room": room.id,
+            "player": player.snapshot(time.monotonic()),
+            "cosmetics": look,
+        },
         player.id,
     )
 
@@ -416,14 +432,24 @@ async def send_remote_input(
         pass
 
 
-async def send_remote_join(binding: RemoteMatch, name: str) -> None:
+async def send_remote_join(
+    binding: RemoteMatch,
+    name: str,
+    loadout: Any = None,
+    cosmetics: dict[str, Any] | None = None,
+) -> None:
     from backend.modules.network.hub import peer_hub
 
-    await peer_hub.send_to(
-        binding.host_node,
-        HASSAULT_JOIN,
-        {"client": binding.client, "room": binding.room, "name": name},
-    )
+    message: dict[str, Any] = {
+        "client": binding.client,
+        "room": binding.room,
+        "name": name,
+    }
+    if loadout is not None:
+        message["loadout"] = loadout
+    if cosmetics is not None:
+        message["cosmetics"] = cosmetics
+    await peer_hub.send_to(binding.host_node, HASSAULT_JOIN, message)
 
 
 async def send_remote_leave(binding: RemoteMatch) -> None:

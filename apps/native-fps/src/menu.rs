@@ -37,6 +37,8 @@ pub enum Page {
     Controls,
     /// One group of key bindings, reached from CONTROLS.
     Keys(KeyGroup),
+    /// What each side carries and wears (`hassault.loadout`, `hassault.agents`).
+    Loadout,
 }
 
 /// The key pages, grouped as the pane's Controls screen groups them
@@ -176,6 +178,100 @@ pub enum Action {
     Bind(controls::Action),
     /// Every key back to the shipped defaults.
     ResetKeys,
+    /// Step a side's weapon in a slot: side 0 is T, 1 CT; slot 0 primary, 1
+    /// secondary. The app saves it (`Menu::step_loadout`).
+    LoadoutPick(u8, u8),
+    /// Step a side's agent.
+    AgentPick(u8),
+}
+
+/// One weapon the loadout page can offer: the served table, trimmed.
+#[derive(Debug, Clone, Default)]
+pub struct LoadoutWeapon {
+    pub id: String,
+    pub name: String,
+    pub slot: String,
+    /// `any`, `t` or `ct`; empty is `any`.
+    pub side: String,
+}
+
+/// One agent the loadout page can offer (`GET /api/hassault/agents`).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct LoadoutAgent {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub sides: Vec<String>,
+}
+
+/// What the loadout page shows and steps. Filled by the app at launch; the
+/// menu owns stepping it, the app owns saving it.
+#[derive(Debug, Clone, Default)]
+pub struct LoadoutTable {
+    pub weapons: Vec<LoadoutWeapon>,
+    pub agents: Vec<LoadoutAgent>,
+    /// The stored `hassault.loadout`, per side or flat (`Null` = never chosen).
+    pub choice: serde_json::Value,
+    /// The stored `hassault.agents`, `{t: id, ct: id}`.
+    pub agent_choice: serde_json::Value,
+}
+
+const SIDE_KEYS: [&str; 2] = ["t", "ct"];
+const SLOT_KEYS: [&str; 2] = ["primary", "secondary"];
+const SLOT_DEFAULTS: [&str; 2] = ["assault", "pistol"];
+
+impl LoadoutTable {
+    fn offered(&self, side: usize, slot: usize) -> Vec<&LoadoutWeapon> {
+        self.weapons
+            .iter()
+            .filter(|w| {
+                w.slot == SLOT_KEYS[slot]
+                    && (matches!(w.side.as_str(), "" | "any") || w.side == SIDE_KEYS[side])
+            })
+            .collect()
+    }
+
+    /// The per-side half of `choice`, reading a flat choice as both sides.
+    fn side_choice(&self, side: usize) -> serde_json::Value {
+        let per_side = SIDE_KEYS
+            .iter()
+            .any(|s| self.choice.get(*s).is_some_and(|v| v.is_object()));
+        if per_side {
+            self.choice.get(SIDE_KEYS[side]).cloned().unwrap_or(serde_json::Value::Null)
+        } else {
+            self.choice.clone()
+        }
+    }
+
+    /// The weapon a side carries in a slot, as the server would resolve it.
+    fn picked(&self, side: usize, slot: usize) -> Option<&LoadoutWeapon> {
+        let offered = self.offered(side, slot);
+        let wanted = self.side_choice(side);
+        let wanted = wanted.get(SLOT_KEYS[slot]).and_then(|v| v.as_str()).unwrap_or("");
+        offered
+            .iter()
+            .find(|w| w.id == wanted)
+            .or_else(|| offered.iter().find(|w| w.id == SLOT_DEFAULTS[slot]))
+            .or_else(|| offered.first())
+            .copied()
+    }
+
+    fn agents_for(&self, side: usize) -> Vec<&LoadoutAgent> {
+        self.agents
+            .iter()
+            .filter(|a| a.sides.iter().any(|s| s == SIDE_KEYS[side]))
+            .collect()
+    }
+
+    fn agent(&self, side: usize) -> Option<&LoadoutAgent> {
+        let offered = self.agents_for(side);
+        let wanted = self
+            .agent_choice
+            .get(SIDE_KEYS[side])
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        offered.iter().find(|a| a.id == wanted).or_else(|| offered.first()).copied()
+    }
 }
 
 /// One line of the menu, as it will be drawn.
@@ -232,6 +328,8 @@ pub struct Menu {
     /// What the last paste or copy said, and whether it worked — drawn under
     /// the crosshair preview. Set by the app, which owns the clipboard.
     pub note: Option<(String, bool)>,
+    /// The LOADOUT page's table. Empty weapons hides the page.
+    pub loadout: LoadoutTable,
 }
 
 impl Menu {
@@ -302,6 +400,13 @@ impl Menu {
                 ),
                 row("VIDEO", String::from(">"), Action::Open(Page::Video)),
                 row("CONTROLS", String::from(">"), Action::Open(Page::Controls)),
+            ]
+            .into_iter()
+            .chain(
+                (!self.loadout.weapons.is_empty())
+                    .then(|| row("LOADOUT", String::from(">"), Action::Open(Page::Loadout))),
+            )
+            .chain([
                 row(
                     // A match is left by disconnecting; Train is left by closing.
                     // Saying which one this is avoids the worst possible surprise
@@ -310,7 +415,31 @@ impl Menu {
                     String::new(),
                     Action::Quit,
                 ),
-            ],
+            ])
+            .collect(),
+            Page::Loadout => {
+                let table = &self.loadout;
+                let mut rows = Vec::new();
+                for (side, name) in ["T", "CT"].iter().enumerate() {
+                    for (slot, slot_name) in ["PRIMARY", "SECONDARY"].iter().enumerate() {
+                        let value = table
+                            .picked(side, slot)
+                            .map(|w| w.name.to_uppercase())
+                            .unwrap_or_default();
+                        rows.push(row(
+                            &format!("{name} {slot_name}"),
+                            value,
+                            Action::LoadoutPick(side as u8, slot as u8),
+                        ));
+                    }
+                    if table.agents_for(side).len() > 1 {
+                        let value = table.agent(side).map(|a| a.name.to_uppercase()).unwrap_or_default();
+                        rows.push(row(&format!("{name} AGENT"), value, Action::AgentPick(side as u8)));
+                    }
+                }
+                rows.push(row("BACK", String::new(), Action::Back));
+                rows
+            }
             Page::Crosshair => {
                 let c = &settings.crosshair;
                 let code = crate::crosshair::encode(*c);
@@ -566,6 +695,7 @@ impl Menu {
             Page::Display => "* GPU AND API CHANGES APPLY ON RESTART",
             Page::Controls => "SENSITIVITY IS DIVIDED BY THE SCOPE ZOOM",
             Page::Keys(_) => "ENTER OR CLICK A ROW, THEN PRESS ITS NEW KEY",
+            Page::Loadout => "EACH SIDE CARRIES ITS OWN - APPLIES AT YOUR NEXT SPAWN",
         }
     }
 
@@ -578,6 +708,54 @@ impl Menu {
             Page::Display => "DISPLAY AND GPU",
             Page::Controls => "CONTROLS",
             Page::Keys(group) => group.title(),
+            Page::Loadout => "LOADOUT",
+        }
+    }
+
+    /// Step a loadout or agent row, returning the setting to save and its new
+    /// value (the JSON document, as the pane stores it). `None` for any other
+    /// action, or a slot with nothing to step to.
+    pub fn step_loadout(&mut self, action: Action, step: i32) -> Option<(&'static str, String)> {
+        match action {
+            Action::LoadoutPick(side, slot) => {
+                let (side, slot) = (side as usize, slot as usize);
+                let offered: Vec<String> =
+                    self.loadout.offered(side, slot).iter().map(|w| w.id.clone()).collect();
+                if offered.is_empty() {
+                    return None;
+                }
+                let current = self.loadout.picked(side, slot).map(|w| w.id.clone()).unwrap_or_default();
+                let at = offered.iter().position(|id| *id == current).unwrap_or(0);
+                let next = &offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize];
+                // Always written per side, so a flat choice becomes two.
+                let mut doc = serde_json::Map::new();
+                for (i, key) in SIDE_KEYS.iter().enumerate() {
+                    let half = self.loadout.side_choice(i);
+                    let mut half = half.as_object().cloned().unwrap_or_default();
+                    if i == side {
+                        half.insert(SLOT_KEYS[slot].to_string(), serde_json::Value::String(next.clone()));
+                    }
+                    doc.insert(key.to_string(), serde_json::Value::Object(half));
+                }
+                self.loadout.choice = serde_json::Value::Object(doc);
+                Some(("hassault.loadout", self.loadout.choice.to_string()))
+            }
+            Action::AgentPick(side) => {
+                let side = side as usize;
+                let offered: Vec<String> =
+                    self.loadout.agents_for(side).iter().map(|a| a.id.clone()).collect();
+                if offered.is_empty() {
+                    return None;
+                }
+                let current = self.loadout.agent(side).map(|a| a.id.clone()).unwrap_or_default();
+                let at = offered.iter().position(|id| *id == current).unwrap_or(0);
+                let next = offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize].clone();
+                let mut doc = self.loadout.agent_choice.as_object().cloned().unwrap_or_default();
+                doc.insert(SIDE_KEYS[side].to_string(), serde_json::Value::String(next));
+                self.loadout.agent_choice = serde_json::Value::Object(doc);
+                Some(("hassault.agents", self.loadout.agent_choice.to_string()))
+            }
+            _ => None,
         }
     }
 
@@ -789,6 +967,8 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         | Action::Quit
         | Action::Bind(_)
         | Action::ResetKeys => vec![],
+        // Documents, not settings this client interprets: `Menu::step_loadout`.
+        Action::LoadoutPick(..) | Action::AgentPick(_) => vec![],
         // The app owns the clipboard.
         Action::CrosshairPaste | Action::CrosshairCopy => vec![],
         Action::CrosshairPreset => {

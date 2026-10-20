@@ -143,7 +143,7 @@ def test_remote_join_forwards_the_account_username(signed_in, monkeypatch):
     forwarded: list[str] = []
     monkeypatch.setattr(fabric, "bind_remote", lambda *a, **k: "binding")
 
-    async def fake_send(binding: Any, name: str) -> None:
+    async def fake_send(binding: Any, name: str, *_: Any) -> None:
         forwarded.append(name)
 
     monkeypatch.setattr(fabric, "send_remote_join", fake_send)

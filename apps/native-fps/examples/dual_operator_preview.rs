@@ -227,6 +227,7 @@ async fn run(path: &str) {
             grip,
             weapon: entry.weapon,
             team: entry.team,
+            ..Default::default()
         });
 
         let actor_pose = ActorPose {
@@ -239,6 +240,7 @@ async fn run(path: &str) {
             grip,
             weapon: entry.weapon,
             team: entry.team,
+            ..Default::default()
         };
 
         if is_ct {

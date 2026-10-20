@@ -263,7 +263,7 @@ const DEFAULT_PALETTE = {
 };
 
 /** Where a skin's colours go, once wear has been applied. */
-interface Palette {
+export interface Palette {
   body: number;
   dark: number;
   grip: number;
@@ -325,7 +325,7 @@ function lift(hex: number): number {
  * the two colours are distributed across the parts instead. That is enough for a
  * Fade to read as a fade and a Camo not to read as a Slate.
  */
-function paletteFor(skin: WeaponSkin | null): Palette {
+export function paletteFor(skin: WeaponSkin | null): Palette {
   if (!skin) return { ...DEFAULT_PALETTE };
   const base = parseColor(skin.baseColor, DEFAULT_PALETTE.body);
   const accent = parseColor(skin.accentColor, DEFAULT_PALETTE.accent);

@@ -364,6 +364,10 @@ pub struct WeaponSpec {
     pub slot: String,
     #[serde(default)]
     pub model: String,
+    /// `any`, or the side that carries it: `t` or `ct`. Empty from an older
+    /// backend, which is read as `any`.
+    #[serde(default)]
+    pub side: String,
     #[serde(rename = "boltAction", default)]
     pub bolt_action: bool,
     /// Active equipped attachments on this weapon.
@@ -413,6 +417,38 @@ pub fn visual_slot(weapons: &[WeaponSpec], index: i32) -> i32 {
         .map(|w| w.visual())
         .unwrap_or("assault");
     BASE_MODELS.iter().position(|m| *m == model).unwrap_or(2) as i32
+}
+
+/// `stored` (the `hassault.loadout` setting, already parsed) as indexes, for
+/// `side`. A port of `weapons.loadouts_for`: the per-side shape
+/// `{t: {primary, secondary}, ct: {...}}` or the older flat one for both
+/// sides, each slot falling back to the default for an unknown id, a weapon
+/// named for the wrong slot, or one the other side carries.
+pub fn loadout_slots(
+    weapons: &[WeaponSpec],
+    stored: &serde_json::Value,
+    side: &str,
+) -> crate::protocol::LoadoutSlots {
+    let per_side = ["t", "ct"].iter().any(|s| stored.get(*s).is_some_and(|v| v.is_object()));
+    let choice = if per_side {
+        stored.get(side).cloned().unwrap_or(serde_json::Value::Null)
+    } else {
+        stored.clone()
+    };
+    let carries = |w: &WeaponSpec| matches!(w.side.as_str(), "" | "any") || w.side == side;
+    let pick = |slot: &str, fallback: &str| -> i32 {
+        let wanted = choice.get(slot).and_then(|v| v.as_str()).unwrap_or("");
+        let find = |id: &str| weapons.iter().position(|w| w.id == id);
+        match find(wanted) {
+            Some(i) if weapons[i].slot == slot && carries(&weapons[i]) => i as i32,
+            _ => find(fallback).unwrap_or(0) as i32,
+        }
+    };
+    crate::protocol::LoadoutSlots {
+        primary: pick("primary", "assault"),
+        secondary: pick("secondary", "pistol"),
+        melee: pick("melee", "knife"),
+    }
 }
 
 fn default_one() -> f32 {
@@ -829,6 +865,13 @@ impl NodeApi {
         ))?
         .into_json()
         .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The agents a player may wear, and on which sides (`cosmetics.py`).
+    pub fn agents(&self) -> Result<Vec<crate::menu::LoadoutAgent>, ApiError> {
+        self.get("/api/hassault/agents")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
     }
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {

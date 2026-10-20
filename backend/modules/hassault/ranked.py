@@ -325,6 +325,13 @@ async def relay_respawn(conn: WsConnection) -> None:
         await session.send("respawn", {})
 
 
+async def relay_loadout(conn: WsConnection, data: dict[str, Any]) -> None:
+    """Forward a loadout pick. The server validates it, as it does at join."""
+    session = _sessions.get(id(conn))
+    if session is not None:
+        await session.send("loadout", data)
+
+
 async def relay_input(conn: WsConnection, data: dict[str, Any]) -> None:
     """Forward one input message untouched.
 

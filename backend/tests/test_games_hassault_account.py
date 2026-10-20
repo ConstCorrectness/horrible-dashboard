@@ -241,7 +241,10 @@ def test_the_migration_upgrades_an_existing_database(tmp_path, monkeypatch):
     store.init_db()
     with store.get_conn() as conn:
         conn.execute("DROP TABLE hassault_items")
-        conn.execute("UPDATE schema_meta SET version = ?", (len(store.MIGRATIONS) - 1,))
+        conn.execute(
+            "UPDATE schema_meta SET version = ?",
+            (store.MIGRATIONS.index(store._m12_hassault_accounts),),
+        )
     store.init_db()
     with store.get_conn() as conn:
         tables = {

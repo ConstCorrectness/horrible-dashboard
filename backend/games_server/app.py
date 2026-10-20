@@ -814,6 +814,12 @@ async def hassault_ws(websocket: WebSocket) -> None:
                 )
             elif event == "input":
                 referee.apply_input(conn, data)
+            elif event == "loadout":
+                chosen = referee.apply_loadout(conn, data)
+                if chosen is not None:
+                    await conn.send_json(
+                        {"channel": "hassault", "event": "loadout", "data": chosen}
+                    )
             elif event == "room_set":
                 refused = await referee.set_room_setting(conn, data)
                 if refused:

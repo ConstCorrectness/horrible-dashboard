@@ -828,7 +828,8 @@ def test_a_loadout_applies_at_the_next_spawn_and_bounds_the_switch():
     from backend.modules.hassault.physics import flat_world
 
     room = MatchRoom("r_loadout", "test", flat_world(32), [])
-    p = room.add("ada", None, team=0)
+    # CT: the lancer is a HALON rifle, which a T side would refuse.
+    p = room.add("ada", None, team=1)
     assert p.held == {0, 1, 2}
     room.set_loadout(p, {"primary": "lancer", "secondary": "hand_cannon"})
     assert p.held == {0, 1, 2}, "not until the next spawn"

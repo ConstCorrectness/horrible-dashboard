@@ -22,7 +22,13 @@ has no node, can reach it at all.
   counts toward the level shown, but the levels it reaches are pre-claimed: no
   drop is ever paid for a number a node wrote down about itself.
 - **Item dicts are the node's own shape** (`SkinInstance.to_dict`), so a client
-  reading the inventory cannot tell which backend answered.
+  reading the inventory cannot tell which backend answered. One field is added:
+  `equippedSides`, the sides an item is on (migration `_m13_hassault_equips`).
+- **What a player looks like is read here, never sent.** `cosmetics` builds the
+  bundle (`cosmetics.py`) from the account's equips and its `hassault.agents`
+  setting, and `loadouts` reads `hassault.loadout`; `hassault_rooms` asks both at
+  join, and again whenever an equip or one of those settings changes
+  (`refresh_account`).
 
 Everything is under `/api/hassault/account/*`, which a node proxies its own
 `/skins/*` routes to when it is signed in and the server advertises the
@@ -169,8 +175,9 @@ def progression(account_id: str) -> dict[str, Any]:
 # ---- inventory ----------------------------------------------------------------------
 
 
-def _item_dict(row: sqlite3.Row) -> dict[str, Any]:
-    """The node's `SkinInstance.to_dict` shape, from a row."""
+def _item_dict(row: sqlite3.Row, sides: list[str] | None = None) -> dict[str, Any]:
+    """The node's `SkinInstance.to_dict` shape, from a row, plus the sides it
+    is equipped on."""
     from backend.modules.hassault.skins import SkinInstance, skin_dict
 
     instance = SkinInstance(
@@ -183,7 +190,19 @@ def _item_dict(row: sqlite3.Row) -> dict[str, Any]:
         is_tradable=row["tradable_after"] is not None,
         stat_tracker_kills=row["stattrak"],
     )
-    return instance.to_dict(skin_dict().get(instance.skin_id))
+    out = instance.to_dict(skin_dict().get(instance.skin_id))
+    out["equippedSides"] = sorted(sides or [])
+    return out
+
+
+def _sides_by_item(conn: sqlite3.Connection, account_id: str) -> dict[str, list[str]]:
+    sides: dict[str, list[str]] = {}
+    for r in conn.execute(
+        "SELECT instance_id, side FROM hassault_equips WHERE account_id = ?",
+        (account_id,),
+    ).fetchall():
+        sides.setdefault(str(r["instance_id"]), []).append(str(r["side"]))
+    return sides
 
 
 def inventory(account_id: str) -> list[dict[str, Any]]:
@@ -194,7 +213,8 @@ def inventory(account_id: str) -> list[dict[str, Any]]:
             "ORDER BY acquired_at",
             (account_id,),
         ).fetchall()
-    return [_item_dict(r) for r in rows]
+        sides = _sides_by_item(conn, account_id)
+    return [_item_dict(r, sides.get(str(r["instance_id"]))) for r in rows]
 
 
 def _insert_item(
@@ -264,33 +284,92 @@ def claim_drop(account_id: str) -> dict[str, Any] | None:
     return out
 
 
-def equip(account_id: str, instance_id: str) -> bool:
-    """Equip an owned item, unequipping whatever else sits on the same weapon."""
+def _sync_equipped(conn: sqlite3.Connection, account_id: str) -> None:
+    """`hassault_items.equipped` means "on for some side". It is recomputed from
+    the equips and never written on its own, so the two cannot disagree."""
+    conn.execute(
+        "UPDATE hassault_items SET equipped = (instance_id IN (SELECT instance_id "
+        "FROM hassault_equips WHERE account_id = ?)) WHERE owner_id = ?",
+        (account_id, account_id),
+    )
+
+
+def _sides(side: str | None) -> tuple[str, ...]:
+    from backend.modules.hassault import weapons
+
+    if not side:
+        return weapons.SIDES
+    if side not in weapons.SIDES:
+        raise ValueError(f"unknown side {side!r}")
+    return (side,)
+
+
+def equip(account_id: str, instance_id: str, side: str | None = None) -> bool:
+    """Put an owned item on its weapon for `side`, or for both sides when
+    `side` is omitted, replacing whatever was there."""
     from backend.modules.hassault.skins import skin_dict
 
-    known = skin_dict()
+    sides = _sides(side)
     with store.get_conn() as conn:
         target = conn.execute(
             "SELECT def_id FROM hassault_items WHERE instance_id = ? AND owner_id = ? "
             "AND state = 'owned'",
             (instance_id, account_id),
         ).fetchone()
-        definition = known.get(str(target["def_id"])) if target else None
+        definition = skin_dict().get(str(target["def_id"])) if target else None
         if definition is None:
             return False
-        same_weapon = [
-            sid for sid, d in known.items() if d.weapon_id == definition.weapon_id
-        ]
-        conn.execute(
-            f"UPDATE hassault_items SET equipped = 0 WHERE owner_id = ? AND def_id IN "
-            f"({','.join('?' * len(same_weapon))})",
-            (account_id, *same_weapon),
-        )
-        conn.execute(
-            "UPDATE hassault_items SET equipped = 1 WHERE instance_id = ?",
-            (instance_id,),
-        )
+        for each in sides:
+            conn.execute(
+                "INSERT INTO hassault_equips VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(account_id, side, weapon_id) "
+                "DO UPDATE SET instance_id = excluded.instance_id",
+                (account_id, each, definition.weapon_id, instance_id),
+            )
+        _sync_equipped(conn, account_id)
     return True
+
+
+def unequip(account_id: str, weapon_id: str, side: str | None = None) -> bool:
+    """Take the skin off `weapon_id` for `side` (or both): back to bare metal."""
+    sides = _sides(side)
+    with store.get_conn() as conn:
+        removed = conn.execute(
+            f"DELETE FROM hassault_equips WHERE account_id = ? AND weapon_id = ? "
+            f"AND side IN ({','.join('?' * len(sides))})",
+            (account_id, weapon_id, *sides),
+        ).rowcount
+        _sync_equipped(conn, account_id)
+    return removed > 0
+
+
+def cosmetics(account_id: str) -> dict[str, Any]:
+    """How this account looks to everyone else (`cosmetics.bundle`), built from
+    its own equips and its `hassault.agents` setting, nothing a client sent."""
+    from backend.modules.hassault import cosmetics as cosmetics_mod
+
+    store.init_db()
+    with store.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT e.side AS equip_side, i.* FROM hassault_equips e "
+            "JOIN hassault_items i ON i.instance_id = e.instance_id "
+            "WHERE e.account_id = ? AND i.owner_id = ? AND i.state = 'owned'",
+            (account_id, account_id),
+        ).fetchall()
+    equips: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        equips.setdefault(str(r["equip_side"]), []).append(_item_dict(r))
+    agents = settings_get(account_id)["values"].get(cosmetics_mod.AGENTS_KEY)
+    return cosmetics_mod.bundle(cosmetics_mod.agents_for(agents), equips)
+
+
+def loadouts(account_id: str) -> dict[str, dict[str, int]]:
+    """The account's loadout per side, from its `hassault.loadout` setting."""
+    from backend.modules.hassault import weapons
+
+    return weapons.loadouts_for(
+        settings_get(account_id)["values"].get("hassault.loadout")
+    )
 
 
 def trade_up(account_id: str, instance_ids: list[str]) -> dict[str, Any] | None:
@@ -337,6 +416,10 @@ def trade_up(account_id: str, instance_ids: list[str]) -> dict[str, Any] | None:
             conn.execute(
                 "UPDATE hassault_items SET state = 'consumed', equipped = 0 "
                 "WHERE instance_id = ?",
+                (r["instance_id"],),
+            )
+            conn.execute(
+                "DELETE FROM hassault_equips WHERE instance_id = ?",
                 (r["instance_id"],),
             )
             conn.execute(
@@ -448,11 +531,24 @@ def get_settings(authorization: str | None = Header(default=None)) -> dict[str, 
     return settings_get(_account(authorization))
 
 
+async def _changed(account_id: str) -> None:
+    """Tell any room this account is seated in that it looks different now."""
+    from backend.games_server import hassault_rooms
+
+    await hassault_rooms.referee.refresh_account(account_id)
+
+
 @router.put("/account/settings")
-def put_settings(
+async def put_settings(
     body: SettingsPut, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    return settings_put(_account(authorization), body.values)
+    from backend.modules.hassault import cosmetics as cosmetics_mod
+
+    account_id = _account(authorization)
+    out = settings_put(account_id, body.values)
+    if {"hassault.loadout", cosmetics_mod.AGENTS_KEY} & set(body.values):
+        await _changed(account_id)
+    return out
 
 
 @router.get("/account/progression")
@@ -501,10 +597,40 @@ def post_claim(authorization: str | None = Header(default=None)) -> dict[str, An
 
 
 @router.post("/account/equip")
-def post_equip(
-    instance_id: str, authorization: str | None = Header(default=None)
+async def post_equip(
+    instance_id: str,
+    side: str | None = None,
+    authorization: str | None = Header(default=None),
 ) -> dict[str, bool]:
-    return {"ok": equip(_account(authorization), instance_id)}
+    account_id = _account(authorization)
+    try:
+        ok = equip(account_id, instance_id, side)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if ok:
+        await _changed(account_id)
+    return {"ok": ok}
+
+
+@router.post("/account/unequip")
+async def post_unequip(
+    weapon_id: str,
+    side: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, bool]:
+    account_id = _account(authorization)
+    try:
+        ok = unequip(account_id, weapon_id, side)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if ok:
+        await _changed(account_id)
+    return {"ok": ok}
+
+
+@router.get("/account/cosmetics")
+def get_cosmetics(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return cosmetics(_account(authorization))
 
 
 @router.post("/account/tradeup")

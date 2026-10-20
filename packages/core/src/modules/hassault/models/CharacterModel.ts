@@ -21,6 +21,8 @@ import { DEFAULT_HITBOX } from '../hitbox';
 import { instantiateOperator, type OperatorAsset, type OperatorInstance } from './operator';
 import { buildMuzzleFlash, buildWeaponProps, createNameplateTexture } from './props';
 import { resolveAvatarSkin, type AvatarSkinPalette } from './skins';
+import type { AgentLook } from '../cosmetics';
+import { paletteFor, type WeaponSkin } from '../viewmodel';
 
 const STANDING_HEIGHT = DEFAULT_HITBOX.standingHeight;
 
@@ -38,6 +40,15 @@ const GRIP_ROTATION: readonly [number, number, number] = [-Math.PI / 2, 0, Math.
 /** Scale a weapon prop down out of cube units into the hand that holds it. */
 const GRIP_SCALE = 0.55;
 
+/** An unskinned prop's body. */
+const BARE_METAL = 0x27272a;
+
+/** `#rrggbb` to an integer, or the fallback. */
+function hexOr(value: string, fallback: number): number {
+  const hex = /^#?([0-9a-f]{6})$/i.exec(value.trim());
+  return hex ? parseInt(hex[1], 16) : fallback;
+}
+
 export class CharacterModel {
   /** What `avatars.ts` positions. Everything else hangs off it. */
   readonly rootGroup: THREE.Group;
@@ -50,6 +61,11 @@ export class CharacterModel {
 
   private readonly weaponProps: THREE.Group[];
   private readonly skinPalette: AvatarSkinPalette;
+  /** The prop materials, shared by every prop: only one is ever shown, so a
+   * weapon skin recolours these two rather than one pair per gun. */
+  private readonly metalMat: THREE.MeshStandardMaterial;
+  private readonly trimMat: THREE.MeshStandardMaterial;
+  private currentSkinKey = '';
   private currentWeaponSlot = -1;
   private currentOpacity = 1;
   /** Each material's own `transparent` flag, so a fade can be undone exactly. */
@@ -61,9 +77,14 @@ export class CharacterModel {
     asset: OperatorAsset,
     team: number,
     name: string,
-    skinId?: string,
+    agent?: AgentLook | null,
   ) {
-    this.skinPalette = resolveAvatarSkin(team, skinId);
+    const base = resolveAvatarSkin(team, agent?.id);
+    // The server's colours win over this client's catalogue: an agent this
+    // build has never heard of is still drawn the way its wearer chose.
+    this.skinPalette = agent
+      ? { ...base, armorColor: hexOr(agent.armor, base.armorColor), trimColor: hexOr(agent.trim, base.trimColor) }
+      : base;
     this.rootGroup = new three.Group();
 
     this.instance = instantiateOperator(three, asset, this.skinPalette.armorColor);
@@ -77,7 +98,7 @@ export class CharacterModel {
     // every clip for free — a socket parented to the root would need the grip
     // animating by hand, which is exactly the work this rewrite removed.
     const metalMat = new three.MeshStandardMaterial({
-      color: 0x27272a,
+      color: BARE_METAL,
       roughness: 0.55,
       metalness: 0.7,
     });
@@ -87,6 +108,8 @@ export class CharacterModel {
       metalness: 0.3,
     });
     this.disposables.push(metalMat, trimMat);
+    this.metalMat = metalMat;
+    this.trimMat = trimMat;
 
     this.weaponSocket = new three.Group();
     this.weaponSocket.position.set(...GRIP_POSITION);
@@ -123,6 +146,29 @@ export class CharacterModel {
     for (let i = 0; i < this.weaponProps.length; i += 1) {
       this.weaponProps[i].visible = i === slot;
     }
+  }
+
+  /**
+   * Paint the weapon in hand with a skin, or bare metal for `null`.
+   *
+   * The same arrangement the first-person view model uses (`paletteFor`), so a
+   * gun reads as the same skin from both ends of it. Cheap to call every frame:
+   * it does nothing unless the skin changed.
+   */
+  setWeaponSkin(skin: WeaponSkin | null): void {
+    const key = skin
+      ? `${skin.baseColor}|${skin.accentColor}|${skin.patternType}|${skin.floatValue}`
+      : '';
+    if (key === this.currentSkinKey) return;
+    this.currentSkinKey = key;
+    if (!skin) {
+      this.metalMat.color.setHex(BARE_METAL);
+      this.trimMat.color.setHex(this.skinPalette.trimColor);
+      return;
+    }
+    const palette = paletteFor(skin);
+    this.metalMat.color.setHex(palette.body);
+    this.trimMat.color.setHex(palette.accent);
   }
 
   triggerMuzzleFlash(): void {

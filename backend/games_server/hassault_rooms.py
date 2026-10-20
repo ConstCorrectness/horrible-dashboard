@@ -212,8 +212,14 @@ class HassaultReferee:
             raise ValueError("this server is full; try a room that is already running")
         if existing is None and new:
             room_id = self.server.create(target_map).id
+        loadouts, look = self.account_look(conn)
         room, player = await self.server.join(
-            conn, target_map, conn.display_name, room_id
+            conn,
+            target_map,
+            conn.display_name,
+            room_id,
+            loadouts=loadouts,
+            cosmetics=look,
         )
         has_guests = conn.is_guest or any(
             getattr(p.conn, "is_guest", False) for p in room.players.values()
@@ -276,6 +282,59 @@ class HassaultReferee:
             and len(room.players) < MAX_PLAYERS
             for room in self.server.rooms.values()
         )
+
+    @staticmethod
+    def account_look(
+        conn: SeatConn,
+    ) -> tuple[dict[str, dict[str, int]] | None, dict[str, Any]]:
+        """A seat's loadouts and cosmetics, from this server's own tables.
+
+        A guest has no account, so no stored loadout and the default look. A
+        failure to read is the default too: what a player looks like must never
+        be why they could not join.
+        """
+        from backend.games_server import hassault_account
+        from backend.modules.hassault import cosmetics
+
+        if conn.is_guest:
+            return None, cosmetics.default_bundle()
+        try:
+            return (
+                hassault_account.loadouts(conn.account_id),
+                hassault_account.cosmetics(conn.account_id),
+            )
+        except Exception:  # noqa: BLE001 - cosmetic; the join goes ahead
+            logger.exception("hassault: could not read %s's look", conn.account_id)
+            return None, cosmetics.default_bundle()
+
+    async def refresh_account(self, account_id: str) -> None:
+        """Re-read an account's look and loadouts for every seat it holds.
+
+        Called after an equip or a loadout or agent setting changes. The look
+        is broadcast now; the loadout, like any loadout, applies at the next
+        spawn.
+        """
+        for room in list(self.server.rooms.values()):
+            for player in list(room.players.values()):
+                conn = player.conn
+                if not isinstance(conn, SeatConn) or conn.account_id != account_id:
+                    continue
+                loadouts, look = self.account_look(conn)
+                if loadouts is not None:
+                    player.loadouts = loadouts
+                await self.server.update_cosmetics(room, player, look)
+
+    def apply_loadout(self, conn: SeatConn, data: dict[str, Any]) -> dict[str, int] | None:
+        """A seated player's loadout pick, validated by the room like any other.
+
+        The stored setting is read at join; this is the same choice made
+        mid-match, before it has reached the account.
+        """
+        entry = self.server.player_for(conn)
+        if entry is None:
+            return None
+        room, player = entry
+        return room.set_loadout(player, data)
 
     def apply_input(self, conn: SeatConn, data: dict[str, Any]) -> None:
         """One input message from a seated player.

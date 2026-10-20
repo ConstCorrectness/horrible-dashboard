@@ -26,6 +26,7 @@ pub mod clips;
 pub mod console;
 pub mod clipboard;
 pub mod controls;
+pub mod cosmetics;
 pub mod crosshair;
 pub mod damage;
 pub mod decals;

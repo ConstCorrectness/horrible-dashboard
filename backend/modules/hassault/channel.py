@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Any
 
-from backend.modules.hassault import bots, fabric, ranked
+from backend.modules.hassault import account_sync, bots, fabric, ranked
 from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.match import (
     _clamp,
@@ -116,8 +116,13 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
                 )
                 return
             binding = fabric.bind_remote(conn, host, room_id, uuid.uuid4().hex[:12])
+            from backend.modules.settings.routes import get_value
+
+            _, look = await account_sync.local_look()
             try:
-                await fabric.send_remote_join(binding, name)
+                await fabric.send_remote_join(
+                    binding, name, get_value("hassault.loadout", None), look
+                )
             except KeyError:
                 fabric.unbind_remote(conn)
                 await conn.send_json(
@@ -125,8 +130,11 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
                 )
             return
 
+        loadouts, look = await account_sync.local_look()
         try:
-            room, player = await match_server.join(conn, map_name, name, room_id, mode)
+            room, player = await match_server.join(
+                conn, map_name, name, room_id, mode, loadouts=loadouts, cosmetics=look
+            )
         except (LookupError, ValueError, CgzError) as exc:
             await conn.send_json(_evt("error", {"message": str(exc)}))
             return
@@ -172,9 +180,13 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             player.rtt_ms = _clamp(_num(rtt), 0.0, 60_000.0)
 
     elif event == "loadout":
-        # Local rooms only for now. A guest's choice would need its own
-        # fabric message, and ranked rooms keep the default until the game
-        # server stores loadouts per account (P5).
+        if ranked.session_for(conn) is not None:
+            # The game server reads the stored loadout at join; this is a pick
+            # made since. It validates, as it does everything else.
+            await ranked.relay_loadout(conn, data if isinstance(data, dict) else {})
+            return
+        # A guest on a friend's node keeps the stored loadout it joined with:
+        # there is no fabric message for a mid-match change.
         entry = match_server.player_for(conn)
         if entry is not None:
             room, player = entry

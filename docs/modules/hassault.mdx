@@ -3630,7 +3630,8 @@ cap `hassault_account`), under `/api/hassault/account/*`:
 | `GET`/`PUT /settings` | account-scoped settings only; machine keys and unknown keys are dropped |
 | `GET /progression`, `/drops` | level, XP and drops, all derived from the ledgers |
 | `GET /inventory` | the node's `SkinInstance.to_dict` shape, so clients cannot tell |
-| `POST /claim_drop`, `/equip`, `/tradeup` | the node's three writes, with the same rules |
+| `POST /claim_drop`, `/equip`, `/tradeup` | the node's three writes, with the same rules; `/equip` takes a `side` |
+| `POST /unequip`, `GET /cosmetics` | a side's skin off; the account's look (see "Sides, agents and visible skins") |
 | `POST /import` | one machine's local history, once |
 
 **Ledgers, not counters.** Level is a `SUM(xp)` over `hassault_xp_ledger`, which
@@ -4769,12 +4770,15 @@ A player carries a **loadout**, CS-style: `MatchPlayer.loadout` is
 refuses a switch to anything not held, which is what makes a loadout a loadout
 rather than a list of favourites.
 
-- **Picked in the menu, applied at the next spawn.** The pane's **Loadout** row
-  (beside Host) stores `{primary, secondary}` weapon ids under `hassault.loadout`,
-  an account-scoped setting. The session sends it as a `loadout` event on every
-  welcome, the native client reads the same setting from the node, and the
-  server validates it slot by slot (`weapons.loadout_for`): an unknown id, or a
-  sniper named as a sidearm, costs only that slot. A change never applies
+- **Picked in the menu, per side, applied at the next spawn.** The pane's
+  **Loadout · T** and **Loadout · CT** rows (beside Host), and the native menu's
+  LOADOUT page, store `{t: {primary, secondary}, ct: {...}}` weapon ids under
+  `hassault.loadout`, an account-scoped setting (an older flat
+  `{primary, secondary}` still reads as both sides). The server validates it
+  slot by slot and side by side (`weapons.loadouts_for`): an unknown id, a
+  sniper named as a sidearm, or a T rifle picked for CT costs only that slot.
+  `reset_loadout` picks the half for the player's team at every spawn, so a side
+  swap carries the other side's guns from the next life. A change never applies
   mid-life: it is a decision about the next fight, not a way out of this one.
 - **The number keys select slots.** 1 primary, 2 secondary, 3 knife, from the
   `slots` the private view now carries; the wheel steps through `held` only.
@@ -4800,6 +4804,61 @@ Behaviour that used to be keyed on an id is now a served field: `penetration`
 (how far a round carries through a wall), `armorPen` (the share of a vest it
 ignores, which is how the sniper, now 115 damage, one-shots an armoured body),
 and `boltAction` (the quick-switch rechamber cancel).
+
+### Sides, agents and visible skins
+
+What a player looks like to **everyone else** is a **cosmetics bundle**
+(`backend/modules/hassault/cosmetics.py`): an agent and the weapon skins, per
+side, both sides in one document so a team swap needs nothing resent.
+
+```
+{"t":  {"agent": {"id", "armor", "trim"},
+        "weapons": {weapon id: {skinId, name, baseColor, accentColor,
+                                patternType, floatValue, seed, statTrak}}},
+ "ct": {...}}
+```
+
+- **Built from the account's own rows, never sent by a client.** On the game
+  server, `hassault_rooms.account_look` reads the seat's equips and its
+  `hassault.agents` setting (`hassault_account.cosmetics`) and its
+  `hassault.loadout` (`hassault_account.loadouts`) at join. An equip, or a
+  change to either setting, re-reads them for any room the account is seated in
+  (`refresh_account`) and broadcasts the new look at once. A guest wears the
+  defaults.
+- **Equips are per side** (migration `_m13_hassault_equips`, keyed
+  `(account, side, weapon)`): `POST /account/equip?side=t|ct` (or both, with no
+  side) and `/account/unequip`. `hassault_items.equipped` survives as "on for
+  some side", recomputed from the equips, and the inventory gains
+  `equippedSides`. The armoury shows **T** and **CT** toggles where the server
+  keeps the account; a node's own inventory still has one equip per weapon.
+- **Agents are a served catalogue** (`GET /api/hassault/agents`, node and game
+  server alike), moved out of the browser's `models/skins.ts`. ARC agents play
+  T, HALON agents CT, neutral either; a pick for the wrong side is that side's
+  default (`cosmetics.agents_for`).
+- **On the wire, never in a snapshot.** The welcome carries `cosmetics`
+  (`{playerId: bundle}`), `joined` carries the newcomer's, and a `cosmetics`
+  event carries a change. A snapshot goes to everyone twenty times a second and
+  a look changes once a match; `test_hassault_cosmetics.py` asserts the
+  snapshot never carries one.
+- **Node-hosted rooms** take their own player's look from the game server when
+  the account is kept there (`account_sync.local_look`), else from the node's
+  inventory. A guest's node sends its look with the fabric join; the host runs
+  it through `cosmetics.clean_bundle`, which re-resolves the agent from its own
+  catalogue and keeps a weapon entry only as valid colours on a real weapon.
+  That is the same trust a nameplate gets: display only.
+- **Drawn the same in both clients.** The browser's `CharacterModel` takes the
+  agent's colours (rebuilt when they change, since the wash is baked into the
+  operator's materials) and `setWeaponSkin` recolours the held prop; native lays
+  the look over each pose (`app.rs` `dress_squad`): the agent's wash as the
+  pose's tint, the skin as the prop's two colours (`held.rs`). A skin belongs
+  to the gun, not the model it borrows, so the lookup is by the weapon's own
+  id. The first-person view model uses the player's own bundle for the side
+  they are on, so a CT-only skin is not in their hands on T.
+- **One palette, three ports.** `cosmetics.palette` is the reference for how a
+  skin's two colours spread over a gun made of boxes; `viewmodel.ts`
+  `paletteFor` and `viewmodel.rs` `palette_for` are pinned to it by
+  `cosmetics-vectors.json` (`scripts/gen_hassault_cosmetics_vectors.py`), which
+  also carries the agent list, the bundle wire and the per-side loadout cases.
 
 ### Accuracy: stopping is what buys the shot
 

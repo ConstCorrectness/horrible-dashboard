@@ -156,6 +156,48 @@ async def import_once(account_id: str) -> dict[str, Any] | None:
     return answer[1]
 
 
+# ---- the local player's look ------------------------------------------------------
+
+
+def _local_bundle() -> dict[str, Any]:
+    """This node's own idea of its player's look: its inventory's equipped
+    items on both sides (a node keeps one equip per weapon), and its agents."""
+    from backend.modules.hassault import cosmetics, results
+    from backend.modules.hassault.skins import skin_dict, skin_manager
+    from backend.modules.settings.routes import get_value
+
+    known = skin_dict()
+    equipped = [
+        item.to_dict(known.get(item.skin_id))
+        for item in skin_manager.get_inventory(results.current_account_id())
+        if item.is_equipped
+    ]
+    agents = cosmetics.agents_for(get_value(cosmetics.AGENTS_KEY, None))
+    return cosmetics.bundle(agents, {side: equipped for side in ("t", "ct")})
+
+
+async def local_look() -> tuple[dict[str, dict[str, int]], dict[str, Any]]:
+    """The loadouts and look this node's player joins its own rooms with.
+
+    Loadouts come from the node's settings bag, which follows the account. The
+    look is the game server's when the account is kept there, else this node's.
+    Never raises: a look is not a reason a join fails.
+    """
+    from backend.modules.hassault import cosmetics, weapons
+    from backend.modules.settings.routes import get_value
+
+    loadouts = weapons.loadouts_for(get_value("hassault.loadout", None))
+    try:
+        if await active_account() is not None:
+            answer = await request("GET", "/cosmetics")
+            if answer is not None and answer[0] == 200:
+                return loadouts, cosmetics.clean_bundle(answer[1])
+        return loadouts, _local_bundle()
+    except Exception:  # noqa: BLE001 - a look is never why a join fails
+        logger.debug("hassault: could not build the local look", exc_info=True)
+        return loadouts, cosmetics.default_bundle()
+
+
 # ---- settings --------------------------------------------------------------------
 
 

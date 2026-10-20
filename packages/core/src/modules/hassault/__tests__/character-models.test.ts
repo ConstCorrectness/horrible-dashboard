@@ -137,7 +137,11 @@ describe('hAssault operator skins', () => {
 
 describe('hAssault operator model', () => {
   it('exposes the skeleton by sanitised bone name', () => {
-    const model = new CharacterModel(THREE, makeAsset(), 0, 'TestOperator', 'arc_default');
+    const model = new CharacterModel(THREE, makeAsset(), 0, 'TestOperator', {
+      id: 'arc_default',
+      armor: '#4a3b2c',
+      trim: '#f2e2c4',
+    });
     expect(model.bones.get('Hips')).toBeDefined();
     expect(model.bones.get('RightHand')).toBeDefined();
     expect(model.bones.size).toBe(BONE_NAMES.length);

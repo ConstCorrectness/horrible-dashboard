@@ -500,6 +500,43 @@ def _m12_hassault_accounts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m13_hassault_equips(conn: sqlite3.Connection) -> None:
+    """hassault equips per side: which item sits on which weapon for T and CT.
+
+    `hassault_items.equipped` said only "on", so one skin covered both sides.
+    A row here is one side's choice for one weapon, keyed so a side can hold
+    one per weapon; `equipped` stays, meaning "on for some side", for the
+    inventory's `isEquipped`. Seeded from it: what was on is on for both.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS hassault_equips (
+            account_id  TEXT NOT NULL,
+            side        TEXT NOT NULL,
+            weapon_id   TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            PRIMARY KEY (account_id, side, weapon_id)
+        );
+        """
+    )
+    from backend.modules.hassault.skins import skin_dict
+
+    known = skin_dict()
+    rows = conn.execute(
+        "SELECT owner_id, def_id, instance_id FROM hassault_items "
+        "WHERE equipped = 1 AND state = 'owned'"
+    ).fetchall()
+    for row in rows:
+        definition = known.get(str(row["def_id"]))
+        if definition is None:
+            continue
+        for side in ("t", "ct"):
+            conn.execute(
+                "INSERT OR IGNORE INTO hassault_equips VALUES (?, ?, ?, ?)",
+                (row["owner_id"], side, definition.weapon_id, row["instance_id"]),
+            )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -513,6 +550,7 @@ MIGRATIONS: list[Any] = [
     _m10_person_devices,
     _m11_account_identities,
     _m12_hassault_accounts,
+    _m13_hassault_equips,
 ]
 
 

@@ -4,6 +4,7 @@ import { registry } from '../../../registry';
 import {
   claimLevelUpDrop,
   equipSkin,
+  unequipSkin,
   executeTradeUp,
   getDropStatus,
   getSkinInventory,
@@ -82,6 +83,24 @@ export function ArmoryMarketplace() {
       );
     });
   }, []);
+
+  /**
+   * Put an item on, or take it off, one side. Only offered where the server
+   * keeps the account (`equippedSides` present); the answer is re-read rather
+   * than guessed, because equipping one side can take another item off it.
+   */
+  const toggleSide = async (item: SkinInstance, side: 't' | 'ct') => {
+    try {
+      if (item.equippedSides?.includes(side)) {
+        if (item.definition) await unequipSkin(item.definition.weaponId, side);
+      } else {
+        await equipSkin(item.instanceId, side);
+      }
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not equip item');
+    }
+  };
 
   const handleEquip = async (instanceId: string) => {
     try {
@@ -431,7 +450,9 @@ export function ArmoryMarketplace() {
                             fontWeight: 800,
                           }}
                         >
-                          EQUIPPED
+                          {item.equippedSides && item.equippedSides.length > 0
+                            ? `EQUIPPED · ${item.equippedSides.map((s) => s.toUpperCase()).join('+')}`
+                            : 'EQUIPPED'}
                         </span>
                       )}
                     </div>
@@ -483,15 +504,35 @@ export function ArmoryMarketplace() {
                     </div>
 
                     <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.2rem' }}>
-                      <button
-                        type="button"
-                        className={item.isEquipped ? 'games-ghost-btn' : 'games-play-btn'}
-                        style={{ fontSize: '0.7rem', padding: '2px 8px', flex: 1 }}
-                        onClick={() => handleEquip(item.instanceId)}
-                        disabled={item.isEquipped}
-                      >
-                        {item.isEquipped ? 'Equipped' : 'Equip Slot'}
-                      </button>
+                      {item.equippedSides ? (
+                        // Per side: a skin can be on for T, CT, or both.
+                        (['t', 'ct'] as const).map((side) => {
+                          const on = item.equippedSides?.includes(side) ?? false;
+                          return (
+                            <button
+                              key={side}
+                              type="button"
+                              className={on ? 'games-play-btn' : 'games-ghost-btn'}
+                              style={{ fontSize: '0.7rem', padding: '2px 8px', flex: 1 }}
+                              onClick={() => toggleSide(item, side)}
+                              aria-pressed={on}
+                              title={on ? `Take off for ${side.toUpperCase()}` : `Equip for ${side.toUpperCase()}`}
+                            >
+                              {side.toUpperCase()}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <button
+                          type="button"
+                          className={item.isEquipped ? 'games-ghost-btn' : 'games-play-btn'}
+                          style={{ fontSize: '0.7rem', padding: '2px 8px', flex: 1 }}
+                          onClick={() => handleEquip(item.instanceId)}
+                          disabled={item.isEquipped}
+                        >
+                          {item.isEquipped ? 'Equipped' : 'Equip Slot'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="games-ghost-btn"

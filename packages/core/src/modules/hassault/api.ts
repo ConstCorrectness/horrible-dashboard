@@ -4,6 +4,7 @@
  */
 import { apiDelete, apiGet, apiPost } from '../../api';
 import type { DrillSpec, DrillSummary } from './training-drill';
+import type { AgentSpec } from './cosmetics';
 import type { ItemRow } from './net';
 import { apiUrl } from '../../origin';
 
@@ -733,6 +734,9 @@ export interface SkinInstance {
   patternSeed: number;
   acquiredAt: number;
   isEquipped: boolean;
+  /** The sides it is on, where the game server keeps the account. Absent
+   * from a node's own inventory, which has one equip per weapon. */
+  equippedSides?: ('t' | 'ct')[];
   isTradable: boolean;
   statTrackerKills: number | null;
   definition?: SkinDefinition;
@@ -746,9 +750,20 @@ export function getSkinInventory(): Promise<SkinInstance[]> {
   return apiGet<SkinInstance[]>('/hassault/skins/inventory');
 }
 
-export function equipSkin(instanceId: string): Promise<{ ok: boolean }> {
+/** Equip an item, for one side or (no `side`) both. */
+export function equipSkin(instanceId: string, side?: 't' | 'ct'): Promise<{ ok: boolean }> {
+  const query = side ? `&side=${side}` : '';
   return apiPost<{ ok: boolean }>(
-    `/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}`,
+    `/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}${query}`,
+    {},
+  );
+}
+
+/** Take the skin off a weapon for one side, or both. Server-kept accounts only. */
+export function unequipSkin(weaponId: string, side?: 't' | 'ct'): Promise<{ ok: boolean }> {
+  const query = side ? `&side=${side}` : '';
+  return apiPost<{ ok: boolean }>(
+    `/hassault/skins/unequip?weapon_id=${encodeURIComponent(weaponId)}${query}`,
     {},
   );
 }
@@ -798,6 +813,11 @@ export function getCatalogStatus(): Promise<CatalogStatus> {
 
 export function listMaps(): Promise<MapSummary[]> {
   return apiGet<MapSummary[]>('/hassault/maps');
+}
+
+/** The agents a player may wear, and on which sides (`cosmetics.py`). */
+export function listAgents(): Promise<AgentSpec[]> {
+  return apiGet<AgentSpec[]>('/hassault/agents');
 }
 
 /** The aim drills a player on `map` can start: its own, plus the any-map ones. */

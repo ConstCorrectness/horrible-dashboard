@@ -7,6 +7,7 @@
  */
 import { reportActivity } from './activity';
 import type { MatchInvite } from './api';
+import { parseCosmetics, parseCosmeticsMap, type Cosmetics } from './cosmetics';
 import { clearInviteNotification } from './invite-notify';
 import { subscribeChannel, sendChannel } from '../../ws';
 import {
@@ -157,6 +158,12 @@ export interface SessionState {
   chat: ChatLine[];
   /** Why the last message was refused ("slow down"), cleared by the next accepted one. */
   chatNotice: string;
+  /**
+   * How each player looks, by player id (`cosmetics.ts`): the welcome's copy,
+   * then each `joined` and `cosmetics` event. A player missing here is drawn
+   * as the team default, which is also what an older server means.
+   */
+  cosmetics: Record<string, Cosmetics>;
 }
 
 /** One chat message, exactly as `backend/modules/hassault/chat.py` stamps it. */
@@ -367,6 +374,7 @@ export class MatchSession {
     lobbyError: '',
     chat: [],
     chatNotice: '',
+    cosmetics: {},
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
@@ -609,11 +617,11 @@ export class MatchSession {
     if (this.state.status === 'joined') sendChannel('hassault', 'respawn');
   }
 
-  /** The loadout to carry, `{primary, secondary}` weapon ids, applied at the
-   * next spawn. Kept and re-sent on every welcome, so it survives a rejoin. */
-  private loadoutChoice: Record<string, string> | null = null;
+  /** The loadout to carry, per side (`loadout.ts`), applied at the next spawn.
+   * Kept and re-sent on every welcome, so it survives a rejoin. */
+  private loadoutChoice: Record<string, unknown> | null = null;
 
-  setLoadout(choice: Record<string, string> | null): void {
+  setLoadout(choice: Record<string, unknown> | null): void {
     this.loadoutChoice = choice;
     if (choice && this.state.status === 'joined') sendChannel('hassault', 'loadout', choice);
   }
@@ -685,6 +693,7 @@ export class MatchSession {
         // mid-round otherwise shows a round clock reading zero, which looks
         // exactly like the round having just ended.
         this.state.modeState = (data.mode as ModeShared | undefined) ?? null;
+        this.state.cosmetics = parseCosmeticsMap(data.cosmetics);
         this.absorbRoomSettings(data.roomSettings);
         if (this.loadoutChoice) sendChannel('hassault', 'loadout', this.loadoutChoice);
         if (this.state.mode && (this.state.mode.v ?? 0) > SUPPORTED_MODE_V) {
@@ -850,10 +859,32 @@ export class MatchSession {
       case 'joined':
       case 'left': {
         // Membership is re-derived from the next snapshot; these events only
-        // matter for reacting immediately rather than up to 50 ms later.
+        // matter for reacting immediately rather than up to 50 ms later — and
+        // for the newcomer's look, which no snapshot carries.
         if (msg.event === 'left') {
           const gone = String(data.playerId ?? '');
           this.state.peers = this.state.peers.filter((p) => p.id !== gone);
+          if (this.state.cosmetics[gone]) {
+            const rest = { ...this.state.cosmetics };
+            delete rest[gone];
+            this.state.cosmetics = rest;
+          }
+          this.emit();
+        } else {
+          const id = String((data.player as { id?: unknown } | undefined)?.id ?? '');
+          const look = parseCosmetics(data.cosmetics);
+          if (id && look) {
+            this.state.cosmetics = { ...this.state.cosmetics, [id]: look };
+            this.emit();
+          }
+        }
+        break;
+      }
+      case 'cosmetics': {
+        const id = String(data.playerId ?? '');
+        const look = parseCosmetics(data.cosmetics);
+        if (id && look) {
+          this.state.cosmetics = { ...this.state.cosmetics, [id]: look };
           this.emit();
         }
         break;
@@ -1096,6 +1127,7 @@ export class MatchSession {
       // A match's chat belongs to that match; the lobby has its own.
       chat: [],
       chatNotice: '',
+      cosmetics: {},
     };
     this.predictor.reset();
     this.snapshots.clear();

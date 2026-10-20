@@ -467,6 +467,14 @@ class MatchPlayer:
     #: next spawn (`reset_loadout`), never mid-life: a loadout change is a
     #: decision about the next fight, not a way out of this one.
     loadout: dict[str, int] = field(default_factory=weapons.loadout_for)
+    #: The loadout per side, `{t: {...}, ct: {...}}`, when one was chosen. The
+    #: active `loadout` is re-picked from it by team at every spawn, so a side
+    #: swap carries the other side's guns from the next life.
+    loadouts: dict[str, dict[str, int]] | None = None
+    #: How this player looks to everyone else (`cosmetics.py`): an agent and
+    #: weapon skins per side. Sent in the welcome, `joined` and `cosmetics`
+    #: events, never in a snapshot.
+    cosmetics: dict[str, Any] | None = None
     #: Weapon indexes in hand. A switch to anything else is refused, which
     #: is what makes a loadout a loadout. Modes may answer differently
     #: (`GameMode.holds`): defuse holds what was bought.
@@ -631,6 +639,8 @@ class MatchPlayer:
         # with it would make the pickup that exists to be fought over a top-up.
         self.armour = 0.0
         self.alive = True
+        if self.loadouts:
+            self.loadout = dict(self.loadouts[weapons.side_of(self.team)])
         self.held = set(self.loadout.values())
         self.weapon = self.loadout["primary"]
         self.ammo = {i: w.mag for i, w in enumerate(weapons.WEAPONS)}
@@ -975,6 +985,8 @@ class MatchRoom:
         conn: Any,
         brain: BotBrain | None = None,
         team: int | None = None,
+        loadouts: dict[str, dict[str, int]] | None = None,
+        cosmetics: dict[str, Any] | None = None,
     ) -> MatchPlayer:
         chosen = self._balanced_team() if team is None else (1 if team else 0)
         player = MatchPlayer(
@@ -984,6 +996,8 @@ class MatchRoom:
             state=self._spawn_state(chosen),
             conn=conn,
             brain=brain,
+            loadouts=loadouts,
+            cosmetics=cosmetics,
         )
         player.reset_loadout()
         self.mode.outfit(self, player)
@@ -1124,11 +1138,21 @@ class MatchRoom:
     def set_loadout(self, player: MatchPlayer, choice: Any) -> dict[str, int]:
         """Record what `player` wants to carry, from `{slot: weapon id}`.
 
-        Takes effect at their next spawn. Validated slot by slot
-        (`weapons.loadout_for`), so a bad pick costs only that slot.
+        Takes effect at their next spawn. Either shape `weapons.loadouts_for`
+        reads: one loadout for both sides, or one per side. Validated slot by
+        slot and side by side, so a bad pick costs only that slot.
         """
-        player.loadout = weapons.loadout_for(choice)
+        player.loadouts = weapons.loadouts_for(choice)
+        player.loadout = dict(player.loadouts[weapons.side_of(player.team)])
         return player.loadout
+
+    def set_cosmetics(self, player: MatchPlayer, bundle: dict[str, Any]) -> None:
+        """Record how `player` looks. The caller broadcasts the change."""
+        player.cosmetics = bundle
+
+    def cosmetics_payload(self) -> dict[str, Any]:
+        """Every player's bundle that has one, by id: the welcome's copy."""
+        return {p.id: p.cosmetics for p in self.players.values() if p.cosmetics}
 
     def respawn(self, player: MatchPlayer) -> None:
         player.state = self._spawn_state(player.team)
@@ -2366,9 +2390,7 @@ class MatchRoom:
         if victim.armour > 0:
             # Some rounds ignore part of a vest (`Weapon.armor_pen`).
             pen = getattr(weapon, "armor_pen", 0.0)
-            absorbed = min(
-                victim.armour, amount * weapons.ARMOUR_ABSORB * (1.0 - pen)
-            )
+            absorbed = min(victim.armour, amount * weapons.ARMOUR_ABSORB * (1.0 - pen))
             victim.armour -= absorbed
             amount -= absorbed
 
@@ -2748,6 +2770,9 @@ class MatchRoom:
             # fabric changes at all, because `fabric.handle_join` sends this
             # payload verbatim as a guest's welcome.
             "mode": self.mode.welcome_state(self),
+            # Who looks like what (`cosmetics.py`), once. Later changes arrive as
+            # `joined` and `cosmetics` events; never in a snapshot.
+            "cosmetics": self.cosmetics_payload(),
         }
 
 
@@ -3144,6 +3169,8 @@ class MatchServer:
         name: str,
         room_id: str | None = None,
         mode: str | None = None,
+        loadouts: dict[str, dict[str, int]] | None = None,
+        cosmetics: dict[str, Any] | None = None,
     ) -> tuple[MatchRoom, MatchPlayer]:
         await self.leave(conn)
         if room_id:
@@ -3157,16 +3184,31 @@ class MatchServer:
             room = self.find_or_create(map_name, mode)
         if len(room.players) >= MAX_PLAYERS:
             raise ValueError("that match is full")
-        player = room.add(name[:MAX_NAME_LEN] or "player", conn)
+        player = room.add(
+            name[:MAX_NAME_LEN] or "player",
+            conn,
+            loadouts=loadouts,
+            cosmetics=cosmetics,
+        )
         self.membership[id(conn)] = (room.id, player.id)
         self.ensure_running()
-        await self.broadcast_event(
-            room,
-            "joined",
-            {"room": room.id, "player": player.snapshot(time.monotonic())},
-            player.id,
-        )
+        joined: dict[str, Any] = {
+            "room": room.id,
+            "player": player.snapshot(time.monotonic()),
+        }
+        if player.cosmetics:
+            joined["cosmetics"] = player.cosmetics
+        await self.broadcast_event(room, "joined", joined, player.id)
         return room, player
+
+    async def update_cosmetics(
+        self, room: MatchRoom, player: MatchPlayer, bundle: dict[str, Any]
+    ) -> None:
+        """Change how `player` looks, and tell the room, them included."""
+        room.set_cosmetics(player, bundle)
+        await self.broadcast_event(
+            room, "cosmetics", {"playerId": player.id, "cosmetics": bundle}
+        )
 
     async def leave(self, conn: WsConnection) -> dict[str, Any] | None:
         """Take this socket out of its room, returning how its player did.

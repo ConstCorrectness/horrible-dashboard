@@ -22,6 +22,7 @@ import {
   getItems,
   listWeapons,
   listDrills,
+  listAgents,
   getDrill,
   ONLINE_HOST,
   type TacticalSpec,
@@ -189,7 +190,8 @@ import {
 import { GrenadeController } from './utility';
 import { TrainingRange, type DrillStatus } from './training';
 import { setWeaponTable, visualId } from './weapon-visuals';
-import { LOADOUT_KEY, loadoutSlots, parseLoadout, serializeLoadout } from './loadout';
+import { LOADOUT_KEY, loadoutSlots, parseLoadouts, serializeLoadouts } from './loadout';
+import { AGENTS_KEY, parseAgents, serializeAgents, skinFor, type AgentSpec } from './cosmetics';
 import { readBests, recordBest, type DrillSummary } from './training-drill';
 import { DrillCard, DrillClock } from './panels/DrillCard';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
@@ -362,6 +364,7 @@ const EMPTY_SESSION: SessionState = {
   lobbyError: '',
   chat: [],
   chatNotice: '',
+  cosmetics: {},
 };
 
 interface SceneHandle {
@@ -657,9 +660,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const brightnessRef = useRef(1);
   brightnessRef.current = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
-  /** The loadout to carry (`loadout.ts`), sent on every welcome. */
+  /** The loadout to carry per side (`loadout.ts`), sent on every welcome. */
   const loadoutRaw = useSetting<string>(LOADOUT_KEY);
-  const loadoutChoice = useMemo(() => parseLoadout(loadoutRaw), [loadoutRaw]);
+  const loadoutChoice = useMemo(() => parseLoadouts(loadoutRaw), [loadoutRaw]);
+  /** The agent per side (`cosmetics.ts`). The server reads it from the account. */
+  const agentsRaw = useSetting<string>(AGENTS_KEY);
+  const agentChoice = useMemo(() => parseAgents(agentsRaw), [agentsRaw]);
+  const [agents, setAgents] = useState<AgentSpec[]>([]);
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
   const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
@@ -951,7 +958,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   if (sessionRef.current === null) sessionRef.current = paneMatch ?? new MatchSession();
   // The loadout rides the session, which re-sends it on every welcome.
   useEffect(() => {
-    sessionRef.current?.setLoadout(loadoutChoice ? { ...loadoutChoice } as Record<string, string> : null);
+    sessionRef.current?.setLoadout(loadoutChoice ? { ...loadoutChoice } : null);
   }, [loadoutChoice]);
   if (shotsRef.current === null) shotsRef.current = new ShotController();
   if (nadesRef.current === null) nadesRef.current = new GrenadeController();
@@ -1137,6 +1144,22 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // otherwise watch.
     sceneRef.current?.setFov(fov / (shotsRef.current?.magnification() ?? 1));
   }, [fov, scoped, progress.renderer]);
+
+  // The agents on offer. A failure is none offered: everyone wears the team
+  // default, which is what an older backend means anyway.
+  useEffect(() => {
+    let cancelled = false;
+    void listAgents()
+      .then((list) => {
+        if (!cancelled) setAgents(list);
+      })
+      .catch(() => {
+        if (!cancelled) setAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // The drills this map offers. A failure is an empty list: Train still works
   // as the free range, which is all a backend older than the route can give.
@@ -2383,6 +2406,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // builds and frees its wireframes inside `sync`, so the flag has to be
           // in force by the time it runs or the toggle lands a frame late.
           avatars.setHitboxes(showHitboxesRef.current);
+          // Who looks like what, from the server (`cosmetics.ts`). Offline the
+          // dummies have no bundle and wear the team defaults.
+          avatars.setLooks(online ? session.state.cosmetics : {});
           avatars.sync(remote, dt);
           remoteRowsRef.current = remote;
           // Straight off the newest snapshot rather than the interpolated
@@ -2713,9 +2739,21 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }
             lastHeldWeaponRef.current = heldWeapon;
           }
+          // Online, the server's bundle for the side we are on now: it is what
+          // everyone else sees us holding, so a CT-only skin is not shown on T.
+          // Offline (or an older server), the inventory's equips as before.
+          const ownLook =
+            online && session ? session.state.cosmetics[session.state.playerId] : undefined;
+          const ownTeam = online && session
+            ? session.state.peers.find((peer) => peer.id === session.state.playerId)?.team
+            : undefined;
           viewmodel.setWeapon(
             heldWeapon,
-            skinsRef.current[holdingNade ? heldWeapon : realWeapon] ?? null,
+            holdingNade
+              ? (skinsRef.current[heldWeapon] ?? null)
+              : ownLook
+                ? skinFor(ownLook, ownTeam, realWeapon)
+                : (skinsRef.current[realWeapon] ?? null),
           );
           // The reload's *progress*, from the two served numbers: how long it
           // takes (`reloadTime`, on the weapon) and how much is left
@@ -3665,7 +3703,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     if (range) {
       range.reset();
       range.setWeapons(weapons, Math.min(2, weapons.length - 1));
-      range.setLoadout(loadoutSlots(weapons, loadoutChoice));
+      // The range has no sides; its shooter carries the T pick.
+      range.setLoadout(loadoutSlots(weapons, loadoutChoice?.t, 't'));
       // Placed relative to where we are about to stand, so the nearest dummies
       // are the ones in front of you rather than the ones the map happens to
       // list first.
@@ -4745,8 +4784,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 onBotSkill={setBotSkill}
                 onTrain={train}
                 weapons={weapons}
-                loadout={loadoutChoice}
-                onLoadout={(choice) => setSetting(LOADOUT_KEY, serializeLoadout(choice))}
+                loadouts={loadoutChoice}
+                onLoadouts={(choice) => setSetting(LOADOUT_KEY, serializeLoadouts(choice))}
+                agents={agents}
+                agentChoice={agentChoice}
+                onAgents={(choice) => setSetting(AGENTS_KEY, serializeAgents(choice))}
                 drills={drills}
                 drillBests={readBests()}
                 onHost={host}

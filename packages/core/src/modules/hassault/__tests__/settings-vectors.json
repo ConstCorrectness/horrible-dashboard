@@ -58,6 +58,13 @@
    "document": true
   },
   {
+   "key": "hassault.agents",
+   "type": "string",
+   "default": "",
+   "scope": "account",
+   "document": true
+  },
+  {
    "key": "hassault.debug.hitboxes",
    "type": "boolean",
    "default": false,

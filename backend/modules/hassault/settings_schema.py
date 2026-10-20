@@ -118,9 +118,12 @@ SCHEMA: tuple[SettingSpec, ...] = (
     _flag("hassault.crouchToggle", False, "account"),
     _flag("hassault.voice.pushToTalk", False, "account"),
     _text("hassault.controls", "", "account", document=True),
-    # `{primary, secondary}` weapon ids, JSON. Validated server-side slot by slot
-    # (`weapons.loadout_for`), so a stale id costs only that slot.
+    # `{t: {primary, secondary}, ct: {...}}` weapon ids, JSON (or the older flat
+    # `{primary, secondary}` for both sides). Validated server-side slot by slot
+    # and side by side (`weapons.loadouts_for`), so a stale id costs one slot.
     _text("hassault.loadout", "", "account", document=True),
+    # Agent per side, `{t: id, ct: id}`, validated (`cosmetics.agents_for`).
+    _text("hassault.agents", "", "account", document=True),
     _flag("hassault.debug.hitboxes", False, "account", native=True),
     _flag("hassault.debug.grenadeArc", False, "account", native=True),
     # ---- the crosshair (spec v1, `crosshair.py`) ----

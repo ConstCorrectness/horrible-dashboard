@@ -1,0 +1,3663 @@
+{
+  "minLuma": 0.14,
+  "palettes": [
+    {
+      "name": "no skin",
+      "skin": null,
+      "palette": {
+        "body": [
+          0.227451,
+          0.25098,
+          0.282353
+        ],
+        "dark": [
+          0.109804,
+          0.12549,
+          0.14902
+        ],
+        "grip": [
+          0.290196,
+          0.247059,
+          0.2
+        ],
+        "accent": [
+          0.541176,
+          0.572549,
+          0.611765
+        ]
+      }
+    },
+    {
+      "name": "knife_fade at 0.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.219608,
+          0.741176,
+          0.972549
+        ],
+        "dark": [
+          0.588235,
+          0.494118,
+          0.670588
+        ],
+        "grip": [
+          0.956863,
+          0.247059,
+          0.368627
+        ],
+        "accent": [
+          0.967647,
+          0.435294,
+          0.526471
+        ]
+      }
+    },
+    {
+      "name": "knife_fade at 0.45",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.252608,
+          0.640235,
+          0.807549
+        ],
+        "dark": [
+          0.547471,
+          0.466262,
+          0.607403
+        ],
+        "grip": [
+          0.807392,
+          0.268412,
+          0.353098
+        ],
+        "accent": [
+          0.815507,
+          0.410059,
+          0.471875
+        ]
+      }
+    },
+    {
+      "name": "knife_fade at 1.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.292941,
+          0.516863,
+          0.605882
+        ],
+        "dark": [
+          0.497647,
+          0.432216,
+          0.530176
+        ],
+        "grip": [
+          0.624706,
+          0.29451,
+          0.334118
+        ],
+        "accent": [
+          0.629559,
+          0.379216,
+          0.405147
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_fade at 0.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.219608,
+          0.741176,
+          0.972549
+        ],
+        "dark": [
+          0.588235,
+          0.494118,
+          0.670588
+        ],
+        "grip": [
+          0.956863,
+          0.247059,
+          0.368627
+        ],
+        "accent": [
+          0.967647,
+          0.435294,
+          0.526471
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_fade at 0.45",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.252608,
+          0.640235,
+          0.807549
+        ],
+        "dark": [
+          0.547471,
+          0.466262,
+          0.607403
+        ],
+        "grip": [
+          0.807392,
+          0.268412,
+          0.353098
+        ],
+        "accent": [
+          0.815507,
+          0.410059,
+          0.471875
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_fade at 1.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.292941,
+          0.516863,
+          0.605882
+        ],
+        "dark": [
+          0.497647,
+          0.432216,
+          0.530176
+        ],
+        "grip": [
+          0.624706,
+          0.29451,
+          0.334118
+        ],
+        "accent": [
+          0.629559,
+          0.379216,
+          0.405147
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_doppler at 0.0",
+      "skin": {
+        "baseColor": "#1e1b4b",
+        "accentColor": "#ec4899",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.126927,
+          0.115286,
+          0.301542
+        ],
+        "dark": [
+          0.132602,
+          0.126014,
+          0.231419
+        ],
+        "grip": [
+          0.135832,
+          0.132121,
+          0.1915
+        ],
+        "accent": [
+          0.92549,
+          0.282353,
+          0.6
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_doppler at 0.45",
+      "skin": {
+        "baseColor": "#1e1b4b",
+        "accentColor": "#ec4899",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.175882,
+          0.162176,
+          0.297029
+        ],
+        "dark": [
+          0.13644,
+          0.127384,
+          0.214298
+        ],
+        "grip": [
+          0.140679,
+          0.132929,
+          0.174627
+        ],
+        "accent": [
+          0.783784,
+          0.294971,
+          0.527206
+        ]
+      }
+    },
+    {
+      "name": "knife_karambit_doppler at 1.0",
+      "skin": {
+        "baseColor": "#1e1b4b",
+        "accentColor": "#ec4899",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.247059,
+          0.23098,
+          0.300588
+        ],
+        "dark": [
+          0.179294,
+          0.167404,
+          0.226294
+        ],
+        "grip": [
+          0.212647,
+          0.20001,
+          0.214559
+        ],
+        "accent": [
+          0.610588,
+          0.310392,
+          0.438235
+        ]
+      }
+    },
+    {
+      "name": "knife_butterfly_marble at 0.0",
+      "skin": {
+        "baseColor": "#ef4444",
+        "accentColor": "#3b82f6",
+        "patternType": "fade",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.937255,
+          0.266667,
+          0.266667
+        ],
+        "dark": [
+          0.584314,
+          0.388235,
+          0.615686
+        ],
+        "grip": [
+          0.231373,
+          0.509804,
+          0.964706
+        ],
+        "accent": [
+          0.423529,
+          0.632353,
+          0.973529
+        ]
+      }
+    },
+    {
+      "name": "knife_butterfly_marble at 0.45",
+      "skin": {
+        "baseColor": "#ef4444",
+        "accentColor": "#3b82f6",
+        "patternType": "fade",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.792637,
+          0.283167,
+          0.276373
+        ],
+        "dark": [
+          0.544228,
+          0.378724,
+          0.562013
+        ],
+        "grip": [
+          0.261461,
+          0.466127,
+          0.801647
+        ],
+        "accent": [
+          0.406059,
+          0.558346,
+          0.808287
+        ]
+      }
+    },
+    {
+      "name": "knife_butterfly_marble at 1.0",
+      "skin": {
+        "baseColor": "#ef4444",
+        "accentColor": "#3b82f6",
+        "patternType": "fade",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.615882,
+          0.303333,
+          0.288235
+        ],
+        "dark": [
+          0.495235,
+          0.367098,
+          0.496412
+        ],
+        "grip": [
+          0.298235,
+          0.412745,
+          0.602353
+        ],
+        "accent": [
+          0.384706,
+          0.467892,
+          0.606324
+        ]
+      }
+    },
+    {
+      "name": "knife_bayonet_lore at 0.0",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#15803d",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.917647,
+          0.701961,
+          0.031373
+        ],
+        "dark": [
+          0.550588,
+          0.421176,
+          0.018824
+        ],
+        "grip": [
+          0.321176,
+          0.245686,
+          0.01098
+        ],
+        "accent": [
+          0.082353,
+          0.501961,
+          0.239216
+        ]
+      }
+    },
+    {
+      "name": "knife_bayonet_lore at 0.45",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#15803d",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.777882,
+          0.610725,
+          0.099314
+        ],
+        "dark": [
+          0.516346,
+          0.405958,
+          0.068556
+        ],
+        "grip": [
+          0.329038,
+          0.267379,
+          0.083969
+        ],
+        "accent": [
+          0.149324,
+          0.460225,
+          0.255716
+        ]
+      }
+    },
+    {
+      "name": "knife_bayonet_lore at 1.0",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#15803d",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.607059,
+          0.499216,
+          0.182353
+        ],
+        "dark": [
+          0.474494,
+          0.387357,
+          0.129341
+        ],
+        "grip": [
+          0.338647,
+          0.293892,
+          0.173176
+        ],
+        "accent": [
+          0.231176,
+          0.409216,
+          0.275882
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_crimson at 0.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.862745,
+          0.14902,
+          0.14902
+        ],
+        "dark": [
+          0.138725,
+          0.138725,
+          0.14991
+        ],
+        "grip": [
+          0.274084,
+          0.082809,
+          0.082809
+        ],
+        "accent": [
+          0.365882,
+          0.365882,
+          0.374118
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_crimson at 0.45",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.736569,
+          0.194637,
+          0.187843
+        ],
+        "dark": [
+          0.141809,
+          0.138423,
+          0.143377
+        ],
+        "grip": [
+          0.269133,
+          0.113898,
+          0.107104
+        ],
+        "accent": [
+          0.362679,
+          0.357826,
+          0.357229
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_crimson at 1.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.582353,
+          0.250392,
+          0.235294
+        ],
+        "dark": [
+          0.193765,
+          0.186216,
+          0.182882
+        ],
+        "grip": [
+          0.302824,
+          0.20211,
+          0.187012
+        ],
+        "accent": [
+          0.358765,
+          0.34798,
+          0.336588
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_fade at 0.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.219608,
+          0.741176,
+          0.972549
+        ],
+        "dark": [
+          0.588235,
+          0.494118,
+          0.670588
+        ],
+        "grip": [
+          0.956863,
+          0.247059,
+          0.368627
+        ],
+        "accent": [
+          0.967647,
+          0.435294,
+          0.526471
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_fade at 0.45",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.252608,
+          0.640235,
+          0.807549
+        ],
+        "dark": [
+          0.547471,
+          0.466262,
+          0.607403
+        ],
+        "grip": [
+          0.807392,
+          0.268412,
+          0.353098
+        ],
+        "accent": [
+          0.815507,
+          0.410059,
+          0.471875
+        ]
+      }
+    },
+    {
+      "name": "knife_skeleton_fade at 1.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#f43f5e",
+        "patternType": "fade",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.292941,
+          0.516863,
+          0.605882
+        ],
+        "dark": [
+          0.497647,
+          0.432216,
+          0.530176
+        ],
+        "grip": [
+          0.624706,
+          0.29451,
+          0.334118
+        ],
+        "accent": [
+          0.629559,
+          0.379216,
+          0.405147
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_case_hardened at 0.0",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.565686,
+          0.487647,
+          0.332745
+        ],
+        "dark": [
+          0.094314,
+          0.252353,
+          0.59902
+        ],
+        "grip": [
+          0.237647,
+          0.162353,
+          0.004706
+        ],
+        "accent": [
+          0.833725,
+          0.632941,
+          0.212549
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_case_hardened at 0.45",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.513032,
+          0.449454,
+          0.326097
+        ],
+        "dark": [
+          0.139121,
+          0.266383,
+          0.548234
+        ],
+        "grip": [
+          0.266182,
+          0.204671,
+          0.079247
+        ],
+        "accent": [
+          0.714731,
+          0.558788,
+          0.235649
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_case_hardened at 1.0",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.448676,
+          0.402775,
+          0.317971
+        ],
+        "dark": [
+          0.193885,
+          0.28353,
+          0.486162
+        ],
+        "grip": [
+          0.301059,
+          0.256392,
+          0.170353
+        ],
+        "accent": [
+          0.569294,
+          0.468157,
+          0.263882
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_slaughter at 0.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.72549,
+          0.109804,
+          0.109804
+        ],
+        "dark": [
+          0.435294,
+          0.065882,
+          0.065882
+        ],
+        "grip": [
+          0.284806,
+          0.078236,
+          0.078236
+        ],
+        "accent": [
+          0.498039,
+          0.113725,
+          0.113725
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_slaughter at 0.45",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.633284,
+          0.165127,
+          0.158333
+        ],
+        "dark": [
+          0.421026,
+          0.112218,
+          0.107462
+        ],
+        "grip": [
+          0.278429,
+          0.11142,
+          0.104625
+        ],
+        "accent": [
+          0.462127,
+          0.168078,
+          0.161284
+        ]
+      }
+    },
+    {
+      "name": "knife_huntsman_slaughter at 1.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.520588,
+          0.232745,
+          0.217647
+        ],
+        "dark": [
+          0.403588,
+          0.168851,
+          0.158282
+        ],
+        "grip": [
+          0.308382,
+          0.200627,
+          0.185529
+        ],
+        "accent": [
+          0.418235,
+          0.23451,
+          0.219412
+        ]
+      }
+    },
+    {
+      "name": "knife_damascus at 0.0",
+      "skin": {
+        "baseColor": "#e2e8f0",
+        "accentColor": "#64748b",
+        "patternType": "patina",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.713333,
+          0.750588,
+          0.802549
+        ],
+        "dark": [
+          0.254902,
+          0.295686,
+          0.354314
+        ],
+        "grip": [
+          0.265882,
+          0.272941,
+          0.282353
+        ],
+        "accent": [
+          0.90902,
+          0.927843,
+          0.952941
+        ]
+      }
+    },
+    {
+      "name": "knife_damascus at 0.45",
+      "skin": {
+        "baseColor": "#e2e8f0",
+        "accentColor": "#64748b",
+        "patternType": "patina",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.624136,
+          0.647318,
+          0.679624
+        ],
+        "dark": [
+          0.271887,
+          0.302209,
+          0.345923
+        ],
+        "grip": [
+          0.287429,
+          0.287888,
+          0.288176
+        ],
+        "accent": [
+          0.77139,
+          0.780702,
+          0.792794
+        ]
+      }
+    },
+    {
+      "name": "knife_damascus at 1.0",
+      "skin": {
+        "baseColor": "#e2e8f0",
+        "accentColor": "#64748b",
+        "patternType": "patina",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.515118,
+          0.521098,
+          0.529382
+        ],
+        "dark": [
+          0.292647,
+          0.31018,
+          0.335668
+        ],
+        "grip": [
+          0.313765,
+          0.306157,
+          0.295294
+        ],
+        "accent": [
+          0.603176,
+          0.600863,
+          0.597059
+        ]
+      }
+    },
+    {
+      "name": "knife_crimson at 0.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.862745,
+          0.14902,
+          0.14902
+        ],
+        "dark": [
+          0.138725,
+          0.138725,
+          0.14991
+        ],
+        "grip": [
+          0.274084,
+          0.082809,
+          0.082809
+        ],
+        "accent": [
+          0.365882,
+          0.365882,
+          0.374118
+        ]
+      }
+    },
+    {
+      "name": "knife_crimson at 0.45",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.736569,
+          0.194637,
+          0.187843
+        ],
+        "dark": [
+          0.141809,
+          0.138423,
+          0.143377
+        ],
+        "grip": [
+          0.269133,
+          0.113898,
+          0.107104
+        ],
+        "accent": [
+          0.362679,
+          0.357826,
+          0.357229
+        ]
+      }
+    },
+    {
+      "name": "knife_crimson at 1.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#18181b",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.582353,
+          0.250392,
+          0.235294
+        ],
+        "dark": [
+          0.193765,
+          0.186216,
+          0.182882
+        ],
+        "grip": [
+          0.302824,
+          0.20211,
+          0.187012
+        ],
+        "accent": [
+          0.358765,
+          0.34798,
+          0.336588
+        ]
+      }
+    },
+    {
+      "name": "knife_slaughter at 0.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.72549,
+          0.109804,
+          0.109804
+        ],
+        "dark": [
+          0.435294,
+          0.065882,
+          0.065882
+        ],
+        "grip": [
+          0.284806,
+          0.078236,
+          0.078236
+        ],
+        "accent": [
+          0.498039,
+          0.113725,
+          0.113725
+        ]
+      }
+    },
+    {
+      "name": "knife_slaughter at 0.45",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.633284,
+          0.165127,
+          0.158333
+        ],
+        "dark": [
+          0.421026,
+          0.112218,
+          0.107462
+        ],
+        "grip": [
+          0.278429,
+          0.11142,
+          0.104625
+        ],
+        "accent": [
+          0.462127,
+          0.168078,
+          0.161284
+        ]
+      }
+    },
+    {
+      "name": "knife_slaughter at 1.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#7f1d1d",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.520588,
+          0.232745,
+          0.217647
+        ],
+        "dark": [
+          0.403588,
+          0.168851,
+          0.158282
+        ],
+        "grip": [
+          0.308382,
+          0.200627,
+          0.185529
+        ],
+        "accent": [
+          0.418235,
+          0.23451,
+          0.219412
+        ]
+      }
+    },
+    {
+      "name": "knife_night at 0.0",
+      "skin": {
+        "baseColor": "#0f172a",
+        "accentColor": "#334155",
+        "patternType": "solid",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.111211,
+          0.140837,
+          0.211199
+        ],
+        "dark": [
+          0.126278,
+          0.140399,
+          0.173936
+        ],
+        "grip": [
+          0.116727,
+          0.143668,
+          0.182155
+        ],
+        "accent": [
+          0.2,
+          0.254902,
+          0.333333
+        ]
+      }
+    },
+    {
+      "name": "knife_night at 0.45",
+      "skin": {
+        "baseColor": "#0f172a",
+        "accentColor": "#334155",
+        "patternType": "solid",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.131618,
+          0.150373,
+          0.199647
+        ],
+        "dark": [
+          0.130801,
+          0.139898,
+          0.164652
+        ],
+        "grip": [
+          0.162603,
+          0.178407,
+          0.201123
+        ],
+        "accent": [
+          0.237853,
+          0.274314,
+          0.326539
+        ]
+      }
+    },
+    {
+      "name": "knife_night at 1.0",
+      "skin": {
+        "baseColor": "#0f172a",
+        "accentColor": "#334155",
+        "patternType": "solid",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.220588,
+          0.223922,
+          0.242353
+        ],
+        "dark": [
+          0.153971,
+          0.156069,
+          0.168412
+        ],
+        "grip": [
+          0.239118,
+          0.240686,
+          0.243235
+        ],
+        "accent": [
+          0.284118,
+          0.298039,
+          0.318235
+        ]
+      }
+    },
+    {
+      "name": "knife_ddpat at 0.0",
+      "skin": {
+        "baseColor": "#365314",
+        "accentColor": "#14532d",
+        "patternType": "camo",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.211765,
+          0.32549,
+          0.078431
+        ],
+        "dark": [
+          0.117365,
+          0.167293,
+          0.058829
+        ],
+        "grip": [
+          0.125098,
+          0.32549,
+          0.142157
+        ],
+        "accent": [
+          0.148235,
+          0.227843,
+          0.054902
+        ]
+      }
+    },
+    {
+      "name": "knife_ddpat at 0.45",
+      "skin": {
+        "baseColor": "#365314",
+        "accentColor": "#14532d",
+        "patternType": "camo",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.246706,
+          0.327431,
+          0.134725
+        ],
+        "dark": [
+          0.139931,
+          0.178845,
+          0.082174
+        ],
+        "grip": [
+          0.181489,
+          0.327431,
+          0.182679
+        ],
+        "accent": [
+          0.1989,
+          0.253952,
+          0.11702
+        ]
+      }
+    },
+    {
+      "name": "knife_ddpat at 1.0",
+      "skin": {
+        "baseColor": "#365314",
+        "accentColor": "#14532d",
+        "patternType": "camo",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.289412,
+          0.329804,
+          0.203529
+        ],
+        "dark": [
+          0.194488,
+          0.218413,
+          0.139471
+        ],
+        "grip": [
+          0.250412,
+          0.329804,
+          0.232206
+        ],
+        "accent": [
+          0.260824,
+          0.285863,
+          0.192941
+        ]
+      }
+    },
+    {
+      "name": "knife_case_hardened at 0.0",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.565686,
+          0.487647,
+          0.332745
+        ],
+        "dark": [
+          0.094314,
+          0.252353,
+          0.59902
+        ],
+        "grip": [
+          0.237647,
+          0.162353,
+          0.004706
+        ],
+        "accent": [
+          0.833725,
+          0.632941,
+          0.212549
+        ]
+      }
+    },
+    {
+      "name": "knife_case_hardened at 0.45",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.513032,
+          0.449454,
+          0.326097
+        ],
+        "dark": [
+          0.139121,
+          0.266383,
+          0.548234
+        ],
+        "grip": [
+          0.266182,
+          0.204671,
+          0.079247
+        ],
+        "accent": [
+          0.714731,
+          0.558788,
+          0.235649
+        ]
+      }
+    },
+    {
+      "name": "knife_case_hardened at 1.0",
+      "skin": {
+        "baseColor": "#ca8a04",
+        "accentColor": "#2563eb",
+        "patternType": "patina",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.448676,
+          0.402775,
+          0.317971
+        ],
+        "dark": [
+          0.193885,
+          0.28353,
+          0.486162
+        ],
+        "grip": [
+          0.301059,
+          0.256392,
+          0.170353
+        ],
+        "accent": [
+          0.569294,
+          0.468157,
+          0.263882
+        ]
+      }
+    },
+    {
+      "name": "knife_tiger_tooth at 0.0",
+      "skin": {
+        "baseColor": "#f59e0b",
+        "accentColor": "#78350f",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.960784,
+          0.619608,
+          0.043137
+        ],
+        "dark": [
+          0.576471,
+          0.371765,
+          0.025882
+        ],
+        "grip": [
+          0.336275,
+          0.216863,
+          0.015098
+        ],
+        "accent": [
+          0.470588,
+          0.207843,
+          0.058824
+        ]
+      }
+    },
+    {
+      "name": "knife_tiger_tooth at 0.45",
+      "skin": {
+        "baseColor": "#f59e0b",
+        "accentColor": "#78350f",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.810343,
+          0.548755,
+          0.108167
+        ],
+        "dark": [
+          0.537744,
+          0.365106,
+          0.074392
+        ],
+        "grip": [
+          0.3404,
+          0.245689,
+          0.087067
+        ],
+        "accent": [
+          0.441471,
+          0.238902,
+          0.119971
+        ]
+      }
+    },
+    {
+      "name": "knife_tiger_tooth at 1.0",
+      "skin": {
+        "baseColor": "#f59e0b",
+        "accentColor": "#78350f",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.626471,
+          0.462157,
+          0.187647
+        ],
+        "dark": [
+          0.490412,
+          0.356969,
+          0.133682
+        ],
+        "grip": [
+          0.345441,
+          0.280922,
+          0.175029
+        ],
+        "accent": [
+          0.405882,
+          0.276863,
+          0.194706
+        ]
+      }
+    },
+    {
+      "name": "sniper_dragonfire at 0.0",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#dc2626",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.917647,
+          0.701961,
+          0.031373
+        ],
+        "dark": [
+          0.862745,
+          0.14902,
+          0.14902
+        ],
+        "grip": [
+          0.256941,
+          0.196549,
+          0.008784
+        ],
+        "accent": [
+          0.903922,
+          0.404314,
+          0.404314
+        ]
+      }
+    },
+    {
+      "name": "sniper_dragonfire at 0.45",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#dc2626",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.777882,
+          0.610725,
+          0.099314
+        ],
+        "dark": [
+          0.774422,
+          0.180952,
+          0.176196
+        ],
+        "grip": [
+          0.280701,
+          0.230403,
+          0.082316
+        ],
+        "accent": [
+          0.767554,
+          0.386746,
+          0.379952
+        ]
+      }
+    },
+    {
+      "name": "sniper_dragonfire at 1.0",
+      "skin": {
+        "baseColor": "#eab308",
+        "accentColor": "#dc2626",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.607059,
+          0.499216,
+          0.182353
+        ],
+        "dark": [
+          0.666471,
+          0.21998,
+          0.209412
+        ],
+        "grip": [
+          0.309741,
+          0.27178,
+          0.172188
+        ],
+        "accent": [
+          0.600882,
+          0.365275,
+          0.350176
+        ]
+      }
+    },
+    {
+      "name": "assault_asiimov at 0.0",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.972549,
+          0.980392,
+          0.988235
+        ],
+        "dark": [
+          0.917647,
+          0.345098,
+          0.047059
+        ],
+        "grip": [
+          0.272314,
+          0.27451,
+          0.276706
+        ],
+        "accent": [
+          0.942353,
+          0.541569,
+          0.332941
+        ]
+      }
+    },
+    {
+      "name": "assault_asiimov at 0.45",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.819196,
+          0.820245,
+          0.819353
+        ],
+        "dark": [
+          0.819812,
+          0.34306,
+          0.0919
+        ],
+        "grip": [
+          0.292269,
+          0.289069,
+          0.283927
+        ],
+        "accent": [
+          0.796474,
+          0.49003,
+          0.326244
+        ]
+      }
+    },
+    {
+      "name": "assault_asiimov at 1.0",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.631765,
+          0.62451,
+          0.612941
+        ],
+        "dark": [
+          0.700235,
+          0.340569,
+          0.146706
+        ],
+        "grip": [
+          0.316659,
+          0.306863,
+          0.292753
+        ],
+        "accent": [
+          0.618176,
+          0.427039,
+          0.318059
+        ]
+      }
+    },
+    {
+      "name": "assault_printstream at 0.0",
+      "skin": {
+        "baseColor": "#ffffff",
+        "accentColor": "#1e1e2e",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "dark": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "grip": [
+          0.35,
+          0.35,
+          0.35
+        ],
+        "accent": [
+          0.132971,
+          0.132971,
+          0.194627
+        ]
+      }
+    },
+    {
+      "name": "assault_printstream at 0.45",
+      "skin": {
+        "baseColor": "#ffffff",
+        "accentColor": "#1e1e2e",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.839853,
+          0.835,
+          0.828206
+        ],
+        "dark": [
+          0.557197,
+          0.5538,
+          0.549044
+        ],
+        "grip": [
+          0.350728,
+          0.345875,
+          0.339081
+        ],
+        "accent": [
+          0.175882,
+          0.171029,
+          0.211451
+        ]
+      }
+    },
+    {
+      "name": "assault_printstream at 1.0",
+      "skin": {
+        "baseColor": "#ffffff",
+        "accentColor": "#1e1e2e",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.644118,
+          0.633333,
+          0.618235
+        ],
+        "dark": [
+          0.504882,
+          0.497333,
+          0.486765
+        ],
+        "grip": [
+          0.351618,
+          0.340833,
+          0.325735
+        ],
+        "accent": [
+          0.247059,
+          0.236275,
+          0.249412
+        ]
+      }
+    },
+    {
+      "name": "assault_howl at 0.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#f97316",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.862745,
+          0.14902,
+          0.14902
+        ],
+        "dark": [
+          0.976471,
+          0.45098,
+          0.086275
+        ],
+        "grip": [
+          0.274084,
+          0.082809,
+          0.082809
+        ],
+        "accent": [
+          0.983529,
+          0.615686,
+          0.360392
+        ]
+      }
+    },
+    {
+      "name": "assault_howl at 0.45",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#f97316",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.736569,
+          0.194637,
+          0.187843
+        ],
+        "dark": [
+          0.868444,
+          0.430598,
+          0.124322
+        ],
+        "grip": [
+          0.269133,
+          0.113898,
+          0.107104
+        ],
+        "accent": [
+          0.827459,
+          0.545804,
+          0.346901
+        ]
+      }
+    },
+    {
+      "name": "assault_howl at 1.0",
+      "skin": {
+        "baseColor": "#dc2626",
+        "accentColor": "#f97316",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.582353,
+          0.250392,
+          0.235294
+        ],
+        "dark": [
+          0.736412,
+          0.405686,
+          0.170824
+        ],
+        "grip": [
+          0.302824,
+          0.20211,
+          0.187012
+        ],
+        "accent": [
+          0.636706,
+          0.460392,
+          0.330412
+        ]
+      }
+    },
+    {
+      "name": "sniper_asiimov at 0.0",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.972549,
+          0.980392,
+          0.988235
+        ],
+        "dark": [
+          0.917647,
+          0.345098,
+          0.047059
+        ],
+        "grip": [
+          0.272314,
+          0.27451,
+          0.276706
+        ],
+        "accent": [
+          0.942353,
+          0.541569,
+          0.332941
+        ]
+      }
+    },
+    {
+      "name": "sniper_asiimov at 0.45",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.819196,
+          0.820245,
+          0.819353
+        ],
+        "dark": [
+          0.819812,
+          0.34306,
+          0.0919
+        ],
+        "grip": [
+          0.292269,
+          0.289069,
+          0.283927
+        ],
+        "accent": [
+          0.796474,
+          0.49003,
+          0.326244
+        ]
+      }
+    },
+    {
+      "name": "sniper_asiimov at 1.0",
+      "skin": {
+        "baseColor": "#f8fafc",
+        "accentColor": "#ea580c",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.631765,
+          0.62451,
+          0.612941
+        ],
+        "dark": [
+          0.700235,
+          0.340569,
+          0.146706
+        ],
+        "grip": [
+          0.316659,
+          0.306863,
+          0.292753
+        ],
+        "accent": [
+          0.618176,
+          0.427039,
+          0.318059
+        ]
+      }
+    },
+    {
+      "name": "pistol_emerald at 0.0",
+      "skin": {
+        "baseColor": "#10b981",
+        "accentColor": "#064e3b",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.062745,
+          0.72549,
+          0.505882
+        ],
+        "dark": [
+          0.037647,
+          0.435294,
+          0.303529
+        ],
+        "grip": [
+          0.021961,
+          0.253922,
+          0.177059
+        ],
+        "accent": [
+          0.023529,
+          0.305882,
+          0.231373
+        ]
+      }
+    },
+    {
+      "name": "pistol_emerald at 0.45",
+      "skin": {
+        "baseColor": "#10b981",
+        "accentColor": "#064e3b",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.134569,
+          0.628431,
+          0.456382
+        ],
+        "dark": [
+          0.092272,
+          0.417629,
+          0.303937
+        ],
+        "grip": [
+          0.103878,
+          0.273576,
+          0.208943
+        ],
+        "accent": [
+          0.105059,
+          0.312676,
+          0.249814
+        ]
+      }
+    },
+    {
+      "name": "pistol_emerald at 1.0",
+      "skin": {
+        "baseColor": "#10b981",
+        "accentColor": "#064e3b",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.222353,
+          0.509804,
+          0.395882
+        ],
+        "dark": [
+          0.159035,
+          0.396039,
+          0.304435
+        ],
+        "grip": [
+          0.204,
+          0.297598,
+          0.247912
+        ],
+        "accent": [
+          0.204706,
+          0.32098,
+          0.272353
+        ]
+      }
+    },
+    {
+      "name": "sniper_hyperbeast at 0.0",
+      "skin": {
+        "baseColor": "#06b6d4",
+        "accentColor": "#f43f5e",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.023529,
+          0.713725,
+          0.831373
+        ],
+        "dark": [
+          0.956863,
+          0.247059,
+          0.368627
+        ],
+        "grip": [
+          0.006588,
+          0.199843,
+          0.232784
+        ],
+        "accent": [
+          0.969804,
+          0.472941,
+          0.558039
+        ]
+      }
+    },
+    {
+      "name": "sniper_hyperbeast at 0.45",
+      "skin": {
+        "baseColor": "#06b6d4",
+        "accentColor": "#f43f5e",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.105059,
+          0.619578,
+          0.701314
+        ],
+        "dark": [
+          0.852233,
+          0.262006,
+          0.357757
+        ],
+        "grip": [
+          0.092311,
+          0.232882,
+          0.250876
+        ],
+        "accent": [
+          0.81713,
+          0.438388,
+          0.49563
+        ]
+      }
+    },
+    {
+      "name": "sniper_hyperbeast at 1.0",
+      "skin": {
+        "baseColor": "#06b6d4",
+        "accentColor": "#f43f5e",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.204706,
+          0.50451,
+          0.542353
+        ],
+        "dark": [
+          0.724353,
+          0.280275,
+          0.344471
+        ],
+        "grip": [
+          0.197082,
+          0.273263,
+          0.272988
+        ],
+        "accent": [
+          0.630529,
+          0.396157,
+          0.419353
+        ]
+      }
+    },
+    {
+      "name": "shotgun_vulcan at 0.0",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#0f172a",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.007843,
+          0.517647,
+          0.780392
+        ],
+        "dark": [
+          0.111211,
+          0.140837,
+          0.211199
+        ],
+        "grip": [
+          0.035128,
+          0.173162,
+          0.244303
+        ],
+        "accent": [
+          0.341176,
+          0.363137,
+          0.415294
+        ]
+      }
+    },
+    {
+      "name": "shotgun_vulcan at 0.45",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#0f172a",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.093255,
+          0.472029,
+          0.662951
+        ],
+        "dark": [
+          0.117923,
+          0.140257,
+          0.196582
+        ],
+        "grip": [
+          0.089005,
+          0.191568,
+          0.240135
+        ],
+        "accent": [
+          0.344088,
+          0.355761,
+          0.388215
+        ]
+      }
+    },
+    {
+      "name": "shotgun_vulcan at 1.0",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#0f172a",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.197647,
+          0.416275,
+          0.519412
+        ],
+        "dark": [
+          0.172059,
+          0.183804,
+          0.219059
+        ],
+        "grip": [
+          0.195106,
+          0.248557,
+          0.266565
+        ],
+        "accent": [
+          0.347647,
+          0.346745,
+          0.355118
+        ]
+      }
+    },
+    {
+      "name": "pistol_kill_confirmed at 0.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#fbbf24",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.72549,
+          0.109804,
+          0.109804
+        ],
+        "dark": [
+          0.984314,
+          0.74902,
+          0.141176
+        ],
+        "grip": [
+          0.253248,
+          0.091696,
+          0.091696
+        ],
+        "accent": [
+          0.98902,
+          0.824314,
+          0.398824
+        ]
+      }
+    },
+    {
+      "name": "pistol_kill_confirmed at 0.45",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#fbbf24",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.633284,
+          0.165127,
+          0.158333
+        ],
+        "dark": [
+          0.874928,
+          0.677002,
+          0.169712
+        ],
+        "grip": [
+          0.240214,
+          0.105636,
+          0.098842
+        ],
+        "accent": [
+          0.83159,
+          0.702796,
+          0.375821
+        ]
+      }
+    },
+    {
+      "name": "pistol_kill_confirmed at 1.0",
+      "skin": {
+        "baseColor": "#b91c1c",
+        "accentColor": "#fbbf24",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.520588,
+          0.232745,
+          0.217647
+        ],
+        "dark": [
+          0.741235,
+          0.58898,
+          0.204588
+        ],
+        "grip": [
+          0.285529,
+          0.197169,
+          0.182071
+        ],
+        "accent": [
+          0.639176,
+          0.554275,
+          0.347706
+        ]
+      }
+    },
+    {
+      "name": "assault_redline at 0.0",
+      "skin": {
+        "baseColor": "#18181b",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.138725,
+          0.138725,
+          0.14991
+        ],
+        "dark": [
+          0.937255,
+          0.266667,
+          0.266667
+        ],
+        "grip": [
+          0.139668,
+          0.139668,
+          0.142579
+        ],
+        "accent": [
+          0.956078,
+          0.486667,
+          0.486667
+        ]
+      }
+    },
+    {
+      "name": "assault_redline at 0.45",
+      "skin": {
+        "baseColor": "#18181b",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.158176,
+          0.153324,
+          0.155382
+        ],
+        "dark": [
+          0.836023,
+          0.278217,
+          0.273461
+        ],
+        "grip": [
+          0.143734,
+          0.13908,
+          0.134942
+        ],
+        "accent": [
+          0.806802,
+          0.448717,
+          0.441923
+        ]
+      }
+    },
+    {
+      "name": "assault_redline at 1.0",
+      "skin": {
+        "baseColor": "#18181b",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.236471,
+          0.225686,
+          0.215882
+        ],
+        "dark": [
+          0.712294,
+          0.292333,
+          0.281765
+        ],
+        "grip": [
+          0.205976,
+          0.195192,
+          0.181576
+        ],
+        "accent": [
+          0.624353,
+          0.402333,
+          0.387235
+        ]
+      }
+    },
+    {
+      "name": "shotgun_heat at 0.0",
+      "skin": {
+        "baseColor": "#27272a",
+        "accentColor": "#f97316",
+        "patternType": "anodized",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.152941,
+          0.152941,
+          0.164706
+        ],
+        "dark": [
+          0.139237,
+          0.139237,
+          0.145927
+        ],
+        "grip": [
+          0.139573,
+          0.139573,
+          0.143317
+        ],
+        "accent": [
+          0.976471,
+          0.45098,
+          0.086275
+        ]
+      }
+    },
+    {
+      "name": "shotgun_heat at 0.45",
+      "skin": {
+        "baseColor": "#27272a",
+        "accentColor": "#f97316",
+        "patternType": "anodized",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.202441,
+          0.197588,
+          0.199647
+        ],
+        "dark": [
+          0.142245,
+          0.138868,
+          0.139942
+        ],
+        "grip": [
+          0.143753,
+          0.138989,
+          0.135362
+        ],
+        "accent": [
+          0.822147,
+          0.421863,
+          0.140627
+        ]
+      }
+    },
+    {
+      "name": "shotgun_heat at 1.0",
+      "skin": {
+        "baseColor": "#27272a",
+        "accentColor": "#f97316",
+        "patternType": "anodized",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.262941,
+          0.252157,
+          0.242353
+        ],
+        "dark": [
+          0.192318,
+          0.184769,
+          0.178541
+        ],
+        "grip": [
+          0.218206,
+          0.207422,
+          0.194176
+        ],
+        "accent": [
+          0.633529,
+          0.386275,
+          0.207059
+        ]
+      }
+    },
+    {
+      "name": "pistol_case_hardened at 0.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#d97706",
+        "patternType": "patina",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.440588,
+          0.645098,
+          0.640392
+        ],
+        "dark": [
+          0.553137,
+          0.303333,
+          0.015294
+        ],
+        "grip": [
+          0.065882,
+          0.222353,
+          0.291765
+        ],
+        "accent": [
+          0.375686,
+          0.792941,
+          0.978039
+        ]
+      }
+    },
+    {
+      "name": "pistol_case_hardened at 0.45",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#d97706",
+        "patternType": "patina",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.418896,
+          0.567936,
+          0.557601
+        ],
+        "dark": [
+          0.518453,
+          0.308531,
+          0.065639
+        ],
+        "grip": [
+          0.136929,
+          0.249821,
+          0.295259
+        ],
+        "accent": [
+          0.370057,
+          0.679188,
+          0.81168
+        ]
+      }
+    },
+    {
+      "name": "pistol_case_hardened at 1.0",
+      "skin": {
+        "baseColor": "#38bdf8",
+        "accentColor": "#d97706",
+        "patternType": "patina",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.392382,
+          0.473627,
+          0.456412
+        ],
+        "dark": [
+          0.476062,
+          0.314883,
+          0.127171
+        ],
+        "grip": [
+          0.223765,
+          0.283392,
+          0.299529
+        ],
+        "accent": [
+          0.363176,
+          0.540157,
+          0.608353
+        ]
+      }
+    },
+    {
+      "name": "assault_slate at 0.0",
+      "skin": {
+        "baseColor": "#09090b",
+        "accentColor": "#27272a",
+        "patternType": "solid",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.139202,
+          0.139202,
+          0.146201
+        ],
+        "dark": [
+          0.139608,
+          0.139608,
+          0.143043
+        ],
+        "grip": [
+          0.139375,
+          0.139375,
+          0.144857
+        ],
+        "accent": [
+          0.152941,
+          0.152941,
+          0.164706
+        ]
+      }
+    },
+    {
+      "name": "assault_slate at 0.45",
+      "skin": {
+        "baseColor": "#09090b",
+        "accentColor": "#27272a",
+        "patternType": "solid",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.143387,
+          0.138696,
+          0.137833
+        ],
+        "dark": [
+          0.14237,
+          0.139218,
+          0.137813
+        ],
+        "grip": [
+          0.144897,
+          0.140044,
+          0.137676
+        ],
+        "accent": [
+          0.202441,
+          0.197588,
+          0.199647
+        ]
+      }
+    },
+    {
+      "name": "assault_slate at 1.0",
+      "skin": {
+        "baseColor": "#09090b",
+        "accentColor": "#27272a",
+        "patternType": "solid",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.21,
+          0.199216,
+          0.187647
+        ],
+        "dark": [
+          0.146735,
+          0.139186,
+          0.131029
+        ],
+        "grip": [
+          0.228529,
+          0.217745,
+          0.205294
+        ],
+        "accent": [
+          0.262941,
+          0.252157,
+          0.242353
+        ]
+      }
+    },
+    {
+      "name": "sniper_cortex at 0.0",
+      "skin": {
+        "baseColor": "#f472b6",
+        "accentColor": "#1e293b",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.956863,
+          0.447059,
+          0.713725
+        ],
+        "dark": [
+          0.117647,
+          0.160784,
+          0.231373
+        ],
+        "grip": [
+          0.267922,
+          0.125176,
+          0.199843
+        ],
+        "accent": [
+          0.382353,
+          0.412549,
+          0.461961
+        ]
+      }
+    },
+    {
+      "name": "sniper_cortex at 0.45",
+      "skin": {
+        "baseColor": "#f472b6",
+        "accentColor": "#1e293b",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.807392,
+          0.418912,
+          0.612784
+        ],
+        "dark": [
+          0.158412,
+          0.190678,
+          0.244281
+        ],
+        "grip": [
+          0.288964,
+          0.176695,
+          0.226088
+        ],
+        "accent": [
+          0.375074,
+          0.392943,
+          0.423331
+        ]
+      }
+    },
+    {
+      "name": "sniper_cortex at 1.0",
+      "skin": {
+        "baseColor": "#f472b6",
+        "accentColor": "#1e293b",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.624706,
+          0.38451,
+          0.489412
+        ],
+        "dark": [
+          0.208235,
+          0.227216,
+          0.260059
+        ],
+        "grip": [
+          0.314682,
+          0.239663,
+          0.258165
+        ],
+        "accent": [
+          0.366176,
+          0.36898,
+          0.376118
+        ]
+      }
+    },
+    {
+      "name": "pistol_glock_water at 0.0",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.007843,
+          0.517647,
+          0.780392
+        ],
+        "dark": [
+          0.937255,
+          0.266667,
+          0.266667
+        ],
+        "grip": [
+          0.035128,
+          0.173162,
+          0.244303
+        ],
+        "accent": [
+          0.956078,
+          0.486667,
+          0.486667
+        ]
+      }
+    },
+    {
+      "name": "pistol_glock_water at 0.45",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.093255,
+          0.472029,
+          0.662951
+        ],
+        "dark": [
+          0.836023,
+          0.278217,
+          0.273461
+        ],
+        "grip": [
+          0.089005,
+          0.191568,
+          0.240135
+        ],
+        "accent": [
+          0.806802,
+          0.448717,
+          0.441923
+        ]
+      }
+    },
+    {
+      "name": "pistol_glock_water at 1.0",
+      "skin": {
+        "baseColor": "#0284c7",
+        "accentColor": "#ef4444",
+        "patternType": "custom_art",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.197647,
+          0.416275,
+          0.519412
+        ],
+        "dark": [
+          0.712294,
+          0.292333,
+          0.281765
+        ],
+        "grip": [
+          0.195106,
+          0.248557,
+          0.266565
+        ],
+        "accent": [
+          0.624353,
+          0.402333,
+          0.387235
+        ]
+      }
+    },
+    {
+      "name": "shotgun_sand_dune at 0.0",
+      "skin": {
+        "baseColor": "#d4b996",
+        "accentColor": "#8c7853",
+        "patternType": "camo",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.831373,
+          0.72549,
+          0.588235
+        ],
+        "dark": [
+          0.374118,
+          0.326471,
+          0.264706
+        ],
+        "grip": [
+          0.647843,
+          0.559804,
+          0.417451
+        ],
+        "accent": [
+          0.581961,
+          0.507843,
+          0.411765
+        ]
+      }
+    },
+    {
+      "name": "shotgun_sand_dune at 0.45",
+      "skin": {
+        "baseColor": "#d4b996",
+        "accentColor": "#8c7853",
+        "patternType": "camo",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.712961,
+          0.628431,
+          0.518353
+        ],
+        "dark": [
+          0.370449,
+          0.32766,
+          0.27184
+        ],
+        "grip": [
+          0.574855,
+          0.503752,
+          0.389838
+        ],
+        "accent": [
+          0.525278,
+          0.464652,
+          0.385559
+        ]
+      }
+    },
+    {
+      "name": "shotgun_sand_dune at 1.0",
+      "skin": {
+        "baseColor": "#d4b996",
+        "accentColor": "#8c7853",
+        "patternType": "camo",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.568235,
+          0.509804,
+          0.432941
+        ],
+        "dark": [
+          0.365965,
+          0.329113,
+          0.280559
+        ],
+        "grip": [
+          0.485647,
+          0.435245,
+          0.356088
+        ],
+        "accent": [
+          0.456,
+          0.411863,
+          0.353529
+        ]
+      }
+    },
+    {
+      "name": "assault_safari at 0.0",
+      "skin": {
+        "baseColor": "#847c64",
+        "accentColor": "#3f3b2f",
+        "patternType": "camo",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.517647,
+          0.486275,
+          0.392157
+        ],
+        "dark": [
+          0.232941,
+          0.218824,
+          0.176471
+        ],
+        "grip": [
+          0.341765,
+          0.320588,
+          0.257059
+        ],
+        "accent": [
+          0.362353,
+          0.340392,
+          0.27451
+        ]
+      }
+    },
+    {
+      "name": "assault_safari at 0.45",
+      "skin": {
+        "baseColor": "#847c64",
+        "accentColor": "#3f3b2f",
+        "patternType": "camo",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.476882,
+          0.448422,
+          0.370804
+        ],
+        "dark": [
+          0.253731,
+          0.238662,
+          0.198891
+        ],
+        "grip": [
+          0.344531,
+          0.323743,
+          0.269143
+        ],
+        "accent": [
+          0.360024,
+          0.338645,
+          0.282275
+        ]
+      }
+    },
+    {
+      "name": "assault_safari at 1.0",
+      "skin": {
+        "baseColor": "#847c64",
+        "accentColor": "#3f3b2f",
+        "patternType": "camo",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.427059,
+          0.402157,
+          0.344706
+        ],
+        "dark": [
+          0.279141,
+          0.26291,
+          0.226294
+        ],
+        "grip": [
+          0.347912,
+          0.327598,
+          0.283912
+        ],
+        "accent": [
+          0.357176,
+          0.33651,
+          0.291765
+        ]
+      }
+    },
+    {
+      "name": "pistol_groundwater at 0.0",
+      "skin": {
+        "baseColor": "#4b5563",
+        "accentColor": "#374151",
+        "patternType": "solid",
+        "floatValue": 0.0
+      },
+      "palette": {
+        "body": [
+          0.294118,
+          0.333333,
+          0.388235
+        ],
+        "dark": [
+          0.147059,
+          0.166667,
+          0.194118
+        ],
+        "grip": [
+          0.122972,
+          0.142248,
+          0.173088
+        ],
+        "accent": [
+          0.215686,
+          0.254902,
+          0.317647
+        ]
+      }
+    },
+    {
+      "name": "pistol_groundwater at 0.45",
+      "skin": {
+        "baseColor": "#4b5563",
+        "accentColor": "#374151",
+        "patternType": "solid",
+        "floatValue": 0.45
+      },
+      "palette": {
+        "body": [
+          0.308676,
+          0.333333,
+          0.367853
+        ],
+        "dark": [
+          0.182728,
+          0.195542,
+          0.213481
+        ],
+        "grip": [
+          0.168505,
+          0.178407,
+          0.195221
+        ],
+        "accent": [
+          0.249657,
+          0.274314,
+          0.314735
+        ]
+      }
+    },
+    {
+      "name": "pistol_groundwater at 1.0",
+      "skin": {
+        "baseColor": "#4b5563",
+        "accentColor": "#374151",
+        "patternType": "solid",
+        "floatValue": 1.0
+      },
+      "palette": {
+        "body": [
+          0.326471,
+          0.333333,
+          0.342941
+        ],
+        "dark": [
+          0.226324,
+          0.230833,
+          0.237147
+        ],
+        "grip": [
+          0.242647,
+          0.240686,
+          0.239706
+        ],
+        "accent": [
+          0.291176,
+          0.298039,
+          0.311176
+        ]
+      }
+    }
+  ],
+  "agents": [
+    {
+      "id": "arc_default",
+      "name": "ARC Scavenger",
+      "faction": "arc",
+      "sides": [
+        "t"
+      ],
+      "bodyColor": "#d9a441",
+      "armorColor": "#4a3b2c",
+      "trimColor": "#f2e2c4",
+      "visorColor": "#222222",
+      "skinToneColor": "#c89d7c",
+      "bootColor": "#2b231d",
+      "roughness": 0.8,
+      "metalness": 0.15
+    },
+    {
+      "id": "halon_default",
+      "name": "HALON Enforcer",
+      "faction": "halon",
+      "sides": [
+        "ct"
+      ],
+      "bodyColor": "#4c8fd4",
+      "armorColor": "#1e293b",
+      "trimColor": "#94a3b8",
+      "visorColor": "#38bdf8",
+      "skinToneColor": "#dfb190",
+      "bootColor": "#0f172a",
+      "roughness": 0.6,
+      "metalness": 0.35
+    },
+    {
+      "id": "scavenger_prime",
+      "name": "Scavenger Prime",
+      "faction": "arc",
+      "sides": [
+        "t"
+      ],
+      "bodyColor": "#b45309",
+      "armorColor": "#1c1917",
+      "trimColor": "#f59e0b",
+      "visorColor": "#fbbf24",
+      "skinToneColor": "#a16207",
+      "bootColor": "#0c0a09",
+      "roughness": 0.75,
+      "metalness": 0.4
+    },
+    {
+      "id": "hazmat_warden",
+      "name": "Hazmat Warden",
+      "faction": "halon",
+      "sides": [
+        "ct"
+      ],
+      "bodyColor": "#eab308",
+      "armorColor": "#18181b",
+      "trimColor": "#ef4444",
+      "visorColor": "#22c55e",
+      "skinToneColor": "#ca8a04",
+      "bootColor": "#1c1917",
+      "roughness": 0.85,
+      "metalness": 0.1
+    },
+    {
+      "id": "cyber_ghost",
+      "name": "Ghost Recon",
+      "faction": "neutral",
+      "sides": [
+        "t",
+        "ct"
+      ],
+      "bodyColor": "#18181b",
+      "armorColor": "#27272a",
+      "trimColor": "#a855f7",
+      "visorColor": "#c084fc",
+      "skinToneColor": "#d4d4d8",
+      "bootColor": "#09090b",
+      "roughness": 0.5,
+      "metalness": 0.6
+    },
+    {
+      "id": "arctic_specops",
+      "name": "Arctic SpecOps",
+      "faction": "neutral",
+      "sides": [
+        "t",
+        "ct"
+      ],
+      "bodyColor": "#e2e8f0",
+      "armorColor": "#64748b",
+      "trimColor": "#38bdf8",
+      "visorColor": "#0ea5e9",
+      "skinToneColor": "#f1f5f9",
+      "bootColor": "#334155",
+      "roughness": 0.65,
+      "metalness": 0.25
+    }
+  ],
+  "defaultAgents": {
+    "t": "arc_default",
+    "ct": "halon_default"
+  },
+  "wire": {
+    "playerId": "p1",
+    "welcome": {
+      "cosmetics": {
+        "p1": {
+          "t": {
+            "agent": {
+              "id": "scavenger_prime",
+              "armor": "#1c1917",
+              "trim": "#f59e0b"
+            },
+            "weapons": {
+              "assault": {
+                "skinId": "assault_asiimov",
+                "name": "Asiimov",
+                "baseColor": "#f8fafc",
+                "accentColor": "#ea580c",
+                "patternType": "custom_art",
+                "floatValue": 0.07,
+                "seed": 42,
+                "statTrak": 7
+              }
+            }
+          },
+          "ct": {
+            "agent": {
+              "id": "cyber_ghost",
+              "armor": "#27272a",
+              "trim": "#a855f7"
+            },
+            "weapons": {
+              "assault": {
+                "skinId": "assault_asiimov",
+                "name": "Asiimov",
+                "baseColor": "#f8fafc",
+                "accentColor": "#ea580c",
+                "patternType": "custom_art",
+                "floatValue": 0.07,
+                "seed": 42,
+                "statTrak": 7
+              },
+              "pistol": {
+                "skinId": "pistol_emerald",
+                "name": "Desert Eagle | Emerald",
+                "baseColor": "#10b981",
+                "accentColor": "#064e3b",
+                "patternType": "anodized",
+                "floatValue": 0.62,
+                "seed": 42,
+                "statTrak": 7
+              }
+            }
+          }
+        }
+      }
+    },
+    "joined": {
+      "player": {
+        "id": "p1",
+        "team": 1
+      },
+      "cosmetics": {
+        "t": {
+          "agent": {
+            "id": "scavenger_prime",
+            "armor": "#1c1917",
+            "trim": "#f59e0b"
+          },
+          "weapons": {
+            "assault": {
+              "skinId": "assault_asiimov",
+              "name": "Asiimov",
+              "baseColor": "#f8fafc",
+              "accentColor": "#ea580c",
+              "patternType": "custom_art",
+              "floatValue": 0.07,
+              "seed": 42,
+              "statTrak": 7
+            }
+          }
+        },
+        "ct": {
+          "agent": {
+            "id": "cyber_ghost",
+            "armor": "#27272a",
+            "trim": "#a855f7"
+          },
+          "weapons": {
+            "assault": {
+              "skinId": "assault_asiimov",
+              "name": "Asiimov",
+              "baseColor": "#f8fafc",
+              "accentColor": "#ea580c",
+              "patternType": "custom_art",
+              "floatValue": 0.07,
+              "seed": 42,
+              "statTrak": 7
+            },
+            "pistol": {
+              "skinId": "pistol_emerald",
+              "name": "Desert Eagle | Emerald",
+              "baseColor": "#10b981",
+              "accentColor": "#064e3b",
+              "patternType": "anodized",
+              "floatValue": 0.62,
+              "seed": 42,
+              "statTrak": 7
+            }
+          }
+        }
+      }
+    },
+    "cosmetics": {
+      "playerId": "p1",
+      "cosmetics": {
+        "t": {
+          "agent": {
+            "id": "scavenger_prime",
+            "armor": "#1c1917",
+            "trim": "#f59e0b"
+          },
+          "weapons": {
+            "assault": {
+              "skinId": "assault_asiimov",
+              "name": "Asiimov",
+              "baseColor": "#f8fafc",
+              "accentColor": "#ea580c",
+              "patternType": "custom_art",
+              "floatValue": 0.07,
+              "seed": 42,
+              "statTrak": 7
+            }
+          }
+        },
+        "ct": {
+          "agent": {
+            "id": "cyber_ghost",
+            "armor": "#27272a",
+            "trim": "#a855f7"
+          },
+          "weapons": {
+            "assault": {
+              "skinId": "assault_asiimov",
+              "name": "Asiimov",
+              "baseColor": "#f8fafc",
+              "accentColor": "#ea580c",
+              "patternType": "custom_art",
+              "floatValue": 0.07,
+              "seed": 42,
+              "statTrak": 7
+            },
+            "pistol": {
+              "skinId": "pistol_emerald",
+              "name": "Desert Eagle | Emerald",
+              "baseColor": "#10b981",
+              "accentColor": "#064e3b",
+              "patternType": "anodized",
+              "floatValue": 0.62,
+              "seed": 42,
+              "statTrak": 7
+            }
+          }
+        }
+      }
+    }
+  },
+  "weapons": [
+    {
+      "id": "knife",
+      "slot": "melee",
+      "side": "any"
+    },
+    {
+      "id": "pistol",
+      "slot": "secondary",
+      "side": "any"
+    },
+    {
+      "id": "assault",
+      "slot": "primary",
+      "side": "any"
+    },
+    {
+      "id": "shotgun",
+      "slot": "primary",
+      "side": "any"
+    },
+    {
+      "id": "sniper",
+      "slot": "primary",
+      "side": "any"
+    },
+    {
+      "id": "hand_cannon",
+      "slot": "secondary",
+      "side": "any"
+    },
+    {
+      "id": "smg",
+      "slot": "primary",
+      "side": "any"
+    },
+    {
+      "id": "raider",
+      "slot": "primary",
+      "side": "t"
+    },
+    {
+      "id": "lancer",
+      "slot": "primary",
+      "side": "ct"
+    },
+    {
+      "id": "lancer_s",
+      "slot": "primary",
+      "side": "ct"
+    },
+    {
+      "id": "scout",
+      "slot": "primary",
+      "side": "any"
+    },
+    {
+      "id": "breacher",
+      "slot": "primary",
+      "side": "any"
+    }
+  ],
+  "loadouts": [
+    {
+      "name": "never chosen",
+      "choice": null,
+      "sides": {
+        "t": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "flat, both sides",
+      "choice": {
+        "primary": "shotgun",
+        "secondary": "hand_cannon"
+      },
+      "sides": {
+        "t": {
+          "primary": "shotgun",
+          "secondary": "hand_cannon",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "shotgun",
+          "secondary": "hand_cannon",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "flat, a T rifle",
+      "choice": {
+        "primary": "raider"
+      },
+      "sides": {
+        "t": {
+          "primary": "raider",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "per side",
+      "choice": {
+        "t": {
+          "primary": "raider"
+        },
+        "ct": {
+          "primary": "lancer"
+        }
+      },
+      "sides": {
+        "t": {
+          "primary": "raider",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "lancer",
+          "secondary": "pistol",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "per side, crossed",
+      "choice": {
+        "t": {
+          "primary": "lancer"
+        },
+        "ct": {
+          "primary": "raider"
+        }
+      },
+      "sides": {
+        "t": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "wrong slot",
+      "choice": {
+        "t": {
+          "primary": "pistol",
+          "secondary": "sniper"
+        }
+      },
+      "sides": {
+        "t": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        }
+      }
+    },
+    {
+      "name": "as the stored string",
+      "choice": "{\"ct\": {\"secondary\": \"hand_cannon\"}}",
+      "sides": {
+        "t": {
+          "primary": "assault",
+          "secondary": "pistol",
+          "melee": "knife"
+        },
+        "ct": {
+          "primary": "assault",
+          "secondary": "hand_cannon",
+          "melee": "knife"
+        }
+      }
+    }
+  ]
+}

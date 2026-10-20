@@ -48,6 +48,11 @@ export function visualId(weapon: WeaponSpec | string | number | null | undefined
   return asBase(named) ?? 'assault';
 }
 
+/** The weapon id at a wire index, or `undefined` before the table arrives. */
+export function weaponIdAt(index: number): string | undefined {
+  return table[index]?.id;
+}
+
 /** The base-model slot (0..4) a weapon's prop is drawn from. */
 export function visualSlot(index: number): number {
   return BASE_MODELS.indexOf(visualId(index));

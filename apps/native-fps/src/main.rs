@@ -372,6 +372,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // map still gets a playable client — the defaults are the game's, not an
     // error state — so this warns and carries on.
     let mut stored_loadout: Option<serde_json::Value> = None;
+    let mut stored_agents = serde_json::Value::Null;
     let (mut settings, controls) = match node.settings().map(|mut values| {
         if let Some(bag) = values.as_object_mut() {
             for (key, value) in &args.overrides {
@@ -388,6 +389,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                     .get("hassault.loadout")
                     .and_then(|v| v.as_str())
                     .and_then(|raw| serde_json::from_str(raw).ok());
+                stored_agents = values
+                    .get("hassault.agents")
+                    .and_then(|v| v.as_str())
+                    .and_then(|raw| serde_json::from_str(raw).ok())
+                    .unwrap_or(serde_json::Value::Null);
                 Settings::from_values(&values)
             },
             // The pane's Controls screen writes this; the native client used to
@@ -698,6 +704,12 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(choice) = stored_loadout {
         app.set_loadout(choice);
     }
+    // The LOADOUT page. A node too old to serve agents offers weapons only.
+    let agents = node.agents().unwrap_or_else(|e| {
+        eprintln!("hassault: no agents served ({e}); the loadout page offers weapons only");
+        Vec::new()
+    });
+    app.set_loadout_menu(agents, stored_agents);
     if let (Mode::Train, Some(drill)) = (args.mode, args.drill.as_deref()) {
         // Fetched here rather than inside the app, like the loadout: the
         // app's constructor is where Train places the player, and the drill
@@ -767,6 +779,7 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                     eprintln!("hassault: {} left", l.player_id)
                 }
                 Incoming::Event(Event::Roster(_)) => {}
+                Incoming::Event(Event::Cosmetics(_)) => {}
                 Incoming::Event(Event::Invite(i)) => {
                     eprintln!("hassault: invite to room {} from {}", i.room, i.host_name)
                 }
