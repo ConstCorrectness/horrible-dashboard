@@ -506,6 +506,48 @@ a size, which the `Warper` does not wrap, and its monumental facade and
 mezzanines would only stretch. It gets no rule-placed clutter either: the hall,
 the offices and the vault are furnished piece by piece already.
 
+**Where each defuse map stands, and what is still to do.** Measured with
+`tools/hassault_route_times.py` on 2026-10-20: the fastest walk from each side's
+spawns to each site, with the number of distinct routes in brackets.
+
+| Map | T to A | T to B | CT to A | CT to B | State |
+| --- | --- | --- | --- | --- | --- |
+| `hd_dust2` | 9.0 s (4) | 8.7 s (3) | 2.3 s | 2.6 s | Done: cut, dressed, photographed. |
+| `hd_mirage` | 7.4 s (3) | 7.7 s (3) | 2.1 s | 2.4 s | Done. |
+| `hd_inferno` | 8.7 s (4) | 7.5 s (3) | 3.3 s | 2.1 s | Done. |
+| `hd_nuke` | 8.0 s (3) | 6.8 s (2) | 2.3 s | 4.7 s | Done. |
+| `hd_office` | 8.2 s (3) | 7.9 s (3) | 3.1 s | 1.8 s | Done. |
+| `hd_bank` | 6.6 s (2) | 6.7 s (3) | 2.8 s | 3.0 s | Done, not cut (see above). |
+| `hd_assault` | 1.5 s (5) | 2.1 s (3) | 6.2 s | 3.9 s | **To do.** Broken the way Office and Bank were: T spawn next to both sites and CT are the side far from them. |
+
+Still open, in the order they would be done:
+
+- **Rebuild Assault** as Office and Bank were: put the sides where the sites
+  make sense (the attackers far from both), give each site two ways in, then
+  cut if the walk is still short. Its materials already have rules waiting:
+  `assault_asphalt` (yard asphalt), `assault_concrete`, `assault_warehouse_floor`,
+  `assault_container_`, `assault_warehouse_wall`, `assault_diamond_plate`,
+  `assault_steel_catwalk`, `assault_office_floor`, `assault_office_wall`,
+  `assault_brick_`, `assault_wood_crate`, `assault_drum_` and `assault_rack_`
+  in `glb-surfaces.json`. Its generator has no `Warper`; check
+  `test_spawn_clearance`, `probe_eye_inside.py` and a bot soak afterwards.
+- **Bake ambient occlusion into `COLOR_0`** for the modelled maps, in Blender, and
+  have both clients multiply it in. It is content, the same for everyone, so it
+  is fair and free at runtime. The GLBs carry no vertex colour today and the
+  native loader reads none; the browser only keeps a material's `vertexColors`
+  flag (`surface-quality.ts`).
+- **Give `hd_aim` a GLB.** The aim range is still the brush-built Cube map: an art
+  pass in Blender, keeping its lanes and the `drills` rails where they are.
+- **Deploy.** The game server on Fly runs the new Office; Bank and Office's
+  corrected spawn facing are on `main` but not deployed (no schema change, so no
+  `/data` backup is needed for them).
+- **Smaller things found on the way.** On Office and Bank the bots visit some
+  cover nodes rarely or never (Office's north gap and the server room's south
+  door, Bank's east side door): they steer straight and have no waypoints, which
+  is the real fix. The comment in `physics.spawn_at` calls entity yaw degrees
+  clockwise from north, but the server reads it as degrees from +x towards +y;
+  Bank's original street spawns faced east because of it.
+
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
 dresses a map (Dust II, Mirage, Inferno, Nuke and Office; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
 the lights must come before it). It plans on a quarter-metre grid of the finished
