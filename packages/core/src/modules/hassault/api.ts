@@ -2,7 +2,7 @@
  * REST client for the HorribleAssault map pipeline. Mirrors
  * `backend/modules/hassault/models.py`; the backend stays the source of truth.
  */
-import { apiDelete, apiGet, apiPost } from '../../api';
+import { ApiError, apiDelete, apiGet, apiPost } from '../../api';
 import type { DrillSpec, DrillSummary } from './training-drill';
 import type { AgentSpec } from './cosmetics';
 import type { ItemRow } from './net';
@@ -731,6 +731,60 @@ export async function installNativeClient(
   return terminal;
 }
 
+// ---- the account, straight from the game server ---------------------------
+//
+// In the dashboard and the native client every call below goes to the node, and
+// the node — which holds the player's game-server token — proxies the account
+// ones to `/api/hassault/account/*` (`backend/modules/hassault/routes.py`). The
+// standalone browser game has no node: its page carries the token itself. It
+// installs a token source here, and the account calls then go to the game server
+// directly, on the server's own paths, with the bearer header.
+
+let serverToken: (() => string | null) | null = null;
+
+/**
+ * Send the account calls (inventory, equips, drops, wallet, trades, market)
+ * straight to the game server, authenticated by `getToken`. `null` restores the
+ * node route. The game server is whatever `apiUrl` resolves to, so a page that
+ * set a backend origin (`initBackendOrigin`) reaches it there.
+ */
+export function routeAccountToGameServer(getToken: (() => string | null) | null): void {
+  serverToken = getToken;
+}
+
+/** Whether the account calls are going to the game server directly. */
+export function accountRoutedToGameServer(): boolean {
+  return serverToken !== null;
+}
+
+/** One request to the game server's `/api/hassault{path}`, as the account. */
+async function serverCall<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = serverToken?.();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(apiUrl(`/api/hassault${path}`), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: 'omit',
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    // The server's `detail` is written for the player ("a key costs 250
+    // credits"); a bare status is not.
+    let message = `${method} ${path} failed: ${res.status}`;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      if (typeof parsed.detail === 'string') message = parsed.detail;
+    } catch {
+      // non-JSON error body — keep the status message
+    }
+    throw new ApiError(message, res.status);
+  }
+  return JSON.parse(text) as T;
+}
+
 export interface SkinDefinition {
   id: string;
   name: string;
@@ -767,17 +821,34 @@ export interface SkinInstance {
   definition?: SkinDefinition;
 }
 
-export function listSkinCatalog(): Promise<SkinDefinition[]> {
-  return apiGet<SkinDefinition[]>('/hassault/skins/catalog');
+export async function listSkinCatalog(): Promise<SkinDefinition[]> {
+  if (!serverToken) return apiGet<SkinDefinition[]>('/hassault/skins/catalog');
+  try {
+    return await serverCall<SkinDefinition[]>('GET', '/skins/catalog');
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+    // A game server from before it served the catalog: every skin that can be
+    // earned there is in one of its cases, so their contents are the catalog.
+    const seen = new Map<string, SkinDefinition>();
+    for (const c of await listCases()) for (const s of c.contents) seen.set(s.id, s);
+    return [...seen.values()];
+  }
 }
 
 export function getSkinInventory(): Promise<SkinInstance[]> {
+  if (serverToken) return serverCall<SkinInstance[]>('GET', '/account/inventory');
   return apiGet<SkinInstance[]>('/hassault/skins/inventory');
 }
 
 /** Equip an item, for one side or (no `side`) both. */
 export function equipSkin(instanceId: string, side?: 't' | 'ct'): Promise<{ ok: boolean }> {
   const query = side ? `&side=${side}` : '';
+  if (serverToken) {
+    return serverCall(
+      'POST',
+      `/account/equip?instance_id=${encodeURIComponent(instanceId)}${query}`,
+    );
+  }
   return apiPost<{ ok: boolean }>(
     `/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}${query}`,
     {},
@@ -787,6 +858,9 @@ export function equipSkin(instanceId: string, side?: 't' | 'ct'): Promise<{ ok: 
 /** Take the skin off a weapon for one side, or both. Server-kept accounts only. */
 export function unequipSkin(weaponId: string, side?: 't' | 'ct'): Promise<{ ok: boolean }> {
   const query = side ? `&side=${side}` : '';
+  if (serverToken) {
+    return serverCall('POST', `/account/unequip?weapon_id=${encodeURIComponent(weaponId)}${query}`);
+  }
   return apiPost<{ ok: boolean }>(
     `/hassault/skins/unequip?weapon_id=${encodeURIComponent(weaponId)}${query}`,
     {},
@@ -806,6 +880,7 @@ export interface DropStatus {
 }
 
 export function getDropStatus(): Promise<DropStatus> {
+  if (serverToken) return serverCall<DropStatus>('GET', '/account/drops');
   return apiGet<DropStatus>('/hassault/skins/drops');
 }
 
@@ -817,10 +892,13 @@ export function getDropStatus(): Promise<DropStatus> {
  * count the browser is holding is a copy.
  */
 export function claimLevelUpDrop(): Promise<SkinInstance & { remaining: number }> {
+  if (serverToken) return serverCall('POST', '/account/claim_drop');
   return apiPost<SkinInstance & { remaining: number }>('/hassault/skins/claim_drop', {});
 }
 
 export function executeTradeUp(instanceIds: string[]): Promise<SkinInstance> {
+  // The node takes the bare list; the server's route names it.
+  if (serverToken) return serverCall('POST', '/account/tradeup', { instanceIds });
   return apiPost<SkinInstance>('/hassault/skins/tradeup', instanceIds);
 }
 
@@ -903,20 +981,23 @@ export interface Listing {
 }
 
 export function getTradeEligibility(): Promise<TradeEligibility> {
+  if (serverToken) return serverCall('GET', '/account/trade/eligibility');
   return apiGet<TradeEligibility>('/hassault/trade/eligibility');
 }
 
 export function getTradeLink(rotate = false): Promise<{ token: string }> {
+  if (serverToken) return serverCall('GET', `/account/trade/link?rotate=${rotate}`);
   return apiGet<{ token: string }>(`/hassault/trade/link?rotate=${rotate}`);
 }
 
 export function getPartnerItems(partnerId: string, token = ''): Promise<TradableItem[]> {
-  return apiGet<TradableItem[]>(
-    `/hassault/trade/partner/${encodeURIComponent(partnerId)}?token=${encodeURIComponent(token)}`,
-  );
+  const path = `/trade/partner/${encodeURIComponent(partnerId)}?token=${encodeURIComponent(token)}`;
+  if (serverToken) return serverCall('GET', `/account${path}`);
+  return apiGet<TradableItem[]>(`/hassault${path}`);
 }
 
 export function listTrades(): Promise<Trade[]> {
+  if (serverToken) return serverCall('GET', '/account/trades');
   return apiGet<Trade[]>('/hassault/trades');
 }
 
@@ -926,6 +1007,7 @@ export function offerTrade(offer: {
   want: string[];
   token?: string;
 }): Promise<Trade> {
+  if (serverToken) return serverCall('POST', '/account/trades', offer);
   return apiPost<Trade>('/hassault/trades', offer);
 }
 
@@ -933,11 +1015,15 @@ export function actOnTrade(
   tradeId: string,
   action: 'accept' | 'confirm' | 'decline' | 'cancel',
 ): Promise<Trade> {
-  return apiPost<Trade>(`/hassault/trades/${encodeURIComponent(tradeId)}/${action}`, {});
+  const path = `/trades/${encodeURIComponent(tradeId)}/${action}`;
+  if (serverToken) return serverCall('POST', `/account${path}`);
+  return apiPost<Trade>(`/hassault${path}`, {});
 }
 
 export function listMarket(skinId?: string): Promise<Listing[]> {
   const query = skinId ? `?skin_id=${encodeURIComponent(skinId)}` : '';
+  // A public read on the server, so it has no account path.
+  if (serverToken) return serverCall('GET', `/market${query}`);
   return apiGet<Listing[]>(`/hassault/market${query}`);
 }
 
@@ -945,6 +1031,7 @@ export function listForSale(
   instanceId: string,
   price: number,
 ): Promise<{ listingId: string; price: number; fee: number }> {
+  if (serverToken) return serverCall('POST', '/account/market/list', { instanceId, price });
   return apiPost<{ listingId: string; price: number; fee: number }>('/hassault/market/list', {
     instanceId,
     price,
@@ -952,24 +1039,32 @@ export function listForSale(
 }
 
 export function actOnListing(listingId: string, action: 'buy' | 'cancel'): Promise<unknown> {
-  return apiPost<unknown>(`/hassault/market/${encodeURIComponent(listingId)}/${action}`, {});
+  const path = `/market/${encodeURIComponent(listingId)}/${action}`;
+  if (serverToken) return serverCall('POST', `/account${path}`);
+  return apiPost<unknown>(`/hassault${path}`, {});
 }
 
 export function listCases(): Promise<CaseSpec[]> {
+  if (serverToken) return serverCall('GET', '/cases');
   return apiGet<CaseSpec[]>('/hassault/cases');
 }
 
 export function getWallet(): Promise<Wallet> {
+  if (serverToken) return serverCall('GET', '/account/wallet');
   return apiGet<Wallet>('/hassault/wallet');
 }
 
 /** Spend credits on a key. Rejects (409) when they do not cover it. */
 export function buyCaseKey(): Promise<{ instanceId: string; balance: number }> {
+  if (serverToken) return serverCall('POST', '/account/keys/buy');
   return apiPost<{ instanceId: string; balance: number }>('/hassault/wallet/keys/buy', {});
 }
 
 /** Open an owned case with a key: the skin it made, inventory-shaped. */
 export function openCase(instanceId: string): Promise<SkinInstance & { caseId: string }> {
+  if (serverToken) {
+    return serverCall('POST', `/account/cases/open?instance_id=${encodeURIComponent(instanceId)}`);
+  }
   return apiPost<SkinInstance & { caseId: string }>(
     `/hassault/wallet/cases/open?instance_id=${encodeURIComponent(instanceId)}`,
     {},

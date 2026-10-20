@@ -6,11 +6,14 @@ import { MAPS, mapArt, mapEntry, modeLabel } from '../maps';
 import { MapBackdrop } from './MapBackdrop';
 import { Wordmark } from './Logo';
 import { CallsignField } from './CallsignField';
+import { ArmorySection } from './ArmorySection';
 
 /** Where Quick Play opens a room when nothing is running. */
 const QUICK_MAP = 'hd_dust2';
 
-type Section = 'play' | 'servers' | 'maps';
+type Section = 'play' | 'servers' | 'armory' | 'maps';
+
+const SECTIONS = ['play', 'servers', 'armory', 'maps'] as const;
 
 export interface LandingProps {
   callsign: string;
@@ -38,6 +41,7 @@ export function Landing(props: LandingProps) {
   const refs = {
     play: useRef<HTMLElement>(null),
     servers: useRef<HTMLElement>(null),
+    armory: useRef<HTMLElement>(null),
     maps: useRef<HTMLElement>(null),
   };
 
@@ -57,7 +61,7 @@ export function Landing(props: LandingProps) {
       // A section is "current" once its top passes the upper third of the view.
       const y = page.scrollTop + page.clientHeight * 0.35;
       let current: Section = 'play';
-      for (const id of ['servers', 'maps'] as const) {
+      for (const id of SECTIONS.slice(1)) {
         const el = refs[id].current;
         if (el && el.offsetTop <= y) current = id;
       }
@@ -80,7 +84,7 @@ export function Landing(props: LandingProps) {
         <div className="wrap topbar-inner">
           <Wordmark />
           <nav className="nav" aria-label="Sections">
-            {(['play', 'servers', 'maps'] as const).map((id) => (
+            {SECTIONS.map((id) => (
               <button
                 key={id}
                 type="button"
@@ -164,6 +168,10 @@ export function Landing(props: LandingProps) {
             onRefresh={() => void refresh()}
             onQuickPlay={quickPlay}
           />
+        </section>
+
+        <section className="section" ref={refs.armory}>
+          <ArmorySection auth={auth} onSignIn={props.onSignIn} />
         </section>
 
         <section className="section" ref={refs.maps}>

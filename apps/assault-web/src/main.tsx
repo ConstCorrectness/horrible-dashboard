@@ -1,9 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { initBackendOrigin } from '@horrible/core';
+import { initBackendOrigin, routeAccountToGameServer } from '@horrible/core';
 import App from './App';
 import { ensureCallsign } from './hooks/useGuestSession';
-import { applySocketIdentity, bindSettingsToAccount, refreshAccount } from './auth';
+import { applySocketIdentity, authStore, bindSettingsToAccount, refreshAccount } from './auth';
 import './theme.css';
 import './landing.css';
 
@@ -20,6 +20,10 @@ if (customOrigin) {
 applySocketIdentity(ensureCallsign());
 void refreshAccount();
 bindSettingsToAccount();
+// No node here to hold the token and proxy the account: the armory's calls
+// (inventory, equips, wallet, trades) go to the game server's own routes with
+// the token read fresh each call, so signing in or out needs no re-binding.
+routeAccountToGameServer(() => authStore.getState().token);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -531,6 +531,92 @@
   font-size: 14px;
 }
 
+/* ---- armory ------------------------------------------------------------------- */
+
+/*
+ * The armory is core's `ArmoryMarketplace`, written for the dashboard's tokens.
+ * The ones this palette has no name for are given one here, scoped to the host,
+ * so the panel reads graphite and amber instead of falling back to its defaults
+ * (`--warn` would be undefined, and an undefined var() drops the declaration).
+ */
+.armory-host {
+  --bg-primary: transparent;
+  --bg-tertiary: var(--line);
+  --border-dim: var(--line);
+  --text-primary: var(--text);
+  --warn: var(--accent);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 32px 32px,
+    rgba(20, 22, 25, 0.86);
+  min-height: 420px;
+  max-height: min(80vh, 900px);
+  display: flex;
+  flex-direction: column;
+}
+.armory-host > * {
+  flex: 1;
+  min-height: 0;
+}
+/*
+ * The store's and the market's actions are classless buttons, which the
+ * dashboard's controls.css makes its standard 30px control. This page has no
+ * such rule, so without one they are the browser's grey bevel.
+ */
+.armory-host button:not([class]) {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.armory-host button:not([class]):hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.armory-host button:not([class]):disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.armory-host input,
+.armory-host select {
+  height: 30px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+/* Its tab strip borrows the board games' toggle, which is coloured for parchment. */
+.armory-host .games-town-toggle-btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.armory-host .games-town-toggle-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.armory-host .games-town-toggle-btn.active {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--text) !important;
+}
+
 /* ---- map grid ----------------------------------------------------------------- */
 
 .map-grid {

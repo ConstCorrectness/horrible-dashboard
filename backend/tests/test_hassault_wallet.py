@@ -189,6 +189,20 @@ def test_the_odds_are_served_by_node_and_server():
         assert abs(sum(o["chance"] for o in listed[0]["odds"]) - 1.0) < 1e-5
 
 
+def test_the_skin_catalog_is_served_by_node_and_server():
+    # The browser game reads its armory's catalog from the game server, having
+    # no node to ask; it must be the same list the dashboard's armory reads.
+    from backend.app import app as node_app
+    from backend.games_server.app import app as server_app
+    from backend.modules.hassault.skins import SKIN_CATALOG
+
+    for client in (TestClient(node_app), TestClient(server_app)):
+        res = client.get("/api/hassault/skins/catalog")
+        assert res.status_code == 200
+        ids = {s["id"] for s in res.json()}
+        assert {s.id for s in SKIN_CATALOG} <= ids
+
+
 # ---- StatTrak ---------------------------------------------------------------------
 
 

@@ -28,7 +28,16 @@ const RARITY_BG: Record<string, string> = {
   special: 'rgba(255, 215, 0, 0.35)',
 };
 
-export function ArmoryMarketplace() {
+export interface ArmoryMarketplaceProps {
+  /**
+   * Offer "inspect in the 3D studio" on items. The studio is a dashboard pane,
+   * opened through the registry; a host with no pane shell (the standalone
+   * browser game) turns this off rather than show buttons that do nothing.
+   */
+  studio?: boolean;
+}
+
+export function ArmoryMarketplace({ studio = true }: ArmoryMarketplaceProps = {}) {
   const [tab, setTab] = useState<'inventory' | 'catalog' | 'tradeup' | 'store' | 'trade'>(
     'inventory',
   );
@@ -207,7 +216,7 @@ export function ArmoryMarketplace() {
               gap: '0.4rem',
             }}
           >
-            🎖 Armory & Skin Marketplace
+            Armory & Skin Marketplace
           </h3>
           <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
             Counter-Strike float wear (0.00–1.00), pattern seeds, trade-up contracts, and rare
@@ -223,21 +232,21 @@ export function ArmoryMarketplace() {
             }
             onClick={() => setTab('inventory')}
           >
-            🎒 My Armory ({inventory.length})
+            My Armory ({inventory.length})
           </button>
           <button
             type="button"
             className={tab === 'catalog' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'}
             onClick={() => setTab('catalog')}
           >
-            📖 Collections Catalog
+            Collections Catalog
           </button>
           <button
             type="button"
             className={tab === 'tradeup' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'}
             onClick={() => setTab('tradeup')}
           >
-            ⚗ Trade-Up Contract ({selectedTradeUpIds.length}/10)
+            Trade-Up ({selectedTradeUpIds.length}/10)
           </button>
           <button
             type="button"
@@ -369,7 +378,7 @@ export function ArmoryMarketplace() {
                 color: latestDrop.definition.rarityColor,
               }}
             >
-              🎉 Unboxed New {latestDrop.definition.rarity.replace('_', ' ')} Item!
+              Unboxed New {latestDrop.definition.rarity.replace('_', ' ')} Item!
             </span>
             <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem' }}>
               {latestDrop.definition.name} ({latestDrop.definition.weaponId.toUpperCase()})
@@ -563,24 +572,26 @@ export function ArmoryMarketplace() {
                       >
                         Inspect
                       </button>
-                      <button
-                        type="button"
-                        className="games-ghost-btn"
-                        style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
-                        title="Inspect in 3D Model Studio"
-                        onClick={() => {
-                          requestWeaponInspect({
-                            weaponId: def.weaponId,
-                            skinId: item.skinId || def.id,
-                            floatValue: item.floatValue,
-                            patternSeed: item.patternSeed,
-                            source: 'armory',
-                          });
-                          registry.openPanel('hassault.studio');
-                        }}
-                      >
-                        ◈ 3D
-                      </button>
+                      {studio && (
+                        <button
+                          type="button"
+                          className="games-ghost-btn"
+                          style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
+                          title="Inspect in 3D Model Studio"
+                          onClick={() => {
+                            requestWeaponInspect({
+                              weaponId: def.weaponId,
+                              skinId: item.skinId || def.id,
+                              floatValue: item.floatValue,
+                              patternSeed: item.patternSeed,
+                              source: 'armory',
+                            });
+                            registry.openPanel('hassault.studio');
+                          }}
+                        >
+                          ◈ 3D
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -673,24 +684,26 @@ export function ArmoryMarketplace() {
                 >
                   Inspect
                 </button>
-                <button
-                  type="button"
-                  className="games-ghost-btn"
-                  style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
-                  title="Inspect in 3D Model Studio"
-                  onClick={() => {
-                    requestWeaponInspect({
-                      weaponId: def.weaponId,
-                      skinId: def.id,
-                      floatValue: 0.03,
-                      patternSeed: 100,
-                      source: 'armory',
-                    });
-                    registry.openPanel('hassault.studio');
-                  }}
-                >
-                  ◈ 3D
-                </button>
+                {studio && (
+                  <button
+                    type="button"
+                    className="games-ghost-btn"
+                    style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
+                    title="Inspect in 3D Model Studio"
+                    onClick={() => {
+                      requestWeaponInspect({
+                        weaponId: def.weaponId,
+                        skinId: def.id,
+                        floatValue: 0.03,
+                        patternSeed: 100,
+                        source: 'armory',
+                      });
+                      registry.openPanel('hassault.studio');
+                    }}
+                  >
+                    ◈ 3D
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -720,7 +733,7 @@ export function ArmoryMarketplace() {
         >
           <div>
             <h4 style={{ margin: 0, color: '#38bdf8' }}>
-              ⚗ Trade-Up Contract (10 Items → 1 Higher Rarity)
+              Trade-Up Contract (10 Items → 1 Higher Rarity)
             </h4>
             <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
               Select 10 skins of the exact same rarity tier. The forge will burn them and yield 1
@@ -735,7 +748,7 @@ export function ArmoryMarketplace() {
               disabled={selectedTradeUpIds.length !== 10}
               onClick={handleExecuteTradeUp}
             >
-              🔥 Sign & Forge Contract ({selectedTradeUpIds.length}/10 selected)
+              Sign & Forge Contract ({selectedTradeUpIds.length}/10 selected)
             </button>
             {selectedTradeUpIds.length > 0 && (
               <button
@@ -764,7 +777,7 @@ export function ArmoryMarketplace() {
                   fontSize: '0.8rem',
                 }}
               >
-                ⭐ Trade-Up Success!
+                Trade-Up Success!
               </div>
               <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '0.2rem' }}>
                 {tradeUpResult.definition.name} ({tradeUpResult.definition.weaponId.toUpperCase()})
@@ -926,7 +939,7 @@ export function ArmoryMarketplace() {
                     }}
                     onClick={() => setInspectFlourish((v) => !v)}
                   >
-                    🎯 Ogre-Twitch Flourish [F]
+                    Ogre-Twitch Flourish [F]
                   </button>
                 </div>
 
@@ -993,32 +1006,34 @@ export function ArmoryMarketplace() {
               </>
             ) : null}
             <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
-              <button
-                type="button"
-                className="games-play-btn"
-                style={{ flex: 1 }}
-                onClick={() => {
-                  const isInstance = 'instanceId' in inspectItem;
-                  const weaponId = isInstance
-                    ? inspectItem.definition?.weaponId
-                    : inspectItem.weaponId;
-                  const skinId = isInstance ? inspectItem.skinId : inspectItem.id;
-                  const floatValue = isInstance ? inspectItem.floatValue : 0.03;
-                  const patternSeed = isInstance ? inspectItem.patternSeed : 100;
-                  if (weaponId) {
-                    requestWeaponInspect({
-                      weaponId,
-                      skinId,
-                      floatValue,
-                      patternSeed,
-                      source: 'armory',
-                    });
-                    registry.openPanel('hassault.studio');
-                  }
-                }}
-              >
-                ◈ Inspect in 3D Studio
-              </button>
+              {studio && (
+                <button
+                  type="button"
+                  className="games-play-btn"
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    const isInstance = 'instanceId' in inspectItem;
+                    const weaponId = isInstance
+                      ? inspectItem.definition?.weaponId
+                      : inspectItem.weaponId;
+                    const skinId = isInstance ? inspectItem.skinId : inspectItem.id;
+                    const floatValue = isInstance ? inspectItem.floatValue : 0.03;
+                    const patternSeed = isInstance ? inspectItem.patternSeed : 100;
+                    if (weaponId) {
+                      requestWeaponInspect({
+                        weaponId,
+                        skinId,
+                        floatValue,
+                        patternSeed,
+                        source: 'armory',
+                      });
+                      registry.openPanel('hassault.studio');
+                    }
+                  }}
+                >
+                  ◈ Inspect in 3D Studio
+                </button>
+              )}
               <button
                 type="button"
                 className="games-ghost-btn"

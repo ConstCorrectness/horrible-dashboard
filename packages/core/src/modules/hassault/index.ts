@@ -616,6 +616,14 @@ export const hassaultModule: ModuleManifest = {
 };
 
 export { lobbyVoice } from './lobby-voice';
-export { listMaps, getMapCubes, getMapInfo, type MapSummary, type MapInfo } from './api';
+export {
+  listMaps,
+  getMapCubes,
+  getMapInfo,
+  routeAccountToGameServer,
+  type MapSummary,
+  type MapInfo,
+} from './api';
+export { ArmoryMarketplace, type ArmoryMarketplaceProps } from './panels/ArmoryMarketplace';
 export { formatBytes } from './boot';
 export { DEFAULT_CONTROLS, keyLabel } from './controls';

@@ -563,6 +563,9 @@ export {
   keyLabel,
   type MapSummary,
   type MapInfo,
+  ArmoryMarketplace,
+  type ArmoryMarketplaceProps,
+  routeAccountToGameServer,
 } from './modules/hassault';
 export {
   shareModule,

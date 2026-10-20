@@ -119,6 +119,7 @@ for _path, _handler, _model in (
     ("/textures", node.get_textures, list[TextureOut]),
     ("/agents", node.list_agents, None),
     ("/cases", node.list_cases, None),
+    ("/skins/catalog", node.get_skin_catalog, None),
     ("/drills", node.list_drills, None),
     ("/drills/{drill_id}", node.get_drill, None),
     ("/settings/schema", node.get_settings_schema, None),

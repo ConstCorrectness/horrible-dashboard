@@ -8891,6 +8891,35 @@ switch rather than a guest check scattered through the pane:
   menu (ranked, the designer, friends) offers nothing a guest can use. No room id
   means "any room on this map with space", the server's `find_or_create`.
 
+### The armory on the web client
+
+The landing page has an **Armory** section (nav: *play · servers · armory · maps*)
+that renders the dashboard's own `ArmoryMarketplace` — inventory and per-side
+equips, the catalog, trade-ups, the case store and wallet, trades and the market —
+exported from `@horrible/core` along with the switch below. It is account-only:
+`ArmorySection` (`apps/assault-web/src/components/ArmorySection.tsx`) shows a
+guest, or a token that never resolved to an account, a sign-in prompt instead,
+since every one of those routes answers a request without a bearer token 401.
+
+The calls themselves needed a second route. In the dashboard and the native client
+they go to the node, which holds the game-server token and proxies them, on its own
+paths (`/hassault/skins/inventory`, `/hassault/wallet`, `/hassault/trades`), to the
+server's `/api/hassault/account/*` (`account_sync.request`). The web client has no
+node, so `main.tsx` calls **`routeAccountToGameServer(getToken)`** at boot and every
+account call in `hassault/api.ts` then goes to the game server **directly**, on the
+server's paths, with `Authorization: Bearer <token>`. The token is read per call,
+so signing in or out needs no re-binding. Two shapes differ between the routes and
+are translated there: trade-up posts `{instanceIds}` rather than a bare list, and
+the market's reads are on the public `/api/hassault/market`.
+
+The game server serves `/api/hassault/skins/catalog` as one of its pure catalogs
+(`hassault_content.py`). Against a server deployed before that, the client builds
+the catalog from the cases' contents — every skin that can be earned there is in
+one. `ArmoryMarketplace` takes `studio={false}` here: its "inspect in 3D" buttons
+open a dashboard pane, and a page with no pane shell would show buttons that do
+nothing. The panel's dashboard tokens (`--warn`, `--border-dim`, `--bg-tertiary`)
+are mapped onto the game palette by `.armory-host` in `landing.css`.
+
 **Desktop and web players meet in online rooms.** A node's casual and hosted
 matches live in its own process, which a browser cannot reach, so the meeting
 point is the game server. The desktop server browser lists the server's rooms
