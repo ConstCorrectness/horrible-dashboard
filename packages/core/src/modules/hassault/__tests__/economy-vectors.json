@@ -1,0 +1,247 @@
+{
+  "catalog": [
+    {
+      "id": "hand_cannon",
+      "name": "Hand Cannon",
+      "kind": "weapon",
+      "slot": 5,
+      "price": 700,
+      "side": "any",
+      "category": "secondary"
+    },
+    {
+      "id": "assault",
+      "name": "Assault Rifle",
+      "kind": "weapon",
+      "slot": 2,
+      "price": 2700,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "shotgun",
+      "name": "Shotgun",
+      "kind": "weapon",
+      "slot": 3,
+      "price": 1800,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "sniper",
+      "name": "Sniper Rifle",
+      "kind": "weapon",
+      "slot": 4,
+      "price": 4750,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "smg",
+      "name": "ARC Viper SMG",
+      "kind": "weapon",
+      "slot": 6,
+      "price": 1250,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "raider",
+      "name": "ARC Raider",
+      "kind": "weapon",
+      "slot": 7,
+      "price": 2700,
+      "side": "t",
+      "category": "primary"
+    },
+    {
+      "id": "lancer",
+      "name": "HALON Lancer",
+      "kind": "weapon",
+      "slot": 8,
+      "price": 3100,
+      "side": "ct",
+      "category": "primary"
+    },
+    {
+      "id": "lancer_s",
+      "name": "HALON Lancer-S",
+      "kind": "weapon",
+      "slot": 9,
+      "price": 2900,
+      "side": "ct",
+      "category": "primary"
+    },
+    {
+      "id": "scout",
+      "name": "Scout",
+      "kind": "weapon",
+      "slot": 10,
+      "price": 1700,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "breacher",
+      "name": "Breacher",
+      "kind": "weapon",
+      "slot": 11,
+      "price": 2000,
+      "side": "any",
+      "category": "primary"
+    },
+    {
+      "id": "armour",
+      "name": "Armour",
+      "kind": "armour",
+      "slot": -1,
+      "price": 1000,
+      "side": "any",
+      "category": "gear"
+    },
+    {
+      "id": "he",
+      "name": "HE Grenade",
+      "kind": "nade",
+      "slot": 0,
+      "price": 300,
+      "side": "any",
+      "category": "grenade"
+    },
+    {
+      "id": "flash",
+      "name": "Flashbang",
+      "kind": "nade",
+      "slot": 1,
+      "price": 200,
+      "side": "any",
+      "category": "grenade"
+    },
+    {
+      "id": "smoke",
+      "name": "Smoke Grenade",
+      "kind": "nade",
+      "slot": 2,
+      "price": 300,
+      "side": "any",
+      "category": "grenade"
+    },
+    {
+      "id": "molotov",
+      "name": "Incendiary",
+      "kind": "nade",
+      "slot": 3,
+      "price": 600,
+      "side": "any",
+      "category": "grenade"
+    },
+    {
+      "id": "defuser",
+      "name": "Defusal Kit",
+      "kind": "kit",
+      "slot": -1,
+      "price": 400,
+      "side": "any",
+      "category": "gear"
+    }
+  ],
+  "buyTime": 20.0,
+  "buyZoneRadius": 14.0,
+  "killRewards": {
+    "knife": 300,
+    "pistol": 300,
+    "assault": 300,
+    "shotgun": 900,
+    "sniper": 100,
+    "hand_cannon": 300,
+    "smg": 600,
+    "raider": 300,
+    "lancer": 300,
+    "lancer_s": 300,
+    "scout": 300,
+    "breacher": 900
+  },
+  "menus": {
+    "t": [
+      {
+        "category": "secondary",
+        "label": "PISTOLS",
+        "rows": [
+          0
+        ]
+      },
+      {
+        "category": "primary",
+        "label": "PRIMARY",
+        "rows": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          8,
+          9
+        ]
+      },
+      {
+        "category": "gear",
+        "label": "GEAR",
+        "rows": [
+          10,
+          15
+        ]
+      },
+      {
+        "category": "grenade",
+        "label": "GRENADES",
+        "rows": [
+          11,
+          12,
+          13,
+          14
+        ]
+      }
+    ],
+    "ct": [
+      {
+        "category": "secondary",
+        "label": "PISTOLS",
+        "rows": [
+          0
+        ]
+      },
+      {
+        "category": "primary",
+        "label": "PRIMARY",
+        "rows": [
+          1,
+          2,
+          3,
+          4,
+          6,
+          7,
+          8,
+          9
+        ]
+      },
+      {
+        "category": "gear",
+        "label": "GEAR",
+        "rows": [
+          10,
+          15
+        ]
+      },
+      {
+        "category": "grenade",
+        "label": "GRENADES",
+        "rows": [
+          11,
+          12,
+          13,
+          14
+        ]
+      }
+    ]
+  }
+}

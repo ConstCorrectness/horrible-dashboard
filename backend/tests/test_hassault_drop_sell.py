@@ -138,12 +138,17 @@ def test_selling_in_the_freeze_refunds_everything_it_cost(game):
     assert att.weapon == 1, "sold the rifle and was left holding an empty one"
 
 
-def test_selling_is_refused_once_the_round_is_live(game):
+def test_selling_is_refused_once_the_buy_time_is_over(game):
+    """The freeze, then `BUY_TIME` of the live round, as buying is."""
+    from backend.modules.hassault.modes.defuse import BUY_TIME
+
     room, att, *_ = game
     s = Sender(room)
     s.buy(att, "assault")
     go_live(room)
     assert room.mode.state.phase == LIVE
+    for _ in range(int(BUY_TIME / 0.05) + 2):
+        room.simulate(0.05)
     s.sell(att, "assault")
     assert 2 in att.owned
     assert att.money == 10000 - CATALOG[BY_ID["assault"]].price
@@ -198,7 +203,9 @@ def test_buy_sell_buy_is_charged_once(game):
     assert att.money == 10000 - CATALOG[BY_ID["shotgun"]].price
 
 
-def test_the_envelope_names_what_can_be_sold_only_in_the_freeze(game):
+def test_the_envelope_names_what_can_be_sold_only_while_buying_is_open(game):
+    from backend.modules.hassault.modes.defuse import BUY_TIME
+
     room, att, *_ = game
     mode = room.mode
     s = Sender(room)
@@ -208,6 +215,8 @@ def test_the_envelope_names_what_can_be_sold_only_in_the_freeze(game):
         [BY_ID["assault"], BY_ID["smoke"]]
     )
     go_live(room)
+    for _ in range(int(BUY_TIME / 0.05) + 2):
+        room.simulate(0.05)
     assert mode.private_state(room, att)["sellable"] == []
 
 

@@ -799,6 +799,7 @@ async def hassault_ws(websocket: WebSocket) -> None:
                         str(data.get("map") or ""),
                         str(data.get("room") or "") or None,
                         new=bool(data.get("new")),
+                        mode=str(data.get("mode") or "") or None,
                     )
                 except (ValueError, LookupError) as exc:
                     await conn.send_json(

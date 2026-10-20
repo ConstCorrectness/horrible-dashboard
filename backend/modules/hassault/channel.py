@@ -104,7 +104,7 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             # A room on the game server, picked out of the browser (or opened
             # there, with no room id) — where web players are. Same proxy as
             # ranked; only which room differs.
-            await ranked.join(conn, map_name, room_id or None, new=not room_id)
+            await ranked.join(conn, map_name, room_id or None, new=not room_id, mode=mode)
             return
 
         if host:

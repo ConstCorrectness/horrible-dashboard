@@ -150,6 +150,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "weapon".into(),
                         slot: 2,
                         price: 2700,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "shotgun".into(),
@@ -157,6 +158,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "weapon".into(),
                         slot: 3,
                         price: 1800,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "sniper".into(),
@@ -164,6 +166,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "weapon".into(),
                         slot: 4,
                         price: 4750,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "armour".into(),
@@ -171,6 +174,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "armour".into(),
                         slot: -1,
                         price: 1000,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "he".into(),
@@ -178,6 +182,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "nade".into(),
                         slot: 0,
                         price: 300,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "flash".into(),
@@ -185,6 +190,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "nade".into(),
                         slot: 1,
                         price: 200,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "smoke".into(),
@@ -192,6 +198,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "nade".into(),
                         slot: 2,
                         price: 300,
+                        ..Default::default()
                     },
                     BuyItem {
                         id: "molotov".into(),
@@ -199,6 +206,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                         kind: "nade".into(),
                         slot: 3,
                         price: 600,
+                        ..Default::default()
                     },
                 ],
                 ..Default::default()
@@ -227,6 +235,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                 // what makes the three states visible at once.
                 money: 2000,
                 can_buy: true,
+                buy_in: 14.0,
                 bought: vec![3, 5],
                 ..Default::default()
             },
@@ -424,6 +433,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         team: 0,
         // Held open when a mode fixture is drawn, unless live/nobuy requested.
         buy_open: fixture.is_some() && !live && !nobuy,
+        // Opened on the first group, so the shot shows rows and prices: the
+        // layout a unit test passes and a screenshot does not.
+        buy_group: Some(0),
         mode: fixture.as_ref().map(|f| &f.0),
         mode_state: fixture.as_ref().map(|f| &f.1),
         mode_self: fixture.as_ref().map(|f| &f.2),

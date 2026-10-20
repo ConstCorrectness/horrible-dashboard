@@ -354,6 +354,12 @@ pub struct App {
     /// refuses fifty-nine as "already owned", which looks identical to a menu
     /// that does not work.
     pending_buy: i32,
+    /// A sale for the next command, as `pending_buy`.
+    pending_sell: i32,
+    /// A drop for the next command.
+    pending_drop: bool,
+    /// The buy menu's open group (`buy_menu.rs`); `None` is the top level.
+    buy_group: Option<usize>,
     /// A clipboard read or write in flight for the crosshair page: a child
     /// process on a worker thread, polled each frame so none waits on it.
     /// `paste` says which, since both report text.
@@ -615,6 +621,9 @@ impl App {
             mode_state: None,
             buy_open: false,
             pending_buy: -1,
+            pending_sell: -1,
+            pending_drop: false,
+            buy_group: None,
             clipboard: None,
             you: None,
             flash: hassault_native::flashbang::FlashState::default(),
@@ -2393,6 +2402,8 @@ impl App {
         // Taken, not copied: the next command must not repeat it. See
         // `pending_buy`.
         cmd.buy = std::mem::replace(&mut self.pending_buy, -1);
+        cmd.sell = std::mem::replace(&mut self.pending_sell, -1);
+        cmd.drop = std::mem::take(&mut self.pending_drop);
         // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
         // the past, so without this every shot is resolved against positions a
         // tenth of a second newer than the ones on screen when the trigger was
@@ -2843,8 +2854,24 @@ impl App {
         // it is bound to. Two jobs for one row rather than a second set of keys:
         // the menu is *held*, so which job is which is never ambiguous.
         if down && self.buy_open {
-            if let Some(slot) = BUY_ROW.iter().position(|k| *k == code) {
-                self.buy(slot);
+            if let Some(key) = BUY_ROW.iter().position(|k| *k == code) {
+                // Keys 1..9 are positions 0..8; `Digit0`, the tenth, is back.
+                let digit = if key == 9 { 0 } else { key + 1 };
+                let team = self
+                    .players
+                    .iter()
+                    .find(|p| p.id == self.self_id)
+                    .map(|p| p.team)
+                    .unwrap_or(0);
+                let groups = hassault_native::buy_menu::buy_groups(
+                    self.mode.as_ref().map(|m| m.catalog.as_slice()).unwrap_or(&[]),
+                    team,
+                );
+                let (open, buy) = hassault_native::buy_menu::press(&groups, self.buy_group, digit);
+                self.buy_group = open;
+                if let Some(index) = buy {
+                    self.buy(index);
+                }
                 return;
             }
         }
@@ -2864,7 +2891,14 @@ impl App {
             Action::Use => self.keys.use_key = down,
             // Held rather than toggled, like the scoreboard: a menu you can
             // leave up by accident is one you die behind.
-            Action::Buy => self.buy_open = down,
+            Action::Buy => {
+                self.buy_open = down;
+                if !down {
+                    self.buy_group = None;
+                }
+            }
+            // The bomb if carried, else the bought gun in hand: the server picks.
+            Action::Drop if down => self.pending_drop = true,
             Action::Quickswitch if down => self.quick_switch_weapon(),
             Action::Reload if down => self.reload(),
             // Purely local — see `WeaponViewModel::inspect`.
@@ -3058,7 +3092,19 @@ impl App {
     /// that names nothing.
     fn buy(&mut self, index: usize) {
         let len = self.mode.as_ref().map(|m| m.catalog.len()).unwrap_or(0);
-        if index < len {
+        if index >= len {
+            return;
+        }
+        // A row paid for in this window sells back instead, as the browser's
+        // `tradeFor` does: the server's `sellable` says which.
+        let sellable = self
+            .you
+            .as_ref()
+            .and_then(|y| y.mode.as_ref())
+            .is_some_and(|m| m.sellable.contains(&(index as i32)));
+        if sellable {
+            self.pending_sell = index as i32;
+        } else {
             self.pending_buy = index as i32;
         }
     }
@@ -3712,8 +3758,8 @@ fn name_or_id(name: &str, id: &str) -> String {
     }
 }
 
-/// The number row, as the buy menu reads it: slot `i` is `BUY_ROW[i]`.
-const BUY_ROW: [KeyCode; 9] = [
+/// The number row, as the buy menu reads it: `Digit1`..`Digit9` then `Digit0`.
+const BUY_ROW: [KeyCode; 10] = [
     KeyCode::Digit1,
     KeyCode::Digit2,
     KeyCode::Digit3,
@@ -3723,6 +3769,7 @@ const BUY_ROW: [KeyCode; 9] = [
     KeyCode::Digit7,
     KeyCode::Digit8,
     KeyCode::Digit9,
+    KeyCode::Digit0,
 ];
 
 fn key_name(code: KeyCode) -> String {
@@ -4379,6 +4426,7 @@ impl ApplicationHandler for App {
                         .map(|p| p.team)
                         .unwrap_or(0),
                     buy_open: self.buy_open,
+                    buy_group: self.buy_group,
                     mode: self.mode.as_ref(),
                     mode_state: self.mode_state.as_ref(),
                     // Out of `you`, which is the only per-recipient part of a

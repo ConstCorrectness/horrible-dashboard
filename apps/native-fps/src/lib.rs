@@ -18,6 +18,7 @@ pub mod arms;
 pub mod atmosphere;
 pub mod audio;
 pub mod bodies;
+pub mod buy_menu;
 pub mod camera;
 pub mod chat;
 pub mod character;

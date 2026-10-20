@@ -812,34 +812,41 @@ class BotBrain:
         if self.buy_in <= 0:
             self.buy_in = 0.5 + self.rng.random() * 0.4
             mode_state = getattr(room.mode, "state", None)
-            buy_open = getattr(mode_state, "buy_open", False)
-            if buy_open and hasattr(me, "money"):
+            can_buy = getattr(room.mode, "can_buy", None)
+            index_of = getattr(room.mode, "catalog_index", None)
+            # Asked of the mode, by id: the catalogue is built from the weapon
+            # table, so its indexes are the mode's business, not a bot's. (This
+            # used to read a `buy_open` flag no mode had, so bots never bought.)
+            if can_buy and index_of and hasattr(me, "money") and can_buy(room, me):
                 owned_weapons = getattr(me, "owned", set())
-                if not any(slot in owned_weapons for slot in (2, 3, 4)):
+                has_primary = any(
+                    weapons.WEAPONS[slot].slot == "primary" for slot in owned_weapons
+                )
+                if not has_primary:
                     if (
                         me.money >= 4750
                         and self.skill.name in ("hard", "expert")
                         and self.rng.random() < 0.35
                     ):
-                        buy_item = 2  # Sniper Rifle
+                        buy_item = index_of("sniper")
                     elif me.money >= 2700:
-                        buy_item = 0  # Assault Rifle
+                        buy_item = index_of("assault")
                     elif me.money >= 1800:
-                        buy_item = 1  # Shotgun
+                        buy_item = index_of("shotgun")
                 elif (
                     me.money >= 1000
                     and "armour" not in getattr(me, "owned_extras", set())
                     and getattr(me, "armour", 0) < 100
                 ):
-                    buy_item = 3  # Armour
+                    buy_item = index_of("armour")
                 elif (
                     me.money >= 400
                     and "defuser" not in getattr(me, "owned_extras", set())
                     and getattr(me, "team", 0) != getattr(mode_state, "attackers", 0)
                 ):
-                    buy_item = 8  # Defusal Kit
+                    buy_item = index_of("defuser")
                 elif me.money >= 300 and not getattr(me, "owned_nades", set()):
-                    buy_item = 4  # HE Grenade
+                    buy_item = index_of("he")
 
         # -- tactical utility throw -----------------------------------------
         throw = False

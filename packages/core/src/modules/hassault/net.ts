@@ -570,6 +570,10 @@ export interface BuyItem {
   kind: string;
   slot: number;
   price: number;
+  /** `any`, `t` or `ct`: who may buy it. Absent from an older server (`any`). */
+  side?: string;
+  /** Its menu group (`buy-menu.ts`): `secondary`, `primary`, `gear`, `grenade`. */
+  category?: string;
 }
 
 /** A bomb site or a flag stand, already resolved onto the floor server-side. */
@@ -725,8 +729,12 @@ export interface ModeSelf {
    * on either side raising a word about it.
    */
   money?: number;
-  /** Whether the window is open — the server's answer, not a phase check. */
+  /** Whether a buy now would land — the server's answer, not a phase check. */
   canBuy?: boolean;
+  /** Seconds the buy stays open: the freeze, then the buy time of the round. */
+  buyIn?: number;
+  /** Whether we stand in one of our team's buy zones. */
+  inBuyZone?: boolean;
   /** Catalogue indices already owned, so a menu can grey them out. */
   bought?: number[];
   /**

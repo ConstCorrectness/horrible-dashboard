@@ -181,8 +181,15 @@ class HassaultReferee:
         map_name: str,
         room_id: str | None = None,
         new: bool = False,
+        mode: str | None = None,
     ) -> dict[str, Any]:
         """Seat a player, opening a room if there is none on that map.
+
+        `mode` picks the game for a room this join opens or fills (deathmatch by
+        default): a join without a room id lands in a room on that map *in that
+        mode*, and opens one if there is none. An unknown mode, or one the map
+        cannot host (defuse on a map with no bomb sites), is refused. A join
+        that names a live room takes whatever that room is running.
 
         Deathmatch default. If joining by explicit room_id, uses the room's existing
         map; otherwise verifies that map_name is a valid bundled map.
@@ -207,17 +214,24 @@ class HassaultReferee:
         target_map = existing.map_name if existing else (map_name or "hd_assault")
         if not self.playable(target_map):
             raise ValueError(f"{target_map!r} is not a bundled map")
-        opening = existing is None and (new or not self._has_space(target_map))
+        if mode and not modes.is_mode(mode):
+            raise ValueError(f"unknown game mode {mode!r}")
+        if existing is not None:
+            mode = existing.mode.id
+        opening = existing is None and (new or not self._has_space(target_map, mode))
         if opening and len(self.server.rooms) >= max_rooms():
             raise ValueError("this server is full; try a room that is already running")
-        if existing is None and new:
-            room_id = self.server.create(target_map).id
+        if opening:
+            # Opened here rather than inside `server.join`, so a map that cannot
+            # host the mode is a refusal with a reason, before anyone is seated.
+            room_id = self.server.create(target_map, mode=mode).id
         loadouts, look = self.account_look(conn)
         room, player = await self.server.join(
             conn,
             target_map,
             conn.display_name,
             room_id,
+            mode,
             loadouts=loadouts,
             cosmetics=look,
         )
@@ -273,12 +287,13 @@ class HassaultReferee:
         )
         return None
 
-    def _has_space(self, map_name: str) -> bool:
-        """Whether a join on `map_name` would land in a room that already exists —
-        the same test `MatchServer.find_or_create` makes before it opens one."""
+    def _has_space(self, map_name: str, mode: str | None = None) -> bool:
+        """Whether a join on `map_name` in `mode` would land in a room that
+        already exists — the same test `MatchServer.find_or_create` makes."""
+        want = mode or modes.DEFAULT_MODE
         return any(
             room.map_name == map_name
-            and room.mode.id == modes.DEFAULT_MODE
+            and room.mode.id == want
             and len(room.players) < MAX_PLAYERS
             for room in self.server.rooms.values()
         )
@@ -439,10 +454,9 @@ class HassaultReferee:
                 rated=False,
                 ruleset={
                     "map": result.get("map"),
-                    # Always `dm` today — see `join`. Written anyway so a row
-                    # from before a second mode existed is distinguishable from
-                    # one where nobody recorded which, which is not the same
-                    # fact.
+                    # The room's mode (`join` takes one since P6). A row from
+                    # before then has none, which reads as `dm`: the only mode
+                    # these rooms ran.
                     "mode": result.get("mode", "dm"),
                     "kills": result.get("kills"),
                     "deaths": result.get("deaths"),

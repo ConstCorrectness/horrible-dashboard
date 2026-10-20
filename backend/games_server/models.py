@@ -21,6 +21,7 @@ TableStatus = Literal["open", "playing", "done"]
 SERVER_CAPS: list[str] = [
     "match_info",  # broadcasts seat identities (SeatProfile) at match start
     "hassault_account",  # hassault settings, inventory, XP ledger and import on /api/hassault/account
+    "hassault_modes",  # hassault rooms take a `mode` on join (defuse and its economy run here)
     "trace",  # accepts move_trace uploads into the match replay
     "replays",  # persists replays + serves them over /replays HTTP
     "tiers",  # placement matches + tier names on ladder/profiles, rating_update pushes

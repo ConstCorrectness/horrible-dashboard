@@ -227,22 +227,35 @@ def test_a_shot_is_resolved_by_the_server(referee: HassaultReferee):
         _, victim = referee.server.player_for(b)
 
         victim.protected_until = 0.0
-        # Twelve cubes from the victim along a clear line on the same floor. The
-        # victim's spawn is random (room ids are), and a fixed offset put the
-        # shooter inside a wall or up on a ledge from some of them.
+        # A victim and a shooter twelve (or eight) cubes apart on one floor with a
+        # clear line between them. Searched over every spawn rather than taken
+        # from the victim's own: spawns are random (room ids are), and some sit
+        # on a ledge with no clear line in any of the directions tried, which
+        # left the shooter behind a wall about a third of the time.
         world = room.world
-        floor = world.floor_at(int(victim.state.x), int(victim.state.y))
-        eye = victim.state.z + 4.5
-        for dx, dy in ((-12, 0), (12, 0), (0, -12), (0, 12), (-8, 0), (8, 0), (0, -8), (0, 8)):
-            sx, sy = victim.state.x + dx, victim.state.y + dy
-            if world.floor_at(int(sx), int(sy)) != floor:
-                continue
-            reach = math.hypot(dx, dy)
-            clear = weapons.raycast_world(
-                world, (sx, sy, eye), (-dx / reach, -dy / reach, 0.0), reach
-            )
-            if clear >= reach - 1.5:
-                break
+
+        def clear_pair():
+            for spawn in room.spawns:
+                vx, vy = spawn.x + 0.5, spawn.y + 0.5
+                floor = world.floor_at(int(vx), int(vy))
+                eye = floor + 4.5
+                for dx, dy in (
+                    (-12, 0), (12, 0), (0, -12), (0, 12), (-8, 0), (8, 0), (0, -8), (0, 8)
+                ):
+                    sx, sy = vx + dx, vy + dy
+                    if world.floor_at(int(sx), int(sy)) != floor:
+                        continue
+                    reach = math.hypot(dx, dy)
+                    clear = weapons.raycast_world(
+                        world, (sx, sy, eye), (-dx / reach, -dy / reach, 0.0), reach
+                    )
+                    if clear >= reach - 1.5:
+                        return (vx, vy, float(floor)), (sx, sy)
+            raise AssertionError("no spawn on hd_pit has a clear line to shoot along")
+
+        (vx, vy, vz), (sx, sy) = clear_pair()
+        victim.state.x, victim.state.y, victim.state.z = vx, vy, vz
+        victim.state.on_ground = True
         shooter.state.x, shooter.state.y = sx, sy
         shooter.state.z = victim.state.z
         shooter.state.on_ground = True
@@ -465,28 +478,21 @@ def test_traffic_on_another_channel_is_not_ours(server):
         assert json.loads(ws.receive_text())["event"] == "welcome"
 
 
-def test_a_rated_room_is_deathmatch_and_the_absence_of_a_choice_is_the_point():
-    """Ranked is pinned to deathmatch, and pinned by the *signature*.
-
-    A rated round-based mode is a different project, not a flag: defuse is scored
-    by round, a round is settled between two full sides, and a server-hosted room
-    people join and leave one at a time has no such thing to report. `join` takes
-    no `mode` precisely so adding one is a decision somebody has to make on
-    purpose rather than a default that quietly fills a ladder with half-played
-    rounds.
-
-    This asserts both halves — that the room really is deathmatch, and that there
-    is no parameter through which it could have been anything else.
+def test_a_server_room_takes_a_mode_but_never_rates_it():
+    """A join may name a mode now (P6: defuse runs here), and that changes no
+    rating: `_record` writes every server room's row `rated=False` with the mode
+    in its ruleset, because a room people join and leave one at a time is not
+    two seats facing each other. A rated mode is a duel queue, not a flag.
     """
     import inspect
 
     from backend.games_server.hassault_rooms import HassaultReferee
     from backend.modules.hassault import modes
 
-    assert "mode" not in inspect.signature(HassaultReferee.join).parameters
-    # And what it therefore falls to. Named rather than assumed, so a change to
-    # the default that made ranked round-based would fail here instead of showing
-    # up as a ladder of unfinished rounds.
+    assert "mode" in inspect.signature(HassaultReferee.join).parameters
+    source = inspect.getsource(HassaultReferee._record)
+    assert "rated=False" in source and '"mode": result.get("mode"' in source
+    # A join that names none is still deathmatch.
     assert modes.build(modes.DEFAULT_MODE).id == "dm"
 
 

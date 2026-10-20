@@ -2572,7 +2572,7 @@ class MatchRoom:
         you["held"] = [
             i for i in range(len(weapons.WEAPONS)) if self.mode.holds(self, player, i)
         ]
-        you["slots"] = dict(player.loadout)
+        you["slots"] = self.mode.slots(self, player)
         # Resolved per recipient, here rather than in the shared rows, because
         # audibility is the whole mechanic: a shared list of noises with positions
         # in it would hand every client the location of everyone it cannot hear.

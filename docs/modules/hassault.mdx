@@ -2606,11 +2606,52 @@ Money on `MatchPlayer` (not a mode-side dict, which leaks its entries when
 a price is a menu that offers a purchase the server then refuses, and that fails
 as money still sitting there with nothing saying why.
 
-The catalogue is `{id, name, kind, slot, price}` rather than raw `WEAPONS`
-indices, so armour and grenades ride the same integer as a rifle and
+The catalogue is `{id, name, kind, slot, price, side, category}` rather than raw
+`WEAPONS` indices, so armour and grenades ride the same integer as a rifle and
 `Command.buy` stays one number. **The index into it is what goes on the wire**,
 which is why a duplicate id is a tested-for error: two rows would buy the same
 thing while the menu showed two.
+
+**Its gun rows are built from the weapon table** (`defuse._weapon_rows`):
+every weapon with a `price` that is not one of the free knife and pistol,
+sidearms first, then primaries, at the weapon's own price and `side`. A gun
+added to `weapons.py` is for sale without touching the mode. The index is the
+same for both sides all match: a row the buyer's side cannot carry (a CT rifle
+on T) is refused, not renumbered.
+
+**Kills pay by weapon** (`Weapon.kill_reward`): the shotgun and the SMG pay more
+than a rifle and the sniper far less, which is what makes an eco round a plan
+rather than a forfeit. A kill with no weapon behind it (a grenade) pays
+`KILL_REWARD`.
+
+**Buying needs the window and the zone** (`Defuse.can_buy`). The window is the
+freeze plus `BUY_TIME` (20 s) of the live round, closed early by a plant. The
+zone is a `BUY_ZONE_RADIUS` circle round each of the team's spawn points; maps
+declare no zones of their own yet. A dead player buys from
+anywhere, but only in the freeze: they are buying for the round they spawn
+into. The envelope says which of the two is shut (`canBuy`, `buyIn`,
+`inBuyZone`), so both menus can say why a buy would be refused.
+
+**One gun per slot.** A primary bought over a primary puts the old one on the
+floor, magazine and all, where a teammate can take it; a sidearm bought over the
+free pistol replaces it on the keys. `GameMode.slots` is what the number keys
+select, and defuse answers with what is owned rather than with the loadout.
+
+**The menu is CS's** (`buy-menu.ts`, `buy_menu.rs`): the catalogue outgrew one
+row of keys, so a number opens a group (pistols, primary, gear, grenades), a
+second buys a row in it, and `0` goes back. A side sees only its own rows.
+`economy-vectors.json` (`scripts/gen_hassault_economy_vectors.py`) pins both
+clients' groups to the server's table. The purse is always on the HUD in a buy
+mode, counting toward each change.
+
+**Bots buy.** They used to read a `buy_open` flag no mode had, so they never
+bought anything; they now ask the mode (`can_buy`, `catalog_index`).
+
+**Game-server rooms take a mode** (cap `hassault_modes`): a join with `mode`
+lands in, or opens, a room on that map in that mode, and a map that cannot host
+it (defuse with no bomb sites) is refused. The web client's Create match offers
+Deathmatch or Defuse. Results there stay unrated with the mode in their ruleset:
+a room people join and leave one at a time is not two seats facing each other.
 
 `Command.buy` and not a `/ws` event, for the reason `throw` gives: commands are
 forwarded *verbatim* by `fabric.handle_input`, so a field crosses the peer wire,
@@ -2675,7 +2716,8 @@ teammate better placed to plant is what a carrier means by the key.
   feet, so without the delay the next tick hands it straight back and the key
   appears to do nothing.
 
-**Sell** refunds the full price, **only in the freeze**. Pressing a row that
+**Sell** refunds the full price, **only while buying is open** (the freeze and
+the buy time, in the buy zone). Pressing a row that
 `you.mode.sellable` lists sells it back. The menu shows that row as
 `SELL +$price` in a colour of its own, because a row that looks finished but
 refunds you on a keypress is a misclick waiting to happen.
@@ -2693,9 +2735,10 @@ keep it honest:
   thrown, armour that has absorbed nothing. Refunding spent utility would make
   the freeze a window in which it is free.
 
-The client decides buy-or-sell in `trade.ts` from the *latest* envelope at send
-time, never from its own idea of what it paid for. The native client renders
-`dropped` as an ordinary bomb state but does not send either field yet.
+The client decides buy-or-sell in `trade.ts` (native: `App::buy`) from the
+*latest* envelope at send time, never from its own idea of what it paid for.
+Both clients send both fields: the native client's drop key (X) and its menu's
+sell rows went in with P6.
 
 #### Two ordering bugs the economy exposed
 

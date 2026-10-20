@@ -200,14 +200,19 @@ def test_a_purchase_that_would_give_nothing_spends_nothing(game):
     assert att.money == after, "the second flash was charged for"
 
 
-def test_buying_is_refused_once_the_round_is_live(game):
-    """The freeze is the buy window; a rifle mid-round would make the economy a
-    tax rather than a decision."""
+def test_buying_stays_open_for_the_buy_time_and_then_closes(game):
+    """The freeze, then `BUY_TIME` of the live round (the CS rule); a rifle any
+    later would make the economy a tax rather than a decision."""
+    from backend.modules.hassault.modes.defuse import BUY_TIME
+
     room, att, _dfn, mode = game
     att.money = 5000
     for _ in range(int(FREEZE_TIME / 0.05) + 2):
         room.simulate(0.05)
     assert mode.state.phase == LIVE
+    assert mode.can_buy(room, att), "the first seconds of the round still buy"
+    for _ in range(int(BUY_TIME / 0.05) + 2):
+        room.simulate(0.05)
     Buyer(room).buy(att, "assault")
     assert att.money == 5000
     assert 2 not in att.owned
@@ -454,11 +459,16 @@ def test_money_rides_in_your_own_envelope_and_not_the_shared_one(game):
 
 
 def test_the_envelope_says_whether_the_window_is_open(game):
+    from backend.modules.hassault.modes.defuse import BUY_TIME
+
     room, att, _dfn, _mode = game
-    assert room.private_view_for(att)["mode"]["canBuy"] is True
-    for _ in range(int(FREEZE_TIME / 0.05) + 2):
+    view = room.private_view_for(att)["mode"]
+    assert view["canBuy"] is True and view["inBuyZone"] is True
+    assert view["buyIn"] > BUY_TIME
+    for _ in range(int((FREEZE_TIME + BUY_TIME) / 0.05) + 4):
         room.simulate(0.05)
-    assert room.private_view_for(att)["mode"]["canBuy"] is False
+    view = room.private_view_for(att)["mode"]
+    assert view["canBuy"] is False and view["buyIn"] == 0
 
 
 def test_what_you_own_is_reported_as_catalogue_indices(game):

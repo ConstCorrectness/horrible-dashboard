@@ -45,7 +45,8 @@ import { createBackdrop, type Backdrop } from './backdrop';
 import { restoreGeneratedSurfaces, upgradePhotoSurfaces } from './photo-surfaces';
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
-import { BuyMenu } from './panels/BuyMenu';
+import { BuyMenu, MoneyCounter } from './panels/BuyMenu';
+import { buyGroups, pressBuyKey } from './buy-menu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
 import { DefuseProgressRing } from './panels/DefuseProgressRing';
 import { KitPool } from './kits';
@@ -59,11 +60,8 @@ import {
 } from './CrossfireKillBadges';
 
 /**
- * Digit codes in catalogue order, so key `n` buys entry `n - 1`.
- *
- * Nine of them: the catalogue is eight today and a tenth entry would need a row
- * of keys that does not exist, which is the moment to scroll rather than to
- * bind `Digit0`.
+ * The number row while the buy menu is held: `Digit1`..`Digit9` pick a group
+ * and then a row in it (`buy-menu.ts`), and `Digit0`, the tenth, goes back.
  */
 const BUY_KEYS = [
   'Digit1',
@@ -75,6 +73,7 @@ const BUY_KEYS = [
   'Digit7',
   'Digit8',
   'Digit9',
+  'Digit0',
 ];
 import { useNativeLaunch } from './native-launch';
 import { FlashAssistToast, FlashOverlay, NadeTray, Radar } from './panels/Radar';
@@ -408,6 +407,9 @@ export interface HorribleAssaultPanelProps {
   initialMap?: string;
   /** Initial room to join automatically once loaded */
   initialRoom?: string;
+  /** The mode to ask for when that first join opens or fills a room (`dm`,
+   * `defuse`); ignored when `initialRoom` names one, which runs its own. */
+  initialMode?: string;
   /** Force running in WebGL canvas (bypassing native client setting) */
   forceWebGl?: boolean;
   /**
@@ -540,6 +542,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    */
   const showBuyRef = useRef(false);
   showBuyRef.current = showBuy;
+  /** The buy menu's open group (`buy-menu.ts`); back to the top when it closes. */
+  const [buyGroup, setBuyGroup] = useState<number | null>(null);
+  const buyGroupRef = useRef<number | null>(null);
+  buyGroupRef.current = buyGroup;
+  useEffect(() => {
+    if (!showBuy) setBuyGroup(null);
+  }, [showBuy]);
   /** Timestamps, compared against `Date.now()` so a stale one simply expires. */
   const [flash, setFlash] = useState({ hit: 0, killed: 0, hurt: 0 });
   /**
@@ -3455,9 +3464,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // it. Returns before the weapon and grenade handlers below, so a buy is
       // never also a weapon switch.
       if (showBuyRef.current) {
-        const slot = BUY_KEYS.indexOf(e.code);
-        if (slot >= 0) {
-          pendingBuyRef.current = slot;
+        const key = BUY_KEYS.indexOf(e.code);
+        if (key >= 0) {
+          const state = sessionRef.current?.state;
+          const team = state?.peers.find((p) => p.id === state.playerId)?.team;
+          const next = pressBuyKey(
+            buyGroups(state?.mode?.catalog ?? [], team),
+            buyGroupRef.current,
+            key === 9 ? 0 : key + 1,
+          );
+          setBuyGroup(next.open);
+          if (next.buy >= 0) pendingBuyRef.current = next.buy;
           keysRef.current.add(action);
           return;
         }
@@ -3838,14 +3855,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * means it is a match on this node, which is the same thing `join` understands.
    */
   const joinRoom = useCallback(
-    (room: string, map: string, host: string) => {
+    (room: string, map: string, host: string, mode?: string) => {
       const session = sessionRef.current;
       if (!session) return;
       // Load their map before joining: the snapshots are positions in *that*
       // world, and rendering them against a different one is nonsense.
       setMapName(map);
       shotsRef.current?.reset();
-      session.join(map, playerName, room, host);
+      session.join(map, playerName, room, host, undefined, mode);
       deploy();
     },
     [playerName, deploy],
@@ -4038,8 +4055,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     if (!info || initialJoinedRef.current) return;
     if (!props.initialRoom && !standalone) return;
     initialJoinedRef.current = true;
-    joinRoom(props.initialRoom ?? '', props.initialMap || mapName, '');
-  }, [props.initialRoom, props.initialMap, info, mapName, joinRoom, standalone]);
+    joinRoom(props.initialRoom ?? '', props.initialMap || mapName, '', props.initialMode);
+  }, [props.initialRoom, props.initialMap, props.initialMode, info, mapName, joinRoom, standalone]);
 
   // The control map, written straight through to settings so a rebind survives a
   // reload. The scalar preferences are edited by `SettingsPanel` directly; this one
@@ -4429,12 +4446,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           <BuyMenu
             mode={net.mode}
             mine={net.you?.mode}
+            team={myTeam}
             open={showBuy}
+            group={buyGroup}
+            onGroup={setBuyGroup}
             onBuy={(index) => {
               pendingBuyRef.current = index;
+              setBuyGroup(null);
             }}
           />
         )}
+        {online && <MoneyCounter mine={net.you?.mode} />}
 
         {online && <KillFeed entries={net.killfeed} />}
 

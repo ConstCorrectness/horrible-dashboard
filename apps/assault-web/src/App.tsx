@@ -26,9 +26,10 @@ const HorribleAssaultPanel = lazy(() =>
 
 const DEFAULT_MAP = 'hd_dust2';
 
-function parseLocationParams(): { room: string | null; map: string } {
+function parseLocationParams(): { room: string | null; map: string; mode?: string } {
   let room: string | null = null;
   let map = DEFAULT_MAP;
+  let mode: string | undefined;
 
   // Check URL hash first (#room=abc&map=hd_dust2)
   const hash = window.location.hash.replace(/^#\/?/, '');
@@ -36,6 +37,7 @@ function parseLocationParams(): { room: string | null; map: string } {
     const params = new URLSearchParams(hash);
     if (params.get('room')) room = params.get('room');
     if (params.get('map')) map = params.get('map') || map;
+    if (params.get('mode')) mode = params.get('mode') || undefined;
   }
 
   // Fallback to query string (?room=abc&map=hd_dust2)
@@ -45,14 +47,14 @@ function parseLocationParams(): { room: string | null; map: string } {
     if (search.get('map')) map = search.get('map') || map;
   }
 
-  return { room, map };
+  return { room, map, mode };
 }
 
 export default function App() {
   const { callsign, setCallsign } = useGuestSession();
   const auth = useAuth();
   const [view, setView] = useState<AppView>('browser');
-  const [target, setTarget] = useState<{ room: string | null; map: string }>({
+  const [target, setTarget] = useState<{ room: string | null; map: string; mode?: string }>({
     room: null,
     map: DEFAULT_MAP,
   });
@@ -135,10 +137,11 @@ export default function App() {
     setView('deploy');
   };
 
-  const host = (map: string) => {
+  const host = (map: string, mode = 'dm') => {
     setDialog(null);
-    setTarget({ room: null, map });
-    window.location.hash = `map=${encodeURIComponent(map)}`;
+    setTarget({ room: null, map, mode });
+    window.location.hash =
+      `map=${encodeURIComponent(map)}` + (mode !== 'dm' ? `&mode=${encodeURIComponent(mode)}` : '');
     setView('deploy');
   };
 
@@ -200,6 +203,7 @@ export default function App() {
               guestCallsign={handle ?? callsign}
               initialMap={target.map}
               initialRoom={target.room ?? undefined}
+              initialMode={target.mode}
               forceWebGl={true}
               standalone={true}
               onShareRoom={(room, map) => setDialog({ kind: 'share', room, map })}

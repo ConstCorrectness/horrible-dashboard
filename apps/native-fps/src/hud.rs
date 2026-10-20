@@ -348,6 +348,8 @@ pub struct HudView<'a> {
     /// Local, and the only piece of mode UI that is: what the *menu* is doing is
     /// this client's business, and everything it displays comes off the wire.
     pub buy_open: bool,
+    /// The buy menu's open group (`buy_menu.rs`), `None` at the top level.
+    pub buy_group: Option<usize>,
     /// A multiplier on the HUD's derived unit, from the player's settings.
     ///
     /// 1.0 is the derived size. Kept as a separate field rather than folded into
@@ -1023,6 +1025,7 @@ impl Hud {
             // at must not be the one underneath. Found by rendering the two
             // together, which no test would have done.
             paint_buy_menu(&mut p, view, u);
+            paint_purse(&mut p, view, u);
         }
 
         // Underwater, under everything else the HUD draws: it is a property of
@@ -2779,12 +2782,17 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
     if info.catalog.is_empty() {
         return;
     }
+    // CS's menu (`buy_menu.rs`): groups at the top level, a group's rows once
+    // one is open, each row keeping its catalogue index for the wire.
+    let groups = crate::buy_menu::buy_groups(&info.catalog, view.team);
+    let open = view.buy_group.and_then(|g| groups.get(g));
+    let lines = open.map(|g| g.rows.len()).unwrap_or(groups.len());
 
     let scale = u * 0.85;
     let line = 8.0 * scale;
     let width = (p.width * 0.34).max(u * 62.0);
     let header = line * 2.2;
-    let height = header + line * info.catalog.len() as f32 + u * 3.0;
+    let height = header + line * (lines as f32 + 1.0) + u * 3.0;
     let x = (p.width - width) * 0.5;
     let y = (p.height - height) * 0.5;
 
@@ -2796,8 +2804,9 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
     p.rect(x, y, width, u * 0.4, [0.42, 0.72, 0.98, 0.9]);
 
     let pad = u * 3.0;
-    p.text(x + pad, y + u * 2.0, scale, [0.92, 0.94, 0.98, 0.95], "BUY");
-    // The purse, right-aligned in the header. Amber when the window has closed,
+    let title = open.map(|g| format!("BUY / {}", g.label)).unwrap_or_else(|| "BUY".to_string());
+    p.text(x + pad, y + u * 2.0, scale, [0.92, 0.94, 0.98, 0.95], &title);
+    // The purse, right-aligned in the header. Amber when a buy would not land,
     // because at that point the number is the only thing on the panel that is
     // still true.
     let purse = format!("${}", mine.money);
@@ -2813,38 +2822,75 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
         purse_colour,
         &purse,
     );
-    if !mine.can_buy {
-        p.text(
-            x + pad,
-            y + u * 2.0 + line * 0.9,
-            scale * 0.8,
-            [0.82, 0.72, 0.48, 0.75],
-            "THE WINDOW IS CLOSED",
-        );
-    }
+    let notice = crate::buy_menu::notice(mine.can_buy, mine.buy_in, mine.in_buy_zone);
+    let status = if notice.is_empty() {
+        format!("CLOSES IN {}S", mine.buy_in.ceil() as i32)
+    } else {
+        notice.to_string()
+    };
+    p.text(
+        x + pad,
+        y + u * 2.0 + line * 0.9,
+        scale * 0.8,
+        if notice.is_empty() {
+            [0.62, 0.66, 0.70, 0.75]
+        } else {
+            [0.82, 0.72, 0.48, 0.75]
+        },
+        &status,
+    );
 
-    for (index, item) in info.catalog.iter().enumerate() {
-        let row = y + header + line * index as f32;
+    let footer_y = y + header + line * lines as f32;
+    p.text(
+        x + pad,
+        footer_y,
+        scale * 0.8,
+        [0.62, 0.66, 0.70, 0.7],
+        if open.is_some() { "0 BACK" } else { "NUMBER KEYS PICK A GROUP" },
+    );
+
+    let Some(group) = open else {
+        for (i, g) in groups.iter().enumerate() {
+            let row = y + header + line * i as f32;
+            let colour = [0.92, 0.94, 0.98, 0.95];
+            p.text(x + pad, row, scale, colour, &format!("{}", i + 1));
+            p.text(x + pad + u * 7.0, row, scale, colour, g.label);
+            let count = format!("{}", g.rows.len());
+            p.text(
+                x + width - pad - text_width(&count, scale),
+                row,
+                scale,
+                [0.62, 0.66, 0.70, 0.75],
+                &count,
+            );
+        }
+        return;
+    };
+
+    for (position, &index) in group.rows.iter().enumerate() {
+        let item = &info.catalog[index];
+        let row = y + header + line * position as f32;
         let owned = mine.bought.contains(&(index as i32));
+        let refundable = mine.sellable.contains(&(index as i32));
         let afford = mine.money >= item.price;
-        // Three states, and they are three because they mean three things: this
-        // is yours already, this is buyable, this is out of reach. Collapsing
-        // the first two would make a menu that keeps offering what you have.
-        let colour = if owned {
+        // Four states, and they are four because they mean four things: paid
+        // for and refundable, yours already, buyable, out of reach.
+        let colour = if refundable {
+            [0.90, 0.71, 0.40, 0.95]
+        } else if owned {
             [0.55, 0.72, 0.60, 0.75]
         } else if afford && mine.can_buy {
             [0.92, 0.94, 0.98, 0.95]
         } else {
             [0.62, 0.64, 0.70, 0.55]
         };
-        // 1-based, matching the key you press. The index on the wire is 0-based
-        // and stays that way — the *label* is the thing being made friendly.
-        // The key column is a fixed gutter wide rather than "the digit plus a
-        // bit": at `u * 4` the number and the name touched — "2Shotgun" — which
-        // is invisible to any test that only counts vertices.
-        p.text(x + pad, row, scale, colour, &format!("{}", index + 1));
+        // 1-based within the group, matching the key you press. The key column
+        // is a fixed gutter wide: at `u * 4` the number and the name touched.
+        p.text(x + pad, row, scale, colour, &format!("{}", position + 1));
         p.text(x + pad + u * 7.0, row, scale, colour, &item.name);
-        let price = if owned {
+        let price = if refundable {
+            format!("SELL +${}", item.price)
+        } else if owned {
             "OWNED".to_string()
         } else {
             format!("${}", item.price)
@@ -2857,6 +2903,31 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
             &price,
         );
     }
+}
+
+/// The purse, on screen in any mode with money, menu or no menu: a kill reward
+/// is something you watch arrive. Stacked on top of the health block, whose
+/// layout (`paint_health`, upwards from the movement line) this repeats.
+fn paint_purse(p: &mut Painter, view: &HudView, u: f32) {
+    let Some(mine) = view.mode_self else { return };
+    let Some(info) = view.mode else { return };
+    if info.catalog.is_empty() {
+        return;
+    }
+    let scale = u * 1.1;
+    let text = format!("${}", mine.money);
+    let floor = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - u * 1.8;
+    let health_top = floor - u * 1.2 - u * 0.6 - u * 2.6 - u * 1.6 - 7.0 * (u * 2.4) - u * 1.8;
+    let x = u * 6.0;
+    let y = health_top - 9.0 * scale - u * 1.5;
+    p.rect(x - u, y - u, text_width(&text, scale) + u * 2.6, 9.0 * scale, [0.04, 0.05, 0.07, 0.72]);
+    p.rect(x - u, y - u, u * 0.5, 9.0 * scale, [0.42, 0.72, 0.98, 0.9]);
+    let colour = if mine.can_buy {
+        [0.62, 0.88, 0.68, 0.95]
+    } else {
+        [0.92, 0.94, 0.98, 0.9]
+    };
+    p.text(x, y, scale, colour, &text);
 }
 
 /// How long an objective banner stays up.
@@ -4392,6 +4463,7 @@ mod tests {
             hud_scale: 1.0,
             team: 0,
             buy_open: false,
+            buy_group: None,
             // No mode by default: every older test in this file is about a HUD
             // with no objective layer, and defaulting one in would draw a round
             // clock into their vertex counts.
@@ -5542,6 +5614,7 @@ mod tests {
                 kind: "weapon".into(),
                 slot: 2,
                 price: 2700,
+                ..Default::default()
             },
             crate::protocol::BuyItem {
                 id: "flash".into(),
@@ -5549,12 +5622,23 @@ mod tests {
                 kind: "nade".into(),
                 slot: 1,
                 price: 200,
+                ..Default::default()
             },
         ]
     }
 
     /// The HUD with a buy menu held open, and how much it drew.
     fn with_menu(open: bool, mine: &ModeSelf, items: Vec<crate::protocol::BuyItem>) -> usize {
+        with_menu_in(open, None, mine, items)
+    }
+
+    /// As `with_menu`, with a group open (`buy_menu.rs`): rows only show inside one.
+    fn with_menu_in(
+        open: bool,
+        group: Option<usize>,
+        mine: &ModeSelf,
+        items: Vec<crate::protocol::BuyItem>,
+    ) -> usize {
         let hud = Hud::default();
         let you = alive();
         let info = ModeInfo {
@@ -5573,6 +5657,7 @@ mod tests {
         let mut v = view(Some(&you));
         v.scores = &[1, 0];
         v.buy_open = open;
+        v.buy_group = group;
         v.mode = Some(&info);
         v.mode_state = Some(&state);
         v.mode_self = Some(mine);
@@ -5624,8 +5709,8 @@ mod tests {
             ..Default::default()
         };
         assert_ne!(
-            with_menu(true, &poor, catalog()),
-            with_menu(true, &owner, catalog())
+            with_menu_in(true, Some(0), &poor, catalog()),
+            with_menu_in(true, Some(0), &owner, catalog())
         );
     }
 

@@ -174,6 +174,13 @@ pub struct Command {
     /// so the field is worth omitting; the action key is on most of them.
     #[serde(skip_serializing_if = "is_no_buy")]
     pub buy: i32,
+    /// Sell back the catalogue entry at this index (bought in this window), or
+    /// `-1`. The `buy` shape and the same reason: a field crosses every relay.
+    #[serde(skip_serializing_if = "is_no_buy")]
+    pub sell: i32,
+    /// Put down the bomb if carried, else the bought gun in hand.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub drop: bool,
 }
 
 /// `-1` is "no purchase". A free function because `skip_serializing_if` needs
@@ -190,8 +197,9 @@ impl Command {
             nade: -1,
             // `-1`, not the `0` a `Default` would give: zero names the first
             // catalogue entry, which would make every movement command a
-            // request to buy a rifle.
+            // request to buy a rifle (or, for `sell`, to sell one back).
             buy: -1,
+            sell: -1,
             ..Default::default()
         }
     }
@@ -1203,13 +1211,19 @@ pub struct BuyItem {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    /// `weapon`, `armour` or `nade`.
+    /// `weapon`, `armour`, `nade` or `kit`.
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
     pub slot: i32,
     #[serde(default)]
     pub price: i32,
+    /// `any`, `t` or `ct`: who may buy it. Empty from an older server (`any`).
+    #[serde(default)]
+    pub side: String,
+    /// Its menu group (`buy_menu.rs`). Empty from an older server.
+    #[serde(default)]
+    pub category: String,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -1326,6 +1340,21 @@ pub struct ModeSelf {
     /// keeping its own idea of what "owned" means.
     #[serde(default)]
     pub bought: Vec<i32>,
+    /// What pressing an owned row would sell back. Not derivable from `bought`:
+    /// a gun picked up off a teammate is owned and was never paid for.
+    #[serde(default)]
+    pub sellable: Vec<i32>,
+    /// Seconds the buy stays open: the freeze, then the buy time.
+    #[serde(rename = "buyIn", default)]
+    pub buy_in: f32,
+    /// Whether we stand in one of our team's buy zones. True from a server too
+    /// old to have zones, where everywhere was one.
+    #[serde(rename = "inBuyZone", default = "yes")]
+    pub in_buy_zone: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Default)]

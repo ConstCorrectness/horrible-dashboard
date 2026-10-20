@@ -174,6 +174,7 @@ async def join(
     map_name: str,
     room_id: str | None = None,
     new: bool = False,
+    mode: str | None = None,
 ) -> None:
     """Open a socket to the game server and put this client in a room there.
 
@@ -214,9 +215,17 @@ async def join(
         return
 
     _sessions[id(conn)] = session
-    await session.send(
-        "join", {"map": map_name, "name": "", "room": room_id or "", "new": new}
-    )
+    join: dict[str, Any] = {
+        "map": map_name,
+        "name": "",
+        "room": room_id or "",
+        "new": new,
+    }
+    if mode:
+        # Only when asked for: a server older than `hassault_modes` ignores the
+        # key and opens deathmatch, which is what this join meant before.
+        join["mode"] = mode
+    await session.send("join", join)
     # Detached: this pump delivers the welcome that the caller is *inside the
     # handler for*. Awaiting it here would deadlock the socket that has to
     # receive it — the same rule the other `/ws` relays follow.

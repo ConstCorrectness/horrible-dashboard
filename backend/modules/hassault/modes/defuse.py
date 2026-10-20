@@ -174,6 +174,14 @@ MAX_LOSS_STREAK = 4
 PLANT_REWARD = 300
 DEFUSE_REWARD = 300
 
+#: How long after the freeze the buy stays open, in seconds of live round: the
+#: CS rule, so a player who spent the freeze walking can still buy on the way.
+BUY_TIME = 20.0
+#: How far from one of your own spawns you may stand and still buy, in cubes.
+#: A map that declares no buy zones gets this circle around each of its team's
+#: spawn points, which covers a spawn area without reaching the next room.
+BUY_ZONE_RADIUS = 14.0
+
 
 @dataclass(slots=True, frozen=True)
 class BuyItem:
@@ -185,11 +193,15 @@ class BuyItem:
 
     id: str
     name: str
-    #: `weapon`, `armour` or `nade`.
+    #: `weapon`, `armour`, `nade` or `kit`.
     kind: str
     #: Index into `weapons.WEAPONS` or `grenades.GRENADES`; unused for armour.
     slot: int
     price: int
+    #: `any`, or the side that may buy it (`weapons.side_of`): a weapon's own.
+    side: str = "any"
+    #: Where a menu lists it: `secondary`, `primary`, `gear` or `grenade`.
+    category: str = "gear"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -198,30 +210,49 @@ class BuyItem:
             "kind": self.kind,
             "slot": self.slot,
             "price": self.price,
+            "side": self.side,
+            "category": self.category,
         }
 
 
-#: The catalogue, in the order a menu lists it.
-#:
-#: The knife and the pistol are absent because you always have them — an entry
-#: for something you cannot not own would be a row that never does anything.
-CATALOG: tuple[BuyItem, ...] = (
-    BuyItem("assault", "Assault Rifle", "weapon", 2, 2700),
-    BuyItem("shotgun", "Shotgun", "weapon", 3, 1800),
-    BuyItem("sniper", "Sniper Rifle", "weapon", 4, 4750),
-    BuyItem("armour", "Armour", "armour", -1, 1000),
-    BuyItem("he", "HE Grenade", "nade", 0, 300),
-    BuyItem("flash", "Flashbang", "nade", 1, 200),
-    BuyItem("smoke", "Smoke Grenade", "nade", 2, 300),
-    BuyItem("molotov", "Incendiary", "nade", 3, 600),
-    BuyItem("defuser", "Defusal Kit", "kit", -1, DEFUSER_PRICE),
-)
+def _weapon_rows() -> list[BuyItem]:
+    """Every gun with a price, from the served weapon table: sidearms first,
+    then primaries, each in table order. Prices and sides are the weapon's own,
+    so a gun added to `weapons.py` is for sale without touching this file."""
+    rows = []
+    for category in ("secondary", "primary"):
+        for index, spec in enumerate(weapons.WEAPONS):
+            if index in FREE_SLOTS or spec.slot != category or spec.price <= 0:
+                continue
+            rows.append(
+                BuyItem(spec.id, spec.name, "weapon", index, spec.price, spec.side, category)
+            )
+    return rows
+
 
 #: What you are given at the start of every round regardless of money.
 #:
 #: The knife and the pistol, and the pistol has unlimited reserve already, so
 #: being broke is a bad round rather than an unplayable one.
 FREE_SLOTS = (0, 1)
+
+#: The catalogue, in the order a menu lists it. The index is `Command.buy`, and
+#: it is the same for both sides for the whole match: a row the buyer's side
+#: cannot carry is refused, not renumbered.
+#:
+#: The knife and the pistol are absent because you always have them — an entry
+#: for something you cannot not own would be a row that never does anything.
+CATALOG: tuple[BuyItem, ...] = (
+    *_weapon_rows(),
+    BuyItem("armour", "Armour", "armour", -1, 1000),
+    BuyItem("he", "HE Grenade", "nade", 0, 300, category="grenade"),
+    BuyItem("flash", "Flashbang", "nade", 1, 200, category="grenade"),
+    BuyItem("smoke", "Smoke Grenade", "nade", 2, 300, category="grenade"),
+    BuyItem("molotov", "Incendiary", "nade", 3, 600, category="grenade"),
+    BuyItem("defuser", "Defusal Kit", "kit", -1, DEFUSER_PRICE),
+)
+
+CATALOG_INDEX = {item.id: index for index, item in enumerate(CATALOG)}
 
 #: Phases, in the order they occur.
 WARMUP = "warmup"
@@ -542,6 +573,56 @@ class Defuse(GameMode):
 
     def attach(self, room: MatchRoom) -> None:
         self.sites = list(room.objectives.sites)
+        #: Where each team may buy: a `BUY_ZONE_RADIUS` circle `(x, y, r)`
+        #: round each of its spawn points. Maps declare no zones of their own yet.
+        self.buy_zones: dict[int, list[tuple[float, float, float]]] = {
+            team: [
+                (float(e.x), float(e.y), BUY_ZONE_RADIUS)
+                for e in room.spawns
+                if e.attr2 == team
+            ]
+            for team in (0, 1)
+        }
+
+    # -- buying -------------------------------------------------------------
+
+    def buy_time_left(self) -> float:
+        """Seconds the buy stays open: the freeze, then `BUY_TIME` of the live
+        round, and never once the bomb is down."""
+        state = self.state
+        if state.phase == FREEZE:
+            return max(0.0, state.remaining) + BUY_TIME
+        if state.phase == LIVE and state.bomb.state != "planted":
+            return max(0.0, BUY_TIME - (ROUND_TIME - state.remaining))
+        return 0.0
+
+    def in_buy_zone(self, player: MatchPlayer) -> bool:
+        """Whether a body stands in one of its own team's buy zones. A team
+        with none at all (a map with no spawns for it) may buy anywhere."""
+        zones = getattr(self, "buy_zones", {}).get(player.team) or []
+        if not zones:
+            return True
+        x, y = player.state.x, player.state.y
+        return any((x - zx) ** 2 + (y - zy) ** 2 <= r * r for zx, zy, r in zones)
+
+    def can_buy(self, room: MatchRoom, player: MatchPlayer) -> bool:
+        """The buy window is open and this player is where buying happens.
+
+        A dead player buys from anywhere during the freeze: they are buying for
+        the round they are about to spawn into, at a spawn. Once it is live,
+        only the living, and only in their buy zone.
+        """
+        if self.buy_time_left() <= 0:
+            return False
+        if not player.alive:
+            return self.state.phase == FREEZE
+        return self.in_buy_zone(player)
+
+    def catalog_index(self, item_id: str) -> int:
+        return CATALOG_INDEX.get(item_id, -1)
+
+    def _side_may(self, player: MatchPlayer, item: BuyItem) -> bool:
+        return item.side in ("any", weapons.side_of(player.team))
 
     def reset(self, room: MatchRoom) -> None:
         self.state = RoundState()
@@ -852,7 +933,10 @@ class Defuse(GameMode):
                 # round they had nothing to do with.
                 attacker.money = max(0, attacker.money - TEAMKILL_PENALTY)
             else:
-                attacker.money = min(MAX_MONEY, attacker.money + KILL_REWARD)
+                # The weapon's own reward (`weapons.Weapon.kill_reward`): the
+                # cheap guns pay more, which is what makes an eco round a plan.
+                reward = int(getattr(weapon, "kill_reward", KILL_REWARD) or KILL_REWARD)
+                attacker.money = min(MAX_MONEY, attacker.money + reward)
 
     def on_death(self, room: MatchRoom, player: MatchPlayer) -> None:
         """Hand over bomb if carrier died, and drop defuse kit if defender had one."""
@@ -889,7 +973,7 @@ class Defuse(GameMode):
         if command.sell >= 0:
             self._sell(room, player, command.sell)
         if command.buy >= 0:
-            self._buy(room, player, command.buy)
+            self._buy(room, player, command.buy, now)
         if command.drop:
             self._drop(room, player, now)
 
@@ -972,7 +1056,9 @@ class Defuse(GameMode):
             self._defuse_info = dict(accolades)
             self._last_defuse_accolades = dict(accolades)
 
-    def _buy(self, room: MatchRoom, player: MatchPlayer, index: int) -> None:
+    def _buy(
+        self, room: MatchRoom, player: MatchPlayer, index: int, now: float = 0.0
+    ) -> None:
         """Spend, if every one of the reasons not to is absent.
 
         Checked here and not trusted from the client for the usual reason — a
@@ -987,13 +1073,14 @@ class Defuse(GameMode):
         """
         if index >= len(CATALOG):
             return
-        # The buy window. A dead player may still buy — they are buying for the
-        # *next* round, and freeze time is exactly when that is decided — so
-        # `alive` is deliberately not checked.
-        if self.state.phase != FREEZE:
+        # The buy window and the buy zone (`can_buy`). A dead player may still
+        # buy in the freeze: they are buying for the round they spawn into.
+        if not self.can_buy(room, player):
             return
         item = CATALOG[index]
         if item.id == "defuser" and player.team == self.state.attackers:
+            return
+        if not self._side_may(player, item):
             return
         if self._owns(player, item):
             return
@@ -1003,6 +1090,12 @@ class Defuse(GameMode):
         player.total_spent += float(item.price)
         player.purchased.add(index)
         if item.kind == "weapon":
+            # One gun per slot, as you carry it: a rifle bought over a rifle
+            # puts the old one on the floor, where a teammate can have it.
+            category = weapons.WEAPONS[item.slot].slot
+            for held in sorted(player.owned):
+                if held != item.slot and weapons.WEAPONS[held].slot == category:
+                    self._put_down(room, player, held, now)
             player.owned.add(item.slot)
             # Handed over now rather than at the next spawn: the buy happens
             # during the freeze of the round it is for, and a rifle that only
@@ -1063,7 +1156,7 @@ class Defuse(GameMode):
         mistake it corrects is a misclick on a number row; a partial one would
         make the buy menu a place you are afraid to press keys.
         """
-        if self.state.phase != FREEZE or not self._sellable(player, index):
+        if not self.can_buy(room, player) or not self._sellable(player, index):
             return
         item = CATALOG[index]
         player.purchased.discard(index)
@@ -1073,7 +1166,7 @@ class Defuse(GameMode):
             player.ammo[item.slot] = 0
             player.reserve[item.slot] = 0
             if player.weapon == item.slot:
-                self._hold(player, 1)
+                self._hold(player, self._sidearm(player))
         elif item.kind == "nade":
             player.owned_nades.discard(item.slot)
             player.nades.counts[item.slot] = 0
@@ -1126,6 +1219,11 @@ class Defuse(GameMode):
         slot = player.weapon
         if slot in FREE_SLOTS or slot not in player.owned:
             return
+        self._put_down(room, player, slot, now)
+        self._hold(player, self._sidearm(player))
+
+    def _put_down(self, room: MatchRoom, player: MatchPlayer, slot: int, now: float) -> None:
+        """Lay an owned gun on the floor where `player` stands, magazine and all."""
         self._drop_seq += 1
         self.dropped_weapons.append(
             DroppedWeapon(
@@ -1146,7 +1244,6 @@ class Defuse(GameMode):
         player.purchased.discard(_catalog_index("weapon", slot))
         player.ammo[slot] = 0
         player.reserve[slot] = 0
-        self._hold(player, 1)
 
     def _hold(self, player: MatchPlayer, slot: int) -> None:
         """Switch hands server-side, cancelling whatever the old weapon was doing.
@@ -1179,10 +1276,30 @@ class Defuse(GameMode):
                 return "defuse"
         return ""
 
+    def _sidearm(self, player: MatchPlayer) -> int:
+        """The secondary in hand: a bought one, else the free pistol."""
+        bought = [
+            i for i in sorted(player.owned) if weapons.WEAPONS[i].slot == "secondary"
+        ]
+        return bought[0] if bought else 1
+
     def holds(self, room: MatchRoom, player: MatchPlayer, index: int) -> bool:
-        """What was bought or picked up, plus the free knife and pistol. The
-        loadout picker has no say in a buy mode: the money does."""
-        return index in FREE_SLOTS or index in player.owned
+        """What was bought or picked up, plus the knife and a sidearm: the free
+        pistol unless a better one was bought over it. The loadout picker has
+        no say in a buy mode: the money does."""
+        if index == 0 or index in player.owned:
+            return True
+        return index == 1 and self._sidearm(player) == 1
+
+    def slots(self, room: MatchRoom, player: MatchPlayer) -> dict[str, int]:
+        """The number keys select what is owned: the bought primary, the sidearm
+        in hand, the knife. With no primary bought, key 1 names the loadout's,
+        which is not held and so selects nothing."""
+        primary = next(
+            (i for i in sorted(player.owned) if weapons.WEAPONS[i].slot == "primary"),
+            player.loadout.get("primary", 2),
+        )
+        return {"primary": primary, "secondary": self._sidearm(player), "melee": 0}
 
     def outfit(self, room: MatchRoom, player: MatchPlayer) -> None:
         """Take back what `reset_loadout` just gave, and hand over what was bought.
@@ -1211,8 +1328,8 @@ class Defuse(GameMode):
         # Hold something you actually have. Defaulting to the rifle leaves a
         # player who could not afford one holding an empty gun and wondering why
         # the trigger does nothing.
-        if player.weapon not in FREE_SLOTS and player.weapon not in player.owned:
-            player.weapon = 1
+        if not self.holds(room, player, player.weapon):
+            player.weapon = self._sidearm(player)
 
     # -- wire ---------------------------------------------------------------
 
@@ -1247,6 +1364,8 @@ class Defuse(GameMode):
                 "lossStreakBonus": LOSS_STREAK_BONUS,
                 "plantReward": PLANT_REWARD,
                 "defuseReward": DEFUSE_REWARD,
+                "buyTime": BUY_TIME,
+                "buyZoneRadius": BUY_ZONE_RADIUS,
             },
             #: What can be bought, in the order a menu lists it. The index into
             #: this list *is* `Command.buy`, so a client never invents an id.
@@ -1317,7 +1436,12 @@ class Defuse(GameMode):
             # say so. `private_view` is the only half of a snapshot rebuilt per
             # player, so this is the only place it can go.
             "money": player.money,
-            "canBuy": self.state.phase == FREEZE,
+            # Whether a buy now would be accepted, and why not when it would
+            # not: the window (`buyIn`, seconds left) and the zone are two
+            # different things to tell a player.
+            "canBuy": self.can_buy(room, player),
+            "buyIn": round(self.buy_time_left(), 1),
+            "inBuyZone": self.in_buy_zone(player),
             "hasKit": has_kit,
             "defuseTime": DEFUSE_TIME_KIT if has_kit else DEFUSE_TIME_STANDARD,
             # Indices into the served catalogue, so a menu can grey out what is
@@ -1331,7 +1455,7 @@ class Defuse(GameMode):
             # menu that guessed would offer a sale the server refuses.
             "sellable": (
                 sorted(i for i in player.purchased if self._sellable(player, i))
-                if self.state.phase == FREEZE
+                if self.can_buy(room, player)
                 else []
             ),
         }

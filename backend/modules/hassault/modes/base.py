@@ -168,6 +168,11 @@ class GameMode:
         to, and what their HUD lists. The default is their loadout."""
         return index in player.held
 
+    def slots(self, room: MatchRoom, player: MatchPlayer) -> dict[str, int]:
+        """Which weapon each number key selects, `{primary, secondary, melee}`.
+        The default is the loadout; a buy mode answers with what is owned."""
+        return dict(player.loadout)
+
     def may_respawn(self, room: MatchRoom, player: MatchPlayer, now: float) -> bool:
         """Whether a dead player whose timer has expired comes back now."""
         return True
