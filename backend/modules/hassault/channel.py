@@ -179,6 +179,16 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         if isinstance(rtt, (int, float)):
             player.rtt_ms = _clamp(_num(rtt), 0.0, 60_000.0)
 
+    elif event == "duel_queue":
+        # Rated duels are the game server's (`hassault_rooms.queue_duel`): the
+        # node only opens the proxied session, as it does for a ranked join.
+        await _leave_any(conn)
+        await ranked.queue_duel(conn)
+
+    elif event == "duel_cancel":
+        await ranked.cancel_duel(conn)
+        await conn.send_json(_evt("duel_queue", {"queued": False}))
+
     elif event == "loadout":
         if ranked.session_for(conn) is not None:
             # The game server reads the stored loadout at join; this is a pick
@@ -425,10 +435,9 @@ def _record_result(result: dict[str, Any]) -> None:
 
     account_id = results.current_account_id()
     try:
+        # No rating here: a rating is the game server's, moved only by a
+        # rated duel it ran (`games_server/hassault_rating.py`).
         results.record(account_id, result)
-        from backend.modules.hassault import rating
-
-        rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record the match result")
 

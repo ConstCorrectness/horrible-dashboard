@@ -716,7 +716,11 @@ def hassault_maps() -> dict[str, Any]:
     """
     from backend.games_server import hassault_rooms
 
-    return {"maps": hassault_rooms.referee.maps()}
+    return {
+        "maps": hassault_rooms.referee.maps(),
+        # Where rated duels are fought; a client loads it before it queues.
+        "duelMap": hassault_rooms.referee.duel_map(),
+    }
 
 
 def _mount_hassault_content() -> None:
@@ -728,6 +732,10 @@ def _mount_hassault_content() -> None:
     app.include_router(router)
     # Account data: settings, inventory, the XP ledger and the one-shot import.
     app.include_router(account_router)
+    # Ratings: Glicko-2 from duels this server ran (`hassault_rating.py`).
+    from backend.games_server.hassault_rating import router as rating_router
+
+    app.include_router(rating_router)
 
 
 _mount_hassault_content()
@@ -815,6 +823,27 @@ async def hassault_ws(websocket: WebSocket) -> None:
                 )
             elif event == "input":
                 referee.apply_input(conn, data)
+            elif event == "duel_queue":
+                try:
+                    status = await referee.queue_duel(conn)
+                except ValueError as exc:
+                    await conn.send_json(
+                        {
+                            "channel": "hassault",
+                            "event": "error",
+                            "data": {"message": str(exc), "code": "duel_refused"},
+                        }
+                    )
+                    continue
+                if status.get("queued"):
+                    await conn.send_json(
+                        {"channel": "hassault", "event": "duel_queue", "data": status}
+                    )
+            elif event == "duel_cancel":
+                referee.cancel_duel(conn)
+                await conn.send_json(
+                    {"channel": "hassault", "event": "duel_queue", "data": {"queued": False}}
+                )
             elif event == "loadout":
                 chosen = referee.apply_loadout(conn, data)
                 if chosen is not None:

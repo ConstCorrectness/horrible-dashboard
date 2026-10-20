@@ -1388,6 +1388,10 @@ pub enum Event {
     Left(Left),
     /// Somebody's look changed: an equip, an agent, or a side's loadout.
     Cosmetics(crate::cosmetics::CosmeticsChanged),
+    /// Where we stand in the rated duel queue.
+    DuelQueue(DuelQueue),
+    /// A rated duel ended and our rating moved (the game server's Glicko-2).
+    RatingUpdate(RatingUpdate),
     /// Bots were fielded or kicked.
     Roster(Roster),
     Chat(ChatBroadcast),
@@ -1402,6 +1406,34 @@ pub enum Event {
     /// the event being handled, and for a long time the app loop's `=> {}` made
     /// those indistinguishable.
     Other(String),
+}
+
+/// `duel_queue`: `{queued, position, waiting, waited}`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DuelQueue {
+    #[serde(default)]
+    pub queued: bool,
+    #[serde(default)]
+    pub position: i32,
+    #[serde(default)]
+    pub waiting: i32,
+    #[serde(default)]
+    pub waited: f32,
+}
+
+/// `rating_update`: our duel rating before and after, and how it ended.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RatingUpdate {
+    #[serde(default)]
+    pub before: f32,
+    #[serde(default)]
+    pub after: f32,
+    #[serde(default)]
+    pub delta: f32,
+    #[serde(default)]
+    pub won: bool,
+    #[serde(default)]
+    pub draw: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -1473,6 +1505,10 @@ pub fn classify(line: &str) -> Option<Event> {
             Event::Joined(Box::new(j))
         }
         "cosmetics" => Event::Cosmetics(serde_json::from_value(env.data).unwrap_or_default()),
+        "duel_queue" => Event::DuelQueue(serde_json::from_value(env.data).unwrap_or_default()),
+        "rating_update" => {
+            Event::RatingUpdate(serde_json::from_value(env.data).unwrap_or_default())
+        }
         "left" => {
             let l: Left = serde_json::from_value(env.data).unwrap_or_default();
             divergence::note_extra("left", &l.extra);

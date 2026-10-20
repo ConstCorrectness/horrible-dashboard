@@ -165,7 +165,7 @@ def check_playable(mode_id: str, objectives: Objectives) -> None:
     bomb, and a CTF room with one flag has a team that cannot score. Both look
     like a working match from the outside and neither reports anything.
     """
-    if mode_id == "defuse" and not objectives.sites:
+    if mode_id in ("defuse", "retake") and not objectives.sites:
         raise ValueError(
             "this map declares no bomb sites, so a defuse match could never end — "
             "add an `objectives.sites` block to its source"

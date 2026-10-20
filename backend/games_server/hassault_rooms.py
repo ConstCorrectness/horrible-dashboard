@@ -41,9 +41,11 @@ and the clients disagree.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from backend.modules.hassault import mapsource, modes
@@ -59,6 +61,15 @@ from backend.modules.hassault.match import (
 MAX_COMMANDS_PER_MESSAGE = 64
 
 logger = logging.getLogger(__name__)
+
+#: Where duels are fought, in order of preference: small, symmetric, bundled.
+DUEL_MAPS = ("hd_pit", "hd_atrium", "hd_aim")
+#: The duel queue's rating window: ±this to start, +step every step_s waited.
+DUEL_WINDOW = 100.0
+DUEL_WINDOW_STEP = 100.0
+DUEL_WINDOW_STEP_S = 10.0
+#: How often a waiting queue is re-tried and told where it stands.
+DUEL_SWEEP_S = 2.0
 
 #: The id these matches are logged and rated under, in `results` and `ratings`.
 GAME_ID = "hassault"
@@ -137,6 +148,9 @@ class HassaultReferee:
         self.server.kick_handler = self._kick
         #: Room id → the settings its host has changed from `ROOM_SETTINGS`.
         self._settings: dict[str, dict[str, bool]] = {}
+        #: Seats waiting for a duel, oldest first: `(conn, since, rating)`.
+        self._duel_queue: list[tuple[SeatConn, float, float]] = []
+        self._duel_sweeper: asyncio.Task[None] | None = None
 
     # -- maps ---------------------------------------------------------------
 
@@ -396,6 +410,185 @@ class HassaultReferee:
             server=self.server,
         )
 
+    # -- duels --------------------------------------------------------------
+
+    def duel_window(self, waited: float) -> float:
+        """How far apart two ratings may be to pair, after `waited` seconds:
+        close matches first, wider as the wait grows, so nobody waits forever."""
+        return DUEL_WINDOW + DUEL_WINDOW_STEP * (waited // DUEL_WINDOW_STEP_S)
+
+    async def queue_duel(self, conn: SeatConn) -> dict[str, Any]:
+        """Put a signed-in seat in the duel queue, and pair if there is a match.
+
+        Guests are refused: a duel is rated, and a rating needs an account. A
+        seat already in a room leaves it first, the way a join would.
+        """
+        from backend.games_server import hassault_rating
+
+        if conn.is_guest:
+            raise ValueError("sign in to play a rated duel")
+        await self.leave(conn)
+        if not any(c is conn for c, _, _ in self._duel_queue):
+            rating = hassault_rating.rating_of(conn.account_id)["rating"]
+            self._duel_queue.append((conn, time.monotonic(), rating))
+        await self._pair_duels()
+        self._ensure_sweeper()
+        return self.duel_status(conn)
+
+    def cancel_duel(self, conn: SeatConn) -> bool:
+        before = len(self._duel_queue)
+        self._duel_queue = [e for e in self._duel_queue if e[0] is not conn]
+        return len(self._duel_queue) != before
+
+    def duel_status(self, conn: SeatConn) -> dict[str, Any]:
+        for position, (c, since, rating) in enumerate(self._duel_queue):
+            if c is conn:
+                waited = time.monotonic() - since
+                return {
+                    "queued": True,
+                    "position": position + 1,
+                    "waiting": len(self._duel_queue),
+                    "waited": round(waited, 1),
+                    "window": self.duel_window(waited),
+                    "rating": round(rating, 1),
+                }
+        return {"queued": False, "waiting": len(self._duel_queue)}
+
+    def _ensure_sweeper(self) -> None:
+        """A loop that re-tries pairing as windows widen, while anyone waits."""
+        if self._duel_sweeper is not None and not self._duel_sweeper.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def sweep() -> None:
+            while self._duel_queue:
+                await asyncio.sleep(DUEL_SWEEP_S)
+                self._duel_queue = [e for e in self._duel_queue if not e[0].closed]
+                await self._pair_duels()
+                for conn, _, _ in list(self._duel_queue):
+                    await conn.send_json(
+                        {"channel": "hassault", "event": "duel_queue", "data": self.duel_status(conn)}
+                    )
+
+        self._duel_sweeper = loop.create_task(sweep())
+
+    async def _pair_duels(self) -> None:
+        """Pair the oldest waiting seat with the closest rating inside its
+        window, repeatedly, until no pair is left to make."""
+        now = time.monotonic()
+        made = True
+        while made and len(self._duel_queue) >= 2:
+            made = False
+            for i, (a, since_a, rating_a) in enumerate(self._duel_queue):
+                window = self.duel_window(now - since_a)
+                best = None
+                for j, (b, since_b, rating_b) in enumerate(self._duel_queue):
+                    if j == i or b.account_id == a.account_id:
+                        continue
+                    gap = abs(rating_a - rating_b)
+                    both = min(window, self.duel_window(now - since_b))
+                    if gap <= both and (best is None or gap < best[0]):
+                        best = (gap, j)
+                if best is not None:
+                    j = best[1]
+                    b = self._duel_queue[j][0]
+                    self._duel_queue = [
+                        e for k, e in enumerate(self._duel_queue) if k not in (i, j)
+                    ]
+                    await self._start_duel(a, b)
+                    made = True
+                    break
+
+    def duel_map(self) -> str:
+        """The map every duel is fought on. Served (`/hassault/maps`), because
+        a client loads its world before it queues and must load this one."""
+        candidates = [m for m in DUEL_MAPS if self.playable(m)] or self.maps()
+        return candidates[0] if candidates else "hd_pit"
+
+    async def _start_duel(self, a: SeatConn, b: SeatConn) -> None:
+        """Open a duel room for two seats, seat them, and send each a welcome."""
+        map_name = self.duel_map()
+        room = self.server.create(map_name, mode="duel")
+        room.on_over = lambda r, summary: self._duel_over(r, summary)
+        for conn in (a, b):
+            loadouts, look = self.account_look(conn)
+            joined_room, player = await self.server.join(
+                conn,
+                map_name,
+                conn.display_name,
+                room.id,
+                loadouts=loadouts,
+                cosmetics=look,
+            )
+            welcome = joined_room.state_payload()
+            welcome["playerId"] = player.id
+            welcome["rated"] = True
+            welcome["roomSettings"] = self.settings_payload(joined_room)
+            await conn.send_json({"channel": "hassault", "event": "welcome", "data": welcome})
+
+    def _duel_over(self, room: Any, summary: dict[str, Any]) -> None:
+        """Rate a finished duel. Called from inside the tick, so the rating and
+        the messages that announce it go out on a task of their own."""
+        seats: dict[int, SeatConn] = {}
+        gone = summary.get("seats") or {}
+        for player in list(room.players.values()):
+            if isinstance(player.conn, SeatConn) and not player.conn.is_guest:
+                seats[player.team] = player.conn
+        # A forfeit: the leaver's conn is no longer on a player. Recover it.
+        leaver = getattr(room, "_last_left_conn", None)
+        if isinstance(leaver, SeatConn) and not leaver.is_guest:
+            for pid, team in gone.items():
+                if team not in seats:
+                    seats[team] = leaver
+        if set(seats) != {0, 1}:
+            return
+        winner = int(summary.get("winner", -1))
+        score_a = 0.5 if winner not in (0, 1) else (1.0 if winner == 0 else 0.0)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        async def announce() -> None:
+            from backend.games_server import hassault_rating
+
+            rated = hassault_rating.rate_match(
+                f"duel:{room.id}",
+                seats[0].account_id,
+                seats[1].account_id,
+                score_a,
+                reason=str(summary.get("reason") or ""),
+            )
+            if rated is None:
+                return
+            for conn in (seats[0], seats[1]):
+                mine = rated[conn.account_id]
+                await conn.send_json(
+                    {
+                        "channel": "hassault",
+                        "event": "rating_update",
+                        "data": {
+                            "queue": "duel",
+                            "before": mine["before"],
+                            "after": mine["after"],
+                            "delta": round(mine["after"] - mine["before"], 1),
+                            "rating": hassault_rating.rating_of(conn.account_id),
+                            "reason": summary.get("reason"),
+                            "won": (score_a == 1.0 and conn is seats[0])
+                            or (score_a == 0.0 and conn is seats[1]),
+                            "draw": score_a == 0.5,
+                        },
+                    }
+                )
+
+        if loop is None:
+            asyncio.run(announce())
+        else:
+            loop.create_task(announce())
+
     async def leave(self, conn: SeatConn) -> dict[str, Any] | None:
         """Take a player out and **write down what they did**.
 
@@ -405,6 +598,11 @@ class HassaultReferee:
         later. What a player did in their session is final the moment they stop
         playing.
         """
+        self.cancel_duel(conn)
+        entry = self.server.player_for(conn)
+        if entry is not None:
+            # For a duel forfeit, which is rated after the leaver's player is gone.
+            entry[0]._last_left_conn = conn
         result = await self.server.leave(conn)
         if result is None:
             return None

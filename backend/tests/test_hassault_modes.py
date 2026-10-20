@@ -106,7 +106,19 @@ def test_the_catalog_covers_every_buildable_mode():
     """The catalog feeds the REST enum, the agent tool's schema and the menus. A
     mode missing from it is a mode nobody can ask for."""
     catalog = modes.catalog()
-    assert {m["id"] for m in catalog} == {"dm", "tdm", "ctf", "defuse", "breach"}
+    assert {m["id"] for m in catalog} == {
+        "dm",
+        "tdm",
+        "ctf",
+        "defuse",
+        "breach",
+        # P7: the duel, retake, the two arenas and random guns.
+        "duel",
+        "retake",
+        "aim",
+        "awp",
+        "dm_random",
+    }
     for entry in catalog:
         mode = modes.build(entry["id"])
         assert mode.name == entry["name"]

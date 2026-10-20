@@ -1796,7 +1796,7 @@ async def dismiss_match_summary() -> dict[str, bool]:
 
 
 @router.get("/ranked/maps")
-async def get_ranked_maps() -> dict[str, list[str]]:
+async def get_ranked_maps() -> dict[str, Any]:
     """Maps the game server will adjudicate, asked of the game server.
 
     Proxied rather than derived locally from `source == "bundled"`. The two agree
@@ -1812,13 +1812,16 @@ async def get_ranked_maps() -> dict[str, list[str]]:
         async with httpx.AsyncClient(timeout=8.0) as client:
             res = await client.get(f"{resolve_http_base().rstrip('/')}/hassault/maps")
             res.raise_for_status()
-            maps = res.json().get("maps") or []
+            body = res.json()
+            maps = body.get("maps") or []
+            duel_map = str(body.get("duelMap") or "")
     except Exception as exc:
         # Not an error to the caller: "no ranked maps" is exactly what an
         # unreachable server means to a menu.
         logger.info("hassault: could not read the ranked map list: %s", exc)
-        return {"maps": []}
-    return {"maps": [str(m) for m in maps]}
+        return {"maps": [], "duelMap": ""}
+    # `duelMap` is empty from a server older than `hassault_duel`: no duels.
+    return {"maps": [str(m) for m in maps], "duelMap": duel_map}
 
 
 @router.get("/match/history")
@@ -1833,36 +1836,82 @@ async def get_match_history(limit: int = 20) -> list[dict[str, Any]]:
     return results.history(_account_id(), limit)
 
 
+#: The rating keys a server rating overlays onto the node's ranked profile.
+_RATING_KEYS = (
+    "rating",
+    "rd",
+    "tier",
+    "tierName",
+    "tierNumber",
+    "matchesPlayed",
+    "wins",
+    "losses",
+    "isCalibrated",
+)
+
+
+async def _server_rating(account_id: str | None) -> dict[str, Any] | None:
+    """The game server's duel rating (`hassault_rating.py`), or `None`.
+
+    **Ratings are the server's now.** A node's own was moved by its own report
+    of a deathmatch against an imaginary 1500 opponent, which is a number about
+    one player and nobody; these routes read the real one when the server has
+    it and fall back to the frozen local row only when it is unreachable.
+    """
+    from backend.modules.hassault import account_sync
+
+    if account_sync.known_active() is None:
+        return None
+    if account_id is None:
+        answer = await account_sync.request("GET", "/rating")
+        return answer[1] if answer is not None and answer[0] == 200 else None
+    return await account_sync.server_get(f"/rating/{account_id}")
+
+
 @router.get("/ranked/rating")
 async def get_my_rating() -> dict[str, Any]:
-    """Current player's Glicko-2 competitive rating, tier and record."""
+    """The signed-in player's duel rating, tier and record (the server's)."""
     from backend.modules.hassault import rating
 
-    return rating.get_player_rating(_account_id())
+    remote = await _server_rating(None)
+    return remote if remote is not None else rating.get_player_rating(_account_id())
 
 
 @router.get("/ranked/rating/{account_id}")
 async def get_account_rating(account_id: str) -> dict[str, Any]:
-    """Target player's competitive rating, tier and record."""
+    """Another player's duel rating, tier and record (the server's)."""
     from backend.modules.hassault import rating
 
-    return rating.get_player_rating(account_id)
+    remote = await _server_rating(account_id)
+    return remote if remote is not None else rating.get_player_rating(account_id)
 
 
 @router.get("/ranked/leaderboard")
 async def get_ranked_leaderboard(limit: int = 50) -> list[dict[str, Any]]:
-    """Top ranked competitive players by Elo/Glicko-2 rating."""
-    from backend.modules.hassault import ranked_mmr
+    """The duel leaderboard (the server's), placed players only."""
+    from backend.modules.hassault import account_sync, ranked_mmr
 
+    remote = (
+        await account_sync.server_get("/rating/leaderboard", {"limit": limit})
+        if account_sync.known_active()
+        else None
+    )
+    if isinstance(remote, list):
+        return remote
     return ranked_mmr.get_ranked_leaderboard_extended(limit)
 
 
 @router.get("/ranked/profile")
 async def get_my_ranked_profile() -> dict[str, Any]:
-    """Current player's full competitive profile with calibration and match history."""
+    """The signed-in player's competitive profile: this node's match history,
+    with the server's rating laid over it."""
     from backend.modules.hassault import ranked_mmr
 
-    return ranked_mmr.get_player_ranked_profile(_account_id())
+    profile = ranked_mmr.get_player_ranked_profile(_account_id())
+    remote = await _server_rating(None)
+    if remote:
+        profile.update({k: remote[k] for k in _RATING_KEYS if k in remote})
+    return profile
 
 
 @router.get("/ranked/profile/{account_id}")
@@ -1887,26 +1936,14 @@ async def get_ranked_season_info() -> dict[str, Any]:
 
 @router.post("/ranked/calibrate")
 async def calibrate_ranked_match(payload: dict[str, Any]) -> dict[str, Any]:
-    """Record a competitive match and advance calibration placement."""
-    import time
-    from backend.modules.hassault import ranked_mmr
+    """Retired: a rating is moved only by a rated duel on the game server.
 
-    # The signed-in account, never one named in the body. Taking `accountId`
-    # from the request let any caller write a rating row for anybody.
-    account_id = _account_id()
-    match_id = payload.get("matchId", f"match_{int(time.time())}")
-    map_name = payload.get("mapName", "hd_mirage")
-    result = payload.get("result", {})
-    opp_rating = float(payload.get("oppRating", 1500.0))
-    opp_rd = float(payload.get("oppRd", 200.0))
-
-    return ranked_mmr.record_ranked_match(
-        account_id=account_id,
-        match_id=match_id,
-        map_name=map_name,
-        result=result,
-        opp_rating=opp_rating,
-        opp_rd=opp_rd,
+    This took a match result from the caller and moved a rating with it, which
+    is a client rating itself. Kept as a route so an old client gets a reason.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="ratings come from rated duels on the game server",
     )
 
 

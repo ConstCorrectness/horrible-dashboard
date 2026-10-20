@@ -18,6 +18,9 @@ from .breach import Breach
 from .ctf import CaptureTheFlag
 from .deathmatch import Deathmatch
 from .defuse import Defuse
+from .arena import Arena, RandomGuns
+from .duel import Duel
+from .retake import Retake
 
 __all__ = [
     "DEFAULT_MODE",
@@ -45,6 +48,11 @@ def _builders() -> dict[str, Any]:
         "ctf": CaptureTheFlag,
         "defuse": Defuse,
         "breach": Breach,
+        "duel": Duel,
+        "retake": Retake,
+        "aim": lambda: Arena("aim"),
+        "awp": lambda: Arena("awp"),
+        "dm_random": RandomGuns,
     }
 
 

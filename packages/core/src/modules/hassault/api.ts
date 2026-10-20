@@ -423,7 +423,7 @@ export interface LaunchNativeOptions {
    * also no socket, and it opens a draft rather than a map (see `blank`).
    */
   /** `ranked` opens a match the game server adjudicates; the rest are local. */
-  mode?: 'train' | 'host' | 'join' | 'ranked' | 'edit';
+  mode?: 'train' | 'host' | 'join' | 'ranked' | 'duel' | 'edit';
   /** A specific room; empty means "any match on this map, or open one". */
   room_id?: string;
   map_name: string;
@@ -573,8 +573,33 @@ export function getThrowPhysics(): Promise<ThrowPhysics> {
  * Ranked out rather than to let a join fail at the socket.
  */
 export async function getRankedMaps(): Promise<string[]> {
-  const res = await apiGet<{ maps: string[] }>('/hassault/ranked/maps');
-  return res.maps ?? [];
+  return (await getRankedInfo()).maps;
+}
+
+/** The rated maps, and the map every rated duel is fought on (empty from a
+ * server too old to run duels). */
+export async function getRankedInfo(): Promise<{ maps: string[]; duelMap: string }> {
+  const res = await apiGet<{ maps?: string[]; duelMap?: string }>('/hassault/ranked/maps');
+  return { maps: res.maps ?? [], duelMap: res.duelMap ?? '' };
+}
+
+/** A duel rating, as the game server keeps it (`hassault_rating.py`). */
+export interface DuelRating {
+  rating: number;
+  rd: number;
+  games: number;
+  wins: number;
+  losses: number;
+  draws?: number;
+  placed: boolean;
+  placementGames: number;
+  tier: string;
+  tierNumber: number;
+}
+
+/** Our own duel rating, through the node (which proxies the server). */
+export function getMyRating(): Promise<DuelRating> {
+  return apiGet<DuelRating>('/hassault/ranked/rating');
 }
 
 export function launchNativeFps(opts: LaunchNativeOptions): Promise<LaunchNativeResult> {

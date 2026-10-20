@@ -28,6 +28,8 @@ this server's simulation of the same shot.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 
 from backend.modules.hassault import mapsource
@@ -52,6 +54,18 @@ router = APIRouter(prefix="/api/hassault", tags=["hassault"])
 def _bundled(name: str) -> None:
     if name not in mapsource.bundled_names():
         raise HTTPException(status_code=404, detail=f"no map named {name!r}")
+
+
+@router.get("/ranked/maps")
+def ranked_maps() -> dict[str, Any]:
+    """The node's `/ranked/maps`, answered here for a client with no node (the
+    standalone web client): the maps a rated match may use, and the duel map."""
+    from backend.games_server import hassault_rooms
+
+    return {
+        "maps": hassault_rooms.referee.maps(),
+        "duelMap": hassault_rooms.referee.duel_map(),
+    }
 
 
 @router.get("/status", response_model=CatalogStatus)

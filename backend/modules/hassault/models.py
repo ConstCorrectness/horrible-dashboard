@@ -545,7 +545,7 @@ class LaunchNativeRequest(BaseModel):
     #: here and fills it with `bots`; `join` enters one that already exists.
     #: `edit` is the map designer — also no socket, and it opens a draft on the
     #: node rather than a map (see `blank`).
-    mode: Literal["train", "host", "join", "ranked", "edit"] = "join"
+    mode: Literal["train", "host", "join", "ranked", "duel", "edit"] = "join"
     #: A specific room; empty means "any match on this map, or open one".
     room_id: str = ""
     map_name: str

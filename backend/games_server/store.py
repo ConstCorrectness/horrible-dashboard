@@ -537,6 +537,51 @@ def _m13_hassault_equips(conn: sqlite3.Connection) -> None:
             )
 
 
+def _m14_hassault_glicko(conn: sqlite3.Connection) -> None:
+    """hassault's rating: Glicko-2 per account and queue, rated by this server.
+
+    It lived on each node, computed from that node's own report of a deathmatch
+    against an imaginary 1500 opponent. A rating is a claim about two players
+    who played each other, so it is written here, from a duel this server ran.
+
+    `hassault_rated_matches` is the ledger and the guard: its primary key is the
+    match, inserted before either rating moves, so a duel is rated exactly once
+    however many times the end of it is reported.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS hassault_glicko (
+            account_id TEXT NOT NULL,
+            queue      TEXT NOT NULL,
+            rating     REAL NOT NULL,
+            rd         REAL NOT NULL,
+            vol        REAL NOT NULL,
+            games      INTEGER NOT NULL DEFAULT 0,
+            wins       INTEGER NOT NULL DEFAULT 0,
+            losses     INTEGER NOT NULL DEFAULT 0,
+            draws      INTEGER NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (account_id, queue)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hassault_glicko_board
+            ON hassault_glicko(queue, rating DESC);
+        CREATE TABLE IF NOT EXISTS hassault_rated_matches (
+            match_id  TEXT PRIMARY KEY,
+            queue     TEXT NOT NULL,
+            a_id      TEXT NOT NULL,
+            b_id      TEXT NOT NULL,
+            score_a   REAL NOT NULL,
+            a_before  REAL NOT NULL,
+            a_after   REAL NOT NULL,
+            b_before  REAL NOT NULL,
+            b_after   REAL NOT NULL,
+            reason    TEXT NOT NULL DEFAULT '',
+            at        REAL NOT NULL
+        );
+        """
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -551,6 +596,7 @@ MIGRATIONS: list[Any] = [
     _m11_account_identities,
     _m12_hassault_accounts,
     _m13_hassault_equips,
+    _m14_hassault_glicko,
 ]
 
 

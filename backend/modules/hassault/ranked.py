@@ -187,6 +187,51 @@ async def join(
     the caller is a websocket handler, and a ranked join that fails should leave
     the player in the menu with a reason, not close their socket.
     """
+    session = await _open(conn)
+    if session is None:
+        return
+    join: dict[str, Any] = {
+        "map": map_name,
+        "name": "",
+        "room": room_id or "",
+        "new": new,
+    }
+    if mode:
+        # Only when asked for: a server older than `hassault_modes` ignores the
+        # key and opens deathmatch, which is what this join meant before.
+        join["mode"] = mode
+    await session.send("join", join)
+    # Detached: this pump delivers the welcome that the caller is *inside the
+    # handler for*. Awaiting it here would deadlock the socket that has to
+    # receive it — the same rule the other `/ws` relays follow.
+    session.pump = asyncio.create_task(_pump(session))
+
+
+async def queue_duel(conn: WsConnection) -> None:
+    """Put this client in the game server's rated duel queue.
+
+    The same proxied session a ranked join opens; the server answers with
+    `duel_queue` status while waiting, then a `welcome` when it pairs, which
+    `_pump` forwards like any other. The server refuses a guest itself.
+    """
+    session = await _open(conn)
+    if session is None:
+        return
+    await session.send("duel_queue", {})
+    session.pump = asyncio.create_task(_pump(session))
+
+
+async def cancel_duel(conn: WsConnection) -> None:
+    """Leave the duel queue. The session closes with it."""
+    session = _sessions.get(id(conn))
+    if session is not None:
+        await session.send("duel_cancel", {})
+    await leave(conn)
+
+
+async def _open(conn: WsConnection) -> RankedSession | None:
+    """A proxied socket to the game server for this client, or `None` (with the
+    reason sent to the client) when the server cannot be reached."""
     from websockets.asyncio.client import connect as ws_connect
 
     from backend.modules.games import server_auth
@@ -212,24 +257,10 @@ async def join(
                 },
             }
         )
-        return
+        return None
 
     _sessions[id(conn)] = session
-    join: dict[str, Any] = {
-        "map": map_name,
-        "name": "",
-        "room": room_id or "",
-        "new": new,
-    }
-    if mode:
-        # Only when asked for: a server older than `hassault_modes` ignores the
-        # key and opens deathmatch, which is what this join meant before.
-        join["mode"] = mode
-    await session.send("join", join)
-    # Detached: this pump delivers the welcome that the caller is *inside the
-    # handler for*. Awaiting it here would deadlock the socket that has to
-    # receive it — the same rule the other `/ws` relays follow.
-    session.pump = asyncio.create_task(_pump(session))
+    return session
 
 
 async def _pump(session: RankedSession) -> None:
@@ -284,10 +315,9 @@ def _record(result: dict[str, Any]) -> None:
 
     account_id = results.current_account_id()
     try:
+        # The rating is the server's own, sent as `rating_update` after a duel;
+        # this node keeps the history, not a second opinion on the number.
         results.record(account_id, result, authority="server")
-        from backend.modules.hassault import rating
-
-        rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record a ranked result")
 

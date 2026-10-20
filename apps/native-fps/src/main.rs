@@ -88,6 +88,9 @@ enum Mode {
     /// The client's only difference is a flag on the join: this node proxies, and
     /// every frame after it is the wire this client already speaks.
     Ranked,
+    /// A **rated duel**: queue on the game server (through this node) and play
+    /// whoever it pairs us with, on its duel map (`--map`, from `/ranked/maps`).
+    Duel,
 }
 
 impl Mode {
@@ -98,6 +101,7 @@ impl Mode {
             "join" => Some(Mode::Join),
             "edit" => Some(Mode::Edit),
             "ranked" => Some(Mode::Ranked),
+            "duel" => Some(Mode::Duel),
             _ => None,
         }
     }
@@ -663,14 +667,21 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("hassault: joining…");
     // Hosting asks for no particular room, exactly as the browser's Host does:
     // the server opens one on this map (or seats us in one already running there).
-    socket.join(
-        &args.map,
-        &args.room,
-        &args.host,
-        &args.name,
-        matches!(args.mode, Mode::Ranked),
-        &args.game,
-    )?;
+    if args.mode == Mode::Duel {
+        // No join: the server seats us when it pairs, and its welcome arrives
+        // like any other. The map was loaded from `--map` above.
+        eprintln!("hassault: queueing for a rated duel…");
+        socket.queue_duel()?;
+    } else {
+        socket.join(
+            &args.map,
+            &args.room,
+            &args.host,
+            &args.name,
+            matches!(args.mode, Mode::Ranked),
+            &args.game,
+        )?;
+    }
 
     if args.headless {
         return run_headless(&mut socket);
@@ -780,6 +791,10 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                 }
                 Incoming::Event(Event::Roster(_)) => {}
                 Incoming::Event(Event::Cosmetics(_)) => {}
+                Incoming::Event(Event::DuelQueue(_)) => {}
+                Incoming::Event(Event::RatingUpdate(r)) => {
+                    eprintln!("hassault: rating {:.0} -> {:.0}", r.before, r.after)
+                }
                 Incoming::Event(Event::Invite(i)) => {
                     eprintln!("hassault: invite to room {} from {}", i.room, i.host_name)
                 }

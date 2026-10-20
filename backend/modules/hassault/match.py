@@ -66,7 +66,6 @@ from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
 from backend.modules.hassault.weapons import (
     MAX_HEALTH,
-    RESPAWN_DELAY,
     SPAWN_PROTECT,
     PositionHistory,
 )
@@ -1062,7 +1061,7 @@ class MatchRoom:
         rounds_played = max(
             1,
             sum(self.scores)
-            if self.mode.id == "defuse"
+            if self.mode.id in ("defuse", "retake")
             else max(1, player.kills + player.deaths),
         )
         adr = round(player.damage_dealt / rounds_played, 1)
@@ -1875,7 +1874,7 @@ class MatchRoom:
         player.health = 0
         player.alive = False
         player.deaths += 1
-        player.respawn_at = now + RESPAWN_DELAY
+        player.respawn_at = now + self.mode.respawn_delay(self, player)
         player.queue.clear()
         self.mode.on_death(self, player)
         self._noise(player, "die", noise.DIE_LOUDNESS)
@@ -2443,7 +2442,7 @@ class MatchRoom:
         victim.health = 0
         victim.alive = False
         victim.deaths += 1
-        victim.respawn_at = now + RESPAWN_DELAY
+        victim.respawn_at = now + self.mode.respawn_delay(self, victim)
         victim.queue.clear()
         # `kills` is a stat and is credited unconditionally, a team kill
         # included. Whether that team kill *scores* is a different question and

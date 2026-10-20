@@ -8,7 +8,9 @@ import {
   dismissMatchSummary,
   getCatalogStatus,
   getLatestMatchSummary,
-  getRankedMaps,
+  getRankedInfo,
+  getMyRating,
+  type DuelRating,
   browseServers,
   getMapCubes,
   getMapInfo,
@@ -46,6 +48,7 @@ import { restoreGeneratedSurfaces, upgradePhotoSurfaces } from './photo-surfaces
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu, MoneyCounter } from './panels/BuyMenu';
+import { DuelQueueBanner, RatingResult } from './panels/DuelPanels';
 import { buyGroups, pressBuyKey } from './buy-menu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
 import { DefuseProgressRing } from './panels/DefuseProgressRing';
@@ -364,6 +367,8 @@ const EMPTY_SESSION: SessionState = {
   chat: [],
   chatNotice: '',
   cosmetics: {},
+  duelQueue: null,
+  ratingUpdate: null,
 };
 
 interface SceneHandle {
@@ -717,6 +722,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // ---- Native process lifecycle bridge ---------------------------------------
   /** Maps the game server will adjudicate. Empty until fetched, or if it is down. */
   const [rankedMaps, setRankedMaps] = useState<string[]>([]);
+  /** Where rated duels are fought (served); empty when the server runs none. */
+  const [duelMap, setDuelMap] = useState('');
+  /** Our duel rating, through the node; `null` until known or when signed out. */
+  const [duelRating, setDuelRating] = useState<DuelRating | null>(null);
   const [nativeRunning, setNativeRunning] = useState(false);
   /** The render loop's copy: it runs outside React and cannot read state. */
   const nativeRunningRef = useRef(false);
@@ -800,6 +809,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    */
   const summaryBaselined = useRef(false);
 
+  // Our duel rating: on mount, and again whenever a duel moves it. Through the
+  // node, which proxies the server's; a node with no account answers with its
+  // frozen local row, and a standalone pane has no node to ask.
+  useEffect(() => {
+    if (standalone) return undefined;
+    let active = true;
+    void getMyRating()
+      .then((rating) => {
+        if (active) setDuelRating(rating);
+      })
+      .catch(() => {
+        if (active) setDuelRating(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [standalone, net.ratingUpdate]);
+
   const closeSummary = useCallback((summary: PostMatchSummary) => {
     dismissedSummaryAt.current = Math.max(dismissedSummaryAt.current, summary.timestamp);
     setPostMatchSummary(null);
@@ -813,9 +840,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // Once, not on a poll: the server's bundled map list changes on a deploy, and
     // a menu that re-asked every few seconds would be spending a round trip to
     // hear the same three names.
-    void getRankedMaps()
-      .then((names) => {
-        if (active) setRankedMaps(names);
+    void getRankedInfo()
+      .then((info) => {
+        if (!active) return;
+        setRankedMaps(info.maps);
+        setDuelMap(info.duelMap);
       })
       .catch(() => {
         // Unreachable: Ranked greys out, which is the honest signal — better than
@@ -2753,9 +2782,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // Offline (or an older server), the inventory's equips as before.
           const ownLook =
             online && session ? session.state.cosmetics[session.state.playerId] : undefined;
-          const ownTeam = online && session
-            ? session.state.peers.find((peer) => peer.id === session.state.playerId)?.team
-            : undefined;
+          const ownTeam =
+            online && session
+              ? session.state.peers.find((peer) => peer.id === session.state.playerId)?.team
+              : undefined;
           viewmodel.setWeapon(
             heldWeapon,
             holdingNade
@@ -3709,50 +3739,55 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   const train = useCallback(
     (drillId: string | null = null) => {
-    if (nativeClient) {
-      void launchNative(drillId ? { mode: 'train', drill: drillId } : { mode: 'train' });
-      return;
-    }
-    sessionRef.current?.leave();
-    shotsRef.current?.reset();
-    const range = rangeRef.current;
-    const world = worldRef.current;
-    if (range) {
-      range.reset();
-      range.setWeapons(weapons, Math.min(2, weapons.length - 1));
-      // The range has no sides; its shooter carries the T pick.
-      range.setLoadout(loadoutSlots(weapons, loadoutChoice?.t, 't'));
-      // Placed relative to where we are about to stand, so the nearest dummies
-      // are the ones in front of you rather than the ones the map happens to
-      // list first.
-      if (world) range.place(world, playerRef.current.x, playerRef.current.y);
-      // The map's own items, exactly where a match would put them: the server
-      // resolved these heights, so the range never has to.
-      if (itemTable && info) {
-        range.placeItems(info.items, itemTable.kinds, itemTable.reach);
+      if (nativeClient) {
+        void launchNative(drillId ? { mode: 'train', drill: drillId } : { mode: 'train' });
+        return;
       }
-    }
-    drillKeyRef.current = '';
-    setDrillStatus(null);
-    setDrillBest(false);
-    if (range && world && drillId) {
-      const at = playerRef.current;
-      void getDrill(drillId, mapName, at.x, at.y)
-        .then((spec) => {
-          range.startDrill(spec, world);
-          // A station has a place to stand. Cube maps only: a modelled map's
-          // body is Rapier's, and the any-map drill has no station anyway.
-          if (spec.shooter && !world3dRef.current) {
-            const p = createPlayer(spec.shooter.x, spec.shooter.y, spec.shooter.z, spec.shooter.yaw);
-            p.onGround = true;
-            playerRef.current = p;
-          }
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : String(err));
-        });
-    }
-    deploy();
+      sessionRef.current?.leave();
+      shotsRef.current?.reset();
+      const range = rangeRef.current;
+      const world = worldRef.current;
+      if (range) {
+        range.reset();
+        range.setWeapons(weapons, Math.min(2, weapons.length - 1));
+        // The range has no sides; its shooter carries the T pick.
+        range.setLoadout(loadoutSlots(weapons, loadoutChoice?.t, 't'));
+        // Placed relative to where we are about to stand, so the nearest dummies
+        // are the ones in front of you rather than the ones the map happens to
+        // list first.
+        if (world) range.place(world, playerRef.current.x, playerRef.current.y);
+        // The map's own items, exactly where a match would put them: the server
+        // resolved these heights, so the range never has to.
+        if (itemTable && info) {
+          range.placeItems(info.items, itemTable.kinds, itemTable.reach);
+        }
+      }
+      drillKeyRef.current = '';
+      setDrillStatus(null);
+      setDrillBest(false);
+      if (range && world && drillId) {
+        const at = playerRef.current;
+        void getDrill(drillId, mapName, at.x, at.y)
+          .then((spec) => {
+            range.startDrill(spec, world);
+            // A station has a place to stand. Cube maps only: a modelled map's
+            // body is Rapier's, and the any-map drill has no station anyway.
+            if (spec.shooter && !world3dRef.current) {
+              const p = createPlayer(
+                spec.shooter.x,
+                spec.shooter.y,
+                spec.shooter.z,
+                spec.shooter.yaw,
+              );
+              p.onGround = true;
+              playerRef.current = p;
+            }
+          })
+          .catch((err: unknown) => {
+            setError(err instanceof Error ? err.message : String(err));
+          });
+      }
+      deploy();
     },
     [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName, loadoutChoice],
   );
@@ -3795,6 +3830,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     session.join(mapName, playerName, undefined, undefined, true);
     deploy();
   }, [mapName, playerName, deploy, nativeClient, launchNative]);
+
+  /**
+   * Queue for a rated duel. On the served duel map, which is loaded first: the
+   * server picks the room, and a client in the wrong world draws nonsense.
+   */
+  const duel = useCallback(() => {
+    if (!duelMap) return;
+    if (nativeClient) {
+      void launchNative({ mode: 'duel', map_name: duelMap });
+      return;
+    }
+    const session = sessionRef.current;
+    if (!session) return;
+    setMapName(duelMap);
+    shotsRef.current?.reset();
+    session.queueDuel(duelMap);
+    deploy();
+  }, [duelMap, deploy, nativeClient, launchNative]);
 
   /** Host a match here on the loaded map and enter it, with bots if asked. */
   const host = useCallback(
@@ -4457,6 +4510,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           />
         )}
         {online && <MoneyCounter mine={net.you?.mode} />}
+        <DuelQueueBanner queue={net.duelQueue} onCancel={() => sessionRef.current?.cancelDuel()} />
+        <RatingResult
+          update={net.ratingUpdate}
+          onDismiss={() => sessionRef.current?.dismissRating()}
+        />
 
         {online && <KillFeed entries={net.killfeed} />}
 
@@ -4817,6 +4875,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 onEditMap={editMap}
                 onQuickPlay={quickPlay}
                 onRanked={ranked}
+                onDuel={duel}
+                duelMap={duelMap}
+                duelRating={duelRating}
                 rankedMaps={rankedMaps}
                 onJoin={joinRoom}
                 onInvite={inviteFriend}

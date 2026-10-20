@@ -177,6 +177,13 @@ class GameMode:
         """Whether a dead player whose timer has expired comes back now."""
         return True
 
+    def respawn_delay(self, room: MatchRoom, player: MatchPlayer) -> float:
+        """Seconds from a death to the respawn timer expiring. An arena answers
+        with almost none; the default is the room's."""
+        from ..weapons import RESPAWN_DELAY
+
+        return RESPAWN_DELAY
+
     def afk_clock_runs(self, room: MatchRoom, player: MatchPlayer) -> bool:
         """Whether this living player's AFK timer is running right now.
 

@@ -75,6 +75,39 @@ async def request(
     return res.status_code, body
 
 
+def known_active() -> str | None:
+    """The signed-in account, if it is already known to have the service.
+
+    Never asks the server: for reads that should prefer the server's answer but
+    must not make a request of their own just to find out whether to.
+    """
+    from backend.modules.games import server_auth
+
+    account_id = server_auth.signed_in_account_id()
+    return account_id if account_id and _ready.get(account_id) else None
+
+
+async def server_get(path: str, params: dict[str, Any] | None = None) -> Any | None:
+    """A public read from the game server's hassault API (`/api/hassault{path}`),
+    or `None` when it could not be reached or did not answer 200."""
+    import httpx
+
+    base, headers = _base_and_headers()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(
+                f"{base}/api/hassault{path}", params=params, headers=headers
+            )
+    except httpx.HTTPError:
+        return None
+    if res.status_code != 200:
+        return None
+    try:
+        return res.json()
+    except ValueError:
+        return None
+
+
 async def active_account() -> str | None:
     """The signed-in account, if the server has the service for it. Asked once
     per account per process; an unreachable server is asked again next time."""

@@ -145,24 +145,20 @@ async def test_ranked_routes_api(monkeypatch):
         assert prof_data["accountId"] == test_acc
         assert not prof_data["isCalibrated"]
 
-        # Calibrate files the result under the signed-in account. The body's
-        # `accountId` is ignored: it used to let a caller write anybody's rating.
+        # Calibrate is retired (P7): it moved a rating from a result the caller
+        # reported. Ratings come only from rated duels on the game server, so
+        # it refuses, and nobody's record moves.
         r_calib = await client.post(
             "/api/hassault/ranked/calibrate",
             json={
                 "accountId": test_acc,
                 "mapName": "hd_mirage",
-                "result": {"won": True, "roundsWon": 13, "roundsLost": 5, "kills": 18, "deaths": 8, "damage": 1900},
+                "result": {"won": True, "kills": 18, "deaths": 8},
             },
         )
-        assert r_calib.status_code == 200
-        calib_res = r_calib.json()
-        assert calib_res["matchesPlayed"] == 1
-        r_victim = await client.get(f"/api/hassault/ranked/profile/{test_acc}")
-        assert not r_victim.json()["isCalibrated"]
-        assert r_victim.json()["matchesPlayed"] == 0
+        assert r_calib.status_code == 410
         r_self = await client.get(f"/api/hassault/ranked/profile/{signed_in}")
-        assert r_self.json()["matchesPlayed"] == 1
+        assert r_self.json()["matchesPlayed"] == 0
 
 
 # ============================================================================

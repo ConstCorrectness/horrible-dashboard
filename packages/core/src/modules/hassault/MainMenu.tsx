@@ -35,6 +35,7 @@ import type { DrillStats, DrillSummary } from './training-drill';
 import type { WeaponSpec } from './api';
 import { DEFAULT_LOADOUT, weaponsInSlot, type Loadouts } from './loadout';
 import { SIDES, type AgentSpec, type Side } from './cosmetics';
+import type { DuelRating } from './api';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -125,6 +126,12 @@ export interface MainMenuProps {
   onQuickPlay: (bots: number) => void;
   /** Play a match the **game server** adjudicates. */
   onRanked: () => void;
+  /** Queue for a rated duel on the game server. */
+  onDuel: () => void;
+  /** The served duel map; empty when the server runs no duels. */
+  duelMap: string;
+  /** Our duel rating, when known. */
+  duelRating: DuelRating | null;
   /** Maps a rated match can use — bundled only, because a map on one player's
    * disk cannot be judged by anybody else. Empty while it is being fetched, or
    * when the server could not be reached. */
@@ -160,6 +167,25 @@ export interface MainMenuProps {
   nativeClient: boolean;
   /** What the last native launch said, success or reason. */
   nativeStatus: string | null;
+}
+
+/**
+ * What the Duel row says about our rating, in one line of the menu.
+ *
+ * `rating` is the server's (`hassault_rating.py`): `rating` and `rd` (its
+ * uncertainty, 350 when new), `games`, `wins`, `losses`, `placed` (true after
+ * `placementGames`) and `tier` ("Unranked" until placed). `null` means unknown:
+ * signed out, or the server could not be asked.
+ */
+export function duelRatingLabel(rating: DuelRating | null): string {
+  // Unknown is an invitation, not an error: the row still works once signed in.
+  if (!rating) return 'Rated 1v1. Sign in to play for a rating.';
+  const record = `${rating.wins}W ${rating.losses}L`;
+  // Before placement the number is mostly its uncertainty, so show progress.
+  if (!rating.placed) {
+    return `Placement ${rating.games}/${rating.placementGames} · ${record}`;
+  }
+  return `${rating.tier} · ${Math.round(rating.rating)} · ${record}`;
 }
 
 export function MainMenu(props: MainMenuProps) {
@@ -549,13 +575,32 @@ function PlaySection(props: MainMenuProps) {
         </button>
       </div>
 
+      {/* The one rated thing: a duel's result moves two real ratings on the
+          server. Below Ranked, which is server-scored but unrated. */}
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span>Duel</span>
+          <span style={{ ...panel.dim, fontFamily: 'var(--font-mono, monospace)' }}>
+            {props.duelMap
+              ? duelRatingLabel(props.duelRating)
+              : 'Rated 1v1 needs the game server and a signed-in account.'}
+          </span>
+        </div>
+        <button
+          onClick={props.onDuel}
+          disabled={!props.ready || props.loadoutError !== '' || !props.duelMap}
+        >
+          Find duel
+        </button>
+      </div>
+
       <div style={panel.row}>
         <div style={panel.rowMain}>
           <span>Train</span>
           {best && (
             <span style={{ ...panel.dim, fontFamily: 'var(--font-mono, monospace)' }}>
-              best {best.killsPerMinute.toFixed(1)} kills/min,{' '}
-              {Math.round(best.accuracy * 100)}% accuracy
+              best {best.killsPerMinute.toFixed(1)} kills/min, {Math.round(best.accuracy * 100)}%
+              accuracy
             </span>
           )}
         </div>
@@ -625,7 +670,9 @@ function PlaySection(props: MainMenuProps) {
                 {sideAgents.length > 1 && (
                   <select
                     value={props.agentChoice[side] ?? sideAgents[0].id}
-                    onChange={(e) => props.onAgents({ ...props.agentChoice, [side]: e.target.value })}
+                    onChange={(e) =>
+                      props.onAgents({ ...props.agentChoice, [side]: e.target.value })
+                    }
                     aria-label={`${side.toUpperCase()} agent`}
                     style={{ width: 132, padding: '0 0.4rem' }}
                   >
@@ -708,9 +755,7 @@ function PlaySection(props: MainMenuProps) {
             marginTop: '0.5rem',
             // A pid is the one unambiguous signal it really started; everything
             // else the route returns is a reason it did not.
-            color: props.nativeStatus.includes('PID')
-              ? 'var(--success)'
-              : 'var(--danger)',
+            color: props.nativeStatus.includes('PID') ? 'var(--success)' : 'var(--danger)',
           }}
         >
           {props.nativeStatus}

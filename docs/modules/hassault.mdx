@@ -2422,6 +2422,51 @@ that team, so the game always had sides whether or not anything called them that
 The difference between the two is what the score *means*, not who you can shoot.
 A genuine free-for-all is a third mode and a real change to how a match plays.
 
+### The P7 modes
+
+| Mode | Id | What changes |
+| --- | --- | --- |
+| Duel | `duel` | 1v1, first to `KILLS_TO_WIN` (10) or most kills after `TIME_LIMIT` (180 s); leaving a live duel forfeits it. The only rated mode. |
+| Retake | `retake` | Defuse with the bomb already planted on a site the room's RNG picks, attackers spawned on it, a short freeze, no economy: each side's card (its own rifle, armour, a kit for defenders). Needs bomb sites. |
+| Aim arena | `aim` | Deathmatch with everyone on the rifle and pistol, whatever they picked, and a 0.6 s respawn. |
+| AWP arena | `awp` | As the aim arena, on the sniper and knife. |
+| Random guns | `dm_random` | Deathmatch dealing a primary from the room's RNG every life, so a room deals the same guns from the same seed. |
+
+Two hooks arrived with them: `GameMode.respawn_delay` (the arenas' quick
+respawn; the default is `weapons.RESPAWN_DELAY`) and `GameMode.slots` (from P6).
+Every one is buildable anywhere `modes.build` is, so a node can host them too;
+only a duel the *game server* runs is rated.
+
+### Duels and the rating
+
+A rating is a claim about two players who played each other, so it is written in
+one place: the game server, from a duel it ran (`games_server/hassault_rating.py`,
+migration `_m14_hassault_glicko`, cap `hassault_duel`).
+
+- **The queue** (`HassaultReferee.queue_duel`, WS events `duel_queue` /
+  `duel_cancel`) is for signed-in accounts only. It pairs the oldest waiting seat
+  with the closest rating inside a window of ±`DUEL_WINDOW`, widening by
+  `DUEL_WINDOW_STEP` every `DUEL_WINDOW_STEP_S` waited, and re-tries every
+  `DUEL_SWEEP_S` while anyone waits. A pair gets a `duel` room on the served duel
+  map (`duelMap` on `/hassault/maps` and `/api/hassault/ranked/maps`; both clients
+  load it before they queue, because the native client builds its world first).
+- **The end is reported once**, through `room.on_over`; a forfeit carries the
+  leaver's seat. `rate_match` inserts the `hassault_rated_matches` row first, so a
+  second report of the same match rates nothing, then moves both players with
+  `rating.compute_glicko2_step`, each against the other's pre-match rating.
+- **Each player hears `rating_update`**: before, after, delta, won or drew. The
+  browser shows it as a result card; the native client as a HUD note.
+- **Reads are public** (`/api/hassault/rating/{account}`, `/rating/leaderboard`,
+  placed players only) except one's own (`/api/hassault/account/rating`). A
+  player is unranked until `PLACEMENT_MATCHES_REQUIRED` (10) duels.
+- **The node proxies.** `/ranked/rating`, `/ranked/rating/{id}`,
+  `/ranked/leaderboard` and the rating half of `/ranked/profile` read the
+  server's when this node's account is known to be on the service
+  (`account_sync.known_active`, which never probes the server itself), else the
+  frozen local row. The node writes no rating anywhere any more.
+- **Queueing** is the menu's *Find duel* (browser: `MatchSession.queueDuel`;
+  native: `--mode=duel`, which sends `duel_queue` instead of a join).
+
 ### `damage_scale` returns a float, and both halves matter
 
 The three damage sites ask it as a legality filter (`> 0`) because
@@ -3731,7 +3776,9 @@ every `local_player` row**, once (`results.adopt_local_rows`):
 - A second account signing in later gets nothing. By then the rows have an owner.
 
 `/ranked/calibrate` also stopped taking `accountId` from the request body, which
-let any caller write a rating row for anybody.
+let any caller write a rating row for anybody. Since P7 it is retired outright
+(410): a rating moves only through a rated duel on the game server (see "Duels
+and the rating").
 
 ## The native HUD
 
@@ -9395,13 +9442,11 @@ The skin system provides distinct faction styling and collectible operator skins
   unattenuated, which reads as the smoke being thinner than it is.
 
 
-- **The rank shown is self-reported.** The game server's ladder is untouched:
-  ELO applies to two seats facing each other, and a free-for-all people come and
-  go from is not that shape. But the node *does* keep a Glicko-2 rating
-  (`rating.py`, `ranked_mmr.py`, CS-style tier names) and updates it after every
-  recorded match, local ones included, scored against an imagined opponent at the
-  default rating. Nothing comparative may be built on it. A real rating between
-  two players belongs to a server-run 1v1 duel mode.
+- **Only duels are rated.** Deathmatch, defuse and the practice modes record a
+  result and grant XP but move no rating: a room people come and go from is not
+  two seats facing each other. The node's old self-reported Glicko-2 row
+  (`rating.py`, `ranked_mmr.py`) is frozen; it is read only when the game server
+  cannot be.
 - **Nothing binds keys yet.** The native client's controls are fixed (WASD,
   space, shift, R, 1–5, 6–9 to ready a grenade, G to throw and H to lob, right
   mouse to scope, Escape for the menu); the pane's

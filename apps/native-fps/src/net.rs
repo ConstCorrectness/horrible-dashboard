@@ -193,6 +193,12 @@ impl MatchSocket {
         ))
     }
 
+    /// Join the game server's rated duel queue (through the node, which
+    /// proxies). The pairing's `welcome` arrives like a join's.
+    pub fn queue_duel(&self) -> Result<(), NetError> {
+        self.send(&Outbound::new("duel_queue", serde_json::json!({})))
+    }
+
     pub fn leave(&self) -> Result<(), NetError> {
         self.send(&Outbound::new("leave", serde_json::json!({})))
     }

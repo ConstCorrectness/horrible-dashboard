@@ -164,6 +164,34 @@ export interface SessionState {
    * as the team default, which is also what an older server means.
    */
   cosmetics: Record<string, Cosmetics>;
+  /** Where we stand in the rated duel queue, while queued; `null` otherwise. */
+  duelQueue: DuelQueueStatus | null;
+  /**
+   * The last rated duel's result, from the server's `rating_update`. Survives
+   * leaving the room, like the lobby: it is read in the menu afterwards.
+   */
+  ratingUpdate: RatingUpdate | null;
+}
+
+/** `duel_queue`: the server's answer while we wait to be paired. */
+export interface DuelQueueStatus {
+  queued: boolean;
+  position?: number;
+  waiting?: number;
+  /** Seconds waited, by the server's clock. */
+  waited?: number;
+  rating?: number;
+}
+
+/** `rating_update`: a rated duel ended and our rating moved. */
+export interface RatingUpdate {
+  before: number;
+  after: number;
+  delta: number;
+  won: boolean;
+  draw: boolean;
+  reason?: string;
+  rating?: { tier?: string; placed?: boolean; games?: number; placementGames?: number };
 }
 
 /** One chat message, exactly as `backend/modules/hassault/chat.py` stamps it. */
@@ -375,6 +403,8 @@ export class MatchSession {
     chat: [],
     chatNotice: '',
     cosmetics: {},
+    duelQueue: null,
+    ratingUpdate: null,
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
@@ -613,6 +643,35 @@ export class MatchSession {
     this.emit();
   }
 
+  /**
+   * Queue for a rated duel on the game server, on `map` (the served duel map,
+   * which the pane loads first). The server answers `duel_queue` while we wait
+   * and sends a `welcome` when it pairs us; guests are refused there.
+   */
+  queueDuel(map: string): void {
+    this.connect();
+    const invites = this.state.invites;
+    this.reset('joining');
+    this.state.invites = invites;
+    this.state.map = map;
+    this.state.ranked = true;
+    this.state.duelQueue = { queued: true, waited: 0 };
+    this.emit();
+    sendChannel('hassault', 'duel_queue', {});
+  }
+
+  /** Close the last duel's result card. */
+  dismissRating(): void {
+    this.state.ratingUpdate = null;
+    this.emit();
+  }
+
+  cancelDuel(): void {
+    sendChannel('hassault', 'duel_cancel', {});
+    this.reset('idle');
+    this.emit();
+  }
+
   respawn(): void {
     if (this.state.status === 'joined') sendChannel('hassault', 'respawn');
   }
@@ -694,6 +753,7 @@ export class MatchSession {
         // exactly like the round having just ended.
         this.state.modeState = (data.mode as ModeShared | undefined) ?? null;
         this.state.cosmetics = parseCosmeticsMap(data.cosmetics);
+        this.state.duelQueue = null;
         this.absorbRoomSettings(data.roomSettings);
         if (this.loadoutChoice) sendChannel('hassault', 'loadout', this.loadoutChoice);
         if (this.state.mode && (this.state.mode.v ?? 0) > SUPPORTED_MODE_V) {
@@ -878,6 +938,16 @@ export class MatchSession {
             this.emit();
           }
         }
+        break;
+      }
+      case 'duel_queue': {
+        this.state.duelQueue = data.queued ? (data as unknown as DuelQueueStatus) : null;
+        this.emit();
+        break;
+      }
+      case 'rating_update': {
+        this.state.ratingUpdate = data as unknown as RatingUpdate;
+        this.emit();
         break;
       }
       case 'cosmetics': {
@@ -1128,6 +1198,9 @@ export class MatchSession {
       chat: [],
       chatNotice: '',
       cosmetics: {},
+      duelQueue: null,
+      // The last duel's result outlives the room it was played in.
+      ratingUpdate: this.state.ratingUpdate,
     };
     this.predictor.reset();
     this.snapshots.clear();

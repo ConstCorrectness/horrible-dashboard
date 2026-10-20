@@ -2219,6 +2219,27 @@ impl App {
                         eprintln!("hassault: {} invite(s) waiting", list.invites.len());
                     }
                 }
+                Incoming::Event(Event::DuelQueue(q)) => {
+                    if q.queued {
+                        self.hud.note(
+                            format!("SEARCHING FOR AN OPPONENT ({:.0}S)", q.waited),
+                            false,
+                        );
+                    }
+                }
+                Incoming::Event(Event::RatingUpdate(r)) => {
+                    let verdict = if r.draw {
+                        "DRAW"
+                    } else if r.won {
+                        "VICTORY"
+                    } else {
+                        "DEFEAT"
+                    };
+                    self.hud.note(
+                        format!("{verdict} - RATING {:+.0} ({:.0})", r.delta, r.after),
+                        true,
+                    );
+                }
                 Incoming::Event(Event::Cosmetics(changed)) => {
                     if let Some(look) = changed.cosmetics {
                         self.looks.insert(changed.player_id, look);
