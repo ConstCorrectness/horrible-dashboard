@@ -1123,6 +1123,14 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
     if summary is None:
         return
 
+    # Not for an account the game server keeps: there, drops are spent against
+    # its XP ledger, and a node rolling one for a match it scored itself is the
+    # farm this used to be (`account_sync.py`).
+    from backend.modules.hassault import account_sync
+
+    if account_sync._ready.get(account_id):
+        return
+
     # The drop is the reward for finishing, so it is rolled here rather than in
     # the leave path — and **persisted**, which the old one was not: it went into
     # a dict on the skin manager and was gone on the next restart.
@@ -1912,6 +1920,15 @@ async def get_skin_inventory() -> list[dict[str, Any]]:
     """Get the active player's skin inventory with float values, pattern seeds and wear."""
     from backend.modules.hassault.skins import skin_dict, skin_manager
 
+    from backend.modules.hassault import account_sync
+
+    # The account's own inventory, from the game server, when it has one for
+    # this account. Otherwise this node's, as before (`account_sync.py`).
+    if await account_sync.active_account():
+        answer = await account_sync.request("GET", "/inventory")
+        if answer is not None and answer[0] == 200:
+            return list(answer[1])
+
     account_id = _account_id()
 
     # Atlas is consulted **only when this node has never seen this account** —
@@ -2015,7 +2032,15 @@ async def get_skin_pack_file(pack_id: str, name: str) -> FileResponse:
 @router.post("/skins/equip")
 async def equip_skin(instance_id: str) -> dict[str, bool]:
     """Equip an item instance to its weapon loadout slot."""
+    from backend.modules.hassault import account_sync
     from backend.modules.hassault.skins import skin_manager
+
+    if await account_sync.active_account():
+        answer = await account_sync.request(
+            "POST", "/equip", params={"instance_id": instance_id}
+        )
+        if answer is not None and answer[0] == 200:
+            return {"ok": bool(answer[1].get("ok"))}
 
     account_id = _account_id()
 
@@ -2033,8 +2058,13 @@ async def get_drop_status() -> dict[str, Any]:
     live here, and a client that computed "you have 3" from a level it had
     would be a second opinion on the one thing the claim route enforces.
     """
+    from backend.modules.hassault import account_sync
     from backend.modules.hassault.skins import skin_manager
 
+    if await account_sync.active_account():
+        answer = await account_sync.request("GET", "/drops")
+        if answer is not None and answer[0] == 200:
+            return dict(answer[1])
     return skin_manager.drop_status(_account_id())
 
 
@@ -2047,7 +2077,17 @@ async def claim_level_up_drop() -> dict[str, Any]:
     new item, the button never went away, and a Covert was a matter of clicking
     for a minute.
     """
+    from backend.modules.hassault import account_sync
     from backend.modules.hassault.skins import skin_dict, skin_manager
+
+    if await account_sync.active_account():
+        answer = await account_sync.request("POST", "/claim_drop")
+        if answer is not None:
+            status, body = answer
+            if status == 200:
+                return dict(body)
+            if status == 409:
+                raise HTTPException(status_code=409, detail=(body or {}).get("detail"))
 
     account_id = _account_id()
 
@@ -2070,7 +2110,19 @@ async def claim_level_up_drop() -> dict[str, Any]:
 @router.post("/skins/tradeup")
 async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
     """Trade in 10 skins of rarity Tier N to forge 1 skin of Tier N+1."""
+    from backend.modules.hassault import account_sync
     from backend.modules.hassault.skins import skin_dict, skin_manager
+
+    if await account_sync.active_account():
+        answer = await account_sync.request(
+            "POST", "/tradeup", json={"instanceIds": instance_ids}
+        )
+        if answer is not None:
+            status, body = answer
+            if status == 200:
+                return dict(body)
+            if status == 400:
+                raise HTTPException(status_code=400, detail=(body or {}).get("detail"))
 
     account_id = _account_id()
 

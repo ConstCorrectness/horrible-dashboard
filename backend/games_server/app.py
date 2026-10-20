@@ -722,9 +722,12 @@ def hassault_maps() -> dict[str, Any]:
 def _mount_hassault_content() -> None:
     # Imported here rather than at the top: it loads the hassault package, and
     # the relay and the games hub should not depend on it importing cleanly.
+    from backend.games_server.hassault_account import router as account_router
     from backend.games_server.hassault_content import router
 
     app.include_router(router)
+    # Account data: settings, inventory, the XP ledger and the one-shot import.
+    app.include_router(account_router)
 
 
 _mount_hassault_content()

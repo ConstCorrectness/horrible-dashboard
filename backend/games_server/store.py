@@ -425,6 +425,81 @@ def _m11_account_identities(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m12_hassault_accounts(conn: sqlite3.Connection) -> None:
+    """hassault's account data: settings, items, an XP ledger, drop claims, imports.
+
+    It lived per machine in each node's `app.db`, so an account's skins and level
+    were whatever the machine you sat at happened to hold. The server is the one
+    place every machine signed in to an account agrees on.
+
+    Ledgers, not counters, on the `hassault_drop_claims` pattern: level is a
+    `SUM(xp)`, a claim is a row keyed by the level it spends, an import is a row
+    keyed by the machine it came from. Each primary key is the guard against
+    the race it names, and no column holds a total that can disagree with the
+    rows it sums.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS hassault_settings (
+            account_id TEXT PRIMARY KEY,
+            doc        TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS hassault_items (
+            instance_id    TEXT PRIMARY KEY,
+            owner_id       TEXT NOT NULL,
+            def_id         TEXT NOT NULL,
+            kind           TEXT NOT NULL DEFAULT 'skin',
+            float_value    REAL NOT NULL,
+            pattern_seed   INTEGER NOT NULL,
+            stattrak       INTEGER,
+            -- drop | tradeup | import (and, later, case | trade | market)
+            origin         TEXT NOT NULL,
+            -- NULL is never: an imported item is self-reported by a node.
+            tradable_after REAL,
+            -- owned | consumed (and, later, listed)
+            state          TEXT NOT NULL DEFAULT 'owned',
+            equipped       INTEGER NOT NULL DEFAULT 0,
+            acquired_at    REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_hassault_items_owner
+            ON hassault_items(owner_id, state);
+        CREATE TABLE IF NOT EXISTS hassault_item_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            from_id     TEXT,
+            to_id       TEXT,
+            ref         TEXT,
+            at          REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS hassault_xp_ledger (
+            account_id TEXT NOT NULL,
+            source     TEXT NOT NULL,
+            source_id  TEXT NOT NULL,
+            xp         INTEGER NOT NULL,
+            at         REAL NOT NULL,
+            PRIMARY KEY (account_id, source, source_id)
+        );
+        CREATE TABLE IF NOT EXISTS hassault_drop_claims (
+            account_id  TEXT NOT NULL,
+            level       INTEGER NOT NULL,
+            instance_id TEXT,
+            claimed_at  REAL NOT NULL,
+            PRIMARY KEY (account_id, level)
+        );
+        CREATE TABLE IF NOT EXISTS hassault_imports (
+            account_id  TEXT NOT NULL,
+            node_id     TEXT NOT NULL,
+            items       INTEGER NOT NULL,
+            matches     INTEGER NOT NULL,
+            imported_at REAL NOT NULL,
+            PRIMARY KEY (account_id, node_id)
+        );
+        """
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -437,6 +512,7 @@ MIGRATIONS: list[Any] = [
     _m9_rich_profiles,
     _m10_person_devices,
     _m11_account_identities,
+    _m12_hassault_accounts,
 ]
 
 

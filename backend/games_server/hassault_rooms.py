@@ -397,6 +397,18 @@ class HassaultReferee:
             # A store hiccup must not break a player's disconnect — the same
             # guard `hub.py` puts around its own result write.
             logger.exception("hassault: could not record a server-hosted result")
+        # XP into the account's ledger: the server's word, since the server ran
+        # the match. Keyed by a per-session id so a retry cannot pay twice.
+        try:
+            import uuid
+
+            from backend.games_server import hassault_account
+
+            hassault_account.grant_match_xp(
+                conn.account_id, str(result.get("matchId") or uuid.uuid4()), result
+            )
+        except Exception:
+            logger.exception("hassault: could not ledger XP for a server-hosted result")
 
     async def shutdown(self) -> None:
         await self.server.shutdown()

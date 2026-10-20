@@ -98,6 +98,11 @@ def schedule_enrollment() -> None:
             )
 
     task = loop.create_task(_enroll())
+    # hassault's account data rides the same moment: probe the service, import
+    # this machine's history once, and pull the account's settings.
+    from backend.modules.hassault import account_sync
+
+    account_sync.schedule_sync()
     _binding_tasks.add(task)
     task.add_done_callback(_binding_tasks.discard)
 

@@ -13,7 +13,7 @@ import { registry } from './registry';
 
 export type SettingValue = string | number | boolean;
 
-interface SettingsResponse {
+export interface SettingsResponse {
   values: Record<string, SettingValue>;
   /**
    * Secret-shaped keys that have a value stored. The values themselves are never
@@ -77,6 +77,35 @@ const SECRET_SUFFIXES = [
   'password',
 ];
 
+/**
+ * Where settings persist. The node's `/settings` by default; a client with no
+ * node (the standalone web client) points this at the game server's account
+ * settings once signed in, which keeps the account-scoped keys and drops the
+ * rest (`hassault_account.settings_put`).
+ */
+export interface SettingsBackend {
+  load(): Promise<SettingsResponse>;
+  put(key: string, value: SettingValue): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+const NODE_BACKEND: SettingsBackend = {
+  load: () => apiGet<SettingsResponse>('/settings'),
+  put: async (key, value) => {
+    await apiPut(`/settings/${encodeURIComponent(key)}`, { value });
+  },
+  remove: async (key) => {
+    await apiDelete(`/settings/${encodeURIComponent(key)}`);
+  },
+};
+
+let backend: SettingsBackend = NODE_BACKEND;
+
+/** Swap where settings persist; `null` is the node again. Call `loadSettings` after. */
+export function setSettingsBackend(next: SettingsBackend | null): void {
+  backend = next ?? NODE_BACKEND;
+}
+
 /** Optimistically update locally, then persist. */
 export async function setSetting(key: string, value: SettingValue): Promise<void> {
   overrides = { ...overrides, [key]: value };
@@ -89,7 +118,7 @@ export async function setSetting(key: string, value: SettingValue): Promise<void
     else secretKeys.add(key);
   }
   emit();
-  await apiPut(`/settings/${encodeURIComponent(key)}`, { value });
+  await backend.put(key, value);
 }
 
 /** Clear the override so the key falls back to its declared default. */
@@ -100,7 +129,7 @@ export async function resetSetting(key: string): Promise<void> {
   overrides = next;
   secretKeys.delete(key);
   emit();
-  await apiDelete(`/settings/${encodeURIComponent(key)}`);
+  await backend.remove(key);
 }
 
 /**
@@ -109,7 +138,7 @@ export async function resetSetting(key: string): Promise<void> {
  */
 export async function loadSettings(): Promise<void> {
   try {
-    const res = await apiGet<SettingsResponse>('/settings');
+    const res = await backend.load();
     overrides = res.values ?? {};
     secretKeys.clear();
     for (const key of res.secretKeys ?? []) secretKeys.add(key);

@@ -3617,6 +3617,55 @@ Note the arrow back. `deployed` is a **flag the panel can clear**, not a one-way
 latch, because a game you can only enter is a game you have to close the pane to
 leave.
 
+### Account data lives on the game server
+
+A node's `app.db` was where an account's skins, level and settings lived, so
+they were whatever the machine you sat at held, and the standalone web client,
+which has no node, had none. The game server now keeps them per account
+(`backend/games_server/hassault_account.py`, migration `_m12_hassault_accounts`,
+cap `hassault_account`), under `/api/hassault/account/*`:
+
+| Route | What it is |
+| --- | --- |
+| `GET`/`PUT /settings` | account-scoped settings only; machine keys and unknown keys are dropped |
+| `GET /progression`, `/drops` | level, XP and drops, all derived from the ledgers |
+| `GET /inventory` | the node's `SkinInstance.to_dict` shape, so clients cannot tell |
+| `POST /claim_drop`, `/equip`, `/tradeup` | the node's three writes, with the same rules |
+| `POST /import` | one machine's local history, once |
+
+**Ledgers, not counters.** Level is a `SUM(xp)` over `hassault_xp_ledger`, which
+server-hosted matches write (`hassault_rooms` calls `grant_match_xp`, keyed per
+session so a retry pays once). A drop inserts its `hassault_drop_claims` row
+before the item exists, so two racing claims both pick the same level and one
+INSERT loses. Every item has a row of provenance in `hassault_item_events`, and a
+`tradable_after` a week out, ready for trading (P9).
+
+**An import is self-reported, so it is kept apart.** The first time a signed-in
+node finds the service (`account_sync.active_account`) it sends its inventory and
+every match's XP. The server inserts the `(account, node)` row first, so a repeat
+is a no-op; skips instance ids it already has (a copied database); marks imported
+items `origin = 'import'` and never tradable; and pre-claims the levels the
+imported XP reached, so no drop is ever paid for a number a node wrote down about
+itself. A marker row in the node's `hassault_exports` stops it asking again.
+
+**The node proxies.** Its `/skins/inventory`, `/equip`, `/drops`, `/claim_drop`
+and `/tradeup` forward to the service when the node is signed in and the server
+has it, and answer from `app.db` otherwise, so a LAN or offline node still works.
+The native client's finishing drop (`_watchdog_game_process`) is skipped for an
+account the server keeps: it was a free roll for a match the node scored itself.
+
+**Settings follow the account.** On startup and every sign-in
+(`server_auth.schedule_enrollment` calls `account_sync.schedule_sync`) the node
+pulls the account's settings into its bag, the server's copy winning, or seeds an
+account that has none from this machine. Each later write to a `hassault.*`
+account key is pushed up in the background (`settings/routes.py` →
+`account_sync.push_setting`); a settings write never waits on a server. Scope
+comes from `settings_schema.py`, so a GPU choice never travels to another
+machine. The native client needs nothing for any of this: it reads the node's
+bag. The standalone web client has no node, so once signed in its settings store
+persists straight to the account (`setSettingsBackend` in core `settings.ts`,
+`bindSettingsToAccount` in `apps/assault-web/src/auth.ts`).
+
 ### Whose rows these are
 
 Every account-keyed row on a node (matches, skins, drop claims, rating, ranked

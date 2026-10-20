@@ -15,8 +15,8 @@ import type { DrillStatus } from '../training';
 import type { DrillStats } from '../training-drill';
 
 const MONO = 'var(--font-mono, ui-monospace, monospace)';
-const ACCENT = 'var(--accent, #6ea8fe)';
-const DIM = 'var(--text-dim, #8b949e)';
+const ACCENT = 'var(--accent)';
+const DIM = 'var(--text-dim)';
 
 /** DESIGN.md's Display step: the drill's name, and the figures it exists to show. */
 const DISPLAY = '19px';
@@ -128,7 +128,7 @@ export function DrillCard({ status, best, onAgain, onFree, onMenu }: DrillCardPr
         style={{
           width: '100%',
           maxWidth: 520,
-          background: 'var(--bg-raised, #1c2128)',
+          background: 'var(--bg-raised)',
           borderTop: `2px solid ${ACCENT}`,
           clipPath: 'polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%)',
           padding: '1.1rem 1.25rem 1rem',
@@ -146,16 +146,14 @@ export function DrillCard({ status, best, onAgain, onFree, onMenu }: DrillCardPr
             <span
               style={{
                 paddingLeft: '0.5rem',
-                borderLeft: '1px solid var(--border-dim, #30363d)',
+                borderLeft: '1px solid var(--border-dim)',
               }}
             >
               {stats.hits} hits
             </span>
           </div>
         </div>
-        {best && (
-          <div style={{ ...label, color: ACCENT, marginTop: '0.25rem' }}>Personal best</div>
-        )}
+        {best && <div style={{ ...label, color: ACCENT, marginTop: '0.25rem' }}>Personal best</div>}
 
         <div
           style={{
@@ -163,15 +161,15 @@ export function DrillCard({ status, best, onAgain, onFree, onMenu }: DrillCardPr
             gridTemplateColumns: 'repeat(3, 1fr)',
             gap: 1,
             marginTop: '0.9rem',
-            background: 'var(--border-dim, #30363d)',
-            border: '1px solid var(--border-dim, #30363d)',
+            background: 'var(--border-dim)',
+            border: '1px solid var(--border-dim)',
           }}
         >
           {tiles(stats).map((tile, i) => (
             <div
               key={tile.label}
               style={{
-                background: 'var(--bg-raised, #1c2128)',
+                background: 'var(--bg-raised)',
                 padding: '0.6rem 0.7rem',
                 animation: `hassaultDrillTileIn 260ms ease-out ${Math.min(i, 5) * STAGGER_MS}ms both`,
               }}

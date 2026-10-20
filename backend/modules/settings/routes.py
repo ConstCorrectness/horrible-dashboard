@@ -103,6 +103,12 @@ def put_setting(key: SettingKey, body: SettingValue) -> SettingValue:
         data = _read()
         data[key] = body.value
         _write(data)
+    if key.startswith("hassault."):
+        # Account-scoped keys follow the account (`hassault/account_sync.py`).
+        # Fire-and-forget: a settings write never waits on a server.
+        from backend.modules.hassault import account_sync
+
+        account_sync.push_setting(key, body.value)
     return body
 
 

@@ -362,6 +362,7 @@ export {
   getSetting,
   isSettingOverridden,
   loadSettings,
+  setSettingsBackend,
   resetSetting,
   setSetting,
   settingsStore,

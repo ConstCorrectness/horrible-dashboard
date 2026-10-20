@@ -13,7 +13,7 @@
  * it just plays unrated (the server marks any room with a guest in it unrated).
  */
 import { useSyncExternalStore } from 'react';
-import { apiUrl, setWsPath } from '@horrible/core';
+import { apiUrl, loadSettings, setSettingsBackend, setWsPath } from '@horrible/core';
 
 const TOKEN_KEY = 'hassault_token';
 
@@ -194,6 +194,47 @@ export async function claimHandle(handle: string): Promise<Account> {
   const result = await post<{ account: Account }>('/account/handle', { handle }, state.token);
   set({ account: result.account });
   return result.account;
+}
+
+/**
+ * Settings follow the account here, because there is no node to keep them: once
+ * a token exists the store persists to the game server's account settings, and
+ * signing out returns it to defaults. Called once at boot.
+ */
+export function bindSettingsToAccount(): void {
+  let bound: string | null | undefined;
+  const apply = () => {
+    const token = state.token;
+    if (token === bound) return;
+    bound = token;
+    if (!token) {
+      setSettingsBackend(null);
+      return;
+    }
+    const url = apiUrl('/api/hassault/account/settings');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const put = async (values: Record<string, unknown>) => {
+      await fetch(url, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ values }),
+        credentials: 'omit',
+      });
+    };
+    setSettingsBackend({
+      load: async () => {
+        const res = await fetch(url, { headers, credentials: 'omit' });
+        if (!res.ok) throw new Error(`settings: ${res.status}`);
+        const body = (await res.json()) as { values?: Record<string, never> };
+        return { values: body.values ?? {}, secretKeys: [] };
+      },
+      put: (key, value) => put({ [key]: value }),
+      remove: (key) => put({ [key]: null }),
+    });
+    void loadSettings();
+  };
+  apply();
+  authStore.subscribe(apply);
 }
 
 export function signOut(): void {

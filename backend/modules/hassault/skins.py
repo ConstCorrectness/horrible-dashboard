@@ -1068,3 +1068,9 @@ class SkinInventoryManager:
 
 
 skin_manager = SkinInventoryManager()
+
+
+def roll_instance() -> SkinInstance:
+    """One weighted-rarity roll, stored nowhere. The game server rolls drops with it."""
+    return skin_manager._roll_instance()
+

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { initBackendOrigin } from '@horrible/core';
 import App from './App';
 import { ensureCallsign } from './hooks/useGuestSession';
-import { applySocketIdentity, refreshAccount } from './auth';
+import { applySocketIdentity, bindSettingsToAccount, refreshAccount } from './auth';
 import './theme.css';
 import './landing.css';
 
@@ -19,6 +19,7 @@ if (customOrigin) {
 // App whenever either changes, so this is only the first value.
 applySocketIdentity(ensureCallsign());
 void refreshAccount();
+bindSettingsToAccount();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
