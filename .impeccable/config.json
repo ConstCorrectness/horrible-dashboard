@@ -269,6 +269,15 @@
         "value": "4)",
         "createdAt": "2026-10-17T18:46:35.486Z",
         "reason": "DESIGN.md Don'ts: a pill is calc(var(--radius-sm) * 4); this is that token expression, not a literal"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "apps/assault-web/src/landing.css"
+        ],
+        "createdAt": "2026-10-20T13:56:09.602Z",
+        "reason": "project instructions: CLAUDE.local.md section 2 asks for subtle background patterns like faint grid overlays on game UI; .armory-host uses a 2.5%-alpha grid"
       }
     ]
   }
