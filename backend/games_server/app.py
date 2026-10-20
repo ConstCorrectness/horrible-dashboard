@@ -850,7 +850,11 @@ async def hassault_ws(websocket: WebSocket) -> None:
             elif event == "duel_cancel":
                 referee.cancel_duel(conn)
                 await conn.send_json(
-                    {"channel": "hassault", "event": "duel_queue", "data": {"queued": False}}
+                    {
+                        "channel": "hassault",
+                        "event": "duel_queue",
+                        "data": {"queued": False},
+                    }
                 )
             elif event == "loadout":
                 chosen = referee.apply_loadout(conn, data)
@@ -995,6 +999,29 @@ def relay_health() -> dict[str, object]:
     return {"status": "ok", "clients": len(_relay_broker._clients)}
 
 
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+
+class WebClientFiles(StaticFiles):
+    """The browser game's build, with caching that survives a deploy.
+
+    Vite names every bundle by its content (`assets/index-<hash>.js`), so those
+    never change and are cached for a year. `index.html` is the one file that
+    names them, and with no `Cache-Control` a browser caches it heuristically
+    (a tenth of its age since `Last-Modified`): a deploy then kept loading the
+    previous bundle names, and the new client did not appear. It is `no-cache`,
+    revalidated on every load by its ETag, so a deploy shows at the next one.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if path.replace(os.sep, "/").startswith("assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif response.media_type == "text/html":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def _mount_web_client() -> None:
     """Serve the standalone browser game (`apps/assault-web` build) at `/`.
 
@@ -1005,12 +1032,10 @@ def _mount_web_client() -> None:
     """
     from pathlib import Path
 
-    from fastapi.staticfiles import StaticFiles
-
     default = Path(__file__).resolve().parents[2] / "apps" / "assault-web" / "dist"
     web_dir = Path(os.environ.get("GAMES_WEB_DIR") or default)
     if (web_dir / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
+        app.mount("/", WebClientFiles(directory=web_dir, html=True), name="web")
 
 
 _mount_web_client()
