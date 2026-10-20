@@ -4,7 +4,7 @@ import { getCachedAssetUrl } from '../models/assetCache';
 
 describe('HorribleAssault Assets Manifest', () => {
   it('has valid manifest version and baseUrl', () => {
-    expect(manifest.version).toBe(3);
+    expect(manifest.version).toBe(4);
     expect(manifest.baseUrl).toMatch(/^https:\/\//);
   });
 

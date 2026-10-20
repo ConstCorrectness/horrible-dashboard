@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v3",
+  "version": 4,
+  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v4",
   "assets": {
     "hassault-arms": {
       "filename": "hassault-arms.glb",
@@ -13,8 +13,8 @@
     "hassault-hands": {
       "filename": "hassault-hands.glb",
       "destination": "apps/web/public/hassault-hands.glb",
-      "sha256": "e1d4df91676952ad9b86acfaa8430396559e573f81b343b2ddf7e8679e230600",
-      "size": 1023452,
+      "sha256": "0d9e3caeacf7d6a0296da44ccc3e061e6fbb430cf44b8fcfb9a27f014df549df",
+      "size": 1061908,
       "category": "arms",
       "description": "Custom rigged first-person tactical sleeved and gloved hands viewmodel"
     },
@@ -85,48 +85,48 @@
     "hassault-weapon-knife": {
       "filename": "hassault-weapon-knife.glb",
       "destination": "apps/web/public/hassault-weapon-knife.glb",
-      "sha256": "18f4f361aceafd6b03d45178e96c042cb476af9df5e47d858ffa47a54ed91c0c",
-      "size": 55412,
+      "sha256": "d6d408ea00cc3bddebb4e8f696de7d195afb8e5c3cff2bf5e979cf1eed0b1750",
+      "size": 364484,
       "category": "weapon",
       "description": "Tactical combat knife melee weapon prop"
     },
     "hassault-weapon-knife-bayonet": {
       "filename": "hassault-weapon-knife-bayonet.glb",
       "destination": "apps/web/public/hassault-weapon-knife-bayonet.glb",
-      "sha256": "17feb313d86328aac19762be697ab915c7110f570ae06df8870b6759630ec48a",
-      "size": 114676,
+      "sha256": "bbf6eb1d3e64ec8a1fc743f920b1a2d198d6cde71c0d9face5b61c028d63d721",
+      "size": 360080,
       "category": "weapon",
       "description": "M9 Bayonet combat knife with Lore PBR finish"
     },
     "hassault-weapon-knife-butterfly": {
       "filename": "hassault-weapon-knife-butterfly.glb",
       "destination": "apps/web/public/hassault-weapon-knife-butterfly.glb",
-      "sha256": "0c77f2b124f28294969501cd57e5ee21a173fe1d95bd21748abf141031e589e5",
-      "size": 85864,
+      "sha256": "1362f91c1156b587fb506d42617a1fe8501ffb48727e556487e4802769393e1a",
+      "size": 233768,
       "category": "weapon",
       "description": "Balisong Butterfly knife with Marble Fade PBR finish"
     },
     "hassault-weapon-knife-huntsman": {
       "filename": "hassault-weapon-knife-huntsman.glb",
       "destination": "apps/web/public/hassault-weapon-knife-huntsman.glb",
-      "sha256": "48c8c672cda40631b42bb2a1346f9537e3813297de668d50ada1f3923f5def17",
-      "size": 120784,
+      "sha256": "ce4c8fdceb7fcbe7c8de014b9923d1c05efb01517c14aa69720c4e92d1c09352",
+      "size": 442808,
       "category": "weapon",
       "description": "Heavy Huntsman survival knife with Case Hardened finish"
     },
     "hassault-weapon-knife-karambit": {
       "filename": "hassault-weapon-knife-karambit.glb",
       "destination": "apps/web/public/hassault-weapon-knife-karambit.glb",
-      "sha256": "f11405bb6de51e938f30626878d4cff440629bf89e73d52e1ddaf09b9d1e4701",
-      "size": 77608,
+      "sha256": "bd6668d391aa5a9e0f3e06544fe137e36fb83a627ca40d1a84adfea195e26542",
+      "size": 217184,
       "category": "weapon",
       "description": "Curved talon Karambit knife with Fade PBR finish"
     },
     "hassault-weapon-knife-skeleton": {
       "filename": "hassault-weapon-knife-skeleton.glb",
       "destination": "apps/web/public/hassault-weapon-knife-skeleton.glb",
-      "sha256": "2ab9fd6d47938d77c4a3fd3205463603b1ef84d53c31074066bab20ec62d7343",
-      "size": 135376,
+      "sha256": "2292f22d6333bce981a1f1c4dbfad89cf451a64426628326d39715c6b6bc0609",
+      "size": 314096,
       "category": "weapon",
       "description": "Skeleton knife with Crimson Web finish and paracord grip"
     },
