@@ -290,6 +290,19 @@ def test_a_valid_token_with_no_publisher_is_idle_not_gone(monkeypatch) -> None:
     assert status["detail"]
 
 
+def test_a_publisher_with_no_frame_yet_is_connecting(monkeypatch) -> None:
+    # The host's WHIP POST was answered and its ICE path never formed. This used
+    # to read as `live` while every viewer watched a black rectangle.
+    _relay_answering(
+        monkeypatch,
+        _FakeResponse(200, {"live": False, "publishing": True, "viewers": 0}),
+    )
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "connecting"
+    assert status["live"] is False
+    assert status["detail"]
+
+
 def test_a_404_means_the_relay_disowned_the_token(monkeypatch) -> None:
     # Exactly the OOM case: the relay is up and has never heard of this token.
     _relay_answering(monkeypatch, _FakeResponse(404))

@@ -26,13 +26,64 @@ import { buildIceConfig } from './signal';
 /** How long to wait for ICE gathering before sending the offer anyway. */
 const GATHER_TIMEOUT_MS = 2500;
 
-function iceConfig(): RTCConfiguration {
-  return buildIceConfig({
+/** How long to wait for the relay's ICE list before publishing without it. */
+const ICE_FETCH_TIMEOUT_MS = 3000;
+
+/**
+ * How long `disconnected` may last before the connection counts as lost.
+ *
+ * `disconnected` is often a blip ICE repairs by itself, so reacting at once
+ * would republish over a path that was about to come back. It can also be
+ * where a dead path settles for good instead of reaching `failed`, so it cannot
+ * be ignored either.
+ */
+export const DISCONNECT_GRACE_MS = 5000;
+
+/**
+ * The relay's own ICE servers for this stream: TURN, usually.
+ *
+ * The node's `network.*` settings rarely carry TURN, and the host is half of
+ * the path — a host behind a strict NAT that offers only host and reflexive
+ * candidates reaches a relay on Fly only when both NATs happen to cooperate,
+ * which is how a public link came to be black "sometimes". Best effort: a relay
+ * that predates this route, or a slow answer, publishes with the settings alone.
+ */
+async function relayIce(ingestUrl: string): Promise<RTCIceServer[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ICE_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${ingestUrl}/ice`, { signal: ctrl.signal });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { iceServers?: unknown };
+    return Array.isArray(body.iceServers) ? (body.iceServers as RTCIceServer[]) : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function iceConfig(extra: RTCIceServer[]): RTCConfiguration {
+  const base = buildIceConfig({
     stunServer: getSetting<string>('network.stunServer'),
     turnUrl: getSetting<string>('network.turnUrl'),
     turnUsername: getSetting<string>('network.turnUsername'),
     turnCredential: getSetting<string>('network.turnCredential'),
   });
+  return { ...base, iceServers: [...base.iceServers, ...extra] };
+}
+
+export interface WhipOptions {
+  /**
+   * Called when a published connection dies: `failed`, or `disconnected` for
+   * longer than `DISCONNECT_GRACE_MS`. Never for a connection this publisher
+   * closed itself, and never for a superseded one.
+   *
+   * Without it a dead host→relay leg was invisible here: WebRTC to a departed
+   * peer does not raise, the relay closed the room, and every viewer sat on
+   * "Paused" over a share the host believed was live.
+   */
+  onLost?: () => void;
 }
 
 async function gathered(pc: RTCPeerConnection): Promise<void> {
@@ -52,6 +103,23 @@ async function gathered(pc: RTCPeerConnection): Promise<void> {
   });
 }
 
+/**
+ * A publish the relay answered and refused, carrying its status.
+ *
+ * The watchdog needs to tell "the relay forgot this link" (404 — retrying only
+ * earns another 404; the host has to mint a new one) from everything worth
+ * another attempt.
+ */
+export class WhipRefused extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'WhipRefused';
+  }
+}
+
 export class WhipPublisher {
   private pc: RTCPeerConnection | null = null;
   private ingestUrl = '';
@@ -63,6 +131,9 @@ export class WhipPublisher {
    * error, over a stream the second call had published perfectly well.
    */
   private generation = 0;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly options: WhipOptions = {}) {}
 
   /** Whether media is currently being pushed to a relay. */
   get live(): boolean {
@@ -85,8 +156,15 @@ export class WhipPublisher {
     this.ingestUrl = ingestUrl;
     const stale = () => gen !== this.generation;
 
-    const pc = new RTCPeerConnection(iceConfig());
+    const extraIce = await relayIce(ingestUrl);
+    if (stale()) return false;
+
+    const pc = new RTCPeerConnection(iceConfig(extraIce));
     this.pc = pc;
+    pc.onconnectionstatechange = () => {
+      if (stale()) return;
+      this.watch(pc.connectionState);
+    };
     // `sendonly`, explicitly. Adding a track without a direction gives
     // `sendrecv`, and the relay would then answer with transceivers it is never
     // going to use — harmless in practice and noise in every SDP dump forever.
@@ -114,10 +192,11 @@ export class WhipPublisher {
 
     if (!res.ok) {
       await this.stop();
-      throw new Error(
+      throw new WhipRefused(
         res.status === 404
           ? 'The relay does not know this link any more. Mint a new one.'
           : `The relay refused the stream (${res.status}).`,
+        res.status,
       );
     }
 
@@ -138,6 +217,7 @@ export class WhipPublisher {
     // An outside stop supersedes any publish still in flight; the stop inside
     // `publish` passes its own generation so it does not supersede itself.
     if (generation === undefined) this.generation += 1;
+    this.clearGrace();
     const pc = this.pc;
     this.pc = null;
     if (!pc) return;
@@ -150,5 +230,27 @@ export class WhipPublisher {
       void fetch(this.ingestUrl, { method: 'DELETE' }).catch(() => {});
       this.ingestUrl = '';
     }
+  }
+
+  /** React to the live connection's state; only ever called for the current one. */
+  private watch(state: RTCPeerConnectionState): void {
+    if (state === 'connected') {
+      this.clearGrace();
+    } else if (state === 'failed') {
+      this.clearGrace();
+      this.options.onLost?.();
+    } else if (state === 'disconnected' && this.graceTimer === null) {
+      const gen = this.generation;
+      this.graceTimer = setTimeout(() => {
+        this.graceTimer = null;
+        if (gen !== this.generation || this.pc?.connectionState === 'connected') return;
+        this.options.onLost?.();
+      }, DISCONNECT_GRACE_MS);
+    }
+  }
+
+  private clearGrace(): void {
+    if (this.graceTimer !== null) clearTimeout(this.graceTimer);
+    this.graceTimer = null;
   }
 }

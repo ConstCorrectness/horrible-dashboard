@@ -73,6 +73,18 @@ const DESTINATION_LABEL: Record<string, string> = {
  *  other is exactly the lie this whole chip was fixed to stop telling. */
 const RELAY_CHIP: Record<RelayState, { label: string; kind: RowKind; title: string }> = {
   live: { label: 'relaying', kind: 'ok', title: 'The relay is receiving this capture.' },
+  connecting: {
+    label: 'connecting',
+    kind: 'idle',
+    title:
+      'The relay accepted the stream and is waiting for the first frame. Viewers are ' +
+      'held on "connecting" until it arrives, rather than shown a black picture.',
+  },
+  reconnecting: {
+    label: 'reconnecting',
+    kind: 'warn',
+    title: 'The connection to the relay dropped and is being re-established.',
+  },
   idle: {
     label: 'no picture',
     kind: 'warn',

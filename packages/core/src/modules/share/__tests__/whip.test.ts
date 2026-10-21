@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // `settings` pulls in the registry and React; only the ICE values are read.
 vi.mock('../../../settings', () => ({ getSetting: () => '' }));
 
-import { WhipPublisher } from '../whip';
+import { DISCONNECT_GRACE_MS, WhipPublisher } from '../whip';
 
 /**
  * Overlapping publishes. A share that starts while a link is being minted
@@ -19,9 +19,16 @@ class FakePeer {
   localDescription: { sdp: string } | null = null;
   closed = false;
   remote: string | null = null;
+  connectionState: RTCPeerConnectionState = 'new';
+  onconnectionstatechange: (() => void) | null = null;
 
-  constructor() {
+  constructor(readonly config: RTCConfiguration) {
     FakePeer.made.push(this);
+  }
+  /** Drive a connection-state change the way the browser would. */
+  become(state: RTCPeerConnectionState) {
+    this.connectionState = state;
+    this.onconnectionstatechange?.();
   }
   addTransceiver() {}
   addEventListener() {}
@@ -105,5 +112,89 @@ describe('WhipPublisher', () => {
     );
     const whip = new WhipPublisher();
     await expect(whip.publish('https://relay/whip/t', stream)).rejects.toThrow(/Mint a new one/);
+  });
+});
+
+/**
+ * The relay leg's watchdog and its ICE. A dead host-to-relay connection used to
+ * be invisible here, and the host's own settings rarely carry TURN.
+ */
+describe('WhipPublisher watchdog', () => {
+  beforeEach(() => {
+    FakePeer.made = [];
+    vi.stubGlobal('RTCPeerConnection', FakePeer);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function relay(ice: unknown = { iceServers: [] }) {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/ice')) return new Response(JSON.stringify(ice), { status: 200 });
+      if (init?.method === 'POST') return new Response('answer', { status: 201 });
+      return new Response(null);
+    });
+    vi.stubGlobal('fetch', fn);
+    return fn;
+  }
+
+  it("adds the relay's TURN to the connection's ICE servers", async () => {
+    const turn = { urls: ['turn:turn.example.com:3478'], username: 'u', credential: 'c' };
+    relay({ iceServers: [turn] });
+    await new WhipPublisher().publish('https://relay/whip/t', stream);
+    expect(FakePeer.made[0].config.iceServers).toContainEqual(turn);
+  });
+
+  it('publishes anyway when the relay has no ICE route', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/ice')
+          ? new Response('', { status: 404 })
+          : new Response('answer', { status: 201 }),
+      ),
+    );
+    await expect(new WhipPublisher().publish('https://relay/whip/t', stream)).resolves.toBe(true);
+  });
+
+  it('reports a failed connection as lost', async () => {
+    relay();
+    const onLost = vi.fn();
+    await new WhipPublisher({ onLost }).publish('https://relay/whip/t', stream);
+    FakePeer.made[0].become('failed');
+    expect(onLost).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a disconnect a grace period before calling it lost', async () => {
+    relay();
+    const onLost = vi.fn();
+    await new WhipPublisher({ onLost }).publish('https://relay/whip/t', stream);
+    vi.useFakeTimers();
+
+    FakePeer.made[0].become('disconnected');
+    vi.advanceTimersByTime(DISCONNECT_GRACE_MS - 1);
+    expect(onLost).not.toHaveBeenCalled();
+    FakePeer.made[0].become('connected');
+    vi.advanceTimersByTime(DISCONNECT_GRACE_MS);
+    expect(onLost).not.toHaveBeenCalled();
+
+    FakePeer.made[0].become('disconnected');
+    vi.advanceTimersByTime(DISCONNECT_GRACE_MS);
+    expect(onLost).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing about a connection it closed itself', async () => {
+    relay();
+    const onLost = vi.fn();
+    const whip = new WhipPublisher({ onLost });
+    await whip.publish('https://relay/whip/t', stream);
+    const old = FakePeer.made[0];
+    await whip.publish('https://relay/whip/t', stream);
+    old.become('failed');
+    await whip.stop();
+    FakePeer.made[1].become('failed');
+    expect(onLost).not.toHaveBeenCalled();
   });
 });

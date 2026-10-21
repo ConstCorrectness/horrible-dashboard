@@ -201,8 +201,13 @@ export function revokeLink(): Promise<ActionResult> {
  * viewer holding the URL is on a dead page and the host should mint a new one,
  * while `unknown` means we could not ask and the link may be perfectly fine.
  * Collapsing them trades one wrong chip for another.
+ *
+ * `connecting` is the relay saying it accepted our stream and has not decoded a
+ * frame from it yet — the host's ICE path is still forming, or never will.
+ * `reconnecting` is never sent by the relay: it is the host's own watchdog
+ * republishing after the connection to the relay died (see `stream.ts`).
  */
-export type RelayState = 'live' | 'idle' | 'gone' | 'unknown';
+export type RelayState = 'live' | 'connecting' | 'reconnecting' | 'idle' | 'gone' | 'unknown';
 
 export interface LinkStatus {
   state: RelayState;

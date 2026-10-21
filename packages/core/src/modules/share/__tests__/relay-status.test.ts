@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LinkStatus } from '../api';
-import { reconcileRelay, type RelayView } from '../relay-status';
+import {
+  judgePublish,
+  reconcileRelay,
+  REPUBLISH_AFTER,
+  republishDelay,
+  type RelayView,
+} from '../relay-status';
 
 /**
  * The chip used to be latched by a successful WHIP POST and never revisited, so
@@ -77,5 +83,50 @@ describe('reconcileRelay', () => {
     const next = reconcileRelay(dead, status({ state: 'unknown', live: false }));
     expect(next.relaying).toBe(false);
     expect(next.relayError).toBe('Mint a new one.');
+  });
+});
+
+/**
+ * The host's watchdog. A WHIP publish is one POST and nothing afterwards
+ * reports the path dying, so the relay's own status decides when to publish
+ * again — and when doing so would be pointless.
+ */
+describe('judgePublish', () => {
+  it('republishes once the relay has lost our publisher for two polls', () => {
+    let verdict = judgePublish(0, 'idle');
+    expect(verdict.republish).toBe(false);
+    verdict = judgePublish(verdict.misses, 'idle');
+    expect(verdict.republish).toBe(true);
+    expect(verdict.misses).toBe(0);
+  });
+
+  it('gives a forming ICE path longer than a missing publisher', () => {
+    let misses = 0;
+    for (let i = 1; i < (REPUBLISH_AFTER.connecting ?? 0); i++) {
+      const v = judgePublish(misses, 'connecting');
+      expect(v.republish).toBe(false);
+      misses = v.misses;
+    }
+    expect(judgePublish(misses, 'connecting').republish).toBe(true);
+  });
+
+  it('resets on a live reading', () => {
+    expect(judgePublish(1, 'live')).toEqual({ misses: 0, republish: false });
+  });
+
+  it('holds the count when it could not ask', () => {
+    // Not being able to reach our own node is not evidence about the relay.
+    expect(judgePublish(1, 'unknown')).toEqual({ misses: 1, republish: false });
+  });
+
+  it('never republishes to a link the relay has forgotten', () => {
+    // That earns a 404 every time; the fix is a new link, which is the host's call.
+    expect(judgePublish(5, 'gone')).toEqual({ misses: 0, republish: false });
+  });
+});
+
+describe('republishDelay', () => {
+  it('backs off 2s, 4s, 8s, then settles at 30s', () => {
+    expect([0, 1, 2, 3, 10].map(republishDelay)).toEqual([2000, 4000, 8000, 30_000, 30_000]);
   });
 });

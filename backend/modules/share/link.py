@@ -334,12 +334,23 @@ async def stream_status(token: str) -> dict[str, Any]:
 
     body = res.json()
     live = bool(body.get("live"))
+    # `publishing` comes from relays that gate `live` on a decoded frame; an older
+    # relay omits it and reads as before. Publishing without receiving is the
+    # host's WHIP POST answered and its ICE path never formed -- the state that
+    # used to show as `live` here while every viewer watched a black rectangle.
+    connecting = not live and bool(body.get("publishing"))
+    if live:
+        state, detail = "live", ""
+    elif connecting:
+        state = "connecting"
+        detail = "The relay accepted the stream but no picture has reached it yet."
+    else:
+        state = "idle"
+        detail = "The relay holds this link but is receiving no picture from it."
     return {
-        "state": "live" if live else "idle",
+        "state": state,
         "live": live,
         "viewers": int(body.get("viewers") or 0),
         "expires_at": float(body.get("expires_at") or 0.0),
-        "detail": ""
-        if live
-        else "The relay holds this link but is receiving no picture from it.",
+        "detail": detail,
     }

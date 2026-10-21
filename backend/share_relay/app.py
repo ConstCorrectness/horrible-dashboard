@@ -118,8 +118,15 @@ async def _room_closed(token: str) -> None:
     await _announce(token, "paused" if registry.get(token) else "ended")
 
 
+async def _room_live(token: str) -> None:
+    # Fired by the room on the publisher's first *decoded frame*, not on the WHIP
+    # answer -- see `fanout.Room.live`. Viewers dial in on this, so sending it any
+    # earlier sends them to a connection with nothing behind it.
+    await _announce(token, "live")
+
+
 registry = Registry(max_viewers_per_stream=_max_viewers())
-rooms = Rooms(on_close=_room_closed)
+rooms = Rooms(on_close=_room_closed, on_live=_room_live)
 chat = Chat()
 restreams = Restreams()
 limiter = MissLimiter()
@@ -219,11 +226,21 @@ class MintOut(BaseModel):
 
 class StatusOut(BaseModel):
     token: str
+    #: The relay is receiving the host's video: a frame has decoded since the
+    #: current publish. Not merely "a WHIP offer was answered".
     live: bool
     viewers: int
     expires_at: float
     has_passphrase: bool
     title: str = ""
+    #: A publisher has negotiated. `publishing and not live` is the state that
+    #: used to be invisible: the host's POST succeeded and its ICE never arrived.
+    publishing: bool = False
+    #: Same as `live`; named for the node, which asks "is the relay receiving?".
+    receiving: bool = False
+    #: Seconds since the host's last real frame. Large on a still screen, which
+    #: is not a fault -- informational only.
+    last_frame_age_s: float | None = None
 
 
 class RestreamIn(BaseModel):
@@ -332,6 +349,9 @@ async def status(token: str) -> StatusOut:
         expires_at=stream.expires_at,
         has_passphrase=bool(stream.passphrase_hash),
         title=stream.title,
+        publishing=bool(room and room.publishing),
+        receiving=bool(room and room.live),
+        last_frame_age_s=room.last_frame_age if room else None,
     )
 
 
@@ -406,13 +426,26 @@ async def whip(token: str, request: Request) -> Response:
     stream = _resolve(token)
     offer = await _sdp_body(request)
     room = rooms.get_or_create(token)
+    await ice.refresh()
     answer = await room.publish(offer, ice.ice_servers())
     stream.live = True
-    # Viewers already on the page -- waiting for the host, or holding a
-    # connection to the publisher this one just replaced -- reconnect on this
-    # rather than on their next poll.
-    await _announce(token, "live")
+    # No `live` announcement here. The answer proves only that the relay agreed
+    # to receive; the room announces `live` itself when the first frame decodes
+    # (`_room_live`), which is the first moment a viewer would see anything.
     return _sdp_response(answer, token, extra={"Location": f"/whip/{token}"})
+
+
+@app.get("/whip/{token}/ice")
+async def whip_ice(token: str) -> dict[str, list[dict]]:
+    """ICE servers for the host's publishing connection, TURN included.
+
+    Gated by the publish token like WHIP itself. The host's own node settings
+    usually carry no TURN at all, and the host is half of the path: a host
+    behind a strict NAT needs a relayed candidate as much as any viewer does.
+    """
+    _resolve(token)
+    await ice.refresh()
+    return {"iceServers": ice.browser_ice()}
 
 
 @app.delete("/whip/{token}")
@@ -451,22 +484,55 @@ async def whep(
         # 409 rather than 404: the link is real and the stream simply has not
         # started. The viewer page polls on this, and answering "no such stream"
         # would make a host who minted a link a minute early look broken.
-        raise HTTPException(status_code=409, detail="stream is not live yet")
+        #
+        # A publisher with no frame yet is a 409 too, worded apart: the host's
+        # connection is still forming, and a viewer let in now would sit on a
+        # black rectangle until it does -- or forever, if it never does.
+        detail = (
+            "the host is connecting"
+            if room is not None and room.publishing
+            else "stream is not live yet"
+        )
+        raise HTTPException(status_code=409, detail=detail)
     if registry.at_capacity(stream):
         raise HTTPException(status_code=503, detail="this stream is full")
 
     offer = await _sdp_body(request)
+    await ice.refresh()
     answer = await room.subscribe(offer, ice.ice_servers())
     stream.viewers = room.viewers
     return _sdp_response(answer, token)
 
 
-def _viewer_response(raw: str, ip: str) -> HTMLResponse:
+@app.get("/whep/{code}/ice")
+async def whep_ice(
+    code: str,
+    request: Request,
+    x_share_passphrase: str = Header(default=""),
+) -> dict[str, list[dict]]:
+    """Fresh ICE servers for a viewer, fetched before every connection attempt.
+
+    The page embeds a set at render time, but a viewer can leave it open longer
+    than a minted TURN credential lives, and every reconnect after that would
+    dial with a dead one. Charged and gated exactly like `/whep`, since it hands
+    out a TURN credential.
+    """
+    ip = _ip(request)
+    stream = _resolve_code(code, ip)
+    if not stream.check_passphrase(x_share_passphrase):
+        limiter.miss(ip)
+        raise HTTPException(status_code=403, detail="passphrase required")
+    await ice.refresh()
+    return {"iceServers": ice.viewer_ice()}
+
+
+async def _viewer_response(raw: str, ip: str) -> HTMLResponse:
     """The page a stranger opens. Self-contained: no CDN, no build step.
 
     A dead code still renders a page rather than a bare 404, because the person
     holding a stale link needs a sentence explaining it, not a status code.
     """
+    await ice.refresh()
     if limiter.blocked(ip):
         return HTMLResponse(viewer.render_limited(), status_code=429)
     stream = registry.get_by_code(raw)
@@ -485,7 +551,7 @@ def _viewer_response(raw: str, ip: str) -> HTMLResponse:
 
 @app.get("/s/{code}", response_class=HTMLResponse)
 async def viewer_page(code: str, request: Request) -> HTMLResponse:
-    return _viewer_response(code, _ip(request))
+    return await _viewer_response(code, _ip(request))
 
 
 @app.post(
@@ -588,4 +654,4 @@ async def short_link(code: str, request: Request) -> HTMLResponse:
     if normalize_code(code) is None:
         # Not a code at all (`/favicon.ico`, a probe). Not a guess, so not charged.
         raise HTTPException(status_code=404, detail="not found")
-    return _viewer_response(code, _ip(request))
+    return await _viewer_response(code, _ip(request))

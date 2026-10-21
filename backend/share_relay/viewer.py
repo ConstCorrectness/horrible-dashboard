@@ -248,6 +248,16 @@ let graceTimer = null;
 // Whether the chat socket is up. While it is, the relay pushes stream state,
 // so waiting for the host can poll slowly instead of every few seconds.
 let chatOpen = false;
+// The ICE servers for the next attempt. Seeded from the page and refreshed
+// before every connect(): a TURN credential is minted with a lifetime, and a
+// page left open past it would otherwise redial with a dead one.
+let iceServers = CFG.iceServers || [];
+// Automatic redials spent on "connected, but no frame". The relay holds and
+// repeats the newest frame, so a working path shows a picture within a second;
+// one that does not is a broken leg worth one or two fresh tries before asking
+// a human to do anything.
+let noFrameRetries = 0;
+const NO_FRAME_RETRIES = 2;
 // The browser refused to autoplay with sound, so the page is playing muted and
 // the unmute button is prompting for the click that will unlock it.
 let autoMuted = false;
@@ -426,6 +436,7 @@ function watchFirstFrame(stale) {
     if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
     diagLine('first frame decoded');
     reconnects = 0;
+    noFrameRetries = 0;
     setPhase('live');
     hideOverlay();
     setStatus('live', true);
@@ -501,6 +512,10 @@ function onStreamEvent(state) {
     return;
   }
   if (state === 'live') {
+    // Already watching: the relay keeps a viewer's video attached across a host
+    // re-publishing, so the picture resumes on its own and redialling would only
+    // blank it for a second.
+    if (gotFrame && pc && pc.connectionState === 'connected') return;
     paused = false;
     reconnects = 0;
     connect();
@@ -553,6 +568,23 @@ fullBtn.addEventListener('click', toggleFullscreen);
 video.addEventListener('dblclick', toggleFullscreen);
 document.addEventListener('fullscreenchange', renderControls);
 
+/** Fetch this link's current ICE servers. Keeps the last set on any failure. */
+async function refreshIce() {
+  // Gated like WHEP, and a wrong passphrase is charged there too. Asking with
+  // none on a protected link would spend a second guess per attempt for nothing.
+  if (CFG.needsPassphrase && !passphrase) return;
+  try {
+    const res = await fetch('/whep/' + CFG.code + '/ice', {
+      headers: { 'X-Share-Passphrase': passphrase },
+    });
+    if (!res.ok) return; // WHEP itself will report a locked or dead link.
+    const body = await res.json();
+    if (Array.isArray(body.iceServers)) iceServers = body.iceServers;
+  } catch (e) {
+    // The relay is waking or unreachable; WHEP will say which.
+  }
+}
+
 async function connect() {
   if (!CFG.found) {
     showOverlay('Link not available', 'This link has expired, been revoked, or never existed. Ask whoever shared it for a new one.', false);
@@ -591,7 +623,9 @@ async function connect() {
   // without touching a pixel of UI that now belongs to somebody else.
   const gen = ++generation;
   gotFrame = false;
-  const self = new RTCPeerConnection({ iceServers: CFG.iceServers });
+  await refreshIce();
+  if (gen !== generation) return;
+  const self = new RTCPeerConnection({ iceServers });
   pc = self;
   const stale = () => gen !== generation;
   const abandon = () => { try { self.close(); } catch (e) {} };
@@ -727,8 +761,17 @@ async function connect() {
   }
   if (res.status === 409) {
     abandon();
+    let detail = '';
+    try { detail = (await res.json()).detail || ''; } catch (e) {}
+    if (stale()) return;
     setStatus('waiting', false);
-    showOverlay('Not started yet', 'The link works — the host has not started sharing. Video appears here the moment they do.', false);
+    if (detail.indexOf('connecting') >= 0) {
+      // The host has published but no frame has reached the relay yet. The
+      // relay pushes `live` the moment one does.
+      showOverlay('The host is connecting', 'Their stream reached the relay and the picture is on its way.', false);
+    } else {
+      showOverlay('Not started yet', 'The link works — the host has not started sharing. Video appears here the moment they do.', false);
+    }
     // With the chat socket up the relay pushes `live` the instant the host
     // publishes, so this poll is only a backstop and can be slow. Without it,
     // polling is the only way to find out.
@@ -799,6 +842,16 @@ async function connect() {
     // it disarmed itself on the evidence of the thing that was not the problem.
     if (gotFrame) return;
     const connected = self.connectionState === 'connected';
+    if (connected && noFrameRetries < NO_FRAME_RETRIES) {
+      // The relay re-sends its newest frame at least once a second, so a
+      // connected path with nothing on it is a broken leg, not a still screen.
+      // A fresh connection usually fixes it; only after that does it need a human.
+      noFrameRetries += 1;
+      diagLine('connected but no frame; redialling (' + noFrameRetries + '/' + NO_FRAME_RETRIES + ')');
+      void sampleStats('no-frame');
+      scheduleReconnect('Connected, but no picture arrived. Trying again.');
+      return;
+    }
     diagLine((connected ? 'connected but no frame' : 'no path') +
       ' after ' + (CONNECT_TIMEOUT_MS / 1000) + 's; state=' + self.connectionState);
     void sampleStats('timeout');
@@ -806,8 +859,9 @@ async function connect() {
     showOverlay(
       connected ? 'Connected, but no video' : 'Could not reach the stream',
       connected
-        ? 'The connection is up and the relay is sending nothing. The host is ' +
-          'probably no longer sharing — ask them to start again.'
+        ? 'The connection is up but no picture arrived, even after redialling. ' +
+          'Press Retry; if it persists, the network between you and the relay is ' +
+          'dropping video — the diagnostics below say where.'
         : 'The relay answered but no connection formed — usually a restrictive ' +
           'network on one end. Try another network, or ask the host to enable TURN ' +
           'for viewers.',
@@ -1028,9 +1082,10 @@ def render(
         "needsPassphrase": needs_passphrase,
         "live": live,
         # From the relay's own config, so the two ends of the connection agree.
-        # STUN only unless the operator opts in: a public viewer is a stranger,
-        # and a TURN credential in a page anyone can open makes the operator's
-        # bandwidth free for the whole internet. See `ice.viewer_ice`.
+        # Minted (expiring) TURN is included; a static TURN credential only when
+        # the operator opts in, since a page anyone can open would make that
+        # bandwidth free for the whole internet. See `ice.viewer_ice`. The page
+        # refreshes this before every attempt via `/whep/<code>/ice`.
         "iceServers": ice.viewer_ice(),
     }
     return _page(body, _SCRIPT, config, title=safe_title)

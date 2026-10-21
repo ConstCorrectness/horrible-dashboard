@@ -20,8 +20,8 @@ import { SharePublisher } from './rtc';
 import { parseSignal } from './signal';
 import { getShareSnapshot, onShareSignal, startSessionAndWait, subscribeShare } from './ws';
 import { getLink, getLinkStatus, type LinkStatus, type RelayState } from './api';
-import { reconcileRelay } from './relay-status';
-import { WhipPublisher } from './whip';
+import { judgePublish, reconcileRelay, republishDelay } from './relay-status';
+import { WhipPublisher, WhipRefused } from './whip';
 
 function lookup(viewId: string): ViewShareInfo | undefined {
   const decl = registry.view(viewId);
@@ -126,7 +126,46 @@ let stopCaptureListener: (() => void) | null = null;
 let unsubscribeParticipants: (() => void) | null = null;
 let unsubscribeSignal: (() => void) | null = null;
 let unsubscribeMixer: (() => void) | null = null;
-const whip = new WhipPublisher();
+const whip = new WhipPublisher({
+  onLost: () => scheduleRepublish('The connection to the relay dropped. Reconnecting…'),
+});
+
+/**
+ * The relay leg's own watchdog.
+ *
+ * A WHIP publish is one POST, and nothing after it reports the path dying:
+ * the relay closes the room, its viewers sit on "Paused", and this side went on
+ * saying `relaying`. So two things trigger a republish — the peer connection
+ * itself failing (`onLost`), and the relay's status saying our stream is not
+ * reaching it (`judgePublish`) — and both go through one timer, so they cannot
+ * stack two publishes on top of each other.
+ */
+let republishTimer: ReturnType<typeof setTimeout> | null = null;
+let republishAttempt = 0;
+let publishMisses = 0;
+
+function scheduleRepublish(reason: string): void {
+  if (!state.live || !outgoing || republishTimer !== null) return;
+  const delay = republishDelay(republishAttempt);
+  republishAttempt += 1;
+  publishMisses = 0;
+  state.relaying = false;
+  state.relayState = 'reconnecting';
+  state.relayError = reason;
+  emit();
+  republishTimer = setTimeout(() => {
+    republishTimer = null;
+    if (!state.live || !outgoing) return;
+    void startRelay(outgoing);
+  }, delay);
+}
+
+function stopRepublish(): void {
+  if (republishTimer !== null) clearTimeout(republishTimer);
+  republishTimer = null;
+  republishAttempt = 0;
+  publishMisses = 0;
+}
 
 /**
  * Push the outgoing stream to the relay, if a public link is live.
@@ -143,6 +182,12 @@ const whip = new WhipPublisher();
  * See `attachRelay`.
  */
 async function startRelay(outgoing: MediaStream): Promise<void> {
+  // A pending retry is superseded by this attempt (a fresh mint calls in here
+  // directly); leaving it armed would publish a second time on top of this one.
+  if (republishTimer !== null) {
+    clearTimeout(republishTimer);
+    republishTimer = null;
+  }
   let ingest = '';
   try {
     ingest = (await getLink()).ingest_url;
@@ -155,9 +200,12 @@ async function startRelay(outgoing: MediaStream): Promise<void> {
   try {
     // Superseded by a newer publish (or a stop): that call owns the outcome.
     if (!(await whip.publish(ingest, outgoing))) return;
-    state.relaying = true;
-    state.relayState = 'live';
+    // `connecting`, not `live`: the relay answering our offer says nothing about
+    // whether a frame will ever cross. The poll promotes it once one has.
+    state.relaying = false;
+    state.relayState = 'connecting';
     state.relayError = null;
+    publishMisses = 0;
     // Only now: polling before there is anything to publish would report `idle`
     // over a link that is merely waiting for us, which reads as a fault.
     startRelayPoll();
@@ -165,6 +213,14 @@ async function startRelay(outgoing: MediaStream): Promise<void> {
     state.relaying = false;
     state.relayState = 'unknown';
     state.relayError = (err as Error).message;
+    emit();
+    // A relay that forgot the link answers every retry with the same 404; that
+    // needs a new link, which is the host's decision. Anything else — the relay
+    // waking from scale-to-zero, a network blip — is worth another attempt.
+    if (!(err instanceof WhipRefused && err.status === 404)) {
+      scheduleRepublish(`${(err as Error).message} Retrying…`);
+    }
+    return;
   }
   emit();
 }
@@ -222,9 +278,25 @@ async function pollRelay(): Promise<void> {
     return;
   }
   if (!state.live) return; // The stream stopped while we were asking.
+  // A republish is already scheduled; its chip says so, and a poll of the
+  // connection it is about to replace has nothing to add.
+  if (republishTimer !== null) return;
 
   Object.assign(state, reconcileRelay(state, status));
+  if (status.state === 'live') republishAttempt = 0;
   emit();
+
+  if (whip.live) {
+    const verdict = judgePublish(publishMisses, status.state);
+    publishMisses = verdict.misses;
+    if (verdict.republish) {
+      scheduleRepublish(
+        status.state === 'connecting'
+          ? 'No picture has reached the relay. Reconnecting…'
+          : 'The relay lost the stream. Reconnecting…',
+      );
+    }
+  }
 }
 
 function startRelayPoll(): void {
@@ -386,6 +458,7 @@ export async function stopStream(): Promise<void> {
   unsubscribeMixer?.();
   unsubscribeMixer = null;
   stopRelayPoll();
+  stopRepublish();
   // Only the capture's own tracks are stopped. The mixer's bus track belongs to
   // the shared `AudioContext` and is reused by the next stream; stopping it would
   // leave the Viewers bus permanently silent with nothing on screen to explain it.

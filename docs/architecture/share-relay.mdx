@@ -298,6 +298,23 @@ anyone holding a link. It lives in `[env]` and not in `fly secrets` because it i
 a flag, not the credential — `SHARE_RELAY_TURN_URL/USER/PASS` stay secrets.
 Rotate them if the exposure ever stops being acceptable.
 
+**Cloudflare TURN removes that trade, and is the preferred source.** With
+`CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` set (as `fly secrets`),
+`ice.refresh()` mints a credential with a 24-hour lifetime, caches it for the
+whole process and re-mints when less than 12 hours remain. A leaked one expires,
+so it goes to viewers without the opt-in. Viewers fetch a fresh set from
+`GET /whep/<code>/ice` before every attempt (passphrase-gated and charged like
+WHEP), and the host fetches one from `GET /whip/<token>/ice` before publishing,
+since the host's own node settings rarely carry TURN and the host is half the
+path. Port-53 URLs are dropped for browsers, which block that port. aiortc uses
+only the first TURN URL it understands, so the relay chooses plain UDP for itself.
+A failed mint falls back to the static server, then to STUN only, and is retried
+after a minute rather than once per connection.
+
+Before this, the deployed relay had no TURN at all (`/health` said
+`"turn": false`). Fly routes no inbound UDP to aiortc's ephemeral ports, so both
+legs relied on hole-punching and worked or not depending on each end's NAT.
+
 A viewer that still cannot form a path now **says so** rather than showing black
 — see below.
 
@@ -565,7 +582,8 @@ Configuration is env-only, like everything else here:
 | `SHARE_RELAY_STUN` | `stun.l.google.com:19302` | `host:port`; the scheme is added. Empty disables STUN. |
 | `SHARE_RELAY_TURN_URL` | — | Full URL (`turn:host:3478`) |
 | `SHARE_RELAY_TURN_USER` / `_PASS` | — | Both required; an incomplete TURN entry is dropped rather than offered, because a malformed entry can take the whole configuration down with it |
-| `SHARE_RELAY_TURN_FOR_VIEWERS` | off (**on** in `fly.share.toml`) | Whether the **viewer page** also gets the TURN credential |
+| `SHARE_RELAY_TURN_FOR_VIEWERS` | off (**on** in `fly.share.toml`) | Whether the **viewer page** also gets the *static* TURN credential |
+| `CLOUDFLARE_TURN_KEY_ID` / `_API_TOKEN` | — | Mint expiring TURN credentials from Cloudflare; preferred over the static server and always given to viewers |
 
 The semantics match `buildIceConfig` on the frontend and `_ice_servers` in
 `network/transport/webrtc.py` — STUN is a bare `host:port`, TURN is a full URL.
@@ -577,8 +595,37 @@ oversight: a TURN credential in a page anyone can open makes the operator's
 relay bandwidth free for the whole internet, while a viewer behind a symmetric
 NAT cannot connect without one. The decision belongs to whoever runs the relay.
 
-`/health` reports whether STUN and TURN are configured — presence only, never the
-credential — so "is ICE set up" is answerable without reproducing the failure.
+`/health` reports whether STUN and TURN are configured, and `turn_source`
+(`cloudflare`, `static` or null). It reports presence only, never the credential,
+so "is ICE set up" can be answered without reproducing the failure.
+
+## A still screen must still reach the viewer
+
+Chrome sends a desktop that isn't changing at close to zero frames per second.
+Three things in the media path assumed a steady flow of frames, and each one
+turned a still screen into a black viewer:
+
+- **aiortc's jitter buffer** releases video frame N only when frame N+1 starts
+  arriving, and ignores the RTP marker bit. The newest frame of a still screen
+  stayed undecoded in the relay. `jitter.py` completes a frame on its marked
+  packet; that is installed by `fanout._aiortc()` before any receiver exists.
+- **Per-viewer `MediaRelay` proxies** feed an encoder only on a *new* frame. A
+  late joiner got nothing, and a lost keyframe was never resent, because aiortc's
+  PLI response only flags the *next* encode. `frames.py` holds each room's newest
+  frame. A new viewer starts on it, and `repeat_while_idle` re-publishes a copy
+  about once a second while someone is watching. Timestamps come from the room's
+  own clock, so each viewer's sequence only ever increases.
+- **"Live" was claimed on the WHIP answer.** A room is now live only once its
+  first frame has decoded. `/whep` answers 409 "the host is connecting" until
+  then, `live` is pushed to viewers at that moment, and `/streams/<token>` adds
+  `publishing`, `receiving` and `last_frame_age_s`. The host's node maps
+  "publishing but not receiving" to a `connecting` state, and its WHIP watchdog
+  (`relay-status.ts` `judgePublish`, `whip.ts` `onLost`) republishes with backoff
+  when the leg stays dead.
+
+`test_share_relay_frames.py` and `test_share_relay_jitter.py` each keep a control
+case asserting aiortc's own behaviour, so a library change that makes either
+workaround unnecessary shows up as a failure rather than going unnoticed.
 
 ### There is no UDP service block
 

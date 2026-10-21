@@ -43,3 +43,52 @@ export function reconcileRelay(prev: RelayView, status: LinkStatus): RelayView {
     relayError: live ? null : status.detail || null,
   };
 }
+
+/**
+ * Consecutive polls a state may persist before the host republishes.
+ *
+ * `idle` means the relay has no publisher at all — our connection is gone and
+ * nothing will bring it back — so two readings (one to rule out a race with a
+ * publish in flight) are enough. `connecting` means the relay holds our offer
+ * and no frame has arrived; ICE through TURN can legitimately take several
+ * seconds, so it gets four polls — the first lands right after the POST, so
+ * that is ~15s — before the path is written off.
+ */
+export const REPUBLISH_AFTER: Partial<Record<RelayState, number>> = {
+  idle: 2,
+  connecting: 4,
+};
+
+export interface PublishVerdict {
+  /** Consecutive polls that said our stream is not reaching the relay. */
+  misses: number;
+  republish: boolean;
+}
+
+/**
+ * Fold one status reading into the decision to republish.
+ *
+ * Only the two states that mean "we are publishing and the relay is not
+ * receiving" count. `unknown` keeps the count where it was — not being able to
+ * ask is not evidence — and `gone` resets it, because republishing to a token
+ * the relay has forgotten only earns a 404; that one needs a new link, which is
+ * the host's call.
+ */
+export function judgePublish(misses: number, state: RelayState): PublishVerdict {
+  if (state === 'unknown') return { misses, republish: false };
+  const limit = REPUBLISH_AFTER[state];
+  if (limit === undefined) return { misses: 0, republish: false };
+  const next = misses + 1;
+  return next >= limit ? { misses: 0, republish: true } : { misses: next, republish: false };
+}
+
+/**
+ * How long to wait before republishing attempt `attempt` (0-based).
+ *
+ * 2s, 4s, 8s, then every 30s. Fast at first because the usual cause is a blip
+ * that is already over; slow after that because a relay that keeps refusing us
+ * is not fixed by asking it more often.
+ */
+export function republishDelay(attempt: number): number {
+  return attempt < 3 ? 2000 * 2 ** attempt : 30_000;
+}

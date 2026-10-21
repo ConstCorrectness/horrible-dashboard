@@ -19,6 +19,8 @@ other.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -67,6 +69,23 @@ async def publisher_offer():
     pc.addTrack(VideoStreamTrack())
     await pc.setLocalDescription(await pc.createOffer())
     return pc, pc.localDescription.sdp
+
+
+def _frame():
+    """A small decoded video frame, as the publisher's pump would deliver."""
+    from av import VideoFrame
+
+    return VideoFrame(64, 48, "yuv420p")
+
+
+async def publish_live(client, token: str, offer: str) -> None:
+    """WHIP, then the first decoded frame -- the point at which a room is live.
+
+    ICE never completes between two in-process peers, so the frame the pump
+    would have delivered is handed to the room the way the pump hands it.
+    """
+    assert (await client.post(f"/whip/{token}", content=offer)).status_code == 201
+    relay_app.rooms.get(token)._frame_arrived(_frame())
 
 
 async def viewer_offer():
@@ -122,11 +141,26 @@ async def test_whip_then_whep_pairs_offers_with_answers(client) -> None:
         # never heard of the token.
         assert "fly-replay-src" not in res.headers
 
+        # Negotiated is not live. ICE never completes in this test, so no frame
+        # arrives -- exactly the state that used to be reported as live and sent
+        # viewers to a black rectangle.
         status = (await client.get(f"/streams/{token}")).json()
-        assert status["live"] is True
+        assert status["live"] is False
+        assert status["publishing"] is True
+        assert status["receiving"] is False
 
         view, view_sdp = await viewer_offer()
         try:
+            waiting = await client.post(f"/whep/{code}", content=view_sdp)
+            assert waiting.status_code == 409
+            assert "connecting" in waiting.json()["detail"]
+
+            # Stand in for the first decoded frame. The room is live from here.
+            relay_app.rooms.get(token)._frame_arrived(_frame())
+            status = (await client.get(f"/streams/{token}")).json()
+            assert status["live"] is True
+            assert status["receiving"] is True
+
             played = await client.post(f"/whep/{code}", content=view_sdp)
             assert played.status_code == 201
             # The answer must actually carry the video the viewer asked for.
@@ -286,7 +320,7 @@ async def test_a_passphrase_is_required_before_any_sdp_is_processed(client) -> N
     token, code = body["token"], body["code"]
     pub, offer = await publisher_offer()
     try:
-        await client.post(f"/whip/{token}", content=offer)
+        await publish_live(client, token, offer)
         view, sdp = await viewer_offer()
         try:
             denied = await client.post(f"/whep/{code}", content=sdp)
@@ -335,7 +369,7 @@ async def test_a_full_stream_is_refused_rather_than_degraded(
     token, code = body["token"], body["code"]
     pub, offer = await publisher_offer()
     try:
-        await client.post(f"/whip/{token}", content=offer)
+        await publish_live(client, token, offer)
         view, sdp = await viewer_offer()
         try:
             assert (await client.post(f"/whep/{code}", content=sdp)).status_code == 503
@@ -460,7 +494,7 @@ async def test_a_relay_without_ffmpeg_says_so_rather_than_500ing(
     token = (await mint(client))["token"]
     pub, offer = await publisher_offer()
     try:
-        await client.post(f"/whip/{token}", content=offer)
+        await publish_live(client, token, offer)
         res = await client.post(
             f"/restream/{token}", json={"target": "rtmp://x/app/k", "label": "Twitch"}
         )
@@ -570,6 +604,15 @@ async def test_publishing_tells_viewers_the_stream_is_live(client, watcher) -> N
     pub, offer = await publisher_offer()
     try:
         assert (await client.post(f"/whip/{token}", content=offer)).status_code == 201
+        # The answer alone announces nothing: viewers sent to a publisher whose
+        # ICE never arrived watched a black rectangle under a "live" banner.
+        assert _stream_events(sock) == []
+
+        relay_app.rooms.get(token)._frame_arrived(_frame())
+        relay_app.rooms.get(token)._frame_arrived(_frame())
+        for _ in range(20):
+            await asyncio.sleep(0)
+        # Once, on the first frame -- not once per frame.
         assert _stream_events(sock) == ["live"]
     finally:
         await pub.close()
@@ -621,3 +664,28 @@ async def test_revoking_an_unpublished_link_still_says_it_ended(
     await client.delete(f"/streams/{token}")
     assert _stream_events(sock) == ["ended"]
     assert sock.closed_with == 4404
+
+
+# --- ICE for each end ----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_host_fetches_ice_with_the_publish_token_only(client) -> None:
+    body = await mint(client)
+    res = await client.get(f"/whip/{body['token']}/ice")
+    assert res.status_code == 200
+    assert isinstance(res.json()["iceServers"], list)
+    # The watch code must open nothing on the publish side, here as on WHIP.
+    assert (await client.get(f"/whip/{body['code']}/ice")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_viewer_ice_is_gated_by_the_passphrase(client) -> None:
+    """It can carry a TURN credential, so it is guarded exactly like WHEP."""
+    code = (await mint(client, passphrase="open sesame"))["code"]
+    assert (await client.get(f"/whep/{code}/ice")).status_code == 403
+    allowed = await client.get(
+        f"/whep/{code}/ice", headers={"X-Share-Passphrase": "open sesame"}
+    )
+    assert allowed.status_code == 200
+    assert isinstance(allowed.json()["iceServers"], list)

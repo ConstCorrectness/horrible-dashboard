@@ -8,6 +8,8 @@ where a host candidate is the right answer -- and never in production.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from backend.share_relay import ice
@@ -21,8 +23,13 @@ def clean_env(monkeypatch):
         "SHARE_RELAY_TURN_USER",
         "SHARE_RELAY_TURN_PASS",
         "SHARE_RELAY_TURN_FOR_VIEWERS",
+        "CLOUDFLARE_TURN_KEY_ID",
+        "CLOUDFLARE_TURN_API_TOKEN",
     ):
         monkeypatch.delenv(name, raising=False)
+    ice.reset_cache()
+    yield
+    ice.reset_cache()
 
 
 def test_stun_is_on_by_default() -> None:
@@ -104,3 +111,160 @@ def test_incomplete_turn_is_dropped_rather_than_offered(monkeypatch) -> None:
     servers = ice.ice_servers()
     assert len(servers) == 1
     assert servers[0].urls == [f"stun:{ice.DEFAULT_STUN}"]
+
+
+# --- Cloudflare TURN ----------------------------------------------------------
+#
+# The live relay reported `turn: false`, and Fly routes no inbound UDP to the
+# ports aiortc gathers on -- so a STUN-only relay connected or not depending on
+# the other end's NAT. These pin the minted-credential path that fixes it.
+
+CF_RESPONSE = {
+    "iceServers": [
+        {"urls": ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"]},
+        {
+            "urls": [
+                "turn:turn.cloudflare.com:3478?transport=udp",
+                "turn:turn.cloudflare.com:53?transport=udp",
+                "turn:turn.cloudflare.com:3478?transport=tcp",
+                "turns:turn.cloudflare.com:5349?transport=tcp",
+                "turns:turn.cloudflare.com:443?transport=tcp",
+            ],
+            "username": "minted-user",
+            "credential": "minted-secret",
+        },
+    ]
+}
+
+
+def cloudflare(monkeypatch, handler):
+    """Configure Cloudflare TURN and return a client routed to `handler`."""
+    import httpx
+
+    monkeypatch.setenv("CLOUDFLARE_TURN_KEY_ID", "key-id")
+    monkeypatch.setenv("CLOUDFLARE_TURN_API_TOKEN", "api-token")
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.anyio
+async def test_cloudflare_credentials_are_minted_and_cached(monkeypatch) -> None:
+    import json
+
+    import httpx
+
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(201, json=CF_RESPONSE)
+
+    async with cloudflare(monkeypatch, handler) as client:
+        await ice.refresh(client)
+        await ice.refresh(client)
+
+    assert len(calls) == 1, (
+        "a fresh credential must be reused, not re-minted per viewer"
+    )
+    req = calls[0]
+    assert str(req.url).endswith("/turn/keys/key-id/credentials/generate-ice-servers")
+    assert req.headers["Authorization"] == "Bearer api-token"
+    assert json.loads(req.content)["ttl"] == ice.CLOUDFLARE_TTL_S
+    assert ice.turn_source() == "cloudflare"
+
+
+@pytest.mark.anyio
+async def test_cloudflare_turn_reaches_viewers_without_the_static_opt_in(
+    monkeypatch,
+) -> None:
+    """It expires, so publishing it in a public page costs a bounded amount --
+    unlike a static credential, which still needs SHARE_RELAY_TURN_FOR_VIEWERS."""
+    import httpx
+
+    async with cloudflare(
+        monkeypatch, lambda r: httpx.Response(201, json=CF_RESPONSE)
+    ) as c:
+        await ice.refresh(c)
+
+    turn = [s for s in ice.viewer_ice() if "username" in s]
+    assert len(turn) == 1
+    assert turn[0]["credential"] == "minted-secret"
+    # Browsers block port 53; with no trickle channel a candidate there is only
+    # a timeout in front of every connection.
+    assert not any(re.search(r":53(\?|$)", url) for url in turn[0]["urls"])
+    # ...and only port 53: the TLS URL on 5349 must survive the filter.
+    assert "turns:turn.cloudflare.com:5349?transport=tcp" in turn[0]["urls"]
+
+
+@pytest.mark.anyio
+async def test_the_relay_itself_uses_udp_turn_first(monkeypatch) -> None:
+    pytest.importorskip("aiortc", reason="needs the `webrtc` extra")
+    import httpx
+
+    async with cloudflare(
+        monkeypatch, lambda r: httpx.Response(201, json=CF_RESPONSE)
+    ) as c:
+        await ice.refresh(c)
+
+    servers = ice.ice_servers()
+    turn = [s for s in servers if s.username]
+    # aiortc uses only the first TURN URL it understands, so we choose it.
+    assert turn[0].urls == ["turn:turn.cloudflare.com:3478?transport=udp"]
+
+
+@pytest.mark.anyio
+async def test_a_failed_mint_falls_back_and_waits_before_retrying(monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setenv("SHARE_RELAY_TURN_URL", "turn:static.example.com:3478")
+    monkeypatch.setenv("SHARE_RELAY_TURN_USER", "u")
+    monkeypatch.setenv("SHARE_RELAY_TURN_PASS", "p")
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500)
+
+    async with cloudflare(monkeypatch, handler) as client:
+        await ice.refresh(client)
+        await ice.refresh(client)
+
+    assert calls == 1, "a failing API must not be hammered once per connection"
+    assert ice.turn_source() == "static"
+
+
+@pytest.mark.anyio
+async def test_a_credential_near_expiry_is_reminted(monkeypatch) -> None:
+    import httpx
+
+    now = [1000.0]
+    monkeypatch.setattr(ice, "_now", lambda: now[0])
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(201, json=CF_RESPONSE)
+
+    async with cloudflare(monkeypatch, handler) as client:
+        await ice.refresh(client)
+        now[0] += ice.CLOUDFLARE_TTL_S - ice.CLOUDFLARE_REFRESH_BELOW_S + 1
+        await ice.refresh(client)
+
+    assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_health_names_the_source_never_the_minted_secret(monkeypatch) -> None:
+    import httpx
+
+    async with cloudflare(
+        monkeypatch, lambda r: httpx.Response(201, json=CF_RESPONSE)
+    ) as c:
+        await ice.refresh(c)
+
+    described = ice.describe()
+    assert described["turn"] is True
+    assert described["turn_source"] == "cloudflare"
+    assert "minted-secret" not in str(described)
+    assert "minted-user" not in str(described)

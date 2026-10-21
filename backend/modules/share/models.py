@@ -201,6 +201,8 @@ class LinkStatusOut(BaseModel):
     `state` carries four values and the pane must render all four:
 
     - `live`   -- the relay is holding published media for this token.
+    - `connecting` -- a publisher negotiated but no frame has reached the
+                  relay yet: the host's ICE path is still forming, or never will.
     - `idle`   -- the token is valid but no picture is arriving.
     - `gone`   -- the relay answered and does not have this token. Everyone
                   holding the URL is looking at a dead page; mint a new one.

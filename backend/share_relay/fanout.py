@@ -44,6 +44,20 @@ right up until the process dies:
 
 Audio stays buffered; see `_buffered_for`.
 
+**Viewers do not read the relay directly for video.** The video pump writes each
+decoded frame into the room's `FrameHolder` and every viewer reads that, newest
+frame only -- which is rule 2 with one slot for the whole room. The holder also
+repeats the last frame when the host's still screen stops producing new ones,
+because a viewer whose encoder is never handed a frame sees black: see
+`frames.py` for the two ways that happened. The RTMP restream still takes a
+plain unbuffered relay proxy (`proxy`), since ffmpeg times its input by count.
+
+**A room is live once a frame has arrived, not once SDP was exchanged.** The
+WHIP answer proves the relay agreed to receive; it says nothing about whether the
+host's ICE ever reached it. Announcing `live` on the answer sent every viewer to
+a connected peer connection with nothing behind it -- a black rectangle that
+blamed the host. `on_live` fires from the pump on the first decoded frame.
+
 `aiortc` is imported **lazily**, the same rule every optional extra in this repo
 follows. The relay is deployed as its own image where it is always present, but
 the node's test suite imports this module to check the token and room logic, and
@@ -55,8 +69,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+from backend.share_relay import jitter
+from backend.share_relay.frames import FrameHolder, held_track, repeat_while_idle
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +82,10 @@ logger = logging.getLogger(__name__)
 #: anyone asks it to -- a host whose network dropped closes it from inside
 #: aiortc's own state handler -- so this is the one place every exit passes.
 OnClose = Callable[["Room"], Awaitable[None]]
+
+#: Told when a publisher's first video frame decodes -- the moment the room is
+#: worth connecting to. Fires once per publish.
+OnLive = Callable[["Room"], Awaitable[None]]
 
 #: How long to wait for one peer connection to shut down before abandoning it.
 #:
@@ -109,12 +131,14 @@ def _aiortc() -> Any:
     try:
         import aiortc  # noqa: PLC0415 — lazy by design, see the module docstring
         import aiortc.contrib.media  # noqa: PLC0415
-
-        return aiortc
     except ImportError as exc:  # pragma: no cover - depends on the environment
         raise RuntimeError(
             "The share relay needs aiortc. Install it with `uv sync --extra webrtc`."
         ) from exc
+    # Before any receiver exists: without it the newest frame of a still screen
+    # is never decoded. See `jitter.py`.
+    jitter.install()
+    return aiortc
 
 
 class Room:
@@ -126,9 +150,23 @@ class Room:
     `Registry` is what knows whether the *link* is still good.
     """
 
-    def __init__(self, token: str, on_close: OnClose | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        on_close: OnClose | None = None,
+        on_live: OnLive | None = None,
+    ) -> None:
         self.token = token
         self._on_close = on_close
+        self._on_live = on_live
+        #: The newest video frame, shared by every viewer. Room-scoped rather
+        #: than publish-scoped, so viewers keep the last picture across a host
+        #: re-publishing instead of being dropped and redialling.
+        self._frames = FrameHolder()
+        #: Re-publishes the held frame while the host's screen is still.
+        self._repeater: Any = None
+        #: Fire-and-forget callbacks, held so they cannot be collected mid-flight.
+        self._side_tasks: set[Any] = set()
         self._relay: Any = None
         self._publisher: Any = None
         #: The tracks the host is sending, by kind. A screen share is one video
@@ -164,6 +202,8 @@ class Room:
 
         async with self._lock:
             await self._close_publisher()
+            # Live again only when *this* publisher's first frame arrives.
+            self._frames.reset_live()
             self._relay = MediaRelay()
             config = aiortc.RTCConfiguration(iceServers=ice_servers or [])
             pc = aiortc.RTCPeerConnection(config)
@@ -217,11 +257,16 @@ class Room:
             return
 
         proxy = self._relay.subscribe(track, buffered=False)
+        video = track.kind == "video"
+        if video:
+            self._start_repeater()
 
         async def _drain() -> None:
             try:
                 while True:
-                    await proxy.recv()
+                    frame = await proxy.recv()
+                    if video:
+                        self._frame_arrived(frame)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -239,6 +284,43 @@ class Room:
     def _stop_pumps(self) -> None:
         for kind in list(self._pumps):
             self._stop_pump(kind)
+        self._stop_repeater()
+
+    def _start_repeater(self) -> None:
+        if self._repeater is not None:
+            return
+        # Only worth a frame copy when somebody is encoding it.
+        self._repeater = asyncio.ensure_future(
+            repeat_while_idle(self._frames, lambda: bool(self._subscribers))
+        )
+
+    def _stop_repeater(self) -> None:
+        if self._repeater is not None:
+            self._repeater.cancel()
+            self._repeater = None
+
+    def _frame_arrived(self, frame: Any) -> None:
+        """One decoded video frame from the publisher: hold it, and go live on the first."""
+        first = self._frames.first_at is None
+        self._frames.put(frame)
+        if first:
+            self._went_live()
+
+    def _went_live(self) -> None:
+        logger.info("relay %s: first frame decoded", self.token[:8])
+        if self._on_live is None:
+            return
+        task = asyncio.ensure_future(self._tell_live())
+        self._side_tasks.add(task)
+        task.add_done_callback(self._side_tasks.discard)
+
+    async def _tell_live(self) -> None:
+        try:
+            if self._on_live is not None:
+                await self._on_live(self)
+        except Exception:
+            # A courtesy to viewers, exactly like `on_close`.
+            logger.warning("relay %s: on_live failed", self.token[:8], exc_info=True)
 
     # -- subscriber side -------------------------------------------------------
 
@@ -257,21 +339,22 @@ class Room:
                 self._subscribers.discard(pc)
                 await _close_pc(pc, f"{self.token[:8]} viewer")
 
-        # Every subscriber gets its own `relay.subscribe()` proxy of the same
-        # source track. Adding the *source* track to two peer connections is the
-        # classic aiortc mistake: the second consumer steals frames from the first
-        # and both stutter.
+        # Video comes from the room's frame holder: newest frame only, starting
+        # with the one already held, so a viewer of a still screen gets a picture
+        # at once. See `frames.py`.
         #
-        # `buffered` is chosen per kind and is the difference between a viewer who
-        # falls behind and a viewer who takes the machine down with them -- see
-        # `_buffered_for`. It is passed explicitly at every call site in this
-        # file, because aiortc's default is the dangerous one.
+        # Audio gets its own `relay.subscribe()` proxy of the source. Adding the
+        # *source* track to two peer connections is the classic aiortc mistake:
+        # the second consumer steals frames from the first and both stutter.
+        # `buffered` is passed explicitly because aiortc's default is the
+        # dangerous one -- see `_buffered_for`.
         for kind, track in list(self._tracks.items()):
-            pc.addTrack(
-                self._relay.subscribe(track, buffered=_buffered_for(kind))
-                if self._relay
-                else track
-            )
+            if kind == "video":
+                pc.addTrack(held_track(self._frames))
+            elif self._relay:
+                pc.addTrack(self._relay.subscribe(track, buffered=_buffered_for(kind)))
+            else:
+                pc.addTrack(track)
 
         await pc.setRemoteDescription(
             aiortc.RTCSessionDescription(sdp=offer_sdp, type="offer")
@@ -299,7 +382,27 @@ class Room:
 
     @property
     def live(self) -> bool:
+        """A publisher is connected *and* its video has produced a frame.
+
+        Tracks alone exist from the moment the SDP is applied, long before -- or
+        without ever -- a packet crossing the host's ICE path.
+        """
+        return bool(self._tracks) and self._frames.first_at is not None
+
+    @property
+    def publishing(self) -> bool:
+        """A publisher has negotiated, whether or not media has arrived yet."""
         return bool(self._tracks)
+
+    @property
+    def last_frame_age(self) -> float | None:
+        """Seconds since the host's last real frame; None before the first.
+
+        Informational: a still screen legitimately sends few frames, so a large
+        age is not by itself a fault.
+        """
+        last = self._frames.last_at
+        return None if last is None else max(0.0, time.monotonic() - last)
 
     # -- teardown --------------------------------------------------------------
 
@@ -327,6 +430,9 @@ class Room:
             return
         self._closing = True
         await self._close_publisher()
+        # After the pumps stop, so nothing puts into a closed holder; this ends
+        # every viewer's video track with `MediaStreamError`.
+        self._frames.close()
         subscribers = list(self._subscribers)
         self._subscribers.clear()
         await asyncio.gather(
@@ -354,10 +460,13 @@ class Rooms:
     """
 
     def __init__(
-        self, on_close: Callable[[str], Awaitable[None]] | None = None
+        self,
+        on_close: Callable[[str], Awaitable[None]] | None = None,
+        on_live: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._rooms: dict[str, Room] = {}
         self._on_close = on_close
+        self._on_live = on_live
 
     async def _closed(self, room: Room) -> None:
         # Only if it is still *this* room: a fresh one may already hold the token.
@@ -366,10 +475,14 @@ class Rooms:
         if self._on_close is not None:
             await self._on_close(room.token)
 
+    async def _live(self, room: Room) -> None:
+        if self._rooms.get(room.token) is room and self._on_live is not None:
+            await self._on_live(room.token)
+
     def get_or_create(self, token: str) -> Room:
         room = self._rooms.get(token)
         if room is None:
-            room = Room(token, on_close=self._closed)
+            room = Room(token, on_close=self._closed, on_live=self._live)
             self._rooms[token] = room
         return room
 
