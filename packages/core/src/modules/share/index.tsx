@@ -5,6 +5,7 @@ import { ShareLiveIndicator } from './panels/LiveIndicator';
 import { getLink, revokeLink } from './api';
 import { bindPublishing } from './publish';
 import { bindStreamLifecycle, stopStream } from './stream';
+import { bindGuestMedia } from './watch';
 import {
   initShare as initShareChannel,
   requestShareState,
@@ -27,6 +28,9 @@ export function initShare(): void {
   // from another tab, from the agent, or from the Stop button, none of which the
   // streaming code would otherwise hear about.
   bindStreamLifecycle();
+  // A host's offer is one-shot, and the mirror pane is not mounted to hear it
+  // whenever its tab is inactive or not yet open. See `watch.ts`.
+  bindGuestMedia();
 }
 
 /**

@@ -4,10 +4,11 @@ import type React from 'react';
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
 import type { MirrorFrame, MirrorNode, MirrorPane } from '../mirror';
 import { mirrorPanes } from '../mirror';
-import { ShareSubscriber } from '../rtc';
-import { parseSignal } from '../signal';
+import { IconPlay, IconVolume } from '../../../glyphs';
 import { GRANT_LADDER, type GrantLevel } from '../api';
-import { getShareSnapshot, onShareSignal, sendShareAction, subscribeShare } from '../ws';
+import { startPlayback, watchFirstFrame, type PlaybackOutcome } from '../playback';
+import { getWatchState, subscribeWatch } from '../watch';
+import { getShareSnapshot, sendShareAction, subscribeShare } from '../ws';
 import './mirror.css';
 
 /**
@@ -197,27 +198,99 @@ function Dock({
 /**
  * The host's screen, when they are sending one.
  *
- * `muted` is absent on purpose: this is another person talking, and muting it by
- * default would be the wrong end of the autoplay trade-off. `playsInline` keeps
+ * Tries for sound first: this is another person talking, and muting it by
+ * default would be the wrong end of the autoplay trade-off. When the engine
+ * refuses sound without a gesture it plays muted and says so with a labelled
+ * Unmute — the pattern the public viewer page uses — instead of the old silent
+ * refusal, which left a paused element that read as a black, broken stream.
+ *
+ * "Showing" waits for the first decoded frame, not the track: a track arrives
+ * with the answer, and a connection that negotiates and never carries a picture
+ * is exactly the case that has to keep saying it is waiting. `playsInline` keeps
  * iOS from taking the video fullscreen on play.
  */
 function VideoStage({ stream }: { stream: MediaStream }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [showing, setShowing] = useState(false);
+  const [outcome, setOutcome] = useState<PlaybackOutcome | null>(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    let stale = false;
+    setShowing(false);
+    setOutcome(null);
     el.srcObject = stream;
-    // Autoplay with sound needs a gesture in most engines. Failing here is
-    // normal and recoverable — the element keeps its controls, so the viewer
-    // presses play — and must not throw into React.
-    void el.play().catch(() => {});
+    const stopWatching = watchFirstFrame(el, () => {
+      if (!stale) setShowing(true);
+    });
+    void startPlayback(el, () => !stale).then((how) => {
+      if (how) setOutcome(how);
+    });
+    // The native controls can unmute too; the prompt must not outlive that.
+    const onVolume = () => {
+      if (!el.muted) setOutcome((o) => (o === 'muted' ? 'sound' : o));
+    };
+    el.addEventListener('volumechange', onVolume);
     return () => {
+      stale = true;
+      stopWatching();
+      el.removeEventListener('volumechange', onVolume);
       el.srcObject = null;
     };
   }, [stream]);
 
-  return <video ref={ref} className="share-video" autoPlay playsInline controls />;
+  const unmute = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.muted = false;
+    // The click is the gesture the engine wanted; play again under it in case
+    // the element paused along the way.
+    void el.play().catch(() => {});
+    setOutcome('sound');
+  };
+
+  const play = () => {
+    const el = ref.current;
+    if (!el) return;
+    void el.play().then(
+      () => setOutcome(el.muted ? 'muted' : 'sound'),
+      () => {},
+    );
+  };
+
+  return (
+    <div className="share-video-stage" data-showing={showing ? 'true' : undefined}>
+      <video ref={ref} className="share-video" autoPlay playsInline controls={showing} />
+      {!showing && outcome !== 'blocked' && (
+        <div className="share-video-wait" role="status">
+          <span className="share-video-wait__title">Connecting to their screen</span>
+          <span className="share-video-wait__meta">waiting for the first frame</span>
+        </div>
+      )}
+      {outcome === 'blocked' && (
+        <div className="share-video-wait">
+          <span className="share-video-wait__title">Ready to play</span>
+          <span className="share-video-wait__meta">your browser blocked autoplay</span>
+          <button type="button" className="share-video-action" onClick={play}>
+            <IconPlay aria-hidden="true" />
+            <span>Play</span>
+          </button>
+        </div>
+      )}
+      {showing && outcome === 'muted' && (
+        <button
+          type="button"
+          className="share-video-action share-video-unmute"
+          title="Your browser started this muted. Click to hear them."
+          onClick={unmute}
+        >
+          <IconVolume muted aria-hidden="true" />
+          <span>Unmute</span>
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** Position on the grant ladder. Unknown rungs sit at the bottom, the same
@@ -232,7 +305,6 @@ export function MirrorPanel() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [following, setFollowing] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
   const [showMap, setShowMap] = useState(false);
 
   const sessions = state.joined;
@@ -240,24 +312,11 @@ export function MirrorPanel() {
   const frame = current ? (state.mirrors[current.id] ?? null) : null;
 
   const sessionId = current?.id ?? '';
-  const hostNode = current?.host_node ?? '';
-
-  // One subscriber per session. Rebuilt when the session changes rather than
-  // reconfigured, so a stale peer connection can never outlive the session that
-  // negotiated it.
-  useEffect(() => {
-    if (!sessionId || !hostNode) return;
-    const sub = new ShareSubscriber(setStream, () => setStream(null));
-    sub.expect(sessionId, hostNode);
-    const off = onShareSignal((from, payload) => {
-      const parsed = parseSignal(payload);
-      if (parsed) void sub.accept(from, parsed);
-    });
-    return () => {
-      off();
-      sub.close();
-    };
-  }, [sessionId, hostNode]);
+  // The connection lives in `watch.ts`, not here — a pane that owned it lost
+  // every offer sent while its tab was inactive or not yet open. This only reads
+  // which stream belongs to the session on screen.
+  const watch = useSyncExternalStore(subscribeWatch, getWatchState, getWatchState);
+  const stream = sessionId ? (watch.streams[sessionId] ?? null) : null;
 
   const grant = current?.grant ?? 'view';
 
@@ -357,38 +416,38 @@ export function MirrorPanel() {
       <div ref={stageRef} onPointerMove={onPointerMove} className="share-mirror__stage">
         {stream && !showMap && <VideoStage stream={stream} />}
 
-      {!frame && !stream && (
-        <EmptyState title="Waiting for the host">
-          You are in the session, but they have not published their layout yet.
-        </EmptyState>
-      )}
+        {!frame && !stream && (
+          <EmptyState title="Waiting for the host">
+            You are in the session, but they have not published their layout yet.
+          </EmptyState>
+        )}
 
-      {frame && (!stream || showMap) && (
-        <>
-          <Workspace
-            frame={frame}
-            following={following}
-            selectedId={selectedId}
-            onSelect={(id) => {
-              setSelectedId(id);
-              // Picking a tile is the gesture that means "stop tracking them" —
-              // making the guest also find a toggle would be one step too many.
-              setFollowing(false);
-            }}
-          />
-          <p className="share-mirror-note">
-            A map of their workspace, not a copy of it. Panes they have not shared show as{' '}
-            <strong>not shared</strong> &mdash; nothing about those left their machine, not even a
-            title.
-            {counts && counts.hidden > 0 && (
-              <>
-                {' '}
-                <Chip kind="warn">{counts.hidden} hidden</Chip>
-              </>
-            )}
-          </p>
-        </>
-      )}
+        {frame && (!stream || showMap) && (
+          <>
+            <Workspace
+              frame={frame}
+              following={following}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setSelectedId(id);
+                // Picking a tile is the gesture that means "stop tracking them" —
+                // making the guest also find a toggle would be one step too many.
+                setFollowing(false);
+              }}
+            />
+            <p className="share-mirror-note">
+              A map of their workspace, not a copy of it. Panes they have not shared show as{' '}
+              <strong>not shared</strong> &mdash; nothing about those left their machine, not even a
+              title.
+              {counts && counts.hidden > 0 && (
+                <>
+                  {' '}
+                  <Chip kind="warn">{counts.hidden} hidden</Chip>
+                </>
+              )}
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

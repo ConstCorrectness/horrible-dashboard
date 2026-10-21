@@ -209,6 +209,16 @@
 
 /* Black ground rather than the surface token: this is video, and letterbox bars
    that are nearly-but-not-quite the page colour read as a rendering fault. */
+/* The video and what is said over it. The element stays mounted and laid out
+   while the stage waits: a `display: none` video is still decoded by most
+   engines, but nothing is gained by betting the first-frame signal on that. */
+.share-video-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 12rem;
+}
+
 .share-video {
   width: 100%;
   flex: 1;
@@ -217,6 +227,136 @@
   border-radius: var(--radius-md);
   background: #000;
   object-fit: contain;
+}
+
+.share-video-stage:not([data-showing]) .share-video {
+  opacity: 0;
+}
+
+/* Waiting for a first frame, or for a click the browser insists on. A faint
+   grid on the inset ground with an accent top rule: a stage that is armed and
+   empty, rather than a black box that reads as broken. */
+.share-video-wait {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-inset);
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--border) 40%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--border) 40%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 28px 28px;
+}
+
+.share-video-wait__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.share-video-wait__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.share-video-wait[role='status'] .share-video-wait__meta::after {
+  content: '';
+  display: inline-block;
+  width: 0.6em;
+  height: 1px;
+  margin-left: 0.4em;
+  vertical-align: middle;
+  background: var(--accent);
+  animation: share-video-wait-tick 1.2s steps(2, jump-none) infinite;
+}
+
+@keyframes share-video-wait-tick {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Play / Unmute: a labelled action over the picture. Classed rather than a
+   bare <button>, so it sizes itself here; the clipped corner matches the
+   card language rather than a floating pill. */
+.share-video-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  animation: share-video-action-in 160ms ease-out both;
+}
+
+.share-video-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.share-video-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.share-video-action svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.share-video-unmute {
+  position: absolute;
+  left: var(--space-4);
+  top: var(--space-4);
+}
+
+@keyframes share-video-action-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-video-action,
+  .share-video-wait[role='status'] .share-video-wait__meta::after {
+    animation: none;
+  }
 }
 
 /* The stage the guest's pointer is measured against. Position:relative so an
@@ -242,7 +382,9 @@
 .share-cursor {
   position: absolute;
   transform: translate(-2px, -2px);
-  transition: left 90ms linear, top 90ms linear;
+  transition:
+    left 90ms linear,
+    top 90ms linear;
   pointer-events: none;
 }
 
@@ -263,7 +405,7 @@
   font-size: 10.5px;
   letter-spacing: 0.04em;
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--bg);
 }

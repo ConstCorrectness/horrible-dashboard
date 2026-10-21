@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildIceConfig, parseSignal, turnIsIncomplete } from '../signal';
+import { buildIceConfig, parseSignal, reofferDelay, sameEpoch, turnIsIncomplete } from '../signal';
 
 /**
  * The signalling vocabulary and the ICE config.
@@ -108,5 +108,59 @@ describe('turnIsIncomplete', () => {
     expect(turnIsIncomplete({ turnUrl: 'turn:x', turnUsername: 'u', turnCredential: 'p' })).toBe(
       false,
     );
+  });
+});
+
+describe('ready and epochs', () => {
+  it('accepts a ready frame', () => {
+    expect(parseSignal({ kind: 'ready', sessionId: 's1' })).toEqual({
+      kind: 'ready',
+      sessionId: 's1',
+    });
+    expect(parseSignal({ kind: 'ready' })).toBeNull();
+  });
+
+  it('carries an epoch on offer, answer and ice', () => {
+    expect(parseSignal({ kind: 'offer', sessionId: 's1', sdp: 'v=0', epoch: 3 })).toEqual({
+      kind: 'offer',
+      sessionId: 's1',
+      sdp: 'v=0',
+      epoch: 3,
+    });
+    expect(parseSignal({ kind: 'answer', sessionId: 's1', sdp: 'v=0', epoch: 0 })).toMatchObject({
+      epoch: 0,
+    });
+    expect(
+      parseSignal({ kind: 'ice', sessionId: 's1', candidate: { candidate: 'x' }, epoch: 7 }),
+    ).toMatchObject({ epoch: 7 });
+  });
+
+  it('drops a malformed epoch but keeps the frame', () => {
+    // The frame is valid without one; only the correlation is lost.
+    for (const epoch of ['3', -1, 1.5, Number.NaN, null, {}]) {
+      const frame = parseSignal({ kind: 'offer', sessionId: 's1', sdp: 'v=0', epoch });
+      expect(frame).not.toBeNull();
+      expect(frame).not.toHaveProperty('epoch');
+    }
+  });
+
+  it('matches an untagged frame to whatever connection is current', () => {
+    expect(sameEpoch(undefined, 4)).toBe(true);
+    expect(sameEpoch(4, 4)).toBe(true);
+    expect(sameEpoch(3, 4)).toBe(false);
+    // No connection: nothing can belong to it.
+    expect(sameEpoch(undefined, null)).toBe(false);
+  });
+});
+
+describe('reofferDelay', () => {
+  it('doubles from a second and settles at thirty', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 50].map(reofferDelay)).toEqual([
+      1000, 2000, 4000, 8000, 16_000, 30_000, 30_000, 30_000,
+    ]);
+  });
+
+  it('treats a nonsense attempt as the first', () => {
+    expect(reofferDelay(-2)).toBe(1000);
   });
 });

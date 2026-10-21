@@ -14,14 +14,40 @@
  * joined, and it decides who is in `participants` at all.
  */
 
-/** One frame of the SDP/ICE exchange. */
+/**
+ * One frame of the SDP/ICE exchange.
+ *
+ * `epoch` names the offer a frame belongs to. Every offer is a fresh
+ * `RTCPeerConnection` on both ends, so the moment the host can re-offer — after a
+ * failure, or because a guest asked — an answer to the *previous* offer can still
+ * be in flight, and applying it to the new connection pairs it with the wrong
+ * DTLS fingerprint: a connection that looks negotiated and never carries a frame.
+ * Optional on the wire, so a peer on an older build that never sends one is
+ * matched against whatever connection is current, which is what it always got.
+ */
 export type SignalFrame =
-  | { kind: 'offer'; sessionId: string; sdp: string }
-  | { kind: 'answer'; sessionId: string; sdp: string }
-  | { kind: 'ice'; sessionId: string; candidate: RTCIceCandidateInit }
+  | { kind: 'offer'; sessionId: string; sdp: string; epoch?: number }
+  | { kind: 'answer'; sessionId: string; sdp: string; epoch?: number }
+  | { kind: 'ice'; sessionId: string; candidate: RTCIceCandidateInit; epoch?: number }
   /** The host stopped capturing. Distinct from a dropped connection: a guest
    *  should be told "they stopped sharing", not left watching a frozen frame. */
-  | { kind: 'bye'; sessionId: string };
+  | { kind: 'bye'; sessionId: string }
+  /**
+   * Guest → host: "I hold no connection for you; offer me one."
+   *
+   * The host's offer is one-shot, and a guest can be without a listener when it
+   * lands — a reload, or a join whose `joined` event raced the offer — after
+   * which the host's connection waits in `have-local-offer` for an answer nobody
+   * is going to send. A host that is not sharing ignores it; sharing starts with
+   * an offer to every guest anyway.
+   */
+  | { kind: 'ready'; sessionId: string };
+
+/** A finite, non-negative integer epoch, or nothing. A malformed one is dropped
+ *  rather than failing the frame: the frame is still valid without it. */
+function epochOf(value: unknown): { epoch?: number } {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? { epoch: value } : {};
+}
 
 /**
  * Validate an inbound signal.
@@ -39,17 +65,76 @@ export function parseSignal(payload: unknown): SignalFrame | null {
   switch (p.kind) {
     case 'offer':
     case 'answer':
-      return typeof p.sdp === 'string' && p.sdp ? { kind: p.kind, sessionId, sdp: p.sdp } : null;
+      return typeof p.sdp === 'string' && p.sdp
+        ? { kind: p.kind, sessionId, sdp: p.sdp, ...epochOf(p.epoch) }
+        : null;
     case 'ice': {
       const candidate = p.candidate;
       if (typeof candidate !== 'object' || candidate === null) return null;
-      return { kind: 'ice', sessionId, candidate: candidate as RTCIceCandidateInit };
+      return {
+        kind: 'ice',
+        sessionId,
+        candidate: candidate as RTCIceCandidateInit,
+        ...epochOf(p.epoch),
+      };
     }
     case 'bye':
       return { kind: 'bye', sessionId };
+    case 'ready':
+      return { kind: 'ready', sessionId };
     default:
       return null;
   }
+}
+
+/**
+ * Whether a frame tagged `epoch` belongs to the connection at `current`.
+ *
+ * An untagged frame matches — see {@link SignalFrame}. A connection that does
+ * not exist yet (`current` null) matches nothing.
+ */
+export function sameEpoch(epoch: number | undefined, current: number | null): boolean {
+  if (current === null) return false;
+  return epoch === undefined || epoch === current;
+}
+
+/**
+ * How long a peer connection may sit in `disconnected` before the host gives up
+ * on it and offers a fresh one.
+ *
+ * `disconnected` is often a blip — a Wi-Fi roam, a laptop lid — that ICE recovers
+ * from on its own within a couple of seconds, and tearing down there would drop a
+ * picture that was about to come back. But it is not guaranteed to progress to
+ * `failed` either, so waiting for that would leave a guest on a frozen frame.
+ */
+export const DISCONNECT_GRACE_MS = 5000;
+
+/**
+ * How long an offer may go unanswered before the host offers again.
+ *
+ * The other half of the dropped-offer problem `ready` addresses: `ready` covers a
+ * guest that knows it has nothing, this covers an offer lost in transit to a
+ * guest that is still listening.
+ */
+export const ANSWER_TIMEOUT_MS = 15_000;
+
+/** The shortest gap between two `ready`s the host will honour from one guest. A
+ *  guest stuck in a loop must not be able to make the host churn connections. */
+export const READY_MIN_INTERVAL_MS = 1500;
+
+/**
+ * The wait before re-offering to a guest after attempt number `attempt` (0-based)
+ * failed: 1s, 2s, 4s, 8s, 16s, then every 30s.
+ *
+ * Doubling because the common causes — a guest on a flaky network, a laptop
+ * asleep — either clear in seconds or not for a long time, and a fixed short
+ * retry would spend the long case renegotiating at a machine that is not there.
+ * Never gives up: a guest who is still in the session should get the picture
+ * back when they wake up, without anyone pressing anything.
+ */
+export function reofferDelay(attempt: number): number {
+  const n = Math.max(0, Math.floor(attempt));
+  return n < 5 ? 1000 * 2 ** n : 30_000;
 }
 
 /** ICE server config, as the browser's `RTCConfiguration` wants it. */

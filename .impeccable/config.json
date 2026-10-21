@@ -278,6 +278,15 @@
         ],
         "createdAt": "2026-10-20T13:56:09.602Z",
         "reason": "project instructions: CLAUDE.local.md section 2 asks for subtle background patterns like faint grid overlays on game UI; .armory-host uses a 2.5%-alpha grid"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/share/panels/mirror.css"
+        ],
+        "createdAt": "2026-10-21T21:07:17.168Z",
+        "reason": "project rule: CLAUDE.local.md asks for faint grid overlays; DESIGN.md specifies the 28px hairline grid at 40% for cards. Used on the mirror video waiting stage."
       }
     ]
   }

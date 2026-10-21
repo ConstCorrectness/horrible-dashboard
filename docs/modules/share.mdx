@@ -265,6 +265,41 @@ of people in a workspace session and the wrong shape for an audience — which i
 what the relay in Phase 4 is for, and why `rtc.ts` has no fan-out logic to grow
 into one.
 
+### Keeping the mesh up
+
+The host's offer goes out only once, so anything that loses it, or loses the
+connection it set up, has to be recoverable without anyone pressing anything:
+
+- **The guest's connection does not belong to the mirror pane.** `watch.ts` holds
+  one `ShareSubscriber` per joined session and is started at boot by `initShare`.
+  Inactive tabs unmount, and the pane is often opened *after* joining. When the
+  subscriber lived in the pane, an offer that arrived while the pane was unmounted
+  was lost, and the host's connection waited in `have-local-offer` forever. The
+  pane now only renders whatever stream `watch.ts` has.
+- **`ready`** (guest → host) means "I hold no connection for you; offer me one".
+  A guest sends it when it joins a session and when its connection fails, so a
+  reload recovers in seconds. The host answers only nodes that are guests of the
+  session, only while it is sharing, and at most once per 1.5s per guest.
+  `share_signal` reaches the host from any trusted peer.
+- **The host re-offers on its own**, with a backoff of 1, 2, 4, 8 and 16s and then
+  every 30s, when a connection `failed`, stays `disconnected` for more than 5s, or
+  an offer goes unanswered for 15s. `disconnected` gets a grace period because it
+  is often a blip, but it is not guaranteed to reach `failed`.
+- **Every offer is a fresh `RTCPeerConnection` on both ends**, tagged with an
+  `epoch` that the answer and the ICE candidates repeat. Without the tag, an answer
+  to a replaced offer could land on its successor and pair it with the wrong DTLS
+  fingerprint: the connection looks negotiated but never carries a frame. The field
+  is optional on the wire, and a frame without it matches whichever connection is
+  current.
+
+On the guest's screen, "showing video" means the **first decoded frame**
+(`requestVideoFrameCallback` or `loadeddata`), not `ontrack`, and the stage says
+it is waiting until then. Playback tries with sound first. If the browser refuses
+sound without a click, the video plays muted with a labelled **Unmute** button.
+If the browser refuses even muted playback, a **Play** button appears. This is the
+same pattern as the public viewer page. The logic is in `playback.ts` and is
+tested without a DOM.
+
 ### The pre-flight check
 
 **A video frame does not know what a pane is.** The semantic mirror can withhold a
@@ -381,7 +416,9 @@ live leaves the UI confident about a picture nobody is receiving.
 
 A guest whose host stops gets an explicit `bye` frame rather than a dropped
 connection, so the pane can say "they stopped sharing" instead of leaving a frozen
-frame that looks like a broken network.
+frame that looks like a broken network. Re-offering after a failure never sends
+`bye`, because in that case the share is still live and the picture is on its way
+back.
 
 ## Backend surface
 

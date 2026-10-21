@@ -6,7 +6,8 @@
  * still claims to be live, or the reverse, leaving the UI confident about a
  * picture nobody is receiving.
  *
- * The guest half is `ShareSubscriber` in `rtc.ts`, driven from the mirror pane.
+ * The guest half is `ShareSubscriber` in `rtc.ts`, held by `watch.ts` — at
+ * module level, not in the mirror pane, which is unmounted whenever its tab is.
  */
 import { mixer } from '../audio/engine';
 import { ensureShareBus, shareBusHasSource, subscribeMixer } from '../audio/store';
