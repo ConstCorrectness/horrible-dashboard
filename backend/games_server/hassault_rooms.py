@@ -151,6 +151,9 @@ class HassaultReferee:
         self.server.kick_handler = self._kick
         #: Room id → the settings its host has changed from `ROOM_SETTINGS`.
         self._settings: dict[str, dict[str, bool]] = {}
+        #: Room id → the account that opened it: whose console may cheat there
+        #: (`hassault_console.py`). Unlike the host, this never passes on.
+        self.creators: dict[str, str] = {}
         #: Seats waiting for a duel, oldest first: `(conn, since, rating)`.
         self._duel_queue: list[tuple[SeatConn, float, float]] = []
         self._duel_sweeper: asyncio.Task[None] | None = None
@@ -242,6 +245,7 @@ class HassaultReferee:
             # Opened here rather than inside `server.join`, so a map that cannot
             # host the mode is a refusal with a reason, before anyone is seated.
             room_id = self.server.create(target_map, mode=mode).id
+            self.creators[room_id] = conn.account_id
         loadouts, look = self.account_look(conn)
         room, player = await self.server.join(
             conn,

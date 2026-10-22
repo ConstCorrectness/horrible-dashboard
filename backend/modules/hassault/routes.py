@@ -2362,7 +2362,17 @@ async def get_console_definitions() -> ConsoleDefinitionsResponse:
 
 @router.post("/console/exec", response_model=ConsoleExecResponse)
 async def exec_console_command(req: ConsoleExecRequest) -> ConsoleExecResponse:
-    """Execute a developer console command, CVar query/assignment, or Python script."""
+    """Execute a developer console command, CVar query/assignment, or Python script.
+
+    The node's own console: whoever reaches this route is the node's owner, who
+    opened every room it runs. A ranked (duel) room is still refused — the game
+    server's equivalent (`games_server/hassault_console.py`) does the same.
+    """
+    room = match_server.get(req.room_id) if req.room_id else None
+    if room is not None and room.mode.id == "duel":
+        raise HTTPException(
+            status_code=403, detail="the console is disabled in ranked matches"
+        )
     return await console_registry.execute(req)
 
 

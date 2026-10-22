@@ -581,58 +581,110 @@ comment in `physics.spawn_at` (Python and TypeScript) now says so. It used to
 say "clockwise from north", which is how Bank's original street spawns came to
 face east.
 
-### Bots and waypoints
-
-A bot heads for a point (its objective, a sound, a roam target) and probes a
-step ahead with `physics.can_stand`. In the open that is all it needs; behind a
-wall it slides along the wall, and on Office a bot sent to the north gap, the
-back of A or B's south door from the attackers' end got no closer than 59 to 92
-cubes. Each defuse map now has a waypoint graph, `backend/modules/hassault/nav/<map>.json`:
-
-- **Built, then editable.** `tools/hassault_nav_build.py hd_office` takes the
-  walking route between every pair of spawns, sites and cover nodes over the
-  cube grid and string-pulls it (from each waypoint, the furthest point still in
-  a straight walkable line becomes the next), which puts nodes at corners and in
-  doorways; adds a node every 15 cubes over the rest of the floor; and links
-  every pair within 30 cubes that a body can walk. 180 to 270 nodes a map.
-- **Directed links.** `nav.walkable` samples the segment every 0.45 cube: a
-  body must fit on the floor under each sample, and no sample may be more than
-  a step above the last. A drop is allowed, a climb is not, so A to B and B to A
-  can differ: Nuke's vent is one-way in the graph as it is in the game.
-- **Used only when needed.** Every half second the bot asks whether it can walk
-  straight to where it is going. If so it does, exactly as before; if not, it
-  plans an A* route (again every 3 s, or when the destination moves) and heads
-  for the next waypoint, skipping ahead whenever it can already walk to the one
-  after. `_steer` still does the local avoiding. A goal no body fits at (a
-  site's centre under its table, Dust II's goose ledge, which only a jump
-  reaches) is approached through the nearest node there is a route to.
-- **Outside `maps/` on purpose.** The generators and the fit tool rewrite map
-  JSON; a regenerated map keeps its graph. Rebuild the graph after a layout
-  change; `test_hassault_nav.py` fails if a link stops being walkable or a spawn
-  stops reaching a site or a cover node.
-
-What it does to a match: with it, the same Office bot reaches each of those
-three places in about 9 s. In a 300 s defuse soak bots spend their time on
-their objectives rather than wandering (Office's floor coverage fell from 22% to
-15% while visits to B's CT door went from 0 to 131); Bank's vault breach went
-from 53 to 677 visits. A soak ticks about 40% slower in total, 8 bots for 300 s
-in 8 s against 6, which is A* on re-plans and the straight-line checks.
-
-### The aim range, modelled around its rails
-
-`hd_aim` was the last brush map. `tools/blender/generate_aim.py` builds it as an
-indoor range (block walls, concrete lane dividers, raised steel booths, a floor
-rail under every target post, a distance line and a board at each post, overhead
-baffles, high-bay lights and a rubber backstop) in metres equal to the old
-cubes divided by three. Since a cube is the same third of a metre on every map,
-every drill shooter, rail, spawn and item kept its coordinates: nothing in
-`drills` was converted. The dividers stop short of both end walls, as the
-brushes did, so a deathmatch still crosses between lanes. Its materials use the
-`aim_` infix and borrow the industrial photo kinds (slab and cast concrete,
-tread plate, painted metal). Both clients load it like any modelled map, so the
-browser's brush-only AO (`geometry.ts`), which native never had, no longer
-decides how one map looks in two clients.
-
+### Bots and waypoints
+
+
+
+A bot heads for a point (its objective, a sound, a roam target) and probes a
+
+step ahead with `physics.can_stand`. In the open that is all it needs; behind a
+
+wall it slides along the wall, and on Office a bot sent to the north gap, the
+
+back of A or B's south door from the attackers' end got no closer than 59 to 92
+
+cubes. Each defuse map now has a waypoint graph, `backend/modules/hassault/nav/<map>.json`:
+
+
+
+- **Built, then editable.** `tools/hassault_nav_build.py hd_office` takes the
+
+  walking route between every pair of spawns, sites and cover nodes over the
+
+  cube grid and string-pulls it (from each waypoint, the furthest point still in
+
+  a straight walkable line becomes the next), which puts nodes at corners and in
+
+  doorways; adds a node every 15 cubes over the rest of the floor; and links
+
+  every pair within 30 cubes that a body can walk. 180 to 270 nodes a map.
+
+- **Directed links.** `nav.walkable` samples the segment every 0.45 cube: a
+
+  body must fit on the floor under each sample, and no sample may be more than
+
+  a step above the last. A drop is allowed, a climb is not, so A to B and B to A
+
+  can differ: Nuke's vent is one-way in the graph as it is in the game.
+
+- **Used only when needed.** Every half second the bot asks whether it can walk
+
+  straight to where it is going. If so it does, exactly as before; if not, it
+
+  plans an A* route (again every 3 s, or when the destination moves) and heads
+
+  for the next waypoint, skipping ahead whenever it can already walk to the one
+
+  after. `_steer` still does the local avoiding. A goal no body fits at (a
+
+  site's centre under its table, Dust II's goose ledge, which only a jump
+
+  reaches) is approached through the nearest node there is a route to.
+
+- **Outside `maps/` on purpose.** The generators and the fit tool rewrite map
+
+  JSON; a regenerated map keeps its graph. Rebuild the graph after a layout
+
+  change; `test_hassault_nav.py` fails if a link stops being walkable or a spawn
+
+  stops reaching a site or a cover node.
+
+
+
+What it does to a match: with it, the same Office bot reaches each of those
+
+three places in about 9 s. In a 300 s defuse soak bots spend their time on
+
+their objectives rather than wandering (Office's floor coverage fell from 22% to
+
+15% while visits to B's CT door went from 0 to 131); Bank's vault breach went
+
+from 53 to 677 visits. A soak ticks about 40% slower in total, 8 bots for 300 s
+
+in 8 s against 6, which is A* on re-plans and the straight-line checks.
+
+
+
+### The aim range, modelled around its rails
+
+
+
+`hd_aim` was the last brush map. `tools/blender/generate_aim.py` builds it as an
+
+indoor range (block walls, concrete lane dividers, raised steel booths, a floor
+
+rail under every target post, a distance line and a board at each post, overhead
+
+baffles, high-bay lights and a rubber backstop) in metres equal to the old
+
+cubes divided by three. Since a cube is the same third of a metre on every map,
+
+every drill shooter, rail, spawn and item kept its coordinates: nothing in
+
+`drills` was converted. The dividers stop short of both end walls, as the
+
+brushes did, so a deathmatch still crosses between lanes. Its materials use the
+
+`aim_` infix and borrow the industrial photo kinds (slab and cast concrete,
+
+tread plate, painted metal). Both clients load it like any modelled map, so the
+
+browser's brush-only AO (`geometry.ts`), which native never had, no longer
+
+decides how one map looks in two clients.
+
+
+
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
 dresses a map (Dust II, Mirage, Inferno, Nuke and Office; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
 the lights must come before it). It plans on a quarter-metre grid of the finished
@@ -9299,6 +9351,29 @@ render an untyped value as — and reported through `divergence::note_unknown_cv
 The only symptom otherwise is a status chip that never updates, on a client whose
 registry fetch is older than the node it is talking to.
 ---
+
+### On the game server: the creator's console, never in ranked
+
+The standalone web client plays on the central game server, so its console's
+`POST /api/hassault/console/exec` lands there rather than on a node. Until the
+route existed the game server's static web mount answered that POST with
+`405 Method Not Allowed`. It is now answered by
+`backend/games_server/hassault_console.py`, which is deliberately much smaller
+than the node's console:
+
+- **Who.** The account that opened the room (`HassaultReferee.creators`,
+  recorded at creation), or an admin listed in `HASSAULT_ADMINS`
+  (comma-separated account ids). Not the room *host*: the host is whoever has
+  been seated longest, which a stranger becomes when the creator steps out. The
+  client sends the account's bearer token; a guest or a non-creator gets a 403
+  whose `detail` the console prints as is.
+- **Where.** Never a ranked room (mode `duel`) — admins included. A node's own
+  console refuses a duel room the same way; otherwise the node's owner opened
+  every room it runs, so a node needs no token.
+- **What.** A whitelist applied to the simulation, so the server honours it:
+  `player.god` (the caller's own player; `god` and `play.god` alias it),
+  `server.bots.freeze`, and the bounded `gameplay.*` numbers. No Python, no
+  macros — those run on a player's own node, never on a public server.
 
 ### Agent Tools Integration
 

@@ -736,6 +736,10 @@ def _mount_hassault_content() -> None:
     from backend.games_server.hassault_rating import router as rating_router
 
     app.include_router(rating_router)
+    # The developer console, for a room's creator or an admin (`hassault_console.py`).
+    from backend.games_server.hassault_console import router as console_router
+
+    app.include_router(console_router)
     # Credits, keys, cases and StatTrak (`hassault_wallet.py`).
     from backend.games_server.hassault_wallet import router as wallet_router
 

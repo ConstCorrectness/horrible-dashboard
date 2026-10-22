@@ -6,6 +6,7 @@
  */
 
 import { apiUrl } from '../../../origin';
+import { gameServerToken } from '../api';
 import { consoleRegistry } from './registry';
 import type { ConsoleExecResult } from './types';
 
@@ -252,9 +253,14 @@ export class ConsoleExecutor {
 
     // Dispatch to Backend REST /api/hassault/console/exec
     try {
+      // On the game server the console is the room creator's (or an admin's),
+      // so it goes as the account; a node's own console needs no token.
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const token = gameServerToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(apiUrl('/api/hassault/console/exec'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           command: expandedLine,
           room_id: context?.room || null,
@@ -264,11 +270,19 @@ export class ConsoleExecutor {
 
       if (!res.ok) {
         const errText = await res.text();
+        // A refusal's `detail` is written for the player; show it as is.
+        let detail: unknown = null;
+        try {
+          detail = (JSON.parse(errText) as { detail?: unknown }).detail;
+        } catch {
+          // not JSON: fall through to the raw body
+        }
         return {
           ok: false,
           command: line,
           output: [],
-          error: `Server HTTP ${res.status}: ${errText}`,
+          error:
+            typeof detail === 'string' ? detail : `Server HTTP ${res.status}: ${errText}`,
           affected_cvars: {},
         };
       }

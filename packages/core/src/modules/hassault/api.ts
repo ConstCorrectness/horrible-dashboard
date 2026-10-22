@@ -752,6 +752,11 @@ export function routeAccountToGameServer(getToken: (() => string | null) | null)
   serverToken = getToken;
 }
 
+/** The account's token for the game server's own routes, when they are in use. */
+export function gameServerToken(): string | null {
+  return serverToken?.() ?? null;
+}
+
 /** Whether the account calls are going to the game server directly. */
 export function accountRoutedToGameServer(): boolean {
   return serverToken !== null;
