@@ -22,7 +22,7 @@ def _vec(text: str) -> list[float]:
 
 @pytest.fixture(autouse=True)
 def fake_embed(monkeypatch):
-    async def _embed(text: str):
+    async def _embed(text: str, **_kw):
         return _vec(text), "test/embed"
 
     monkeypatch.setattr("backend.modules.database.embeddings.get_embedding", _embed)

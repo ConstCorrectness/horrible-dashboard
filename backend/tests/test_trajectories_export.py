@@ -249,7 +249,7 @@ async def test_search_falls_back_to_substring_and_says_so(db, monkeypatch):
     exists. The truth may be that nobody could embed the query."""
     _run(db, goal="deploy the service")
 
-    async def fallback(text):
+    async def fallback(text, **_kw):
         return [0.0] * 384, "local-fallback"
 
     monkeypatch.setattr(search, "get_embedding", fallback)

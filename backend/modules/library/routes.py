@@ -259,7 +259,7 @@ async def search(req: LibrarySearchRequest) -> LibrarySearchResponse:
     """
     library = req.library or "default"
     init_db()  # tolerate search before anything has been ingested
-    embedding, _source = await get_embedding(req.text)
+    embedding, _source = await get_embedding(req.text, input_type="query")
     text_results = search_documents(library, embedding, req.limit)
 
     clip_results: list[dict] = []

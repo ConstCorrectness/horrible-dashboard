@@ -3,6 +3,8 @@ import logging
 import hashlib
 import math
 import time
+from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 from backend.modules.agent.routes import _load_config
@@ -59,15 +61,61 @@ def get_local_fallback_embedding(text: str) -> list[float]:
     return vector
 
 
-# Resolved (pin, model, endpoint, dialect, kind) cache. Model discovery costs a
-# `GET /api/tags` round-trip, and `get_embedding` did it on **every single call** — in
-# a bulk index that's one discovery request per document, for an answer that never
-# changes mid-run. Cached with a short TTL so a newly pulled embedding model is still
-# picked up within a minute. The pin is part of the key, not just the value: a pinned
-# model must take effect on the next call, not up to a TTL later, or a rebuild
-# started right after setting it silently indexes with the old model.
+#: Which side of a retrieval pair a text is. Asymmetric embedders (NVIDIA's
+#: nemotron-embed) place a search query and the passage that answers it in different
+#: regions on purpose, so the caller has to say which one it is holding. Indexing
+#: is the common case and the default; every search path passes "query".
+InputType = Literal["query", "passage"]
+
+
+@dataclass(frozen=True)
+class _Embedder:
+    model: str
+    endpoint: str
+    info: P.ProviderInfo
+
+    @property
+    def method(self) -> str:
+        """The `<provider>/<model>` tag stamped on every vector this produced."""
+        return f"{'ollama' if self.info.dialect == 'ollama' else self.info.kind}/{self.model}"
+
+    def headers(self) -> dict[str, str]:
+        """The provider's key, read per request rather than cached, so a rotated key
+        takes effect without waiting out `_MODEL_CACHE_TTL_S`. Empty for every local
+        server: `api_key_for` answers None for anything not hosted."""
+        key = P.api_key_for(self.info)
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
+    def body(self, inputs: str | list[str], input_type: InputType) -> dict[str, object]:
+        body: dict[str, object] = {"model": self.model, "input": inputs}
+        if self.info.embed_input_type:
+            body["input_type"] = input_type
+        return body
+
+
+# Resolved embedder cache. Model discovery costs a `GET /api/tags` round-trip, and
+# `get_embedding` did it on **every single call** — in a bulk index that's one
+# discovery request per document, for an answer that never changes mid-run. Cached
+# with a short TTL so a newly pulled embedding model is still picked up within a
+# minute. The pin and the provider setting are part of the key, not just the value:
+# either must take effect on the next call, not up to a TTL later, or a rebuild
+# started right after changing it silently indexes with the old model.
 _MODEL_CACHE_TTL_S = 60.0
-_model_cache: tuple[float, str, str, str, str, str] | None = None
+_model_cache: tuple[float, tuple[str, str], _Embedder] | None = None
+
+#: `database.embedProvider` value meaning "whatever the agent uses" — the behaviour
+#: before embeddings had a provider of their own, kept as the default so a node
+#: whose indexes were built that way keeps the same embedding space.
+FOLLOW_AGENT = "agent"
+
+
+def _embed_provider_setting() -> str:
+    from backend.modules.settings.routes import get_value
+
+    return str(
+        get_value("database.embedProvider", FOLLOW_AGENT) or FOLLOW_AGENT
+    ).strip()
+
 
 # How many embeddings to request concurrently when the provider has no batch endpoint.
 # The server processes one at a time per slot, but overlapping the request/response
@@ -100,82 +148,140 @@ def _select_embedding_model(available: list[str], default: str) -> str:
     return default
 
 
-async def _resolve_model(client: httpx.AsyncClient) -> tuple[str, str, str, str] | None:
-    """(model, endpoint, dialect, kind) for embedding, or None with no agent config.
-    Cached for `_MODEL_CACHE_TTL_S` so bulk indexing doesn't re-probe per document."""
+def _embedding_provider() -> tuple[P.ProviderInfo, str, str] | None:
+    """(provider, endpoint, fallback model) to embed with, or None when there is
+    nothing usable — logged with the reason, since every caller degrades to the hash
+    embedding and would otherwise fail silently.
+
+    `database.embedProvider` decides; its default follows the agent. A provider
+    chosen here that is also the agent's borrows the agent's saved endpoint (a
+    repointed vLLM, a non-default LM Studio port) and model; any other uses its own
+    defaults, because the agent's model id means nothing to a different vendor.
+    """
+    config = _load_config()
+    choice = _embed_provider_setting()
+    if choice == FOLLOW_AGENT:
+        if not config:
+            logger.info("No agent config and no embedding provider set.")
+            return None
+        info = P.provider_for(config.provider)
+    else:
+        info = P.PROVIDERS.get(choice)
+        if info is None:
+            logger.warning(f"database.embedProvider names no provider: {choice!r}")
+            return None
+    same = config is not None and config.provider == info.kind
+    # `embed_endpoint` first: it is set only where the chat endpoint is not where
+    # embeddings live (litellm providers have no chat endpoint to save at all).
+    saved = config.endpoint if config is not None and same else ""
+    endpoint = info.embed_endpoint or saved or info.default_endpoint
+    if info.dialect not in ("ollama", "openai") and not info.embed_endpoint:
+        logger.warning(f"{info.label} serves no embeddings this node can call.")
+        return None
+    if info.hosted and not P.api_key_for(info):
+        logger.warning(f"No API key for {info.label}; cannot embed there.")
+        return None
+    return info, endpoint, (config.model if same and config else "")
+
+
+async def _resolve_model(client: httpx.AsyncClient) -> _Embedder | None:
+    """The embedder to use, or None with nothing configured. Cached for
+    `_MODEL_CACHE_TTL_S` so bulk indexing doesn't re-probe per document."""
     global _model_cache
     now = time.monotonic()
-    pin = _pinned_embedding_model()
+    key = (_pinned_embedding_model(), _embed_provider_setting())
     if (
         _model_cache
-        and _model_cache[1] == pin
+        and _model_cache[1] == key
         and now - _model_cache[0] < _MODEL_CACHE_TTL_S
     ):
-        return _model_cache[2:]
-    config = _load_config()
-    if not config:
+        return _model_cache[2]
+    resolved = _embedding_provider()
+    if resolved is None:
         return None
-    info = P.provider_for(config.provider)
-    endpoint = config.endpoint or info.default_endpoint
+    info, endpoint, agent_model = resolved
+    pin = key[0]
     if pin:
         # Deliberately not validated against the provider's catalog. A pin that names
         # a model the server isn't serving must fail as a loud request error, not
         # quietly fall back to discovery — falling back is what would reintroduce the
         # silent width change this setting exists to prevent.
         model = pin
+    elif info.default_embed_model:
+        # A hosted provider's listing cannot be discovered from -- see the field.
+        model = info.default_embed_model
     else:
-        model = config.model
+        model = agent_model
         try:
             model = _select_embedding_model(
                 await P.list_models(client, info, endpoint), model
             )
         except Exception as exc:  # noqa: BLE001 — discovery is best-effort
             logger.debug(f"Failed to query available models list: {exc}")
-    _model_cache = (now, pin, model, endpoint, info.dialect, info.kind)
-    return _model_cache[2:]
+    embedder = _Embedder(model=model, endpoint=endpoint, info=info)
+    _model_cache = (now, key, embedder)
+    return embedder
 
 
 class _ProviderUnreachable(Exception):
-    """Nothing is listening at the embedding endpoint. Unlike a missing batch
-    endpoint, retrying text by text cannot help — it only turns one refused
-    connection into hundreds of them."""
+    """The embedding endpoint cannot serve this request at all: nothing is
+    listening, or a hosted provider refused it (bad key, retired model). Unlike a
+    missing batch endpoint, retrying text by text cannot help — it only turns one
+    refusal into hundreds of them."""
+
+
+def _refusal(res: httpx.Response) -> str:
+    """A provider's error body, short enough to log. NIM's 410 names the retirement
+    date and OpenRouter's 404 the missing model — the status code alone says neither."""
+    return f"HTTP {res.status_code}: {res.text[:300]}"
 
 
 async def _embed_batch(
     client: httpx.AsyncClient,
     texts: list[str],
-    model: str,
-    endpoint: str,
-    dialect: str,
-    kind: str,
+    embedder: _Embedder,
+    input_type: InputType,
 ) -> list[list[float]] | None:
     """One request for many texts, or None if the provider has no batch endpoint.
     Ollama's `/api/embed` and the OpenAI-compatible `/v1/embeddings` both take an
-    array `input` and return results in order."""
+    array `input`."""
     try:
-        if dialect == "ollama":
+        if embedder.info.dialect == "ollama":
             res = await client.post(
-                f"{endpoint}/api/embed", json={"model": model, "input": texts}
+                f"{embedder.endpoint}/api/embed",
+                json={"model": embedder.model, "input": texts},
             )
             res.raise_for_status()
             out = res.json().get("embeddings")
         else:
             res = await client.post(
-                f"{endpoint}/v1/embeddings", json={"model": model, "input": texts}
+                f"{embedder.endpoint}/v1/embeddings",
+                json=embedder.body(texts, input_type),
+                headers=embedder.headers(),
             )
+            # A hosted provider always has the batch shape, so a refusal is a
+            # refusal -- not a missing endpoint that per-text requests could avoid.
+            if embedder.info.hosted and res.is_error:
+                raise _ProviderUnreachable(_refusal(res))
             res.raise_for_status()
-            out = [d.get("embedding") for d in res.json().get("data", [])]
+            data = res.json().get("data", [])
+            # OpenAI's shape carries `index`; order by it rather than trusting the
+            # array order of a router fanning one batch out upstream.
+            data = sorted(data, key=lambda d: d.get("index", 0))
+            out = [d.get("embedding") for d in data]
         if isinstance(out, list) and len(out) == len(texts):
             return [[float(x) for x in vec] for vec in out]
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
         raise _ProviderUnreachable(str(exc)) from exc
+    except _ProviderUnreachable:
+        raise
     except Exception as exc:  # noqa: BLE001 — fall back to per-text requests
         logger.debug(f"Batch embedding unavailable ({exc}); using per-text requests.")
     return None
 
 
 async def get_embeddings(
-    texts: list[str], *, allow_peer: bool = True
+    texts: list[str], *, allow_peer: bool = True, input_type: InputType = "passage"
 ) -> tuple[list[list[float]], str]:
     """Embed many texts in as few round-trips as possible.
 
@@ -188,6 +294,9 @@ async def get_embeddings(
     Returns `(vectors, method)` with vectors in input order. Like `get_embedding`, it
     degrades to the deterministic hash embedding rather than raising, and the returned
     method says which was used so callers can refuse to persist a fallback.
+
+    `input_type` is "passage" for anything being indexed and "query" for a search
+    string -- see `InputType`. Providers that do not distinguish never see it.
     """
     if not texts:
         return [], "noop"
@@ -196,20 +305,19 @@ async def get_embeddings(
     # timeout here degrades to the hash fallback, which the index build correctly
     # refuses to persist, so it would abandon the whole build.
     async with httpx.AsyncClient(timeout=300.0) as client:
-        resolved = await _resolve_model(client)
-        if resolved is None:
-            logger.info("Agent config not found; using local fallback embedding.")
+        embedder = await _resolve_model(client)
+        if embedder is None:
             return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
-        model, endpoint, dialect, kind = resolved
-        method = f"{'ollama' if dialect == 'ollama' else kind}/{model}"
+        method = embedder.method
 
         # A batch is the one embedding shape worth sending off-machine: a 200 ms
         # round trip is nothing against a multi-second batch. Opt-in
         # (`database.embedOnPeer`, default off) because shipping every index build
         # to a friend's node is a surprising thing to do quietly, and
         # `allow_peer=False` on the lender's own route so serving a batch can
-        # never re-borrow it from a third node.
-        if allow_peer and _peer_offload_enabled():
+        # never re-borrow it from a third node. Passages only: the peer protocol
+        # carries no `input_type`, and the lender embeds everything as a passage.
+        if allow_peer and input_type == "passage" and _peer_offload_enabled():
             from backend.modules.database import embed_peer
 
             peered = await embed_peer.try_peer_batch(texts, method)
@@ -218,11 +326,11 @@ async def get_embeddings(
                 return vectors, peer_method
 
         try:
-            batched = await _embed_batch(client, texts, model, endpoint, dialect, kind)
+            batched = await _embed_batch(client, texts, embedder, input_type)
         except _ProviderUnreachable as exc:
             logger.warning(
-                f"Embedding provider {kind} at {endpoint} is unreachable ({exc}); "
-                "using local fallback."
+                f"Embedding provider {embedder.info.kind} at {embedder.endpoint} "
+                f"cannot embed with {embedder.model} ({exc}); using local fallback."
             )
             return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
         if batched is not None:
@@ -233,7 +341,7 @@ async def get_embeddings(
 
         async def one(text: str) -> list[float] | None:
             async with sem:
-                return await _embed_one(client, text, model, endpoint, dialect)
+                return await _embed_one(client, text, embedder, input_type)
 
         try:
             results = await asyncio.gather(*(one(t) for t in texts))
@@ -242,7 +350,7 @@ async def get_embeddings(
             results = [None] * len(texts)
         if any(r is None for r in results):
             logger.warning(
-                f"Failed to fetch remote embeddings from {kind}; "
+                f"Failed to fetch remote embeddings from {embedder.info.kind}; "
                 "falling back to local deterministic hash embedding."
             )
             return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
@@ -256,13 +364,14 @@ def _peer_offload_enabled() -> bool:
 
 
 async def _embed_one(
-    client: httpx.AsyncClient, text: str, model: str, endpoint: str, dialect: str
+    client: httpx.AsyncClient, text: str, embedder: _Embedder, input_type: InputType
 ) -> list[float] | None:
     """A single embedding over an existing client, or None on failure."""
     try:
-        if dialect == "ollama":
+        if embedder.info.dialect == "ollama":
             res = await client.post(
-                f"{endpoint}/api/embeddings", json={"model": model, "prompt": text}
+                f"{embedder.endpoint}/api/embeddings",
+                json={"model": embedder.model, "prompt": text},
             )
             res.raise_for_status()
             emb = res.json().get("embedding")
@@ -270,9 +379,15 @@ async def _embed_one(
                 return [float(x) for x in emb]
             return None
         res = await client.post(
-            f"{endpoint}/v1/embeddings", json={"model": model, "input": text}
+            f"{embedder.endpoint}/v1/embeddings",
+            json=embedder.body(text, input_type),
+            headers=embedder.headers(),
         )
-        res.raise_for_status()
+        if res.is_error:
+            # Warning, not debug: a hosted refusal (retired model, bad key) is the
+            # whole answer to "why is search running on hashes", and debug hid it.
+            logger.warning(f"Embedding with {embedder.model} refused: {_refusal(res)}")
+            return None
         data = res.json().get("data", [])
         if data:
             emb = data[0].get("embedding")
@@ -283,29 +398,31 @@ async def _embed_one(
     return None
 
 
-async def get_embedding(text: str) -> tuple[list[float], str]:
+async def get_embedding(
+    text: str, *, input_type: InputType = "passage"
+) -> tuple[list[float], str]:
     """
-    Generate an embedding vector for the text using the configured agent model,
-    falling back to the local deterministic hash embedding if remote server is offline.
+    Generate an embedding vector for the text with the embedding provider
+    (`database.embedProvider`, by default the agent's), falling back to the local
+    deterministic hash embedding if it is offline or refuses.
 
     Single-text convenience over the same cached model resolution the batch path uses,
     so it no longer re-probes `GET /api/tags` on every call. For more than one text
-    prefer `get_embeddings`, which batches the requests too.
+    prefer `get_embeddings`, which batches the requests too. A search string passes
+    `input_type="query"`; see `InputType`.
 
     Returns:
         tuple[embedding_list, model_or_method_name]
     """
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resolved = await _resolve_model(client)
-        if resolved is None:
-            logger.info("Agent config not found; using local fallback embedding.")
+        embedder = await _resolve_model(client)
+        if embedder is None:
             return get_local_fallback_embedding(text), "local-fallback"
-        model, endpoint, dialect, kind = resolved
-        vector = await _embed_one(client, text, model, endpoint, dialect)
+        vector = await _embed_one(client, text, embedder, input_type)
         if vector is not None:
-            return vector, f"{'ollama' if dialect == 'ollama' else kind}/{model}"
+            return vector, embedder.method
         logger.warning(
-            f"Failed to fetch remote embedding from {kind}; "
+            f"Failed to fetch remote embedding from {embedder.info.kind}; "
             "falling back to local deterministic hash embedding."
         )
         return get_local_fallback_embedding(text), "local-fallback"

@@ -177,7 +177,7 @@ async def search_runs(
         )
         return runs, "recent"
 
-    vector, method = await get_embedding(query)
+    vector, method = await get_embedding(query, input_type="query")
     if _is_fallback(method):
         runs, _ = store.list_runs(
             dataset_id=dataset_id,

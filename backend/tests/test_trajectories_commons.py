@@ -255,7 +255,7 @@ def test_only_the_publisher_can_withdraw(server, monkeypatch):
         p.sig = key.sign(canonical_profile_bytes(p))
         return p.model_dump()
 
-    async def no_embed(text: str) -> tuple[list[float], str]:
+    async def no_embed(text: str, **_kw) -> tuple[list[float], str]:
         from backend.modules.database.embeddings import get_local_fallback_embedding
 
         return get_local_fallback_embedding(text), "local-fallback"

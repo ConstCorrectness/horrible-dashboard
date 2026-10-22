@@ -318,7 +318,7 @@ class SymdexIndex:
                 "results": [],
             }
         meta = _read_meta()
-        embedding, method = await get_embedding(query)
+        embedding, method = await get_embedding(query, input_type="query")
         if _is_fallback(method) or (meta.get("dim") and len(embedding) != meta["dim"]):
             return {"query": query, "status": "reindex_needed", "results": []}
         prefix = KIND_PREFIXES.get(kind or "")

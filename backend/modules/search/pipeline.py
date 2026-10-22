@@ -332,18 +332,25 @@ async def rerank_ranking(
         (h.text or f"{h.title}\n{h.snippet}")[:_RERANK_CHARS] or h.title for h in hits
     ]
     try:
-        vectors, method = await asyncio.wait_for(
-            get_embeddings([query, *texts]), timeout=EMBED_TIMEOUT_S
+        # Two requests, concurrently, because the query and the pages are opposite
+        # sides of the pair: an asymmetric embedder (NVIDIA's) needs to be told which
+        # is which, and a single batch carries one `input_type`.
+        (q_vecs, q_method), (doc_vecs, method) = await asyncio.wait_for(
+            asyncio.gather(
+                get_embeddings([query], input_type="query"),
+                get_embeddings(texts, input_type="passage"),
+            ),
+            timeout=EMBED_TIMEOUT_S,
         )
     except Exception as exc:  # noqa: BLE001 — reranking is additive
         return [], f"rerank skipped ({type(exc).__name__})"
 
-    if method.startswith("local-fallback"):
+    if method.startswith("local-fallback") or q_method.startswith("local-fallback"):
         return [], "rerank skipped (embedding provider unavailable)"
-    if len(vectors) != len(hits) + 1:
+    if len(q_vecs) != 1 or len(doc_vecs) != len(hits):
         return [], "rerank skipped (unexpected embedding count)"
 
-    query_vec, doc_vecs = vectors[0], vectors[1:]
+    query_vec = q_vecs[0]
     scored = sorted(
         zip(hits, doc_vecs),
         key=lambda pair: _cosine(query_vec, pair[1]),

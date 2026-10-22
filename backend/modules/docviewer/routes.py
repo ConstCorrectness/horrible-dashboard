@@ -317,7 +317,7 @@ async def search_set(set_id: str, req: SearchRequest) -> SearchResponse:
 
     row = _set_or_404(set_id)
     init_db()
-    embedding, _source = await get_embedding(req.query)
+    embedding, _source = await get_embedding(req.query, input_type="query")
     # Over-fetch: hits are filtered to this set afterwards, so asking for exactly
     # `limit` would return fewer than asked for whenever a library holds two sets.
     rows = search_documents(row["library"], embedding, req.limit * 4)

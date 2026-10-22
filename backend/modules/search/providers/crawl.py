@@ -67,7 +67,7 @@ async def search_index(
         return []
 
     init_db()
-    embedding, method = await get_embedding(query)
+    embedding, method = await get_embedding(query, input_type="query")
 
     # The query must be embedded by the same model the index was built with, or the
     # vectors live in different spaces and the "nearest" results are arbitrary.

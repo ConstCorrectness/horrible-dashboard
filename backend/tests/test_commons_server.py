@@ -24,7 +24,7 @@ def client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     # Hermetic + deterministic: use the local hash embedding directly so tests never
     # reach for an LLM provider over the network.
-    async def _fake_embed(text: str) -> tuple[list[float], str]:
+    async def _fake_embed(text: str, **_kw) -> tuple[list[float], str]:
         return get_local_fallback_embedding(text), "local-fallback"
 
     monkeypatch.setattr(commons_server, "get_embedding", _fake_embed)

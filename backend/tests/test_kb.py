@@ -32,7 +32,7 @@ def fake_query_embed(monkeypatch):
     """Queries embed with the same hash as the stored rows, under a real-looking
     model name — so ranking is deterministic and the fallback guard stays quiet."""
 
-    async def _embed(text: str):
+    async def _embed(text: str, **_kw):
         return _vec(text), "test/embed"
 
     monkeypatch.setattr("backend.modules.database.embeddings.get_embedding", _embed)
@@ -259,7 +259,7 @@ def test_search_scoped_to_a_collection(fake_query_embed):
 def test_search_refuses_a_fallback_query_vector(monkeypatch):
     _indexed("https://f.test/a", "kb-pages", [("A", "text")])
 
-    async def _fallback(text: str):
+    async def _fallback(text: str, **_kw):
         return _vec(text), "local-fallback"
 
     monkeypatch.setattr("backend.modules.database.embeddings.get_embedding", _fallback)
@@ -377,7 +377,7 @@ def test_http_rejects_non_http_urls(client):
 def test_http_search_503_when_embedder_down(client, monkeypatch):
     _indexed("https://e.test/a", "kb-pages", [("A", "x")])
 
-    async def _fallback(text: str):
+    async def _fallback(text: str, **_kw):
         return _vec(text), "local-fallback"
 
     monkeypatch.setattr("backend.modules.database.embeddings.get_embedding", _fallback)
