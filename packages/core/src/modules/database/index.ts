@@ -40,6 +40,24 @@ export const databaseModule: ModuleManifest = {
       default: 1000,
     },
     {
+      key: 'database.embedProvider',
+      title: 'Embedding provider',
+      description:
+        'Where text is embedded for every vector collection on this node. "agent" uses the chat agent’s provider, as before. Pick one explicitly to chat on one provider and embed on another — NIM and OpenRouter each serve NVIDIA’s nemotron-embed at no cost, so indexing no longer needs a local server running. Hosted providers use the key from Settings → API keys. If Embedding model below is pinned, change it too — a pin is sent to whichever provider this names, so an LM Studio model id pinned here makes NIM refuse every request; blank uses the provider’s default. Changing this changes the embedding space: rebuild the affected indexes.',
+      type: 'enum',
+      enumValues: [
+        'agent',
+        'nim',
+        'openrouter',
+        'openai',
+        'ollama',
+        'lmstudio',
+        'llamacpp',
+        'vllm',
+      ],
+      default: 'agent',
+    },
+    {
       key: 'database.embedModel',
       title: 'Embedding model',
       description:

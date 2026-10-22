@@ -70,7 +70,7 @@ async def retrieve(
         from backend.modules.database.embeddings import get_embedding
         from backend.modules.database.vectorstore import search_documents
 
-        embedding, _src = await get_embedding(str(query))
+        embedding, _src = await get_embedding(str(query), input_type="query")
         rows = search_documents(source or "default", embedding, int(k))
         return [
             {"text": r.get("text", ""), "score": float(r.get("score", 0.0))}

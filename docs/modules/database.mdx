@@ -340,8 +340,41 @@ endpoint. See [symdex](symdex.mdx#build-cost).
 - **Command**: `database.open` (`Database: Open Console`) — opens the console in the
   workspace center.
 - **Settings**: `database.defaultConnection` (default `app`), `database.rowLimit`
-  (default `1000`), and `database.embedModel` (default blank), read live via
-  `useSetting()` — see [settings](settings.mdx).
+  (default `1000`), `database.embedProvider` (default `agent`) and
+  `database.embedModel` (default blank), read live via `useSetting()` — see
+  [settings](settings.mdx).
+
+### Choosing the embedding provider
+
+`database.embedProvider` decides where text is embedded. `agent` — the default, and the
+only behaviour before the setting existed — embeds with the chat agent's provider. Any
+provider id embeds there instead, so the agent can chat on a hosted model while
+embeddings run somewhere else, or the reverse.
+
+Hosted providers are called with their key from **Settings → API keys** (NIM borrows the
+`nvidia` connector's). Without a key, or on a provider with no embeddings endpoint
+(Anthropic, Gemini), nothing is sent and the hash fallback answers — which index builds
+refuse to persist.
+
+The pin (`database.embedModel`, below) is sent to whichever provider this names. A pin
+left over from a local server, such as LM Studio's `text-embedding-nomic-embed-text-v1.5`,
+makes a hosted provider refuse every request: `Model … does not exist`, logged as a
+warning, followed by the hash fallback. Change the pin when you change the provider, or
+blank it to use the provider's default.
+
+Discovery (below) is skipped for hosted providers, because neither listing can be
+trusted to find an embedder. NIM's `/v1/models` still lists embedders that answer
+**410 Gone**, and OpenRouter keeps its embedders out of the chat catalog altogether.
+Each has a default instead: `nvidia/nemotron-3.5-embed-1b` on NIM,
+`nvidia/nemotron-3.5-embed-1b:free` on OpenRouter (2048-dim, $0 on both), and
+`text-embedding-3-small` on OpenAI.
+
+NVIDIA's embedders are **asymmetric**: a search query and the passage that answers it
+are embedded differently, and the request is refused without `input_type`. So
+`get_embedding` and `get_embeddings` take `input_type="query" | "passage"`. Passage is
+the default because indexing is the common case, and every search path passes `query`.
+It is sent only to providers that accept it everywhere (NIM, OpenRouter); OpenAI rejects
+an unknown argument.
 
 ### Pinning the embedding model
 

@@ -390,7 +390,7 @@ async def get_all_documents(
 @router.post("/search", response_model=list[SearchResult])
 async def search(req: SearchRequest) -> list[SearchResult]:
     # 1. Generate the query embedding (using agent provider or local fallback)
-    emb, _ = await get_embedding(req.text)
+    emb, _ = await get_embedding(req.text, input_type="query")
 
     # 2. Search database using cosine similarity
     # We query with a larger limit to ensure we retrieve enough unique intents after grouping

@@ -197,7 +197,7 @@ def make_tools(library: str) -> tuple[list[dict[str, Any]], dict[str, ToolHandle
             return {"error": "library_search needs a query"}
         try:
             init_db()
-            embedding, _src = await get_embedding(query)
+            embedding, _src = await get_embedding(query, input_type="query")
             rows = search_documents(library, embedding, 6)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"library search failed: {exc}"}

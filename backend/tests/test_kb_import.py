@@ -149,7 +149,7 @@ def harness(monkeypatch):
     async def _embed_many(texts: list[str]):
         return [get_local_fallback_embedding(t) for t in texts], "test/embed"
 
-    async def _embed_one(text: str):
+    async def _embed_one(text: str, **_kw):
         return get_local_fallback_embedding(text), "test/embed"
 
     monkeypatch.setattr("backend.modules.library.ingest.get_embeddings", _embed_many)

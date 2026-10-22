@@ -44,7 +44,7 @@ def data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fake_embed(monkeypatch):
-    async def _embed(text: str):
+    async def _embed(text: str, **_kw):
         return get_local_fallback_embedding(text), "test-fallback"
 
     async def _embed_many(texts: list[str]):

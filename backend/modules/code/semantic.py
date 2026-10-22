@@ -146,7 +146,7 @@ class SemanticIndex:
         init_db()
         if self.count() == 0:
             return {"query": query, "building": self._building, "results": []}
-        embedding, _method = await get_embedding(query)
+        embedding, _method = await get_embedding(query, input_type="query")
         rows = search_documents(_COLLECTION, embedding, limit)
         results = [
             {

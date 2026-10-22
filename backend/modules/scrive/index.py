@@ -198,7 +198,7 @@ async def search(site_id: str, query: str, limit: int) -> list[dict]:
     if not has_index(site_id):
         _spawn(build(site_id))
         return []
-    vectors, method = await get_embeddings([query])
+    vectors, method = await get_embeddings([query], input_type="query")
     if method == "local-fallback" or not vectors:
         unavailable[site_id] = "no embedding model answered; searching by keywords only"
         return []

@@ -397,7 +397,7 @@ async def search(req: SearchRequest) -> SearchResponse:
     if not libraries:
         return SearchResponse(query=req.query, passages=[], libraries=[])
 
-    vector, method = await get_embedding(req.query)
+    vector, method = await get_embedding(req.query, input_type="query")
     if method.startswith("local-fallback"):
         raise SearchUnavailable(
             "the embedding provider is unavailable, so the query can't be embedded "

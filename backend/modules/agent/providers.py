@@ -36,7 +36,6 @@ from backend.modules.telemetry.instrument import tee_stream
 DeltaSink = Callable[[str, str], Awaitable[None]]
 
 
-
 @dataclass(frozen=True)
 class ProviderInfo:
     kind: str  # stable id stored in AgentConfig
@@ -98,6 +97,27 @@ class ProviderInfo:
     #: — the field is a starting point for a dropdown, never a claim to be the
     #: provider's full range, and the model field stays free-text everywhere.
     static_models: tuple[str, ...] = ()
+
+    # --- embeddings ------------------------------------------------------------
+    #: Base URL whose `/v1/embeddings` serves this provider's embedders, when that
+    #: is not `default_endpoint`. Only the litellm-dialect providers need it: they
+    #: have no endpoint at all (litellm routes chat by model prefix), but embeddings
+    #: go out as a plain OpenAI-shape request, which needs somewhere to go.
+    embed_endpoint: str = ""
+    #: The embedder to use when nothing is pinned, for a provider whose model list
+    #: cannot be trusted to discover one. NIM's `/v1/models` still lists embedders
+    #: that answer **410 Gone** (`baai/bge-m3`, `nv-embedqa-e5-v5`, both retired
+    #: 2026-08-25), and OpenRouter keeps its embedders out of the chat catalog
+    #: entirely -- keyword discovery would pick a dead model on one and the *chat*
+    #: model on the other. Empty means "discover from the listing", the local rule.
+    default_embed_model: str = ""
+    #: Send `input_type` ("query" / "passage") with every embedding request.
+    #: NVIDIA's asymmetric embedders refuse a request without it (`'input_type'
+    #: parameter is required for asymmetric models`), and embed a query and the
+    #: passage it should match differently -- which is the point of them. Only for
+    #: providers that accept the field everywhere: OpenAI proper rejects an unknown
+    #: argument, so this cannot simply be sent to every openai-shape endpoint.
+    embed_input_type: bool = False
 
 
 PROVIDERS: dict[str, ProviderInfo] = {
@@ -183,6 +203,8 @@ PROVIDERS: dict[str, ProviderInfo] = {
             "NVIDIA's hosted endpoints run on your build.nvidia.com credits — no "
             "card, and no per-model price is published, so none is shown per model."
         ),
+        default_embed_model="nvidia/nemotron-3.5-embed-1b",
+        embed_input_type=True,
     ),
     "vllm": ProviderInfo(
         kind="vllm",
@@ -205,6 +227,8 @@ PROVIDERS: dict[str, ProviderInfo] = {
         api_key_url="https://platform.openai.com/api-keys",
         env_var="OPENAI_API_KEY",
         static_models=("gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"),
+        embed_endpoint="https://api.openai.com",
+        default_embed_model="text-embedding-3-small",
     ),
     "anthropic": ProviderInfo(
         kind="anthropic",
@@ -255,6 +279,11 @@ PROVIDERS: dict[str, ProviderInfo] = {
         # Only a fallback for a catalog fetch that times out — never the range on
         # offer. `:free` entries are rate-limited rather than unlimited.
         static_models=("minimax/minimax-m3:free", "minimax/minimax-m3"),
+        embed_endpoint="https://openrouter.ai/api",
+        # The same NVIDIA embedder NIM serves, here at $0. OpenRouter passes
+        # `input_type` through to NVIDIA and ignores it for symmetric models.
+        default_embed_model="nvidia/nemotron-3.5-embed-1b:free",
+        embed_input_type=True,
     ),
     "browser": ProviderInfo(
         kind="browser",

@@ -325,7 +325,7 @@ async def _handle_search(ws: WebSocket, msg: dict[str, Any]) -> None:
         await _send(ws, {"type": "candidates", "results": []})
         return
     init_db()
-    embedding, _ = await get_embedding(query)
+    embedding, _ = await get_embedding(query, input_type="query")
     matches = search_documents(PROFILE_COLLECTION, embedding, max(limit, 1))
     results: list[dict[str, Any]] = []
     for match in matches:

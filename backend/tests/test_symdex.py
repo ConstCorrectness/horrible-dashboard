@@ -98,7 +98,7 @@ def test_extract_docs_chunks_mdx(tmp_path):
 
 
 def _fake_embedder(model: str, dim: int):
-    async def fake(text: str):
+    async def fake(text: str, **_kw):
         return [0.1] * dim, model
 
     return fake
