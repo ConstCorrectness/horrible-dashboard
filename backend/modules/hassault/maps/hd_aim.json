@@ -2,352 +2,343 @@
   "title": "Aim Range",
   "author": "horrible-dashboard",
   "license": "CC0-1.0",
-  "sfactor": 7,
+  "sfactor": 8,
   "waterlevel": -100,
   "ambient": 60,
-  "modes": [
-    "dm"
-  ],
+  "atmosphere": {
+    "skyZenith": 1712688,
+    "skyHorizon": 3819094,
+    "hemiSky": 14214388,
+    "hemiGround": 4867648,
+    "hemiIntensity": 1.7,
+    "sunColor": 15922943,
+    "sunIntensity": 0.9,
+    "sunDir": [0.25, 0.9, 0.35],
+    "fillColor": 12110048,
+    "fillIntensity": 0.35,
+    "fillDir": [-0.5, 0.4, -0.6],
+    "fogColor": 2765374,
+    "fogDensity": 0.0018,
+    "exposure": 1.1,
+    "sunDisc": false
+  },
+  "modes": ["dm"],
+  "format": "gltf",
   "brushes": [
     {
       "op": "room",
-      "rect": [
-        4,
-        4,
-        120,
-        94
-      ],
+      "rect": [2, 2, 124, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [2, 4, 2, 96],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [4, 4, 119, 10],
       "floor": 0,
-      "ceil": 24,
-      "wtex": 12,
-      "ftex": 21,
-      "ctex": 33
-    },
-    {
-      "op": "solid",
-      "rect": [
-        16,
-        31,
-        104,
-        2
-      ],
-      "wtex": 47
-    },
-    {
-      "op": "solid",
-      "rect": [
-        16,
-        64,
-        104,
-        2
-      ],
-      "wtex": 47
+      "ceil": 23
     },
     {
       "op": "room",
-      "rect": [
-        7,
-        14,
-        6,
-        7
-      ],
-      "floor": 1,
-      "ceil": 24,
-      "wtex": 47,
-      "ftex": 58,
-      "ctex": 33
+      "rect": [123, 4, 3, 96],
+      "floor": 25,
+      "ceil": 33
     },
     {
       "op": "room",
-      "rect": [
-        7,
-        45,
-        6,
-        7
-      ],
-      "floor": 1,
-      "ceil": 24,
-      "wtex": 47,
-      "ftex": 58,
-      "ctex": 33
+      "rect": [4, 14, 3, 84],
+      "floor": 0,
+      "ceil": 23
     },
     {
       "op": "room",
-      "rect": [
-        7,
-        78,
-        6,
-        7
-      ],
+      "rect": [7, 14, 6, 7],
       "floor": 1,
-      "ceil": 24,
-      "wtex": 47,
-      "ftex": 58,
-      "ctex": 33
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [13, 14, 110, 17],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [7, 21, 6, 24],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [13, 31, 3, 67],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [16, 31, 104, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [120, 31, 3, 67],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [16, 33, 104, 31],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [7, 45, 6, 7],
+      "floor": 1,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [7, 52, 6, 26],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [16, 64, 104, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [16, 66, 104, 32],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [7, 78, 6, 7],
+      "floor": 1,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [7, 85, 6, 13],
+      "floor": 0,
+      "ceil": 23
+    },
+    {
+      "op": "room",
+      "rect": [4, 98, 119, 2],
+      "floor": 25,
+      "ceil": 33
     }
   ],
   "drills": [
     {
       "id": "close",
       "label": "Close lane: 10 and 25 cubes",
-      "shooter": [
-        10,
-        17
-      ],
+      "shooter": [10, 17],
       "posts": [
-        [
-          20,
-          13,
-          3
-        ],
-        [
-          20,
-          21,
-          3
-        ],
-        [
-          35,
-          10,
-          4
-        ],
-        [
-          35,
-          17,
-          4
-        ],
-        [
-          35,
-          24,
-          4
-        ]
+        [20, 13, 3],
+        [20, 21, 3],
+        [35, 10, 4],
+        [35, 17, 4],
+        [35, 24, 4]
       ]
     },
     {
       "id": "gallery",
       "label": "Strafe gallery: 30 and 45 cubes",
-      "shooter": [
-        10,
-        48
-      ],
+      "shooter": [10, 48],
       "posts": [
-        [
-          40,
-          38,
-          5
-        ],
-        [
-          40,
-          48,
-          5
-        ],
-        [
-          40,
-          58,
-          5
-        ],
-        [
-          55,
-          43,
-          5
-        ],
-        [
-          55,
-          53,
-          5
-        ]
+        [40, 38, 5],
+        [40, 48, 5],
+        [40, 58, 5],
+        [55, 43, 5],
+        [55, 53, 5]
       ]
     },
     {
       "id": "long",
       "label": "Long lane: 50 and 100 cubes",
-      "shooter": [
-        10,
-        81
-      ],
+      "shooter": [10, 81],
       "posts": [
-        [
-          60,
-          76,
-          6
-        ],
-        [
-          60,
-          86,
-          6
-        ],
-        [
-          110,
-          81,
-          8
-        ]
+        [60, 76, 6],
+        [60, 86, 6],
+        [110, 81, 8]
       ]
     }
   ],
   "entities": [
+    {"type": "playerstart", "x": 10, "y": 17, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 10, "y": 48, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 10, "y": 81, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 10, "y": 92, "yaw": 0, "team": 0},
+    {"type": "playerstart", "x": 116, "y": 17, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 116, "y": 48, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 116, "y": 81, "yaw": 180, "team": 1},
+    {"type": "playerstart", "x": 116, "y": 10, "yaw": 180, "team": 1},
+    {"type": "ammo", "x": 12, "y": 22, "z": 0},
+    {"type": "ammo", "x": 12, "y": 53, "z": 0},
+    {"type": "ammo", "x": 12, "y": 86, "z": 0},
+    {"type": "clips", "x": 80, "y": 17, "z": 0},
+    {"type": "clips", "x": 80, "y": 48, "z": 0},
+    {"type": "clips", "x": 80, "y": 81, "z": 0},
+    {"type": "health", "x": 110, "y": 24, "z": 0},
+    {"type": "health", "x": 110, "y": 92, "z": 0},
+    {"type": "armour", "x": 96, "y": 48, "z": 0},
     {
-      "type": "playerstart",
-      "x": 10,
-      "y": 17,
-      "yaw": 0,
-      "team": 0
-    },
-    {
-      "type": "playerstart",
-      "x": 10,
-      "y": 48,
-      "yaw": 0,
-      "team": 0
-    },
-    {
-      "type": "playerstart",
-      "x": 10,
-      "y": 81,
-      "yaw": 0,
-      "team": 0
-    },
-    {
-      "type": "playerstart",
-      "x": 10,
-      "y": 92,
-      "yaw": 0,
-      "team": 0
-    },
-    {
-      "type": "playerstart",
-      "x": 116,
-      "y": 17,
-      "yaw": 180,
-      "team": 1
-    },
-    {
-      "type": "playerstart",
-      "x": 116,
-      "y": 48,
-      "yaw": 180,
-      "team": 1
-    },
-    {
-      "type": "playerstart",
-      "x": 116,
-      "y": 81,
-      "yaw": 180,
-      "team": 1
-    },
-    {
-      "type": "playerstart",
-      "x": 116,
-      "y": 10,
-      "yaw": 180,
-      "team": 1
+      "type": "light",
+      "x": 18,
+      "y": 18,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
       "type": "light",
-      "x": 30,
-      "y": 17,
-      "radius": 96,
-      "color": [
-        255,
-        240,
-        214
-      ]
+      "x": 18,
+      "y": 82,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
       "type": "light",
-      "x": 45,
-      "y": 48,
-      "radius": 110,
-      "color": [
-        255,
-        240,
-        214
-      ]
+      "x": 39,
+      "y": 82,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
       "type": "light",
       "x": 60,
-      "y": 81,
-      "radius": 120,
-      "color": [
-        255,
-        240,
-        214
-      ]
+      "y": 82,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
       "type": "light",
-      "x": 105,
-      "y": 81,
-      "radius": 96,
-      "color": [
-        214,
-        226,
-        255
-      ]
+      "x": 81,
+      "y": 82,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
       "type": "light",
-      "x": 105,
-      "y": 30,
-      "radius": 96,
-      "color": [
-        214,
-        226,
-        255
-      ]
+      "x": 102,
+      "y": 82,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "ammo",
-      "x": 12,
-      "y": 22,
-      "z": 0
+      "type": "light",
+      "x": 39,
+      "y": 18,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "ammo",
-      "x": 12,
-      "y": 53,
-      "z": 0
+      "type": "light",
+      "x": 60,
+      "y": 18,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "ammo",
-      "x": 12,
-      "y": 86,
-      "z": 0
+      "type": "light",
+      "x": 81,
+      "y": 18,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "clips",
-      "x": 80,
-      "y": 17,
-      "z": 0
+      "type": "light",
+      "x": 102,
+      "y": 18,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "clips",
-      "x": 80,
+      "type": "light",
+      "x": 18,
       "y": 48,
-      "z": 0
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     },
     {
-      "type": "clips",
-      "x": 80,
-      "y": 81,
-      "z": 0
-    },
-    {
-      "type": "health",
-      "x": 110,
-      "y": 24,
-      "z": 0
-    },
-    {
-      "type": "health",
-      "x": 110,
-      "y": 92,
-      "z": 0
-    },
-    {
-      "type": "armour",
-      "x": 96,
+      "type": "light",
+      "x": 39,
       "y": 48,
-      "z": 0
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
+    },
+    {
+      "type": "light",
+      "x": 60,
+      "y": 48,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
+    },
+    {
+      "type": "light",
+      "x": 81,
+      "y": 48,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
+    },
+    {
+      "type": "light",
+      "x": 102,
+      "y": 48,
+      "z": 19,
+      "radius": 48,
+      "color": [236, 242, 255],
+      "intensity": 1.8
     }
+  ],
+  "collision": "baked",
+  "spawns": [
+    {"x": 10, "y": 17, "yaw": 0, "team": 0},
+    {"x": 10, "y": 48, "yaw": 0, "team": 0},
+    {"x": 10, "y": 81, "yaw": 0, "team": 0},
+    {"x": 10, "y": 92, "yaw": 0, "team": 0},
+    {"x": 116, "y": 17, "yaw": 180, "team": 1},
+    {"x": 116, "y": 48, "yaw": 180, "team": 1},
+    {"x": 116, "y": 81, "yaw": 180, "team": 1},
+    {"x": 116, "y": 10, "yaw": 180, "team": 1}
   ]
 }

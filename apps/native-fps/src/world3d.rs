@@ -93,6 +93,9 @@ pub struct World3D {
     pub render_colors: Vec<f32>,
     pub render_uvs: Vec<f32>,
     pub render_materials: Vec<f32>,
+    /// Baked ambient occlusion per render vertex (a GLB's COLOR_0). Empty for
+    /// the procedural worlds, which read as unoccluded.
+    pub render_ao: Vec<f32>,
     pub triangles: usize,
     /// Collision geometry in game space (x, y, z as height).
     pub col_vertices: Vec<Point<Real>>,
@@ -111,6 +114,7 @@ impl World3D {
             colors: self.render_colors.clone(),
             uvs: self.render_uvs.clone(),
             materials: self.render_materials.clone(),
+            ao: self.render_ao.clone(),
             triangles: self.triangles,
         }
     }
@@ -584,6 +588,7 @@ pub fn create_procedural_facility_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -696,6 +701,7 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1049,6 +1055,7 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1500,6 +1507,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1644,6 +1652,7 @@ pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1794,6 +1803,7 @@ pub fn create_procedural_dust2_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1951,6 +1961,7 @@ pub fn create_procedural_inferno_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2109,6 +2120,7 @@ pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2249,6 +2261,7 @@ pub fn create_procedural_nuke_3d(info: MapInfo) -> World3D {
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
+        render_ao: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2264,6 +2277,7 @@ const HD_MIRAGE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hass
 const HD_INFERNO_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_inferno.glb");
 const HD_DUST2_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_dust2.glb");
 const HD_OFFICE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_office.glb");
+const HD_AIM_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_aim.glb");
 const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
 const HD_BANK_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_bank.glb");
 const HD_JUNKFLEA_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_junkflea.glb");
@@ -2354,6 +2368,7 @@ fn walk_glb_node(
     render_colors: &mut Vec<f32>,
     render_uvs: &mut Vec<f32>,
     render_materials: &mut Vec<f32>,
+    render_ao: &mut Vec<f32>,
     col_vertices: &mut Vec<Point<Real>>,
     col_indices: &mut Vec<[u32; 3]>,
     windows: &mut std::collections::HashMap<String, BreakableWindow>,
@@ -2421,6 +2436,9 @@ fn walk_glb_node(
             // sandstone drew near black). Absent UVs are projected from the world
             // instead, `glb-surfaces.ts` `planarUv` on the browser side.
             let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|t| t.into_f32().collect());
+            // Baked ambient occlusion (`maplib.bake_vertex_ao`): grey in COLOR_0,
+            // so red is the value. A primitive without it is unoccluded.
+            let ao: Option<Vec<f32>> = reader.read_colors(0).map(|c| c.into_rgb_f32().map(|c| c[0]).collect());
             let mat_kind = MaterialKind::from_name(mat_name);
             let mat_id = mat_kind as u8 as f32;
             let indices: Vec<u32> = match reader.read_indices() {
@@ -2495,6 +2513,8 @@ fn walk_glb_node(
                     render_uvs.extend_from_slice(&uv1);
 
                     render_materials.extend_from_slice(&[mat_id, mat_id, mat_id]);
+                    let ao_at = |i: usize| ao.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(1.0);
+                    render_ao.extend_from_slice(&[ao_at(i0), ao_at(i2), ao_at(i1)]);
                 }
 
                 if is_win {
@@ -2559,6 +2579,7 @@ fn walk_glb_node(
             render_colors,
             render_uvs,
             render_materials,
+            render_ao,
             col_vertices,
             col_indices,
             windows,
@@ -2577,6 +2598,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     let mut render_colors = Vec::new();
     let mut render_uvs = Vec::new();
     let mut render_materials = Vec::new();
+    let mut render_ao = Vec::new();
     let mut col_vertices = Vec::new();
     let mut col_indices = Vec::new();
     let mut windows = std::collections::HashMap::new();
@@ -2592,6 +2614,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 &mut render_colors,
                 &mut render_uvs,
                 &mut render_materials,
+                &mut render_ao,
                 &mut col_vertices,
                 &mut col_indices,
                 &mut windows,
@@ -2601,7 +2624,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
 
     let triangles = render_positions.len() / 9;
 
-    let (spawns, items) = if info.name == "hd_facility" {
+    let (spawns, items) = if info.name == "hd_aim" {
+        (
+            vec![
+                SpawnPoint { x: 10.0, y: 17.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 10.0, y: 48.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 10.0, y: 81.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 10.0, y: 92.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 116.0, y: 17.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 116.0, y: 48.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 116.0, y: 81.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 116.0, y: 10.0, z: 0.0, yaw: 180.0, team: 1 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "ammo_assault".into(), x: 12.0, y: 22.0, z: 0.0 },
+                ItemRow { id: 2, kind: "ammo_assault".into(), x: 12.0, y: 53.0, z: 0.0 },
+                ItemRow { id: 3, kind: "ammo_assault".into(), x: 12.0, y: 86.0, z: 0.0 },
+                ItemRow { id: 4, kind: "clips".into(), x: 80.0, y: 17.0, z: 0.0 },
+                ItemRow { id: 5, kind: "clips".into(), x: 80.0, y: 48.0, z: 0.0 },
+                ItemRow { id: 6, kind: "clips".into(), x: 80.0, y: 81.0, z: 0.0 },
+                ItemRow { id: 7, kind: "health".into(), x: 110.0, y: 24.0, z: 0.0 },
+                ItemRow { id: 8, kind: "health".into(), x: 110.0, y: 92.0, z: 0.0 },
+                ItemRow { id: 9, kind: "armour".into(), x: 96.0, y: 48.0, z: 0.0 },
+            ],
+        )
+    } else if info.name == "hd_facility" {
         (
             vec![
                 SpawnPoint { x: 30.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
@@ -2829,7 +2876,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         )
     };
 
-    let bounds = if info.name == "hd_facility" {
+    let bounds = if info.name == "hd_aim" {
+        WorldBounds {
+            min: [4.0, 4.0, 0.0],
+            max: [124.0, 98.0, 24.0],
+            center: [64.0, 51.0, 12.0],
+            extent: 120.0,
+        }
+    } else if info.name == "hd_facility" {
         WorldBounds {
             min: [0.0, 0.0, -15.0],
             max: [192.0, 192.0, 42.0],
@@ -2895,6 +2949,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         render_colors,
         render_uvs,
         render_materials,
+        render_ao,
         triangles,
         col_vertices,
         col_indices,
@@ -3015,6 +3070,20 @@ pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
         }
     }
     load_world_3d_from_glb(HD_ASSAULT_GLB_BYTES, info)
+}
+
+pub fn load_aim_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_aim.glb",
+        "backend/modules/hassault/maps/hd_aim.glb",
+        "assets/maps/hd_aim.glb",
+        "apps/web/public/hd_aim.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_AIM_GLB_BYTES, info)
 }
 
 pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
@@ -3153,6 +3222,13 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 }
             }
         }
+        "hd_aim" => match load_aim_glb(info.clone()) {
+            Ok(w) => w,
+            Err(err) => {
+                eprintln!("hassault: failed to load GLB for hd_aim ({err}), falling back to procedural");
+                scale_fallback(create_procedural_facility_3d(info))
+            }
+        },
         "hd_office" => {
             match load_office_glb(info.clone()) {
                 Ok(w) => w,

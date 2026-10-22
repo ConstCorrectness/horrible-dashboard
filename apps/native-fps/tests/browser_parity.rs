@@ -971,6 +971,27 @@ fn both_clients_give_a_player_the_same_light_floor_at_every_level() {
     );
 }
 
+#[test]
+fn baked_ambient_occlusion_is_content_on_the_world_and_never_a_setting() {
+    // A map's GLB carries AO in COLOR_0 (`tools/blender/maplib.py`). It is the
+    // same darkening for everyone at every level, so it is fair: the shader
+    // folds it into the albedo before `shade()`, whose Low early-out returns
+    // that albedo; it never reaches a character; no setting turns it off; and
+    // the browser keeps it through the static-batch merge.
+    const SHADER_WGSL: &str = include_str!("../src/shader.wgsl");
+    const SKIN_WGSL: &str = include_str!("../src/skin.wgsl");
+    const WORLD3D_TS: &str = include_str!("../../../packages/core/src/modules/hassault/world3d.ts");
+    const GRAPHICS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    const SETTINGS_RS: &str = include_str!("../src/settings.rs");
+    assert!(SHADER_WGSL.contains("albedo = albedo * in.ao;"), "textured world surfaces lost their AO");
+    assert!(SHADER_WGSL.contains("* DETAIL_GAIN * in.ao"), "untextured world surfaces lost their AO");
+    assert!(!SKIN_WGSL.contains(".ao") && !LIGHTING_WGSL.contains(".ao"), "AO reached the characters");
+    assert!(WORLD3D_TS.contains("merged.setAttribute('color'"), "the browser drops COLOR_0 when it batches");
+    for (name, src) in [("graphics.ts", GRAPHICS_TS), ("settings.rs", SETTINGS_RS)] {
+        assert!(!src.to_lowercase().contains("occlusion"), "{name} has an AO setting");
+    }
+}
+
 // -- the post chain ------------------------------------------------------------
 
 const POST_CHAIN_TS: &str =

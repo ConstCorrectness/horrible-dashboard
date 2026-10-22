@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 const PUBLIC_DIR = fileURLToPath(new URL('../../../../../../apps/web/public/', import.meta.url));
 
 const MAPS = [
+  'hd_aim',
   'hd_assault',
   'hd_bank',
   'hd_dust2',
@@ -225,5 +226,42 @@ describe.each(MAPS)('%s geometry', (name) => {
 
   it('has no surfaces fighting for the same plane', () => {
     expect(fightingArea([...nodes.values()].flat())).toBeLessThan(OVERLAP_BUDGET);
+  });
+});
+
+/**
+ * Baked ambient occlusion (`maplib.bake_vertex_ao`) rides in COLOR_0, grey, and
+ * is never darker than `AO_FLOOR`. Only see-through and self-lit surfaces go
+ * without, so a regeneration that lost the bake (a Blender whose exporter needs
+ * other arguments, a material the wiring skipped) fails here, not on screen.
+ */
+const AO_FLOOR = 0.45;
+const NO_AO = /glass|window|glow|emiss|light|lamp|sky|water/i;
+
+describe.each(MAPS)('%s baked AO', (name) => {
+  const { gltf, bin } = readGlb(`${PUBLIC_DIR}${name}.glb`);
+
+  it('covers every opaque surface and stays in range', () => {
+    let lit = 0;
+    let total = 0;
+    let lo = 1;
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        const material = gltf.materials?.[prim.material ?? -1]?.name ?? '';
+        if (NO_AO.test(material)) continue;
+        const count = gltf.accessors[prim.attributes.POSITION!]!.count;
+        total += count;
+        const color = prim.attributes.COLOR_0;
+        if (color === undefined) continue;
+        lit += count;
+        // Normalised bytes (`maplib._bytes_for_colors`), so 255 is 1; alpha is padding.
+        const scale = gltf.accessors[color]!.componentType === 5121 ? 255 : 1;
+        const values = accessor(gltf, bin, color);
+        for (let k = 0; k < values.length; k++)
+          if (k % 4 !== 3) lo = Math.min(lo, values[k]! / scale);
+      }
+    }
+    expect(lit / total).toBeGreaterThan(0.95);
+    expect(lo).toBeGreaterThanOrEqual(AO_FLOOR - 0.01);
   });
 });

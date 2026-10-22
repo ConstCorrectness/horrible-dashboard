@@ -268,3 +268,6 @@ benchmark_db_driver/
 __screenshots__/
 # WebML kernel-test measurements (parity summaries, speed benchmarks)
 packages/webml/kernel-tests/.results/
+
+# Map meshes before their AO edge splits, for bake_collision.py (maplib.COLLISION_DIR)
+tools/blender/.collision/

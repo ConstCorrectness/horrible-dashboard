@@ -1368,6 +1368,256 @@ def _write_map_json(path: str, factor: float) -> None:
     print(f"Wrote {len(_LIGHTS)} lights and atmosphere to: {path}")
 
 
+# --- Baked ambient occlusion --------------------------------------------------
+#
+# Content, not a setting: every client draws the same darkening in the same
+# corners, at every quality level, so it is fair and costs nothing at runtime.
+# It rides in COLOR_0, a per-vertex colour both clients multiply into the
+# surface colour (native `shader.wgsl`, three's `vertexColors`). Per vertex
+# because the clients have no second UV set for a lightmap; the price is that a
+# big flat face must be split before it has vertices to carry the shading.
+
+#: How far a surface looks for an occluder, in metres (times the scale on use).
+AO_DISTANCE = 1.5
+#: Longest edge left on a receiving face, in metres, before the bake.
+AO_MAX_EDGE = 2.0
+#: The darkest a fully occluded vertex may draw: AO is remapped to
+#: `AO_FLOOR + (1 - AO_FLOOR) * ao`, so a corner reads as a corner, not a hole.
+AO_FLOOR = 0.45
+AO_SAMPLES = 48
+
+#: Where `export_map_glb` leaves each map as it was *before* the AO splits,
+#: for `bake_collision.py`. The server's heightfield is rasterised by vertical
+#: rays counting faces, and that count is sensitive to how a floor is
+#: triangulated: baked from the split mesh, Inferno moved 45 cells' floors by
+#: up to four cubes. Same surfaces, different collision is a graphics pass
+#: changing the game, so collision keeps reading the unsplit mesh. Not
+#: committed: regenerate before re-baking.
+COLLISION_DIR = os.path.join(REPO_ROOT, "tools", "blender", ".collision")
+AO_ATTRIBUTE = "AO"
+
+#: Objects that neither cast nor receive: invisible collision, the safety floor
+#: and boundary walls, and anything see-through or self-lit.
+_AO_SKIP_NAMES = ("_ColOnly", "Invisible", "Safety_Floor", "Boundary")
+_AO_SKIP_MATERIALS = ("glass", "window", "glow", "emiss", "light", "lamp", "sky")
+
+
+def _ao_skip_material(mat) -> bool:
+    """See-through or self-lit: neither casts AO nor shows it."""
+    if mat is None:
+        return False
+    lower = mat.name.lower()
+    return any(k in lower for k in _AO_SKIP_MATERIALS) or mat.blend_method == "BLEND"
+
+
+def _ao_skipped(obj) -> bool:
+    """An object with no surface that takes AO: by name, or every slot skipped.
+
+    Per material rather than "any slot", because joined meshes mix a wall with
+    its window: skipping the object for the glass cost the wall its AO. The
+    glass in a kept object still occludes a little; that is the lesser error.
+    """
+    if obj.type != "MESH" or any(k in obj.name for k in _AO_SKIP_NAMES):
+        return True
+    mats = [s.material for s in obj.material_slots]
+    return bool(mats) and all(_ao_skip_material(m) for m in mats)
+
+
+def _split_long_edges(obj, max_edge: float) -> None:
+    """Halve every edge longer than `max_edge` until none is, grid-filling quads."""
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    for _ in range(8):
+        long = [e for e in bm.edges if e.calc_length() > max_edge]
+        if not long:
+            break
+        bmesh.ops.subdivide_edges(bm, edges=long, cuts=1, use_grid_fill=True)
+    bm.to_mesh(obj.data)
+    bm.free()
+
+
+def _wire_ao_into_material(mat) -> bool:
+    """Base Color <- Mix(Multiply, factor, Color Attribute "AO").
+
+    The one arrangement Blender 4.1's glTF exporter reads a vertex colour from
+    (`get_vertex_color_info`): without a material that uses it, COLOR_0 is
+    not written at all. The importer builds the same thing, and the exporter
+    still takes the factor from the Mix's first colour, so the base colour the
+    clients read is unchanged. A Base Color already driven by something else
+    (a texture) is left alone, and that material's meshes export no AO.
+    """
+    if not mat.use_nodes or mat.node_tree is None:
+        return False
+    tree = mat.node_tree
+    bsdf = next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return False
+    socket = bsdf.inputs["Base Color"]
+    if socket.is_linked:
+        return any(n.type == "VERTEX_COLOR" for n in tree.nodes)
+    mix = tree.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.blend_type = "MULTIPLY"
+    mix.inputs[0].default_value = 1.0
+    mix.inputs[6].default_value = tuple(socket.default_value)
+    attr = tree.nodes.new("ShaderNodeVertexColor")
+    attr.layer_name = AO_ATTRIBUTE
+    tree.links.new(attr.outputs[0], mix.inputs[7])
+    tree.links.new(mix.outputs[2], socket)
+    return True
+
+
+def bake_vertex_ao(factor: float) -> None:
+    """Bake AO into each receiving mesh's `AO` colour attribute, made active.
+
+    Runs on the finished, scaled scene (distances in cubes). `HASSAULT_BAKE_AO=0`
+    skips it, for a quick look at a layout change.
+    """
+    if os.environ.get("HASSAULT_BAKE_AO", "1") == "0":
+        print("ao: skipped (HASSAULT_BAKE_AO=0)")
+        return
+    scene = bpy.context.scene
+    meshes = [o for o in scene.objects if o.type == "MESH"]
+    receivers = [o for o in meshes if not _ao_skipped(o)]
+    hidden = [o for o in meshes if _ao_skipped(o) and not o.hide_render]
+    before = sum(len(o.data.vertices) for o in receivers)
+    for o in receivers:
+        if o.data.users > 1:
+            o.data = o.data.copy()
+        _split_long_edges(o, AO_MAX_EDGE * factor)
+        attrs = o.data.color_attributes
+        if AO_ATTRIBUTE in attrs:
+            attrs.remove(attrs[AO_ATTRIBUTE])
+        attr = attrs.new(AO_ATTRIBUTE, "BYTE_COLOR", "POINT")
+        attrs.active_color = attr
+        attrs.render_color_index = attrs.find(AO_ATTRIBUTE)
+    after = sum(len(o.data.vertices) for o in receivers)
+    wired = {
+        s.material.name
+        for o in receivers
+        for s in o.material_slots
+        if s.material is not None
+        and not _ao_skip_material(s.material)
+        and _wire_ao_into_material(s.material)
+    }
+    print(f"ao: {len(wired)} materials carry it")
+    print(f"ao: {len(receivers)} receivers, {before} -> {after} vertices")
+
+    for o in hidden:
+        o.hide_render = True
+    previous_engine = scene.render.engine
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = AO_SAMPLES
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("AO_World")
+    scene.world.light_settings.distance = AO_DISTANCE * factor
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in receivers:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = receivers[0]
+    bpy.ops.object.bake(type="AO", target="VERTEX_COLORS", use_clear=True)
+    for o in hidden:
+        o.hide_render = False
+    scene.render.engine = previous_engine
+
+    lo, total, n = 1.0, 0.0, 0
+    for o in receivers:
+        data = o.data.color_attributes[AO_ATTRIBUTE].data
+        for d in data:
+            ao = AO_FLOOR + (1.0 - AO_FLOOR) * d.color[0]
+            d.color = (ao, ao, ao, 1.0)
+            lo = min(lo, ao)
+            total += ao
+            n += 1
+    print(f"ao: baked {n} vertices, mean {total / max(n, 1):.3f}, darkest {lo:.3f}")
+
+
+def _bytes_for_colors(path: str) -> None:
+    """Rewrite every float COLOR_0 in a GLB as normalised unsigned bytes.
+
+    Blender writes vertex colours as three floats, 12 bytes a vertex, as much as
+    the positions; AO is a grey whose eighth bit nobody can see. Bytes, padded
+    to RGBA because a vertex attribute's elements must be 4-byte aligned, are a
+    third of that. Both clients read either (three's normalised attributes, the
+    `gltf` crate's `into_rgb_f32`). The binary chunk is rebuilt view by view so
+    the old floats do not ride along unused.
+    """
+    import json
+    import struct
+
+    with open(path, "rb") as f:
+        data = f.read()
+    json_len = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20 : 20 + json_len])
+    bin_start = 20 + json_len + 8
+    blob = data[bin_start : bin_start + struct.unpack_from("<I", data, 20 + json_len)[0]]
+
+    colour_views = {}
+    for mesh in doc.get("meshes", []):
+        for prim in mesh["primitives"]:
+            idx = prim["attributes"].get("COLOR_0")
+            if idx is None:
+                continue
+            acc = doc["accessors"][idx]
+            if acc["componentType"] != 5126:
+                continue
+            colour_views[acc["bufferView"]] = idx
+    if not colour_views:
+        return
+
+    out = bytearray()
+    for vi, view in enumerate(doc["bufferViews"]):
+        start = view.get("byteOffset", 0)
+        raw = blob[start : start + view["byteLength"]]
+        if vi in colour_views:
+            acc = doc["accessors"][colour_views[vi]]
+            comps = 4 if acc["type"] == "VEC4" else 3
+            stride = view.get("byteStride", 4 * comps)
+            packed = bytearray()
+            for k in range(acc["count"]):
+                vals = struct.unpack_from(f"<{comps}f", raw, acc.get("byteOffset", 0) + k * stride)
+                rgb = [max(0, min(255, round(v * 255))) for v in vals[:3]]
+                packed += bytes((*rgb, 255))
+            raw = bytes(packed)
+            view.pop("byteStride", None)
+            acc.update(componentType=5121, normalized=True, type="VEC4", byteOffset=0)
+            acc.pop("min", None)
+            acc.pop("max", None)
+        while len(out) % 4:
+            out.append(0)
+        view["byteOffset"] = len(out)
+        view["byteLength"] = len(raw)
+        out += raw
+    while len(out) % 4:
+        out.append(0)
+    doc["buffers"][0]["byteLength"] = len(out)
+    text = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    text += b" " * ((4 - len(text) % 4) % 4)
+    total = 12 + 8 + len(text) + 8 + len(out)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<III", 0x46546C67, 2, total))
+        f.write(struct.pack("<II", len(text), 0x4E4F534A) + text)
+        f.write(struct.pack("<II", len(out), 0x004E4942) + bytes(out))
+
+
+def _export_glb(path: str) -> None:
+    bpy.ops.export_scene.gltf(
+        filepath=path,
+        export_format="GLB",
+        use_selection=False,
+        export_apply=True,
+        export_yup=True,
+        export_materials="EXPORT",
+        export_lights=False,
+        export_cameras=False,
+        export_colors=True,
+    )
+    _bytes_for_colors(path)
+
+
 def export_map_glb(name: str) -> str:
     """Scale the built scene to cubes and write `<name>.glb` to both homes.
 
@@ -1375,6 +1625,7 @@ def export_map_glb(name: str) -> str:
     output is the repo's own maps directory.
     """
     factor = float(os.environ.get("HASSAULT_MAP_SCALE", MAP_SCALE))
+    override = os.environ.get("HASSAULT_MAP_OUT")
     add_safety_floor(bpy.context.scene.collection)
     add_boundary_walls(bpy.context.scene.collection)
     _linearize_base_colors()
@@ -1397,8 +1648,11 @@ def export_map_glb(name: str) -> str:
         clean_meshes()
     separate_coplanar(factor)
     mark_sharp_edges()
+    collision_dir = os.path.join(override, "collision") if override else COLLISION_DIR
+    os.makedirs(collision_dir, exist_ok=True)
+    _export_glb(os.path.join(collision_dir, f"{name}.glb"))
+    bake_vertex_ao(factor)
 
-    override = os.environ.get("HASSAULT_MAP_OUT")
     backend_dir = override or os.path.join(
         REPO_ROOT, "backend", "modules", "hassault", "maps"
     )
@@ -1407,16 +1661,7 @@ def export_map_glb(name: str) -> str:
 
     backend_path = os.path.join(backend_dir, f"{name}.glb")
     print(f"Exporting {name} at {factor}x to: {backend_path}")
-    bpy.ops.export_scene.gltf(
-        filepath=backend_path,
-        export_format="GLB",
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials="EXPORT",
-        export_lights=False,
-        export_cameras=False,
-    )
+    _export_glb(backend_path)
     if web_dir:
         os.makedirs(web_dir, exist_ok=True)
         shutil.copyfile(backend_path, os.path.join(web_dir, f"{name}.glb"))

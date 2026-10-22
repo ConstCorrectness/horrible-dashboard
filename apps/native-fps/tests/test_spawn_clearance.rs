@@ -26,6 +26,7 @@ const GLB_MAPS: &[&str] = &[
     "hd_inferno",
     "hd_mirage",
     "hd_nuke",
+    "hd_aim",
 ];
 
 /// Where a standing body at (x, y) collides, or `None` if it fits.

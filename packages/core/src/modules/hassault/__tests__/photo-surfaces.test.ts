@@ -167,7 +167,8 @@ describe('photo surface kinds', () => {
             lower.includes('nuke_') ||
             lower.includes('office_') ||
             lower.includes('bank_') ||
-            lower.includes('assault_'),
+            lower.includes('assault_') ||
+            lower.includes('aim_'),
           row.name,
         ).toBe(true);
       }

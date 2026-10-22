@@ -48,6 +48,12 @@ pub struct Vertex {
     pub color: [f32; 3],
     pub uv: [f32; 2],
     pub material: f32,
+    /// Baked ambient occlusion, 1 for none: a map's GLB carries it in
+    /// COLOR_0. Its own attribute rather than folded into `color`, because
+    /// some layers *mix* the colour with a photograph, which would wash the
+    /// darkening out; the shader multiplies it in after the mix, as three does
+    /// with a vertex colour.
+    pub ao: f32,
 }
 
 /// A vertex of a translucent volume: smoke, fire.
@@ -132,6 +138,7 @@ impl Vertex {
             color,
             uv: [0.0, 0.0],
             material: 0.0,
+            ao: 1.0,
         }
     }
 
@@ -148,15 +155,17 @@ impl Vertex {
             color,
             uv,
             material,
+            ao: 1.0,
         }
     }
 
-    pub const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    pub const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x3,
         3 => Float32x2,
         4 => Float32,
+        5 => Float32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -2117,6 +2126,7 @@ pub fn mesh_vertices(mesh: &MeshData) -> Vec<Vertex> {
             ],
             uv,
             material,
+            ao: mesh.ao.get(i).copied().unwrap_or(1.0),
         });
     }
     out
@@ -2174,18 +2184,19 @@ mod tests {
         // The shader indexes by byte offset. If `repr(C)` were ever dropped,
         // Rust would be free to reorder these and the colours would arrive in
         // the normal's slot with no error anywhere.
-        assert_eq!(std::mem::size_of::<Vertex>(), 12 * 4);
+        assert_eq!(std::mem::size_of::<Vertex>(), 13 * 4);
         let v = Vertex {
             position: [1.0, 2.0, 3.0],
             normal: [4.0, 5.0, 6.0],
             color: [7.0, 8.0, 9.0],
             uv: [10.0, 11.0],
             material: 12.0,
+            ao: 13.0,
         };
         let bytes: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&v));
         assert_eq!(
             bytes,
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0]
         );
     }
 
@@ -2221,6 +2232,7 @@ mod tests {
             colors: vec![0.5, 0.5, 0.5, 0.25, 0.25, 0.25],
             uvs: vec![0.0, 0.0, 1.0, 1.0],
             materials: vec![0.0, 1.0],
+            ao: vec![0.5],
             triangles: 0,
         };
         let verts = mesh_vertices(&mesh);
@@ -2229,6 +2241,9 @@ mod tests {
         assert_eq!(verts[1].color, [0.25, 0.25, 0.25]);
         assert_eq!(verts[1].uv, [1.0, 1.0]);
         assert_eq!(verts[1].material, 1.0);
+        // A mesh with fewer AO values than vertices is unoccluded past them.
+        assert_eq!(verts[0].ao, 0.5);
+        assert_eq!(verts[1].ao, 1.0);
     }
 }
 #[cfg(test)]

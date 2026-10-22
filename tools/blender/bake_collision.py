@@ -28,7 +28,10 @@ What a heightfield cannot say, and the choices made about it:
 - **Breakable glass is open.** The server does not simulate shattering, and a
   pane that is solid forever would close sightlines the map is built around.
 
-Run headless, after the generator (it reads the committed GLB):
+Run headless, after the generator. It reads the mesh the generator left in
+`tools/blender/.collision/` (the map before its AO edge splits, which change
+how rays count faces: see `maplib.COLLISION_DIR`), and the committed GLB only
+when that is missing, with a warning:
 
     blender --background --factory-startup --python tools/blender/bake_collision.py -- hd_dust2 [hd_nuke ...]
 """
@@ -50,6 +53,7 @@ REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 )
 MAPS_DIR = os.path.join(REPO_ROOT, "backend", "modules", "hassault", "maps")
+COLLISION_DIR = os.path.join(REPO_ROOT, "tools", "blender", ".collision")
 COLLIDERS = os.path.join(
     REPO_ROOT, "packages", "core", "src", "modules", "hassault", "glb-colliders.json"
 )
@@ -114,7 +118,7 @@ def load_colliders(name: str):
     quiet, sys.stdout = sys.stdout, io.StringIO()
     try:
         bpy.ops.wm.read_homefile(use_empty=True, use_factory_startup=True)
-        bpy.ops.import_scene.gltf(filepath=os.path.join(MAPS_DIR, f"{name}.glb"))
+        bpy.ops.import_scene.gltf(filepath=source_glb(name))
     finally:
         sys.stdout = quiet
     solids = []
@@ -135,6 +139,19 @@ def load_colliders(name: str):
         zlo, zhi = min(zlo, lo[2]), max(zhi, hi[2])
         solids.append((BVHTree.FromPolygons(verts, polys), lo, hi))
     return solids, zlo, zhi
+
+
+def source_glb(name: str) -> str:
+    """The unsplit mesh the generator left for this bake, else the shipped GLB."""
+    unsplit = os.path.join(COLLISION_DIR, f"{name}.glb")
+    if os.path.isfile(unsplit):
+        return unsplit
+    print(
+        f"{name}: no {unsplit}; baking from the shipped GLB, whose AO edge splits "
+        "move floors. Regenerate the map first.",
+        file=sys.__stdout__,
+    )
+    return os.path.join(MAPS_DIR, f"{name}.glb")
 
 
 def object_solid(

@@ -75,11 +75,11 @@
     },
     {
       "kind": "cast_concrete",
-      "match": ["nuke_concrete_wall", "nuke_concrete_dark", "assault_concrete"]
+      "match": ["nuke_concrete_wall", "nuke_concrete_dark", "assault_concrete", "aim_block_wall", "aim_divider_concrete"]
     },
     {
       "kind": "slab_concrete",
-      "match": ["nuke_concrete_floor", "assault_warehouse_floor", "bank_concrete_sidewalk"]
+      "match": ["nuke_concrete_floor", "assault_warehouse_floor", "bank_concrete_sidewalk", "aim_concrete_floor"]
     },
     {
       "kind": "corrugated",
@@ -87,11 +87,11 @@
     },
     {
       "kind": "painted_metal",
-      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue", "assault_drum_", "assault_rack_"]
+      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue", "assault_drum_", "assault_rack_", "aim_steel_"]
     },
     {
       "kind": "tread_plate",
-      "match": ["nuke_steel_grate", "assault_diamond_plate", "assault_steel_catwalk"]
+      "match": ["nuke_steel_grate", "assault_diamond_plate", "assault_steel_catwalk", "aim_booth_plate"]
     },
     {
       "kind": "yard_asphalt",

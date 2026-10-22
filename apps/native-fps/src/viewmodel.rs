@@ -1407,6 +1407,7 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
         color: v.color,
         uv: v.uv,
         material: v.material,
+        ao: v.ao,
     }
 }
 

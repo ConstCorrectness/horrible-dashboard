@@ -230,9 +230,10 @@ They are ours, CC0, and named `hd_*`. All nine are modelled `gltf` maps:
 `apps/assault-web/src/maps.ts` lists the same nine with their key art, and
 `lore.py` has a brief for each.
 
-A tenth, **`hd_aim`**, is the aim range: a brush-built Cube map rather than a
-GLB, three lanes walled apart (close, gallery, long) with its drill stations
-declared in the source under a top-level `drills` key. It is a training map, so
+A tenth, **`hd_aim`**, is the aim range: an indoor training range modelled in
+`tools/blender/generate_aim.py`, three lanes walled apart (close, gallery,
+long) with its drill stations declared in the source under a top-level
+`drills` key. See [The aim range](#the-aim-range-modelled-around-its-rails). It is a training map, so
 the web client's match list leaves it out; see [Aim drills](#aim-drills). It
 passes the same playability bar as the rest (spawns, items, reachability).
 
@@ -509,9 +510,10 @@ a size, which the `Warper` does not wrap, and its monumental facade and
 mezzanines would only stretch. It gets no rule-placed clutter either: the hall,
 the offices and the vault are furnished piece by piece already.
 
-**Where each defuse map stands, and what is still to do.** Measured with
-`tools/hassault_route_times.py` on 2026-10-20: the fastest walk from each side's
-spawns to each site, with the number of distinct routes in brackets.
+**Where each defuse map stands.** Measured with
+`tools/hassault_route_times.py` on 2026-10-22: the fastest walk from each side's
+spawns to each site, with the number of distinct routes in brackets. Every
+defuse map is now rebuilt; the P10 map list is closed.
 
 | Map | T to A | T to B | CT to A | CT to B | State |
 | --- | --- | --- | --- | --- | --- |
@@ -521,30 +523,55 @@ spawns to each site, with the number of distinct routes in brackets.
 | `hd_nuke` | 8.0 s (3) | 6.8 s (2) | 2.3 s | 4.7 s | Done. |
 | `hd_office` | 8.2 s (3) | 7.9 s (3) | 3.1 s | 1.8 s | Done. |
 | `hd_bank` | 6.6 s (2) | 6.7 s (3) | 2.8 s | 3.0 s | Done, not cut (see above). |
-| `hd_assault` | 6.2 s (4) | 3.9 s (3) | 1.5 s | 2.1 s | **To do.** Its two spawn sets were labelled the wrong way round (T 1.5 s from A); they are swapped, but T still reach B in under 4 s. |
+| `hd_assault` | 6.4 s (4) | 6.7 s (3) | 1.6 s | 1.6 s | Done, not cut (below). |
 
-Still open, in the order they would be done:
+**Assault: both sites to the back of the warehouse.** Its spawn sets were
+labelled the wrong way round, and once swapped T still reached B, out on the
+warehouse floor by the forklift, in 3.9 s through Bay 1. Rather than cut a
+56 m square whose generator places boxes by corner (as Bank's does), the sites
+moved: A to the ground under the hostage office, B to the workshop in the
+north-west corner, and CT spawn between them at the back wall. A door in the
+warehouse's west wall (y 49.5 to 52 m) gives T a third way into B, up the alley
+from the street, so B is reached through Bay 1, along the west catwalk, or
+through the alley door; A through Bay 2's street door, the east door off the
+rail yard, or the fire escape into the office. The second pallet rack now
+fronts B. Its materials carry the `assault_` infix, so the rules that were
+waiting in `glb-surfaces.json` match. No rule-placed clutter: like Bank, it is
+furnished piece by piece. `test_hassault_routes.py` pins the walk, the three
+routes each way and the four doors; the eye probe finds nothing an eye fits in.
 
-- **Rebuild Assault** as Office and Bank were: its spawn sets are now the right
-  way round, but B is under 4 s from the attackers' end, so give each site two
-  ways in and lengthen the approach (cut if need be). Its materials already have rules waiting:
-  `assault_asphalt` (yard asphalt), `assault_concrete`, `assault_warehouse_floor`,
-  `assault_container_`, `assault_warehouse_wall`, `assault_diamond_plate`,
-  `assault_steel_catwalk`, `assault_office_floor`, `assault_office_wall`,
-  `assault_brick_`, `assault_wood_crate`, `assault_drum_` and `assault_rack_`
-  in `glb-surfaces.json`. Its generator has no `Warper`; check
-  `test_spawn_clearance`, `probe_eye_inside.py` and a bot soak afterwards.
-- **Bake ambient occlusion into `COLOR_0`** for the modelled maps, in Blender, and
-  have both clients multiply it in. It is content, the same for everyone, so it
-  is fair and free at runtime. The GLBs carry no vertex colour today and the
-  native loader reads none; the browser only keeps a material's `vertexColors`
-  flag (`surface-quality.ts`).
-- **Give `hd_aim` a GLB.** The aim range is still the brush-built Cube map: an art
-  pass in Blender, keeping its lanes and the `drills` rails where they are.
-- **Bots and waypoints.** On Office and Bank the bots visit some cover nodes
-  rarely or never (Office's north gap and the server room's south door, Bank's
-  east side door): they steer straight and have no waypoints, which is the real
-  fix.
+**Baked ambient occlusion.** `maplib.bake_vertex_ao` darkens corners and
+contact edges into each map's GLB: a Cycles AO bake (1.5 m, 48 samples) into a
+grey colour attribute, remapped so the darkest corner is 0.45, exported as
+`COLOR_0`. It is content, not a setting: every client draws the same darkening
+at every quality level, so it changes nobody's view of anybody, and it costs
+nothing at runtime. Three things about it are not obvious:
+
+- *Per vertex needs vertices.* A wall is often one quad, and AO interpolated
+  across a 30 m floor from its four corners is a smear, not a shadow. So the
+  bake first halves every edge longer than 2 m on surfaces that take it, and
+  `COLOR_0` is repacked from Blender's three floats to four normalised bytes
+  (`_bytes_for_colors`). The nine GLBs grew from 34.6 MB to 51.4 MB, 1.49 times;
+  Facility, the least detailed, most (2.1 times), Inferno least (1.16).
+- *Blender 4.1 exports a vertex colour only if a material uses it.* So each
+  receiving material's Base Color becomes Mix(Multiply, factor, Color
+  Attribute "AO"), the one arrangement the exporter reads, which keeps the
+  factor the clients see. Glass, water and anything self-lit take none.
+- *Collision is baked from the mesh before the splits.* `bake_collision.py`
+  counts faces along vertical rays, and that count is sensitive to how a floor
+  is triangulated: baked from the split mesh, Inferno moved 45 cells' floors by
+  up to four cubes. So `export_map_glb` also writes the unsplit map to
+  `tools/blender/.collision/` (not committed) and the bake reads that.
+  Regenerate before re-baking.
+
+Native carries AO as its own vertex attribute (`Vertex::ao`) rather than
+folding it into the colour, because layers 8, 10 and 11 *mix* the colour with
+a photograph, which would wash it out; `shader.wgsl` multiplies it in after the
+mix, as three multiplies a vertex colour after its map, and before `shade()`,
+so Low gets it too. The browser keeps `COLOR_0` through the static-batch merge.
+`browser_parity.rs` and `map-geometry.test.ts` pin all of that: the shader
+lines, that neither the skin shader nor the shared lighting sees it, that no
+setting mentions it, and that every opaque surface of every map carries it.
 
 Checked and closed: Bank's street spawn at (36, 8) m was written up as standing
 inside the bus shelter. Rendered from the GLB at eye height, it stands 0.4 m in
@@ -554,6 +581,58 @@ comment in `physics.spawn_at` (Python and TypeScript) now says so. It used to
 say "clockwise from north", which is how Bank's original street spawns came to
 face east.
 
+### Bots and waypoints
+
+A bot heads for a point (its objective, a sound, a roam target) and probes a
+step ahead with `physics.can_stand`. In the open that is all it needs; behind a
+wall it slides along the wall, and on Office a bot sent to the north gap, the
+back of A or B's south door from the attackers' end got no closer than 59 to 92
+cubes. Each defuse map now has a waypoint graph, `backend/modules/hassault/nav/<map>.json`:
+
+- **Built, then editable.** `tools/hassault_nav_build.py hd_office` takes the
+  walking route between every pair of spawns, sites and cover nodes over the
+  cube grid and string-pulls it (from each waypoint, the furthest point still in
+  a straight walkable line becomes the next), which puts nodes at corners and in
+  doorways; adds a node every 15 cubes over the rest of the floor; and links
+  every pair within 30 cubes that a body can walk. 180 to 270 nodes a map.
+- **Directed links.** `nav.walkable` samples the segment every 0.45 cube: a
+  body must fit on the floor under each sample, and no sample may be more than
+  a step above the last. A drop is allowed, a climb is not, so A to B and B to A
+  can differ: Nuke's vent is one-way in the graph as it is in the game.
+- **Used only when needed.** Every half second the bot asks whether it can walk
+  straight to where it is going. If so it does, exactly as before; if not, it
+  plans an A* route (again every 3 s, or when the destination moves) and heads
+  for the next waypoint, skipping ahead whenever it can already walk to the one
+  after. `_steer` still does the local avoiding. A goal no body fits at (a
+  site's centre under its table, Dust II's goose ledge, which only a jump
+  reaches) is approached through the nearest node there is a route to.
+- **Outside `maps/` on purpose.** The generators and the fit tool rewrite map
+  JSON; a regenerated map keeps its graph. Rebuild the graph after a layout
+  change; `test_hassault_nav.py` fails if a link stops being walkable or a spawn
+  stops reaching a site or a cover node.
+
+What it does to a match: with it, the same Office bot reaches each of those
+three places in about 9 s. In a 300 s defuse soak bots spend their time on
+their objectives rather than wandering (Office's floor coverage fell from 22% to
+15% while visits to B's CT door went from 0 to 131); Bank's vault breach went
+from 53 to 677 visits. A soak ticks about 40% slower in total, 8 bots for 300 s
+in 8 s against 6, which is A* on re-plans and the straight-line checks.
+
+### The aim range, modelled around its rails
+
+`hd_aim` was the last brush map. `tools/blender/generate_aim.py` builds it as an
+indoor range (block walls, concrete lane dividers, raised steel booths, a floor
+rail under every target post, a distance line and a board at each post, overhead
+baffles, high-bay lights and a rubber backstop) in metres equal to the old
+cubes divided by three. Since a cube is the same third of a metre on every map,
+every drill shooter, rail, spawn and item kept its coordinates: nothing in
+`drills` was converted. The dividers stop short of both end walls, as the
+brushes did, so a deathmatch still crosses between lanes. Its materials use the
+`aim_` infix and borrow the industrial photo kinds (slab and cast concrete,
+tread plate, painted metal). Both clients load it like any modelled map, so the
+browser's brush-only AO (`geometry.ts`), which native never had, no longer
+decides how one map looks in two clients.
+
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
 dresses a map (Dust II, Mirage, Inferno, Nuke and Office; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
 the lights must come before it). It plans on a quarter-metre grid of the finished
@@ -681,17 +760,17 @@ whether it wants lengthening is a playtest question, not a number.
 
 `tools/hassault_bot_soak.py <map> [seconds] [bots] [mode]` lets bots play with no
 one watching and reports how much floor they stood on and how many visits each of
-the map's cover nodes got. Bots have no navmesh: they steer straight at a point and
-probe round what is in the way, so a place reached only by a ramp from the far
-side gets no visits however good it is for a player, and a cover node belongs at a
-place they can reach. On the original Dust II they never reached B at all; they do
+the map's cover nodes got. Bots steer straight at a point and probe round what
+is in the way, and since 2026-10-22 follow a waypoint graph when the straight
+line is not walkable (see [Bots and waypoints](#bots-and-waypoints)), so a
+cover node belongs at a place a body can walk to. On the original Dust II they never reached B at all; they do
 now. A bot sitting still for 13 to 26 s is holding cover, not stuck: Mirage and
 Inferno do the same. So is a bot sitting for minutes after the match ends
 (`phase` is `over`): the soak keeps ticking. On Nuke every cover node gets
 visits, B's included (its node is at the ramp's foot, straight down the ramp).
 What still costs them time is walls across their straight line: T bots slide
 along the Lobby's south wall to reach A. Clutter is kept off the Lobby and its
-south wall for that reason; waypoints for bots are the real fix. A pocket with
+south wall for that reason; the waypoint graphs are the fix. A pocket with
 one way out is worse than a wall: see the vent, above.
 
 To look at a map without running the game,

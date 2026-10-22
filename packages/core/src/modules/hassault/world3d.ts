@@ -1467,6 +1467,52 @@ export interface MapConfig {
 }
 
 export const MAP_CONFIGS: Record<string, MapConfig> = {
+  // The aim range (`tools/blender/generate_aim.py`), modelled around the drills'
+  // rails: the same cube coordinates as the brush map it replaced.
+  hd_aim: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [124, 98, 24],
+      center: [64, 51, 12],
+      extent: 120,
+    },
+    spawns: {
+      cla: [
+        { x: 10, y: 17, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 48, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 81, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 92, z: 0, yaw: 0, team: 0 },
+      ],
+      rvsf: [
+        { x: 116, y: 17, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 48, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 81, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 10, z: 0, yaw: 180, team: 1 },
+      ],
+      all: [
+        { x: 10, y: 17, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 48, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 81, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 92, z: 0, yaw: 0, team: 0 },
+        { x: 116, y: 17, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 48, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 81, z: 0, yaw: 180, team: 1 },
+        { x: 116, y: 10, z: 0, yaw: 180, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'ammo_assault', x: 12, y: 22, z: 0 },
+      { id: 2, kind: 'ammo_assault', x: 12, y: 53, z: 0 },
+      { id: 3, kind: 'ammo_assault', x: 12, y: 86, z: 0 },
+      { id: 4, kind: 'clips', x: 80, y: 17, z: 0 },
+      { id: 5, kind: 'clips', x: 80, y: 48, z: 0 },
+      { id: 6, kind: 'clips', x: 80, y: 81, z: 0 },
+      { id: 7, kind: 'health', x: 110, y: 24, z: 0 },
+      { id: 8, kind: 'health', x: 110, y: 92, z: 0 },
+      { id: 9, kind: 'armour', x: 96, y: 48, z: 0 },
+    ],
+    ladders: [],
+  },
   hd_facility: {
     bounds: {
       min: [0, 0, -15],
@@ -2192,16 +2238,31 @@ export function buildWorld3DFromGLTF(
     const posMerged = new Float32Array(totalVerts * 3);
     const normMerged = new Float32Array(totalVerts * 3);
     const uvMerged = new Float32Array(totalVerts * 2);
+    // Baked ambient occlusion rides in COLOR_0 (`maplib.bake_vertex_ao`), and
+    // GLTFLoader gives a primitive that has it a `vertexColors` material of its
+    // own, so a batch is all-or-none. Read through getX: the GLB stores it as
+    // normalised bytes, which `.array` would hand over unscaled.
+    const colorMerged = batch.material.vertexColors
+      ? new Float32Array(totalVerts * 3).fill(1)
+      : null;
     let vOffset = 0;
 
     for (const e of batch.entries) {
       const pos = e.geom.attributes.position;
       const norm = e.geom.attributes.normal;
       const uv = e.geom.attributes.uv;
+      const color = e.geom.attributes.color;
       const count = pos?.count ?? 0;
       if (pos) posMerged.set(pos.array as Float32Array, vOffset * 3);
       if (norm) normMerged.set(norm.array as Float32Array, vOffset * 3);
       if (uv) uvMerged.set(uv.array as Float32Array, vOffset * 2);
+      if (colorMerged && color) {
+        for (let i = 0; i < count; i++) {
+          colorMerged[(vOffset + i) * 3] = color.getX(i);
+          colorMerged[(vOffset + i) * 3 + 1] = color.getY(i);
+          colorMerged[(vOffset + i) * 3 + 2] = color.getZ(i);
+        }
+      }
       vOffset += count;
       e.geom.dispose();
     }
@@ -2210,6 +2271,7 @@ export function buildWorld3DFromGLTF(
     merged.setAttribute('position', new THREE.BufferAttribute(posMerged, 3));
     merged.setAttribute('normal', new THREE.BufferAttribute(normMerged, 3));
     merged.setAttribute('uv', new THREE.BufferAttribute(uvMerged, 2));
+    if (colorMerged) merged.setAttribute('color', new THREE.BufferAttribute(colorMerged, 3));
     merged.computeBoundingBox();
     merged.computeBoundingSphere();
     geometries.push(merged);

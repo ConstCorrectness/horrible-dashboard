@@ -51,6 +51,7 @@ struct VertexIn {
     @location(2) color: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) material: f32,
+    @location(5) ao: f32,
 };
 
 struct VertexOut {
@@ -66,6 +67,9 @@ struct VertexOut {
     @location(3) world_position: vec3<f32>,
     @location(5) uv: vec2<f32>,
     @location(6) material: f32,
+    // Baked ambient occlusion, 1 for none. Content, the same at every
+    // quality level: see `Vertex::ao`.
+    @location(7) ao: f32,
 };
 
 // How wide the moving front is, in units of overall progress. `reveal::BAND`.
@@ -138,6 +142,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.normal = (camera.light_transform * vec4<f32>(in.normal, 0.0)).xyz;
     out.uv = in.uv;
     out.material = in.material;
+    out.ao = in.ao;
     return out;
 }
 
@@ -302,6 +307,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             }
         }
 
+        // After the photograph is mixed in, as three multiplies a vertex colour
+        // after its map, so the darkening survives layers 8, 10 and 11.
+        albedo = albedo * in.ao;
         let N = normal;
         // From the **eye**. This used to be built from the build-in's centre at
         // a fixed height of 1.8 — `camera.reveal.yz` is where the map is
@@ -331,7 +339,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             detail_sampler,
             grain_uv,
         ).r;
-        albedo = albedo * grain * DETAIL_GAIN;
+        albedo = albedo * grain * DETAIL_GAIN * in.ao;
     }
 
     // A pass that does not receive the shadow is fully lit, not fully dark —

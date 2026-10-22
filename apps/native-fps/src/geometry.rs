@@ -28,6 +28,8 @@ pub struct MeshData {
     pub colors: Vec<f32>,
     pub uvs: Vec<f32>,
     pub materials: Vec<f32>,
+    /// Baked ambient occlusion per vertex; missing entries read as 1.
+    pub ao: Vec<f32>,
     pub triangles: usize,
 }
 
@@ -132,6 +134,7 @@ impl MeshBuilder {
             colors: self.colors,
             uvs: Vec::new(),
             materials: Vec::new(),
+            ao: Vec::new(),
             triangles,
         }
     }
