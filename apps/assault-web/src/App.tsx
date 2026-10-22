@@ -216,7 +216,13 @@ export default function App() {
       )}
 
       {dialog?.kind === 'create' && (
-        <CreateMatchDialog onLaunch={host} onClose={() => setDialog(null)} />
+        <CreateMatchDialog
+          onLaunch={host}
+          onDuel={(duelMap) => host(duelMap, 'duel')}
+          canDuel={Boolean(auth.token && auth.account)}
+          onSignIn={() => setDialog({ kind: 'signin', step: 'in' })}
+          onClose={() => setDialog(null)}
+        />
       )}
       {dialog?.kind === 'signin' && (
         <SignInDialog initialStep={dialog.step} onClose={() => setDialog(null)} />

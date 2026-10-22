@@ -48,6 +48,8 @@ import os
 import time
 from typing import Any
 
+from functools import lru_cache
+
 from backend.modules.hassault import mapsource, modes
 from backend.modules.hassault.match import (
     MAX_NAME_LEN,
@@ -138,6 +140,29 @@ class SeatConn:
             self.closed = True
 
 
+#: The modes a player opens a room in from a menu. Duel is not one: it is
+#: matched by the queue, on the map the server picks (`duel_map`).
+MENU_MODES = ("dm", "tdm", "defuse", "retake", "aim", "awp")
+
+
+@lru_cache(maxsize=64)
+def _declared_modes(path: str, _mtime_ns: int) -> tuple[str, ...]:
+    """`HassaultReferee.map_modes` for one source file, cached by its mtime."""
+    with open(path, encoding="utf-8") as f:
+        source = json.load(f)
+    sites = bool(source.get("objectives", {}).get("sites"))
+    declared = source.get("modes")
+    if not isinstance(declared, list):
+        declared = ["dm", "tdm"] + (["defuse"] if sites else [])
+    out = []
+    for mode in MENU_MODES:
+        if mode in declared or (mode == "retake" and "defuse" in declared):
+            if mode in ("defuse", "retake") and not sites:
+                continue
+            out.append(mode)
+    return tuple(out)
+
+
 class HassaultReferee:
     """The rooms this server is running, and the results it stands behind."""
 
@@ -172,6 +197,22 @@ class HassaultReferee:
 
     def maps(self) -> list[str]:
         return list(mapsource.bundled_names())
+
+    @staticmethod
+    def map_modes(map_name: str) -> list[str]:
+        """The menu modes (`MENU_MODES`) a room on this map may open in.
+
+        A map's source lists what it is built for (`"modes"`); retake goes
+        wherever defuse does, since it is defuse with the bomb already down, and
+        neither goes on a map with no bomb sites. A map that lists nothing gets
+        deathmatch and team deathmatch, plus defuse if it has sites. Served to
+        the menus (`/hassault/maps`) and enforced by `join`, so a menu never
+        offers a room the server would refuse, or the other way round.
+        """
+        path = mapsource.source_path(map_name)
+        if path is None:
+            return []
+        return list(_declared_modes(str(path), path.stat().st_mtime_ns))
 
     def active_rooms(self) -> list[dict[str, Any]]:
         """Active rooms currently ticking on this game server."""
@@ -238,6 +279,8 @@ class HassaultReferee:
             raise ValueError(f"unknown game mode {mode!r}")
         if existing is not None:
             mode = existing.mode.id
+        elif mode in MENU_MODES and mode not in self.map_modes(target_map):
+            raise ValueError(f"{target_map} does not offer {mode}")
         opening = existing is None and (new or not self._has_space(target_map, mode))
         if opening and len(self.server.rooms) >= max_rooms():
             raise ValueError("this server is full; try a room that is already running")
@@ -360,7 +403,9 @@ class HassaultReferee:
                     player.loadouts = loadouts
                 await self.server.update_cosmetics(room, player, look)
 
-    def apply_loadout(self, conn: SeatConn, data: dict[str, Any]) -> dict[str, int] | None:
+    def apply_loadout(
+        self, conn: SeatConn, data: dict[str, Any]
+    ) -> dict[str, int] | None:
         """A seated player's loadout pick, validated by the room like any other.
 
         The stored setting is read at join; this is the same choice made
@@ -477,7 +522,11 @@ class HassaultReferee:
                 await self._pair_duels()
                 for conn, _, _ in list(self._duel_queue):
                     await conn.send_json(
-                        {"channel": "hassault", "event": "duel_queue", "data": self.duel_status(conn)}
+                        {
+                            "channel": "hassault",
+                            "event": "duel_queue",
+                            "data": self.duel_status(conn),
+                        }
                     )
 
         self._duel_sweeper = loop.create_task(sweep())
@@ -534,7 +583,9 @@ class HassaultReferee:
             welcome["playerId"] = player.id
             welcome["rated"] = True
             welcome["roomSettings"] = self.settings_payload(joined_room)
-            await conn.send_json({"channel": "hassault", "event": "welcome", "data": welcome})
+            await conn.send_json(
+                {"channel": "hassault", "event": "welcome", "data": welcome}
+            )
 
     def _duel_over(self, room: Any, summary: dict[str, Any]) -> None:
         """Rate a finished duel. Called from inside the tick, so the rating and

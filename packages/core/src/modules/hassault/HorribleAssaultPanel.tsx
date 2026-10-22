@@ -4123,8 +4123,28 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     if (!info || initialJoinedRef.current) return;
     if (!props.initialRoom && !standalone) return;
     initialJoinedRef.current = true;
+    if (props.initialMode === 'duel' && !props.initialRoom) {
+      // A duel is not a room to join but a queue: the server pairs two players
+      // and opens the room itself, on the served duel map (the page loads it as
+      // `initialMap`, since a client in the wrong world draws nonsense).
+      const session = sessionRef.current;
+      if (!session) return;
+      shotsRef.current?.reset();
+      session.queueDuel(props.initialMap || mapName);
+      deploy();
+      return;
+    }
     joinRoom(props.initialRoom ?? '', props.initialMap || mapName, '', props.initialMode);
-  }, [props.initialRoom, props.initialMap, props.initialMode, info, mapName, joinRoom, standalone]);
+  }, [
+    props.initialRoom,
+    props.initialMap,
+    props.initialMode,
+    info,
+    mapName,
+    joinRoom,
+    standalone,
+    deploy,
+  ]);
 
   // The control map, written straight through to settings so a rebind survives a
   // reload. The scalar preferences are edited by `SettingsPanel` directly; this one

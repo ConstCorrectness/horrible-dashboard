@@ -720,6 +720,11 @@ def hassault_maps() -> dict[str, Any]:
         "maps": hassault_rooms.referee.maps(),
         # Where rated duels are fought; a client loads it before it queues.
         "duelMap": hassault_rooms.referee.duel_map(),
+        # What a room on each map may open in, for the Create match menus.
+        "modes": {
+            m: hassault_rooms.referee.map_modes(m)
+            for m in hassault_rooms.referee.maps()
+        },
     }
 
 

@@ -859,6 +859,20 @@
   flex: 1;
 }
 
+/* The ranked duel queue under the mode chips: a technical divider above it,
+   because it is a different act (join a queue) from opening a room. */
+.duel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.duel-row .hint {
+  margin: 0;
+}
+
 .map-pick {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -357,7 +357,7 @@ function OperatorPanel({
   );
 }
 
-const FILTERS = ['all', 'dm', 'tdm', 'defuse'] as const;
+const FILTERS = ['all', 'dm', 'tdm', 'defuse', 'retake', 'aim', 'awp', 'duel'] as const;
 
 function ServerList({
   rooms,

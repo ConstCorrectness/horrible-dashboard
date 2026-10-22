@@ -1,24 +1,32 @@
 import { useEffect, useState } from 'react';
-import { MAPS, mapArt, mapEntry } from '../maps';
+import { useServerMaps } from '../hooks/useServerMaps';
+import { MAPS, MODE_OPTIONS, mapArt, mapEntry, modeLabel, modesFor } from '../maps';
 
-/** The modes a browser room can open in. Defuse needs a map with bomb sites. */
-const MODES = [
-  { id: 'dm', label: 'Deathmatch' },
-  { id: 'defuse', label: 'Defuse' },
-] as const;
-
-/** Pick a map and a mode, and open a fresh room on it. */
+/**
+ * Pick a map and a mode, and open a fresh room on it; or queue for a ranked
+ * duel, which has no map to pick: the server pairs two players and chooses.
+ */
 export function CreateMatchDialog({
   onLaunch,
+  onDuel,
+  canDuel,
+  onSignIn,
   onClose,
 }: {
   onLaunch: (map: string, mode: string) => void;
+  /** Queue for a duel on the served duel map. */
+  onDuel: (duelMap: string) => void;
+  /** Duels are rated, so the server queues accounts only. */
+  canDuel: boolean;
+  onSignIn: () => void;
   onClose: () => void;
 }) {
+  const served = useServerMaps();
   const [selected, setSelected] = useState(MAPS[0]!.id);
   const [mode, setMode] = useState<string>('dm');
-  // A map without sites cannot host defuse; the server would refuse the room.
-  const effective = mode === 'defuse' && !mapEntry(selected).sites ? 'dm' : mode;
+  // Only what this map offers; the server refuses a room in anything else.
+  const allowed = modesFor(selected, served?.modes);
+  const effective = allowed.includes(mode) ? mode : (allowed[0] ?? 'dm');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -66,18 +74,38 @@ export function CreateMatchDialog({
           </div>
           <p className="hint">{mapEntry(selected).blurb}</p>
           <div className="chips" role="group" aria-label="Mode">
-            {MODES.map((m) => (
+            {MODE_OPTIONS.map((id) => (
               <button
-                key={m.id}
+                key={id}
                 type="button"
                 className="chip"
-                aria-pressed={effective === m.id}
-                disabled={m.id === 'defuse' && !mapEntry(selected).sites}
-                onClick={() => setMode(m.id)}
+                aria-pressed={effective === id}
+                disabled={!allowed.includes(id)}
+                onClick={() => setMode(id)}
               >
-                {m.label}
+                {modeLabel(id)}
               </button>
             ))}
+          </div>
+          <div className="duel-row">
+            <p className="hint">
+              Ranked duel: one against one, first to ten, rated against your opponent.
+              {canDuel ? '' : ' Needs an account.'}
+            </p>
+            {canDuel ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={!served?.duelMap}
+                onClick={() => served?.duelMap && onDuel(served.duelMap)}
+              >
+                Queue for a duel
+              </button>
+            ) : (
+              <button type="button" className="btn" onClick={onSignIn}>
+                Sign in
+              </button>
+            )}
           </div>
           <div className="form-actions">
             <button type="button" className="btn" onClick={onClose}>

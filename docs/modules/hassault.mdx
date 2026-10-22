@@ -227,8 +227,8 @@ They are ours, CC0, and named `hd_*`. All nine are modelled `gltf` maps:
 `hd_mirage`, `hd_nuke` and `hd_office`. Each is a Blender generator in
 `tools/blender/` exported to one GLB that both clients load; see
 [The modelled maps](#the-modelled-maps-how-one-is-built-and-what-each-revision-changed).
-`apps/assault-web/src/maps.ts` lists the same nine with their key art, and
-`lore.py` has a brief for each.
+`apps/assault-web/src/maps.ts` lists the same nine with their key art, plus
+the aim range below, and `lore.py` has a brief for each.
 
 A tenth, **`hd_aim`**, is the aim range: an indoor training range modelled in
 `tools/blender/generate_aim.py`, three lanes walled apart (close, gallery,
@@ -2949,9 +2949,19 @@ bought anything; they now ask the mode (`can_buy`, `catalog_index`).
 
 **Game-server rooms take a mode** (cap `hassault_modes`): a join with `mode`
 lands in, or opens, a room on that map in that mode, and a map that cannot host
-it (defuse with no bomb sites) is refused. The web client's Create match offers
-Deathmatch or Defuse. Results there stay unrated with the mode in their ruleset:
-a room people join and leave one at a time is not two seats facing each other.
+it (defuse with no bomb sites) is refused. Which **menu modes**
+(`hassault_rooms.MENU_MODES`: deathmatch, team deathmatch, defuse, retake, aim
+and AWP arena) a map offers comes from its own source's `modes` list, with
+retake going wherever defuse does and neither on a map without sites
+(`HassaultReferee.map_modes`). `/hassault/maps` serves it per map as `modes`,
+and `join` refuses a menu mode a map does not offer, so the web client's Create
+match, which greys out the rest, never offers a room the server would refuse.
+The aim range offers deathmatch, aim and AWP arena. Duel is not a menu mode:
+Create match has a **Queue for a duel** button instead (accounts only), which
+opens the game on the served `duelMap` with `initialMode: 'duel'`, and the
+standalone panel queues rather than joins. Results in menu rooms stay unrated
+with the mode in their ruleset: a room people join and leave one at a time is
+not two seats facing each other.
 
 `Command.buy` and not a `/ws` event, for the reason `throw` gives: commands are
 forwarded *verbatim* by `fabric.handle_input`, so a field crosses the peer wire,

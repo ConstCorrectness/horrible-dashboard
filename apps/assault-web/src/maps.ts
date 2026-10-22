@@ -17,6 +17,8 @@ export interface MapEntry {
   blurb: string;
   /** Bomb sites present — the room's mode decides whether they're used. */
   sites: boolean;
+  /** The modes a room here may open in, when it is not what `sites` implies. */
+  modes?: readonly string[];
 }
 
 export const MAPS: MapEntry[] = [
@@ -64,7 +66,31 @@ export const MAPS: MapEntry[] = [
     blurb: 'Scrapyard market, cover everywhere.',
     sites: false,
   },
+  {
+    id: 'hd_aim',
+    title: 'Aim Range',
+    blurb: 'Lanes and a strafe gallery, for aim and AWP duels.',
+    sites: false,
+    modes: ['dm', 'aim', 'awp'],
+  },
 ];
+
+/** The modes Create match offers, in order. Duel is not one: it is a queue. */
+export const MODE_OPTIONS = ['dm', 'tdm', 'defuse', 'retake', 'aim', 'awp'] as const;
+
+/**
+ * The modes a room on `id` may open in. The server's list (`/hassault/maps`,
+ * from each map's own source) wins when it has arrived; before then, or if it
+ * cannot be fetched, what this page knows about the map, so the menu never
+ * offers a room the server would refuse.
+ */
+export function modesFor(id: string, served?: Record<string, readonly string[]> | null): string[] {
+  const listed = served?.[id];
+  if (listed) return MODE_OPTIONS.filter((m) => listed.includes(m));
+  const entry = mapEntry(id);
+  if (entry.modes) return [...entry.modes];
+  return entry.sites ? ['dm', 'tdm', 'defuse', 'retake'] : ['dm', 'tdm'];
+}
 
 const BY_ID = new Map(MAPS.map((m) => [m.id, m]));
 
@@ -101,6 +127,14 @@ export function modeLabel(mode: string): string {
       return 'Defuse';
     case 'ctf':
       return 'Capture';
+    case 'retake':
+      return 'Retake';
+    case 'aim':
+      return 'Aim Arena';
+    case 'awp':
+      return 'AWP Arena';
+    case 'duel':
+      return 'Duel';
     default:
       return mode.toUpperCase();
   }
