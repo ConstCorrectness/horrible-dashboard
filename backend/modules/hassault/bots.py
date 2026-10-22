@@ -207,9 +207,6 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (91.5, 142.5, "lower_dark_door"),
         (95.0, 219.0, "b_doors"),
     ],
-    # The larger Nuke (`tools/blender/nuke_layout.py`). B is a pit reached by its
-    # ramp, its north stairs or the vent from A; bots steer straight, so its node
-    # is at the ramp's foot, straight down the ramp from its top.
     "hd_bank": [
         (96.0, 102.0, "hall_compass"),
         (96.0, 73.5, "front_door"),
@@ -234,6 +231,9 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (70.5, 108.0, "elevator_lobby"),
         (159.0, 130.5, "cubicles_aisle"),
     ],
+    # The larger Nuke (`tools/blender/nuke_layout.py`). B is a pit reached by its
+    # ramp, its north stairs or the vent from A; bots steer straight, so its node
+    # is at the ramp's foot, straight down the ramp from its top.
     "hd_nuke": [
         (97.5, 153.0, "site_a_hut"),
         (136.0, 140.0, "site_a_crates"),

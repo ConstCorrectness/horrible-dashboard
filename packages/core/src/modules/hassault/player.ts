@@ -722,7 +722,8 @@ export function spawnAt(
   // Every cell under the body solid — which no official map manages, but a
   // community one might. The centre cell's floor is the best guess left.
   const z = enclosed ? world.floorAt(Math.floor(spawn.x), Math.floor(spawn.y)) : floor;
-  // Entity yaw is degrees clockwise from north; the camera uses radians about +x.
+  // Entity yaw is degrees from +x towards +y (0 = east, 90 = north); the
+  // simulation uses radians about +x.
   const yaw = ((spawn.yaw ?? 0) * Math.PI) / 180;
   const player = createPlayer(x, y, z, yaw);
   // Resting on the floor, so say so: otherwise the very first frame refuses a

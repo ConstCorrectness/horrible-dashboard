@@ -541,14 +541,18 @@ Still open, in the order they would be done:
   flag (`surface-quality.ts`).
 - **Give `hd_aim` a GLB.** The aim range is still the brush-built Cube map: an art
   pass in Blender, keeping its lanes and the `drills` rails where they are.
-- **Bank's street spawn at (36, 8) m stands inside the bus shelter**, facing its
-  back pane: it has room for a body, but it is a poor place to start a round.
-- **Smaller things found on the way.** On Office and Bank the bots visit some
-  cover nodes rarely or never (Office's north gap and the server room's south
-  door, Bank's east side door): they steer straight and have no waypoints, which
-  is the real fix. The comment in `physics.spawn_at` calls entity yaw degrees
-  clockwise from north, but the server reads it as degrees from +x towards +y;
-  Bank's original street spawns faced east because of it.
+- **Bots and waypoints.** On Office and Bank the bots visit some cover nodes
+  rarely or never (Office's north gap and the server room's south door, Bank's
+  east side door): they steer straight and have no waypoints, which is the real
+  fix.
+
+Checked and closed: Bank's street spawn at (36, 8) m was written up as standing
+inside the bus shelter. Rendered from the GLB at eye height, it stands 0.4 m in
+front of the shelter's open north side, facing the bank, with the canopy behind
+it. Entity yaw is degrees from +x towards +y (0 = east, 90 = north), and the
+comment in `physics.spawn_at` (Python and TypeScript) now says so. It used to
+say "clockwise from north", which is how Bank's original street spawns came to
+face east.
 
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
 dresses a map (Dust II, Mirage, Inferno, Nuke and Office; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and

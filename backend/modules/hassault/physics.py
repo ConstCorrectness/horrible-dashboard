@@ -929,7 +929,8 @@ def spawn_at(world: World, spawn) -> PlayerState:
         # Every cell under the body is solid, which no official map manages but a
         # community one might. The centre cell's floor is the best guess left.
         floor = world.floor_at(int(spawn.x), int(spawn.y))
-    # Entity yaw is degrees clockwise from north; the camera uses radians about +x.
+    # Entity yaw is degrees from +x towards +y (0 = east, 90 = north); the
+    # simulation uses radians about +x.
     yaw = math.radians(spawn.yaw or 0.0)
     return PlayerState(x=x, y=y, z=floor, yaw=yaw, on_ground=True)
 
