@@ -14,8 +14,8 @@ to modules.
 flowchart TB
     subgraph Shell["Layout shell (packages/ui)"]
         direction LR
-        WS["Frame<br/>tabs · rail · docks · areas"]
-        WL["Window layer<br/>free windows over the desktop"]
+        WL["Window layer<br/>every pane in a window, over the desktop"]
+        TB["Taskbar"]
         CP["Spotlight"]
         SB["Status bar"]
         KB["Keybinding service"]
@@ -42,15 +42,10 @@ dispatches inbound channel messages.
 The shell has exactly **one** main view. `ShellView` is `'boot' | 'oobe' |
 'desktop'`, and the first two are the states before you arrive at it.
 
-That is a change from the original two-view design, and the two views it replaced
-were both removed for the same reason:
+That is a change from the original two-view design. The `workspace` view (a tiling
+frame) is gone along with tiling itself — see
+[desktop-shell.mdx](desktop-shell.mdx#one-desktop-no-tiling) — and:
 
-- **`workspace` was never a surface.** A desktop *is* a workspace, and whether it
-  shows the tiling frame or free-floating windows is that desktop's `mode`. Making
-  it a view meant one fact had two homes that could disagree, and flipping paradigm
-  became a navigation instead of a property change. The desktop view renders the
-  backdrop always, with the tiling frame mounted opaquely over it while
-  `frame.mode === 'tiling'` — so a flip is a mount, not a route change.
 - **`home` was a second landing screen** competing with the desktop for the same
   job. It survives as the `splash` **backdrop** — same avatar, greeting and ask bar,
   now with windows able to float over it. `shell.home` still exists and still means
@@ -58,18 +53,17 @@ were both removed for the same reason:
 
 Installing the layout engine is correspondingly a **shell** job rather than the
 frame's: `packages/ui/src/layout/install.ts` installs the LayoutController, binds the
-autosave, registers the `frame` module's commands and hydrates the active workspace.
-That used to live in `Frame.tsx`'s mount effect, which worked only while the frame
+autosave, registers the `frame` module's commands and hydrates the desktop. That
+used to live in the tiling frame's mount effect, which worked only while the frame
 was the only place you could be — once the desktop became the landing surface a
 fresh boot installed none of it, and every one of those failures was silent.
 
 See [desktop-shell.mdx](desktop-shell.mdx) for the desktop, its backdrops, the
 taskbar and the boot flow.
 
-The two things that survived from the old `home` view:
-
-- The avatar (`packages/core/src/Avatar3D.tsx` — moved
-  to core so feature modules like the agent chat pane can use it too) is a
+What survived from the old `home` view is the avatar
+(`packages/core/src/Avatar3D.tsx` — moved to core so feature modules like the agent
+chat pane can use it too). It is a
   rigged glTF character (`/my-avatar.glb`) loaded with three's `GLTFLoader`,
   with pointer-tracking. It expresses the agent's **emotional mood** as a looping
   animation: the `moods` prop maps mood names to animation clips
@@ -80,53 +74,32 @@ The two things that survived from the old `home` view:
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
   as the agent status light. three is dynamically imported so a desktop not
   showing the `splash` backdrop never loads it.
-- The **frame** — a hybrid VS Code/Blender layout engine, now mounted only while
-  the active desktop is in tiling mode.
-  Documents tab into a Blender-style center grid of splittable **areas**, tools
-  live in three fixed **docks** behind VS Code-style **activity rails**, and
-  widgets take areas of their own. Several **workflow workspaces** exist —
-  predefined frame presets like **Dashboard**, **Scripting**, and **Coding
-  Harnesses** plus any custom ones; each persists its complete frame (docks +
-  center + regions + floating). A custom engine — no third-party docking
-  library — wrapped so the registry stays the public API. See
-  [windowing.mdx](windowing.mdx) for the model, roles, pane types vs instances,
-  presets, and persistence.
 
-A persistent **workspace tab strip** across the top (home/logo at its left, one
-tab per workspace preset + a `＋` for custom ones) is the only chrome shared by
-every desktop — the single workspace switcher (Blender-style). Clicking a tab
-activates that desktop. On a **tiling** desktop the frame adds an
-**activity rail down each side**, each driving the dock
-on that side (click opens a tool in its dock, click again hides the dock; the
-left rail also carries the bottom dock's tools), and a
-**minibuffer** along the very bottom — status line when idle, `alt+x` for slash
-commands, and where `dialogs.prompt()` renders (see
+Every pane opens in a **window**; a window can hold several panes as tabs, and
+region strips run down a pane's own sides. See [windowing.mdx](windowing.mdx) for the
+model, roles, pane types vs instances, and persistence. Panes are opened from the
+spotlight, the Start menu, a command, or the agent. The **minibuffer** floats above
+the taskbar — `alt+x` for slash commands, and where `dialogs.prompt()` renders (see
 [windowing.mdx](windowing.mdx#the-minibuffer)).
-Individual panes are opened from the spotlight, the start menu, a rail (tools), or
-each area's type switcher. On a **floating** desktop the rails and docks are not
-shown at all and `openPane` routes to a window instead — routing a tool to its dock
-there would open it somewhere the user cannot see.
 
-A **window layer** sits over the view as a sibling of it, not inside it, so
-free-floating windows are not clipped to the frame's center grid and do not vanish
-when the frame unmounts (`.shell-view[hidden]` is `display: none`). It is bounded by
-`.shell-content`, which keeps a window titlebar from sliding under the workspace strip
-and its Tauri drag region — and the taskbar sits outside `.shell-content`, so a
-maximized window cannot cover it. See [desktop-shell.mdx](desktop-shell.mdx).
+The **window layer** sits over the view as a sibling of it, not inside it, so windows
+do not vanish when the view is hidden (`.shell-view[hidden]` is `display: none`). It
+is bounded by `.shell-content`, which keeps a window titlebar from sliding under the
+native titlebar and its Tauri drag region — and the taskbar sits outside
+`.shell-content`, so a maximized window cannot cover it. See
+[desktop-shell.mdx](desktop-shell.mdx).
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
 16/32/48), the SVG favicon copy, and the Tauri app icons (full size set) from
-`assets/logo.svg`. The shell header shows the logo; `assets/banner.svg` is the
-README banner.
+`assets/logo.svg`. `assets/banner.svg` is the README banner.
 
 ## The workspace
 
-The shell owns a dockable workspace: panels arranged in split panes and tab
-groups, persisted per layout profile. Modules never render themselves into the
-DOM directly — they **register panels** with the module registry
-(`packages/core`), and the workspace decides where panels live (default
-placement comes from the panel declaration; the user can rearrange freely).
+The shell owns the desktop: panes in windows, persisted as one layout. Modules never
+render themselves into the DOM directly — they **register panels** with the module
+registry (`packages/core`), and the shell decides where panes live (a window, placed
+where that view was last left; the user can rearrange freely).
 
 A pane body is **loaded when it first renders, not at boot.** Every manifest is
 registered before the shell paints, so a component a manifest imports statically is
@@ -176,29 +149,27 @@ plus host-reserved chords and the `keymap.*` agent tools, is in
 [keybindings.mdx](keybindings.mdx). (CodeMirror/xterm keep their own internal
 keymaps; this service is for registry command bindings.)
 
-### Default frame keybindings
+### Default desktop keybindings
 
 | Key | Action |
 | --- | --- |
 | `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
 | declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
-| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | fullscreen the focused pane — the focused area on a tiling desktop, the focused window's pane on a floating one |
+| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | present the focused window's pane over the whole screen |
 | `f11` (desktop only) | toggle native OS-window fullscreen. Desktop-only because `f11` is browser-owned and **unpreventable** — the browser layout reaches app fullscreen through the tray control instead |
-| `alt+arrows` | move focus between areas |
-| `alt+shift+arrows` | move the active pane to the neighboring area |
-| `mod+alt+arrows` | split the focused area in that direction |
-| `mod+alt+j` | join the focused area with a neighbor |
-| `mod+b` / `mod+alt+b` / `mod+j` | toggle the left / right / bottom dock |
-| `mod+1..9` (desktop) · `alt+1..9` (browser) | switch workspace by position |
+| `alt+arrows` | focus the nearest window in that direction |
+| `alt+grave` / `alt+shift+grave` | next / previous window |
+| `mod+shift+arrows` | snap the focused window to a half (top maximizes) |
+| `mod+alt+s` then a key | snap palette: corners, centre, thirds — see [desktop-shell.mdx](desktop-shell.mdx#the-snap-palette) |
+| `mod+alt+up` / `mod+alt+down` | maximize / minimize the focused window |
 | `mod+k` | spotlight — ask, run a command, or jump to a pane (a focused pane may shadow it — the terminal binds it to `terminal.clear`) |
 | `alt+x` | minibuffer / M-x — slash commands (`override`, never shadowable) |
 | `mod+k mod+s` | Keyboard Shortcuts pane |
 
-Two of those rows split by host or platform for a reason. `mod+1..9` is browser
-tab switching and is **not** cancellable, so in a tab those bindings never fired
-at all; `ctrl+space` is the IME toggle on Windows and the input-source switch on
-macOS. Both are in the reserved table, and the Shortcuts pane flags any binding
-that lands on one.
+Two of those rows split by host or platform for a reason: `f11` is browser-owned,
+and `ctrl+space` is the IME toggle on Windows and the input-source switch on macOS.
+Both are in the reserved table, and the Shortcuts pane flags any binding that lands
+on one.
 
 ## Platform capability service
 
@@ -212,9 +183,8 @@ gracefully:
 | `shell.revealInOS`     | no                                 | yes                              |
 | `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
 | `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
-| `window.perWorkspace`  | no                                 | **yes** (open a workspace in its own OS window) |
 | `window.fullscreen`    | **yes** (DOM Fullscreen API; tray control, no F11) | **yes** (native OS-window fullscreen; F11 or the titlebar control) |
-| `chrome.workspaceTabs` | no (the frame renders its own tab strip) | **yes** (undecorated window; the tab strip is the titlebar) |
+| `chrome.workspaceTabs` | no (the page is already in a window) | **yes** (undecorated window; the app draws the titlebar) |
 | `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
 | `tray`                 | no                                 | yes                              |
 | `media.displayCapture` | **yes**                            | **Windows/Linux only** — WKWebView on macOS exposes `getDisplayMedia` and rejects it |
@@ -229,17 +199,15 @@ would report "available", the share would fail, and the UI would correctly stay
 silent about what it read as a cancel. Everything else about capture is still
 feature-detected; see [the share module](../modules/share.mdx).
 
-The `window.*`/`chrome.*` **phase-2** rows are the contract for the native
-shell (workspace-per-OS-window, native chrome hosting the workspace tab strip,
-OS fullscreen). They exist in the `Capability` union so the frame can branch on
-them. The Tauri shell grants these through `DESKTOP_CAPABILITIES`, and the
+The `window.*`/`chrome.*` rows are the contract for the native shell (an
+app-drawn titlebar, OS fullscreen). They exist in the `Capability` union so the
+shell can branch on them. The Tauri shell grants these through `DESKTOP_CAPABILITIES`, and the
 desktop entry wires a `WindowControl` seam (`packages/core/src/window.ts`) to
 the shell's `window_*` commands (`apps/desktop/src-tauri/src/window.rs`).
 Shipped so far:
 
 - **`window.fullscreen`** — `shell.toggleFullscreen` takes the whole app
-  fullscreen, distinct from the frame's in-window `area.fullscreen` and from a
-  presented pane. It is granted in **both** layouts: `toggleAppFullscreen`
+  fullscreen, distinct from presenting a pane in-window. It is granted in **both** layouts: `toggleAppFullscreen`
   (`core/fullscreen.ts`) drives the native OS window through the `WindowControl`
   seam where there is one, and the DOM Fullscreen API where there is not. The
   **key** is native-only — `keymap/reserved.ts` declares `f11` browser-owned with
@@ -247,31 +215,14 @@ Shipped so far:
   never fires. The tray's `⛶` button is what makes the feature reachable in the
   browser.
 - **`chrome.workspaceTabs`** — the desktop window is **undecorated**
-  (`decorations: false`) and the workspace tab strip is its titlebar: the strip's
-  empty space is a native `data-tauri-drag-region` (moves the window, maximizes
-  on double-click, handled in the webview), it hosts the min/maximize/close
-  controls (`WindowControls`), and invisible edge grips (`WindowResizeHandles`)
-  drive OS edge-resize since the frame has no native borders.
-- **`window.perWorkspace`** — a workspace tab's context menu gains **Open in new
-  window**, which opens (or focuses) a second OS window via `window_open_workspace`.
-  The new window is labelled `ws-<id>` and opens **detached**: `AppShell` drops the
-  workspace-switcher strip and the taskbar for a slim draggable titlebar
-  (`DetachedTitlebar` — workspace name + window controls) over that one workspace's
-  frame (rail + docks + center), Blender detached-area style. Its target workspace
-  arrives via a Tauri **initialization-script** global
-  (`window.__HORRIBLE_WORKSPACE__`) that `main.tsx` reads to boot straight into it
-  (the `?workspace=` query is a browser-testing fallback). Two things the command
-  gets right the hard way: it's **`async`** (a sync command runs on the main thread,
-  where `WebviewWindowBuilder::build()` deadlocks the whole app), and in dev it
-  loads **`build.devUrl` via `WebviewUrl::External`** (a runtime-created
-  `WebviewUrl::App` resolves to the production asset protocol, which has no built
-  `dist` → a blank webview). All windows share one backend and persist their own
-  workspace server-side, so no per-platform fork; the `ws-*` capability glob grants
-  secondary windows the same titlebar permissions as `main`. (v1 caveat: opening
-  the *same* workspace in two windows is last-write-wins on autosave, and the
-  server "active" flag tracks the most recently switched workspace in any window.)
-
-Phase 2 is complete; all three native-shell capabilities ship.
+  (`decorations: false`) and `TitleBar.tsx` is its titlebar: a native
+  `data-tauri-drag-region` (moves the window, maximizes on double-click, handled in
+  the webview), the min/maximize/close controls (`WindowControls`), and invisible
+  edge grips (`WindowResizeHandles`) that drive OS edge-resize since the window has
+  no native borders. The name is the workspace tab strip's, which used to be that
+  titlebar.
+Both ship. (`window.perWorkspace` — a workspace in its own OS window — was removed
+with the workspaces.)
 
 The `window_*` custom commands are ACL-gated like any command here: each needs a
 permission in `apps/desktop/src-tauri/permissions/` listed in

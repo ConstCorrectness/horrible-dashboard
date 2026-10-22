@@ -166,7 +166,6 @@ export const scriveModule: ModuleManifest = {
       component: SitesPanel,
       role: 'tool',
       icon: '🪶',
-      defaultDock: 'left',
       singleton: true,
     },
     {

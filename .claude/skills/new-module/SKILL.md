@@ -17,8 +17,8 @@ manifest object:
 - **Commands** — named actions invokable from the command palette (`id`, `title`,
   `run()`). Every user-facing capability must be a command first; UI buttons call
   commands, never the other way around.
-- **Panels** — React components the dockable workspace hosts as windows (`id`,
-  `title`, `component`, `defaultPlacement`). Set `singleton: true` if only one
+- **Panels** — React components the desktop hosts as windows (`id`,
+  `title`, `component`, `role` — `document`, `tool` or `widget`). Set `singleton: true` if only one
   window of the panel should exist (opening again focuses it, e.g. the
   dashboard); omit it for panels you open many of (terminals, editor buffers).
   Declare the component with `lazyPane(() => import('./panels/Foo'), 'Foo')`

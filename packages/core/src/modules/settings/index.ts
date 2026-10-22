@@ -18,9 +18,9 @@ export const settingsModule: ModuleManifest = {
       id: 'settings.home',
       title: 'Settings',
       component: SettingsPanel,
-      // A center tab, the way VS Code opens its Settings editor — not a dock
-      // panel. The page is two columns (category list + settings) and a right
-      // dock gave that ~20rem, which wrapped every row onto three lines.
+      // A document, the way VS Code opens its Settings editor. The page is two
+      // columns (category list + settings); a narrow companion width wraps every
+      // row onto three lines.
       role: 'document',
       icon: '⚙',
       singleton: true,

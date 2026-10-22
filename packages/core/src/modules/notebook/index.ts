@@ -77,7 +77,6 @@ export const notebookModule: ModuleManifest = {
       component: NotebookBrowser,
       role: 'tool',
       icon: '📓',
-      defaultDock: 'left',
       singleton: true,
       // A section of Explorer now — see modules/explorer. Stays registered so the
       // region strip on `notebook.editor` keeps working unchanged.
@@ -135,19 +134,6 @@ export const notebookModule: ModuleManifest = {
       title: 'Notebook: Open notebooks',
       run: () => {
         revealSection('notebooks', 'explorer.home');
-      },
-    },
-  ],
-  frames: [
-    {
-      id: 'notebook',
-      name: 'Notebooks',
-      description: "An empty desk for notebooks, with the explorer's Notebooks section alongside.",
-      icon: '📓',
-      frame: {
-        // Empty document area: pick a notebook from the browser in the left dock.
-        center: { tabs: [] },
-        docks: { left: { tools: ['explorer.home'], size: 280 } },
       },
     },
   ],

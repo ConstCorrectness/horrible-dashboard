@@ -9,10 +9,10 @@
 import { memo } from 'react';
 import {
   collapseRegion,
+  findPaneAnywhere,
   layoutStore,
   regionAt,
   regionDisplay,
-  paneDrag,
   resolveView,
   setRegionView,
   type PaneState,
@@ -150,25 +150,10 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
   // second one that stacked every view at once, and on the training notebook —
   // which declares five — that meant Metrics, Architecture, Rollout, Manim and
   // Peers each got a fifth of a 300px column, about 60px, and none of them could
-  // draw anything legible. Stacking also quietly cost the two things this branch
-  // has: `activeView` meant nothing, and there was no way to drag a companion out
-  // into a real pane, which is the actual answer to "I want two of these at once".
+  // draw anything legible. Stacking also quietly cost `activeView` its meaning.
   const content = (
     <div className="frame-region-content">
-      <div
-        className="frame-region-header"
-        draggable
-        title="Drag into the center to open in its own area"
-        onDragStart={(e) => {
-          e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', activeTitle);
-          // A `view` payload, not `pane`: the strip's content is a synthetic
-          // per-host instance, not a pane the layout owns — so it opens a real
-          // one where it lands, and the strip stays put.
-          paneDrag.begin({ kind: 'view', viewId: region.activeView, title: activeTitle });
-        }}
-        onDragEnd={() => paneDrag.end()}
-      >
+      <div className="frame-region-header">
         {region.views.length > 1 ? (
           <div className="frame-region-tabs">
             {region.views.map((id) => {
@@ -244,48 +229,24 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
 /** Re-read the strip from the store (drag closures must not capture stale state). */
 function latestRegion(instanceId: string, position: RegionPosition): RegionState | null {
   const { frame } = layoutStore.getSnapshot();
-  const walk = (tabs: PaneState[]): RegionState | null => {
-    const pane = tabs.find((t) => t.instanceId === instanceId);
-    return pane?.regions?.[position] ?? null;
-  };
-  const search = (node: typeof frame.center): RegionState | null => {
-    if (node.kind === 'area') return walk(node.tabs);
-    for (const child of node.children) {
-      const hit = search(child);
-      if (hit) return hit;
-    }
-    return null;
-  };
-  return (
-    search(frame.center) ??
-    walk(frame.docks.left.tools) ??
-    walk(frame.docks.right.tools) ??
-    walk(frame.docks.bottom.tools) ??
-    walk(frame.windows.flatMap((w) => w.area.tabs))
-  );
+  return findPaneAnywhere(frame, instanceId)?.pane.regions?.[position] ?? null;
 }
 
 /**
- * A pane's content wrapped with its three region strips (center areas + docks).
+ * A pane's content wrapped with its three region strips.
  *
- * Memoized because its parents re-render on chrome changes the pane does not see:
- * a window's mode or rect, an area's focus. The reducers spread the window, so
- * `pane` keeps its identity through those, and without the memo every maximize
- * re-rendered the whole pane — 500ms+ for a large one (Settings).
+ * Memoized because its parent re-renders on chrome changes the pane does not see:
+ * a window's mode or rect. The reducers spread the window, so `pane` keeps its
+ * identity through those, and without the memo every maximize re-rendered the
+ * whole pane — 500ms+ for a large one (Settings).
  */
-export const PaneWithRegions = memo(function PaneWithRegions({
-  pane,
-  areaId,
-}: {
-  pane: PaneState;
-  areaId?: string;
-}) {
+export const PaneWithRegions = memo(function PaneWithRegions({ pane }: { pane: PaneState }) {
   return (
     <div className="frame-pane-regions">
       <div className="frame-pane-regions-middle">
         <Region pane={pane} position="left" />
         <div className="frame-pane-regions-content">
-          <PaneHost pane={pane} areaId={areaId} />
+          <PaneHost pane={pane} />
         </div>
         <Region pane={pane} position="right" />
       </div>

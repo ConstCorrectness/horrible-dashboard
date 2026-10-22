@@ -2,7 +2,7 @@
   "$schema": "gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for the main window",
-  "windows": ["main", "ws-*"],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "allow-backend-status",
@@ -15,7 +15,6 @@
     "allow-window-close",
     "allow-window-set-zoom",
     "allow-window-start-resize-dragging",
-    "allow-window-open-workspace",
     "allow-browser-open-url",
     "allow-create-browser-webview",
     "allow-update-browser-webview-bounds",

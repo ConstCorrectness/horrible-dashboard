@@ -24,10 +24,6 @@ const CANDIDATES: ShowCandidates = {
       ],
     },
   ],
-  workspaces: [
-    { id: 'dataops', name: 'Data Ops' },
-    { id: 'scripting', name: 'Scripting' },
-  ],
   aliases: {
     'network.peers': { kind: 'view', viewId: 'people.home', section: 'discover' },
     Peers: { kind: 'view', viewId: 'people.home', section: 'discover' },
@@ -67,13 +63,6 @@ describe('resolveShowTarget', () => {
     });
   });
 
-  it('switches workspace by name', () => {
-    expect(resolveShowTarget('Data Ops', CANDIDATES)).toEqual({
-      kind: 'workspace',
-      workspaceId: 'dataops',
-    });
-  });
-
   it('prefers an exact view id over a fuzzy title match', () => {
     // 'Friends' is both a view title and a section label; the whole-view id wins
     // when asked for by id, and the section is still reachable by its own name.
@@ -98,7 +87,6 @@ describe('resolveShowTarget', () => {
         { id: 'a.one', title: 'Report Alpha' },
         { id: 'a.two', title: 'Report Beta' },
       ],
-      workspaces: [],
     };
     // Two titles contain "report" — silently picking one is how an agent opens the
     // wrong thing and then reports success.

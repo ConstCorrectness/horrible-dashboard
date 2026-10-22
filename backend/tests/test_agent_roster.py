@@ -87,7 +87,7 @@ def test_core_tools_gated_by_spec() -> None:
     # round — including turns that only read a file — starved it worst. It keeps the
     # cheap read set plus `show`, which covers "open/go to X" in one call.
     assert {"show", "get_layout", "list_open_panes"} <= names_default
-    assert names_default.isdisjoint({"open_pane", "split_area", "toggle_dock"})
+    assert names_default.isdisjoint({"open_pane", "window_state", "arrange_windows"})
 
     coder = roster.get_agent("coder")
     names_coder = {t["function"]["name"] for t in orchestrator._core_tools(coder)}
@@ -96,7 +96,7 @@ def test_core_tools_gated_by_spec() -> None:
     # A scoped agent keeps the layout READ verbs (orientation) and the meta tools,
     # but pays nothing for the arrangement verbs until it loads the `layout` group.
     assert {"get_layout", "list_open_panes", "load_tools"} <= names_coder
-    assert names_coder.isdisjoint({"open_pane", "split_area", "toggle_dock"})
+    assert names_coder.isdisjoint({"open_pane", "window_state", "arrange_windows"})
 
 
 def test_select_tools_scoped_to_spec_groups() -> None:
@@ -180,12 +180,12 @@ def test_scoped_agent_can_load_the_layout_group() -> None:
         )
     )
     assert loaded["loaded"] == ["layout"]
-    assert {"open_pane", "split_area", "toggle_dock"} <= set(loaded["tools"])
+    assert {"open_pane", "window_state", "arrange_windows"} <= set(loaded["tools"])
     # …and the next round actually presents them.
     names = {
         t["function"]["name"] for t in orchestrator._select_tools(conn, active, coder)
     }
-    assert {"open_pane", "split_area", "get_layout"} <= names
+    assert {"open_pane", "window_state", "get_layout"} <= names
 
     # The main orchestrator no longer carries the arrangement verbs in core, so
     # `layout` must now be a loadable group for it too — otherwise nothing could ever
@@ -200,7 +200,7 @@ def test_scoped_agent_can_load_the_layout_group() -> None:
         for t in orchestrator._all_dynamic_tools(conn)
         if orchestrator._group_of(t["function"]["name"]) == "layout"
     }
-    assert {"open_pane", "split_area", "toggle_dock"} <= main_dynamic
+    assert {"open_pane", "window_state", "arrange_windows"} <= main_dynamic
     assert main_dynamic.isdisjoint({"show", "get_layout", "list_open_panes"})
 
 

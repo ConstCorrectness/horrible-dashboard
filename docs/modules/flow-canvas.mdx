@@ -46,7 +46,7 @@ is the new part; the execution borrows everything.
 | Talk to a model | `providers.chat_stream` (Ollama / LM Studio / vLLM) |
 | Persist a flow | the workspace-store pattern (server stores the graph **opaquely**) |
 | Stream progress to the UI | the shared `/ws` socket, new `flow` channel |
-| Surface in the UI | a registry **Panel** hosted by the dockable workspace |
+| Surface in the UI | a registry **Panel**, in a window on the desktop |
 
 So the build is mostly: a **canvas panel**, a **node registry**, and a **graph
 executor** that schedules nodes and delegates each node's work to machinery that
@@ -220,8 +220,6 @@ each Agent node's loop nested inside and traced as the node (`flow:node:<id>`), 
   ComfyUI).
 - **Commands:** `flow.new` (create + open a new flow), `flow.openLibrary` (open
   the library). (Run/stop live on the canvas toolbar; agent flow-CRUD tools are Phase 3.)
-- **Frame preset:** an **Orchestration** workspace (library dock · canvas) in the
-  workspace tab strip.
 
 ## Backend surface
 

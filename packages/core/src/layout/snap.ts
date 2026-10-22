@@ -23,6 +23,9 @@ export interface SnapConfig {
 
 export const DEFAULT_SNAP: SnapConfig = { edge: 12, corner: 72, gap: 0 };
 
+/** Viewport assumed when nothing has measured the surface yet (the Tauri default). */
+export const NOMINAL_VIEWPORT = { w: 1280, h: 800 };
+
 /**
  * Every snap zone, as data — the one list, and the only place a new zone is added.
  *

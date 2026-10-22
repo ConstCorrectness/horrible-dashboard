@@ -1,18 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { layoutStore } from '../../layout/store';
-import { seedFromPreset, type FramePreset } from '../../layout/presets';
+import { windowsFrame } from '../../layout/__tests__/fixtures';
 import { releaseCapture, requestCapture } from '../capture';
 import { followCaptureWithEscapeLock, hostTakesEscape } from '../keyboard-lock';
 
 // Core vitest runs without a DOM, so the two globals the lock reads are stubbed:
 // `document` (fullscreen / pointer-lock state) and `navigator.keyboard`.
-const preset: FramePreset = {
-  id: 'test',
-  name: 'Test',
-  frame: { center: { split: 'row', children: [{ pane: 'editor.buffer' }] } },
-};
-
 const doc = {
   fullscreenElement: null as unknown,
   pointerLockElement: null as unknown,
@@ -22,11 +16,7 @@ const doc = {
 const keyboard = { lock: vi.fn(async () => {}), unlock: vi.fn() };
 
 function editorInstance(): string {
-  const center = layoutStore.getSnapshot().frame.center;
-  if (center.kind === 'area') return center.tabs[0]!.instanceId;
-  const first = center.children[0]!;
-  if (first.kind !== 'area') throw new Error('unexpected layout');
-  return first.tabs[0]!.instanceId;
+  return layoutStore.getSnapshot().frame.windows[0]!.area.tabs[0]!.instanceId;
 }
 
 function captureEditor(escape: 'passthrough' | 'release'): void {
@@ -47,7 +37,7 @@ beforeEach(() => {
   layoutStore.dispatch({
     type: 'LOAD_WORKSPACE',
     workspaceId: 'test',
-    frame: seedFromPreset(preset, { knownViews: new Set(['editor.buffer']) }),
+    frame: windowsFrame(['editor.buffer']),
   });
 });
 

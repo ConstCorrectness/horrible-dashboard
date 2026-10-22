@@ -21,16 +21,9 @@
  * Everything here is pure and takes the registry lookup as an argument, so the
  * redaction can be tested without a registry, a socket or a DOM.
  */
-import type { DockSide, PaneShareDecl } from '@horribledashboard/sdk';
+import type { PaneShareDecl } from '@horribledashboard/sdk';
 
-import type {
-  AreaNode,
-  DesktopMode,
-  FrameState,
-  LayoutNode,
-  PaneState,
-  WindowRect,
-} from '../../layout/types';
+import type { AreaNode, FrameState, PaneState, WindowRect } from '../../layout/types';
 
 /** What a guest is told about one pane. */
 export interface MirrorPane {
@@ -46,7 +39,6 @@ export interface MirrorPane {
   viewId?: string;
   /** Only the keys the pane's declaration allowlisted. */
   params?: Record<string, unknown>;
-  minimized?: boolean;
 }
 
 export interface MirrorArea {
@@ -56,36 +48,20 @@ export interface MirrorArea {
   activeTab: number;
 }
 
-export interface MirrorSplit {
-  kind: 'split';
-  id: string;
-  orientation: 'row' | 'column';
-  children: MirrorNode[];
-  sizes: number[];
-}
-
-export type MirrorNode = MirrorSplit | MirrorArea;
-
-export interface MirrorDock {
-  visible: boolean;
-  tools: MirrorPane[];
-  activeTool: string | null;
-}
-
 export interface MirrorWindow {
   id: string;
   area: MirrorArea;
+  /** Pixels against `MirrorFrame.windowViewport`. */
   rect: WindowRect;
+  /** Stacking order: higher is in front. */
+  z: number;
   minimized: boolean;
 }
 
-/** The host's workspace as a guest sees it. */
+/** The host's desktop as a guest sees it. */
 export interface MirrorFrame {
-  center: MirrorNode;
-  docks: Record<DockSide, MirrorDock>;
   windows: MirrorWindow[];
   windowViewport: { w: number; h: number } | null;
-  mode: DesktopMode;
   /** What the host is looking at, for follow mode. */
   focusedInstanceId: string | null;
   /** How many panes were withheld — shown to the guest as a fact, not hidden. */
@@ -175,7 +151,6 @@ function redactPane(pane: PaneState, lookup: ViewLookup, walk: Walk): MirrorPane
     mode: decl.mode,
     viewId: pane.viewId,
     params: pickParams(pane.params, decl.params),
-    minimized: pane.minimized,
   };
 }
 
@@ -185,17 +160,6 @@ function redactArea(area: AreaNode, lookup: ViewLookup, walk: Walk): MirrorArea 
     id: area.id,
     tabs: area.tabs.map((t) => redactPane(t, lookup, walk)),
     activeTab: area.activeTab,
-  };
-}
-
-function redactNode(node: LayoutNode, lookup: ViewLookup, walk: Walk): MirrorNode {
-  if (node.kind === 'area') return redactArea(node, lookup, walk);
-  return {
-    kind: 'split',
-    id: node.id,
-    orientation: node.orientation,
-    children: node.children.map((c) => redactNode(c, lookup, walk)),
-    sizes: node.sizes,
   };
 }
 
@@ -210,32 +174,17 @@ function redactNode(node: LayoutNode, lookup: ViewLookup, walk: Walk): MirrorNod
  */
 export function redactFrame(frame: FrameState, lookup: ViewLookup): MirrorFrame {
   const walk: Walk = { n: 0, ids: new Map() };
-  const center = redactNode(frame.center, lookup, walk);
-
-  const docks = {} as Record<DockSide, MirrorDock>;
-  for (const side of ['left', 'right', 'bottom'] as const) {
-    const dock = frame.docks[side];
-    docks[side] = {
-      visible: dock.visible,
-      tools: dock.tools.map((t) => redactPane(t, lookup, walk)),
-      // `activeTool` is an instance id too, and so carries the same view id.
-      activeTool: dock.activeTool ? (walk.ids.get(dock.activeTool) ?? null) : null,
-    };
-  }
-
   const windows = frame.windows.map((w) => ({
     id: w.id,
     area: redactArea(w.area, lookup, walk),
     rect: w.rect,
+    z: w.z,
     minimized: w.mode === 'minimized',
   }));
 
   return {
-    center,
-    docks,
     windows,
     windowViewport: frame.windowViewport,
-    mode: frame.mode,
     // Mapped through the same table: the host may well be looking at a pane the
     // guest cannot see, and forwarding the raw id there would put the view id
     // back into the payload by the side door.
@@ -263,24 +212,20 @@ export function summarize(frame: MirrorFrame): MirrorSummary {
   return { panes: mirrorPanes(frame).length, hidden: frame.redactedCount };
 }
 
-/** Every pane in a projection, flattened — for counting and for tests. */
+/**
+ * Every pane in a projection, flattened — for counting and for tests.
+ *
+ * `windows` is read defensively: a host on a build from before the tiling frame was
+ * removed sends `center`/`docks` too, and may send no `windows` at all.
+ */
 export function mirrorPanes(frame: MirrorFrame): MirrorPane[] {
-  const out: MirrorPane[] = [];
-  const walk = (node: MirrorNode): void => {
-    if (node.kind === 'area') out.push(...node.tabs);
-    else node.children.forEach(walk);
-  };
-  walk(frame.center);
-  for (const side of ['left', 'right', 'bottom'] as const) out.push(...frame.docks[side].tools);
-  for (const win of frame.windows) out.push(...win.area.tabs);
-  return out;
+  return (frame.windows ?? []).flatMap((win) => win.area.tabs);
 }
 
 /**
  * Whether two projections differ in anything a guest would see.
  *
- * The layout store fires on every pixel of a drag, and a resize that moves a
- * split by 0.4% is not news. Comparing the *projection* rather than the frame
+ * The layout store fires on every pixel of a drag. Comparing the *projection* rather than the frame
  * also means the common case — the host typing in a pane the guest cannot see —
  * produces no traffic at all.
  */

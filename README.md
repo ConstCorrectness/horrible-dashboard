@@ -18,7 +18,7 @@
 ![LanceDB](https://img.shields.io/badge/LanceDB-vector%20store-e4572e?style=flat)
 ![ViZDoom](https://img.shields.io/badge/ViZDoom-native%20engine-8b0000?style=flat)
 
-**Emacs for the agentic era.** One app for everything: a dockable workspace of
+**Emacs for the agentic era.** One app for everything: a desktop of windowed
 panes where a local-model agent is a first-class citizen — it opens your windows,
 reads your library, drives a real browser, queries your databases, plays Doom
 against your friends' agents, and phones other people's nodes over a peer-to-peer
@@ -43,7 +43,7 @@ it will.
 ## The tour
 
 Everything is a **module**: it declares its panes, commands, keybindings, agent
-tools, and settings in one place, then docks into the same workspace shell.
+tools, and settings in one place, then plugs into the same desktop shell.
 That's the whole trick — and it's the same contract third-party plugins get.
 
 ### 🧠 The agent

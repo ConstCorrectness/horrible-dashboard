@@ -23,8 +23,18 @@ function area(id: string, tabs: PaneState[], activeTab = 0): AreaNode {
   return { kind: 'area', id, tabs, activeTab };
 }
 
-function frameWith(center: FrameState['center']): FrameState {
-  return { ...createEmptyFrame(), center };
+/** One window per area, in order. */
+function frameWith(...areas: AreaNode[]): FrameState {
+  return {
+    ...createEmptyFrame(),
+    windows: areas.map((a, i) => ({
+      id: `w${i + 1}`,
+      area: a,
+      rect: { x: 40 * i, y: 40 * i, w: 400, h: 300 },
+      mode: 'normal' as const,
+      z: i + 1,
+    })),
+  };
 }
 
 const lookup: ViewLookup = (viewId) => {
@@ -88,22 +98,6 @@ describe('preflight', () => {
     expect(result.undeclared.map((p) => p.title)).toEqual(['Settings']);
   });
 
-  it('checks visible docks', () => {
-    const frame = createEmptyFrame();
-    frame.docks.right.visible = true;
-    frame.docks.right.tools = [pane('secret.settings')];
-    frame.docks.right.activeTool = 'secret.settings#1';
-    expect(isClear(preflight(frame, lookup))).toBe(false);
-  });
-
-  it('ignores a hidden dock', () => {
-    const frame = createEmptyFrame();
-    frame.docks.right.visible = false;
-    frame.docks.right.tools = [pane('secret.settings')];
-    frame.docks.right.activeTool = 'secret.settings#1';
-    expect(isClear(preflight(frame, lookup))).toBe(true);
-  });
-
   it('checks a window that is on screen', () => {
     const frame = createEmptyFrame();
     frame.windows = [
@@ -134,13 +128,10 @@ describe('preflight', () => {
   });
 
   it('lists several undeclared panes rather than stopping at the first', () => {
-    const frame = frameWith({
-      kind: 'split',
-      id: 's1',
-      orientation: 'row',
-      children: [area('a1', [pane('secret.settings')]), area('a2', [pane('ghost.gone')])],
-      sizes: [0.5, 0.5],
-    });
+    const frame = frameWith(
+      area('a1', [pane('secret.settings')]),
+      area('a2', [pane('ghost.gone')]),
+    );
     expect(preflight(frame, lookup).undeclared).toHaveLength(2);
   });
 });

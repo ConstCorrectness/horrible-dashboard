@@ -94,8 +94,6 @@ export const recordsModule: ModuleManifest = {
       component: RecordList,
       role: 'tool',
       icon: '🗃',
-      defaultDock: 'left',
-      defaultDockSize: 260,
       singleton: true,
       // Embedded, hosted by the region strip declared above on all three record
       // documents. It was briefly an Explorer section instead, which put a table
@@ -103,39 +101,6 @@ export const recordsModule: ModuleManifest = {
       // schema list is only meaningful beside the grid it re-points. Same call as
       // the flow library. See modules/explorer.
       embedded: true,
-    },
-  ],
-  // One workspace, not two. The old `crm` preset arranged a contacts/deals pipeline
-  // that presumed a sales workflow the substrate never actually required — and it
-  // was the reason a generic table store read as CRM software. The review surface
-  // now docks into the workspaces where the reading happens instead (Research and
-  // Web Ops, in modules/layouts), so an extraction is reviewed beside the document
-  // it came from rather than a workspace switch away.
-  frames: [
-    {
-      id: 'intake',
-      name: 'Data Entry',
-      description:
-        'Read a document on the left, fill its record on the right, and review every field the agent proposes.',
-      icon: '📥',
-      // Source left, review right, half and half: the whole workflow is reading one
-      // and confirming the other, and neither is secondary.
-      agent: 'intake',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.5, 0.5],
-          children: [
-            { tabs: ['research.pdfViewer', 'browser.view'], active: 0 },
-            { tabs: ['records.form', 'records.grid'], active: 0 },
-          ],
-        },
-        docks: {
-          left: { tools: ['explorer.home'], size: 240 },
-          right: { tools: ['agent.chat'], size: 360 },
-          bottom: { tools: ['observability.io'], visible: false },
-        },
-      },
     },
   ],
   commands: [

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type React from 'react';
 
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
-import type { MirrorFrame, MirrorNode, MirrorPane } from '../mirror';
+import type { MirrorArea, MirrorFrame, MirrorPane, MirrorWindow } from '../mirror';
 import { mirrorPanes } from '../mirror';
 import { IconPlay, IconVolume } from '../../../glyphs';
 import { GRANT_LADDER, type GrantLevel } from '../api';
@@ -12,7 +12,7 @@ import { getShareSnapshot, sendShareAction, subscribeShare } from '../ws';
 import './mirror.css';
 
 /**
- * The guest's window onto the host's workspace.
+ * The guest's window onto the host's desktop.
  *
  * It is a **map**, not a copy, and that distinction is the whole design. A pane
  * component renders local data, so seeding the host's layout into this dashboard
@@ -38,11 +38,13 @@ function Tile({
   pane,
   focused,
   selected,
+  minimized,
   onSelect,
 }: {
   pane: MirrorPane;
   focused: boolean;
   selected: boolean;
+  minimized: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -52,7 +54,7 @@ function Tile({
       data-tone={tone(pane)}
       data-focused={focused ? 'true' : undefined}
       data-selected={selected ? 'true' : undefined}
-      data-minimized={pane.minimized ? 'true' : undefined}
+      data-minimized={minimized ? 'true' : undefined}
       onClick={onSelect}
       title={
         pane.mode === 'redacted'
@@ -66,65 +68,66 @@ function Tile({
   );
 }
 
-function Node({
-  node,
+/** One window's tab strip and its showing pane. */
+function Area({
+  area,
+  minimized,
   focusedId,
   selectedId,
   onSelect,
 }: {
-  node: MirrorNode;
+  area: MirrorArea;
+  minimized: boolean;
   focusedId: string | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  if (node.kind === 'area') {
-    const active = node.tabs[node.activeTab];
-    return (
-      <div className="share-area">
-        {node.tabs.length > 1 && (
-          <div className="share-tabs">
-            {node.tabs.map((t) => (
-              <span
-                key={t.instanceId}
-                className="share-tab"
-                data-active={t.instanceId === active?.instanceId ? 'true' : undefined}
-              >
-                {t.title}
-              </span>
-            ))}
-          </div>
-        )}
-        {active ? (
-          <Tile
-            pane={active}
-            focused={active.instanceId === focusedId}
-            selected={active.instanceId === selectedId}
-            onSelect={() => onSelect(active.instanceId)}
-          />
-        ) : (
-          <div className="share-tile" data-tone="empty">
-            <span className="share-tile-mode">empty</span>
-          </div>
-        )}
-      </div>
-    );
-  }
+  const active = area.tabs[area.activeTab];
   return (
-    <div className="share-split" data-orientation={node.orientation}>
-      {node.children.map((child, i) => (
-        <div
-          key={child.id}
-          className="share-split-child"
-          style={{ flexGrow: node.sizes[i] ?? 1, flexBasis: 0 }}
-        >
-          <Node node={child} focusedId={focusedId} selectedId={selectedId} onSelect={onSelect} />
+    <div className="share-area">
+      {area.tabs.length > 1 && (
+        <div className="share-tabs">
+          {area.tabs.map((t) => (
+            <span
+              key={t.instanceId}
+              className="share-tab"
+              data-active={t.instanceId === active?.instanceId ? 'true' : undefined}
+            >
+              {t.title}
+            </span>
+          ))}
         </div>
-      ))}
+      )}
+      {active ? (
+        <Tile
+          pane={active}
+          focused={active.instanceId === focusedId}
+          selected={active.instanceId === selectedId}
+          minimized={minimized}
+          onSelect={() => onSelect(active.instanceId)}
+        />
+      ) : (
+        <div className="share-tile" data-tone="empty">
+          <span className="share-tile-mode">empty</span>
+        </div>
+      )}
     </div>
   );
 }
 
-function Workspace({
+/** A host's window as a fraction of their desktop, so the map keeps its proportions. */
+function windowStyle(win: MirrorWindow, viewport: { w: number; h: number }): React.CSSProperties {
+  const pct = (v: number, of: number) => `${Math.min(Math.max((v / of) * 100, 0), 100)}%`;
+  return {
+    left: pct(win.rect.x, viewport.w),
+    top: pct(win.rect.y, viewport.h),
+    width: pct(win.rect.w, viewport.w),
+    height: pct(win.rect.h, viewport.h),
+    zIndex: win.z,
+  };
+}
+
+function Desktop({
   frame,
   following,
   selectedId,
@@ -138,59 +141,44 @@ function Workspace({
   // Following means the map tracks what the host is looking at; unfollowing lets
   // the guest hold their own attention on a tile while the host moves around.
   const highlighted = following ? frame.focusedInstanceId : selectedId;
-  const docks = (['left', 'right'] as const).filter((s) => frame.docks[s].visible);
+  // A host on a build from before the tiling frame was removed may send no
+  // `windows`; its centre grid has no equivalent here, so the map is just empty.
+  const windows = frame.windows ?? [];
+  const open = windows.filter((w) => !w.minimized);
+  const minimized = windows.filter((w) => w.minimized);
+  // Rects are pixels against the host's surface; before the host has measured
+  // one, any box keeps the proportions between windows right.
+  const viewport = frame.windowViewport ?? { w: 1280, h: 800 };
 
   return (
     <div className="share-workspace">
-      {docks.includes('left') && (
-        <Dock tools={frame.docks.left.tools} highlighted={highlighted} onSelect={onSelect} />
-      )}
-      <div className="share-center">
-        <Node
-          node={frame.center}
-          focusedId={highlighted}
-          selectedId={selectedId}
-          onSelect={onSelect}
-        />
-        {frame.docks.bottom.visible && frame.docks.bottom.tools.length > 0 && (
-          <Dock
-            tools={frame.docks.bottom.tools}
-            highlighted={highlighted}
-            onSelect={onSelect}
-            horizontal
-          />
-        )}
+      <div className="share-desktop" style={{ aspectRatio: `${viewport.w} / ${viewport.h}` }}>
+        {open.map((win) => (
+          <div key={win.id} className="share-window" style={windowStyle(win, viewport)}>
+            <Area
+              area={win.area}
+              minimized={false}
+              focusedId={highlighted}
+              selectedId={selectedId}
+              onSelect={onSelect}
+            />
+          </div>
+        ))}
       </div>
-      {docks.includes('right') && (
-        <Dock tools={frame.docks.right.tools} highlighted={highlighted} onSelect={onSelect} />
+      {minimized.length > 0 && (
+        <div className="share-minimized" aria-label="Minimized windows">
+          {minimized.map((win) => (
+            <Area
+              key={win.id}
+              area={win.area}
+              minimized
+              focusedId={highlighted}
+              selectedId={selectedId}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
       )}
-    </div>
-  );
-}
-
-function Dock({
-  tools,
-  highlighted,
-  onSelect,
-  horizontal,
-}: {
-  tools: MirrorPane[];
-  highlighted: string | null;
-  onSelect: (id: string) => void;
-  horizontal?: boolean;
-}) {
-  if (tools.length === 0) return null;
-  return (
-    <div className="share-dock" data-horizontal={horizontal ? 'true' : undefined}>
-      {tools.map((t) => (
-        <Tile
-          key={t.instanceId}
-          pane={t}
-          focused={t.instanceId === highlighted}
-          selected={false}
-          onSelect={() => onSelect(t.instanceId)}
-        />
-      ))}
     </div>
   );
 }
@@ -424,7 +412,7 @@ export function MirrorPanel() {
 
         {frame && (!stream || showMap) && (
           <>
-            <Workspace
+            <Desktop
               frame={frame}
               following={following}
               selectedId={selectedId}
@@ -436,7 +424,7 @@ export function MirrorPanel() {
               }}
             />
             <p className="share-mirror-note">
-              A map of their workspace, not a copy of it. Panes they have not shared show as{' '}
+              A map of their desktop, not a copy of it. Panes they have not shared show as{' '}
               <strong>not shared</strong> &mdash; nothing about those left their machine, not even a
               title.
               {counts && counts.hidden > 0 && (

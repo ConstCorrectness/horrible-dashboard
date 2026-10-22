@@ -51,8 +51,6 @@ export const peopleModule: ModuleManifest = {
       component: FriendsPanel,
       role: 'tool',
       icon: '👥',
-      defaultDock: 'right',
-      defaultDockSize: 340,
       sections: [
         { id: 'friends', label: 'Friends', icon: '👥', component: FriendsPanel, default: true },
         { id: 'messages', label: 'Messages', icon: '✉', component: PeerChatPanel, key: 'm' },

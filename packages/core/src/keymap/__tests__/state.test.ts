@@ -5,7 +5,7 @@ import { getKeymap, initKeymapHost, setKeymapOverrides, unreachableDefaults } fr
 import { keyContextStore } from '../state';
 import { releaseCapture, requestCapture } from '../capture';
 import { layoutStore } from '../../layout/store';
-import { seedFromPreset } from '../../layout/presets';
+import { windowsFrame } from '../../layout/__tests__/fixtures';
 
 /** Isolate the keymap from every other module's real bindings. */
 function only(keybindings: Parameters<typeof registry.register>[0]['keybindings']): void {
@@ -139,14 +139,9 @@ describe('the context store notices a capture', () => {
     layoutStore.dispatch({
       type: 'LOAD_WORKSPACE',
       workspaceId: 'test',
-      frame: seedFromPreset(
-        { id: 't', name: 'T', frame: { center: { pane: 'hassault.play' } } },
-        { knownViews: new Set(['hassault.play']) },
-      ),
+      frame: windowsFrame(['hassault.play']),
     });
-    const center = layoutStore.getSnapshot().frame.center;
-    if (center.kind !== 'area') throw new Error('expected a single seeded area');
-    const instanceId = center.tabs[0].instanceId;
+    const instanceId = layoutStore.getSnapshot().frame.windows[0].area.tabs[0].instanceId;
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId });
 
     let emits = 0;

@@ -1,7 +1,6 @@
 import { bindingsFor } from '../../keymap/resolve';
 import { labelSpec, tryParseSpec } from '../../keymap/spec';
 import { useKeyContext, useKeymap } from '../../keymap/state';
-import { WorkspaceLauncher } from '../../WorkspaceLauncher';
 
 import './welcome.css';
 
@@ -38,11 +37,6 @@ function useChordLabel(command: string): string | null {
  * anyone about itself. There is no tour and no help menu, so this card and the
  * first-run wizard are the whole body of guidance, and the wizard covers a name, a
  * wallpaper and three credential steps.
- *
- * The workspaces do the heavy lifting, through the same `WorkspaceLauncher` the home
- * surface renders. Sharing the component is the point: the presets are this app's
- * table of contents, and a second hand-written list of them would be missing
- * whichever one was added last.
  */
 export function WelcomeWidget() {
   const palette = useChordLabel('shell.commandPalette');
@@ -54,8 +48,8 @@ export function WelcomeWidget() {
       </p>
       <ul className="welcome-ways">
         <li>
-          <b>Pick a workspace.</b> Each one below opens a complete arrangement for a kind of work.
-          Switching costs nothing: every desktop keeps what you left in it.
+          <b>Open a window.</b> The Start menu lists every pane by kind of work. Windows snap to the
+          edges and remember where you left them.
         </li>
         <li>
           {/* Absent, not faked: if the palette has no binding on this keymap, saying
@@ -76,7 +70,6 @@ export function WelcomeWidget() {
           training metrics&rdquo; is a way to navigate.
         </li>
       </ul>
-      <WorkspaceLauncher />
     </div>
   );
 }

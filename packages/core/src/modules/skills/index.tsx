@@ -23,12 +23,9 @@ export const skillsModule: ModuleManifest = {
       title: 'Skills',
       component: SkillsPane,
       // A browsable library — the same shape as the marketplace, which is a
-      // document. It was a dock-only `tool`, which put a catalogue you read and
-      // edit into a 280px rail. `dockable` keeps the rail glyph for consulting
-      // it alongside something else.
+      // document: a catalogue you read and edit in.
       role: 'document',
       icon: '🎓',
-      dockable: 'left',
       singleton: true,
       /**
        * Library and editor are **sections**, not a `useState` swap of the pane

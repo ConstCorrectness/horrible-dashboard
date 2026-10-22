@@ -91,7 +91,6 @@ export {
   DEFAULT_AVATAR_MOODS,
   type AvatarMoodMap,
 } from './Avatar3D';
-export { WorkspaceLauncher } from './WorkspaceLauncher';
 export {
   apiUrl,
   getBackendOrigin,
@@ -172,15 +171,7 @@ export { closePaneSession, paneSessionKey } from './layout/pane-lifetime';
 /** Recently opened panes — the Start menu's Recent band. */
 export { MAX_RECENTS, recentViewIds, subscribeRecents } from './layout/recents';
 export type { LayoutAction } from './layout/actions';
-export {
-  findArea,
-  findAreaAnywhere,
-  findPaneAnywhere,
-  findWindow,
-  firstArea,
-  listPanes,
-  MIN_FRACTION,
-} from './layout/model';
+export { findAreaAnywhere, findPaneAnywhere, findWindow, listPanes } from './layout/model';
 export {
   arrangeWindows,
   cascadeRect,
@@ -189,6 +180,7 @@ export {
   DEFAULT_SNAP,
   fillTarget,
   MIN_WINDOW_SIZE,
+  NOMINAL_VIEWPORT,
   overlapFraction,
   rectForZone,
   rescaleRect,
@@ -197,15 +189,8 @@ export {
   type ArrangeStyle,
   type SnapConfig,
 } from './layout/snap';
-export { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './layout/windows';
-export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
 export { resolveViewIcon, taskbarEntries } from './layout/taskbar';
 export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
-export type { RailEntry, RailSide, RailState } from './layout/rail';
-export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
-export type { RailPrefs } from './layout/rail-prefs';
-export { dropPaneOnArea, dropPaneOnTab, paneDrag } from './layout/drag';
-export type { DragPayload } from './layout/drag';
 export { DEFAULT_BACKDROP } from './layout/types';
 export {
   DEFAULT_HOME_UNDERLAY,
@@ -235,59 +220,43 @@ export { matchCommands, minibuffer, resolveCommand } from './minibuffer';
 export type { MinibufferState } from './minibuffer';
 export type {
   AreaNode,
-  DockState,
   BackdropRef,
-  DesktopMode,
   SnapZone,
   WindowMode,
   WindowRect,
   WindowState,
   FrameState,
-  LayoutNode,
   LayoutStoreState,
   LocatedPane,
   NavDirection,
   PaneLocation,
   PaneState,
   RegionState,
-  SplitNode,
 } from './layout/types';
-export type { FramePreset, PresetNode } from './layout/presets';
 export {
   activeSectionOf,
   closePaneGuarded,
   collapseRegion,
-  focusAreaDirection,
   focusedPane,
   focusedViewId,
   focusInstance,
   focusPaneDom,
-  fullscreenArea,
-  fullscreenFocusedArea,
   isPresenting,
+  presentFocusedPane,
   presentPane,
-  dockSidesOf,
   installFrameController,
-  isDockable,
-  joinAreaDirection,
-  movePaneDirection,
-  moveTabToSplit,
   openDocument,
   openPane as openFramePane,
-  openPaneInArea,
-  openToolInDock,
   paneDisplayTitle,
   readPaneAgentContext,
   regionAt,
   regionDisplay,
   regionsFor,
-  resizeAreaPx,
   resolveView,
   revealRegionView,
   revealSection,
   roleOf,
   sectionsOf,
-  setCenterMeasurer,
   activateTaskbarEntry,
   arrangeDesktop,
   cycleWindows,
@@ -296,23 +265,16 @@ export {
   focusWindowDirection,
   minimizePane,
   requestPaneAttention,
-  moveWindowToDesktop,
-  movePaneTo,
   setBackdrop,
   setDesktopMeasurer,
-  setDesktopMode,
-  setPaneMinimized,
-  setPaneWindowed,
   setWindowMode,
   snapFocused,
+  tearOffPane,
   snapWindow,
-  toggleDesktopMode,
   toggleWindowMaximized,
   toggleWindowMinimized,
   setPaneSection,
   setRegionView,
-  splitAreaBy,
-  toggleDock,
   toggleRegion,
   toggleRegionView,
 } from './layout/controller';
@@ -334,12 +296,7 @@ export { usePaneSection, sectionOfInstance, type PaneSections } from './layout/u
 export { lastPlacement, rememberPlacement, WINDOW_PLACEMENT_KEY } from './layout/window-placement';
 export type { WindowPlacement } from './layout/window-placement';
 export * as framePersistence from './layout/persistence';
-export {
-  BOOT_WORKSPACE_KEY,
-  BOOT_WORKSPACE_LAST,
-  DEFAULT_BOOT_WORKSPACE,
-} from './layout/persistence';
-export { WORKSPACES_ENABLED_KEY, workspacesEnabled } from './layout/workspaces-setting';
+export { DESKTOP_WORKSPACE } from './layout/persistence';
 export {
   useWorkspaces,
   workspaceStore,
@@ -399,7 +356,6 @@ export {
   type AgentToolDecl,
   type BackdropDecl,
   type CommandDecl,
-  type DockSide,
   type JSONSchema,
   type KeybindingDecl,
   type PaneCaptureDecl,
@@ -413,15 +369,12 @@ export {
   type ModuleManifest,
   type OpenPaneInfo,
   type OpenPaneOptions,
-  type PaneDirection,
   type PanelDecl,
-  type SplitDirection,
   type SettingDecl,
   type SettingType,
   type ShellView,
   type UseAgentContext,
   type WidgetDecl,
-  type WorkspaceInfo,
 } from './registry';
 export {
   beginConnect,
@@ -453,7 +406,6 @@ export { SignInCard } from './SignInCard';
 export { HubLogin } from './HubLogin';
 export { AccountGate } from './AccountGate';
 export { dashboardModule } from './modules/dashboard';
-export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { mcpModule } from './modules/mcp';
 export { skillsModule } from './modules/skills';

@@ -9,7 +9,6 @@ import { useSyncExternalStore } from 'react';
 import {
   backendHealth,
   hasCapability,
-  layoutStore,
   THEMES,
   useThemeId,
   setSetting,
@@ -23,9 +22,7 @@ import { ShellIndicators } from '../../layout/ShellIndicators';
 
 export function Tray({ showLabels }: { showLabels: boolean }) {
   const health = useSyncExternalStore(backendHealth.subscribe, backendHealth.getSnapshot);
-  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const themeId = useThemeId();
-  const tiling = frame.mode === 'tiling';
   // The tray is where fullscreen becomes discoverable. F11 exists only on the
   // native shell (the browser owns that key), and the titlebar cluster only
   // renders under `chrome.workspaceTabs` — so without this button the browser
@@ -42,38 +39,9 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
   return (
     <div className="os-taskbar-tray" role="group" aria-label="Status">
       {/* Module readouts first — "your screen is being broadcast" outranks the
-          theme button. The floating desktop has no tab strip, so without this the
-          boot desktop would show nothing while a share was live. */}
+          theme button. In the browser there is no titlebar to carry them, so
+          without this the desktop would show nothing while a share was live. */}
       <ShellIndicators />
-      {/* An indicator, not a toggle.
-       *
-       * The paradigm is a property of the **workspace** now — you pick it when you
-       * make a desktop (Start ▸ New desktop), and you switch paradigms
-       * by switching desktops. This used to be a one-click flip, which invited the
-       * one operation the shell cannot do well: `explodeToWindows` cannot express
-       * split ratios as anything but the rects they occupy and `tileWindows` cannot
-       * recover the ratios you dragged, so every round trip quietly degraded the
-       * arrangement. Converting in place is still possible, but it now lives in the
-       * command palette where a destructive verb belongs rather than under a button
-       * sitting next to the clock.
-       */}
-      <button
-        type="button"
-        className="os-tray-btn"
-        aria-label={tiling ? 'Tiling desktop' : 'Floating desktop'}
-        title={
-          tiling
-            ? 'Tiling desktop — new desktops are made from the Start menu'
-            : 'Floating desktop — new desktops are made from the Start menu'
-        }
-        aria-haspopup="menu"
-        onClick={(ev) => {
-          const r = ev.currentTarget.getBoundingClientRect();
-          openContextMenu({ clientX: r.left, clientY: r.top }, { kind: 'taskbar.mode' });
-        }}
-      >
-        {tiling ? '▦' : '❐'}
-      </button>
       <button
         type="button"
         className="os-tray-btn"

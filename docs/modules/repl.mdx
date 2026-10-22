@@ -18,16 +18,12 @@ same browser. It is the programmatic twin of the
 
 ## Contributions to the layout shell
 
-- **Panels:** `repl.console` (one kernel per instance, default: bottom dock tab
-  group; non-singleton — open as many as you like, tab/split/float them). The kernel,
-  transcript and input history belong to the **pane** (`console.ts`, via
-  `usePaneSession`): a tab or desktop switch keeps every variable, and only closing
-  the pane stops the kernel. It used to start a kernel per mount, so switching tabs
+- **Panels:** `repl.console` (one kernel per instance; non-singleton — open as many
+  as you like, each in its own window or merged as tabs). The kernel, transcript and
+  input history belong to the **pane** (`console.ts`, via `usePaneSession`): a tab
+  switch keeps every variable, and only closing the pane stops the kernel. It used to start a kernel per mount, so switching tabs
   silently wiped the interpreter.
 - **Commands:** `repl.new` ("Python REPL: New console").
-- **Workflow layout:** the console is part of the built-in **Scripting** layout
-  (files · editor · REPL + terminal) in the shell rail — see
-  [windowing](../architecture/windowing.mdx).
 
 ## The `dash` SDK
 
@@ -40,12 +36,9 @@ doc (return shapes, error handling, recipes, how to extend it).
 | Call                          | Relayed tool          | Does                                        |
 | ----------------------------- | --------------------- | ------------------------------------------- |
 | `dash.panes.available()`      | `list_available_panes`| Every openable pane (panel + widget)        |
-| `dash.panes.open_list()`      | `list_open_panes`     | Panes open in the active workspace          |
+| `dash.panes.open_list()`      | `list_open_panes`     | Panes open on the desktop                   |
 | `dash.panes.open(id)`         | `open_pane`           | Open a panel/widget by id                   |
 | `dash.panes.close(id)`        | `close_pane`          | Close an open pane                          |
-| `dash.workspaces.list()`      | `list_workspaces`     | Named workspaces + which is active          |
-| `dash.workspaces.create(name)`| `create_workspace`    | New workspace, switched to                  |
-| `dash.workspaces.switch(id)`  | `switch_workspace`    | Switch workspace tab                        |
 | `dash.context(instanceId)`    | `get_pane_context`    | Read a live widget's state snapshot         |
 | `dash.call(name, **args)`     | _any_                 | Escape hatch: relay any tool by name        |
 
@@ -55,7 +48,6 @@ capabilities are scriptable the moment they exist — no SDK change needed.
 ```python
 dash.panes.available()                 # discover ids
 dash.panes.open("settings.home")       # open Settings
-ws = dash.workspaces.list()            # inspect workspaces
 panes = dash.panes.open_list()         # find a live instanceId
 dash.context(panes["panes"][0]["instanceId"])  # read its state
 ```

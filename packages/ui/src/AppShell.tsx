@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState } from 'react';
 import {
   closeTransientChrome,
   DEFAULT_ESCAPE_HOLD_MS,
@@ -9,7 +9,6 @@ import {
   hasCapability,
   installKeymap,
   installUpdate,
-  layoutStore,
   onExternalOpenFailed,
   startAutoUpdateChecks,
   toggleAppFullscreen,
@@ -19,9 +18,7 @@ import {
   zoomIn,
   zoomOut,
   registry,
-  workspacesEnabled,
   setBackdrop,
-  setDesktopMode,
   setSetting,
   setShellView,
   SymbolSearchModal,
@@ -45,41 +42,36 @@ import { Taskbar } from './desktop/Taskbar';
 import { registerDesktopModule } from './desktop/module';
 import { SnapAssist } from './desktop/SnapAssist';
 import { WindowLayer } from './desktop/WindowLayer';
-import { Frame } from './layout/Frame';
 import { Minibuffer } from './layout/Minibuffer';
-import { installFrameShell, openPaneWhenReady, switchWorkspaceWhenReady } from './layout/install';
+import { installFrameShell, openPaneWhenReady } from './layout/install';
+import { TitleBar } from './layout/TitleBar';
 import { WindowResizeHandles } from './layout/WindowChrome';
-import { DetachedTitlebar, WorkspaceTabs } from './layout/WorkspaceTabs';
 import './styles.css';
 import './desktop/desktop.css';
+// The shell's column layout, the titlebar and the region strips. It used to come in
+// through the tiling frame's components, and when they went the shell quietly
+// became a row with the taskbar beside the desktop.
+import './layout/frame.css';
 import './desktop/backdrops/backdrops.css';
 import './desktop/taskbar/taskbar.css';
 import './desktop/oobe.css';
 import './overlay/docs.css';
 
 /**
- * The shell: the workspace tab strip on top (always visible, Blender-style),
- * then either the `desktop` (a backdrop, with windows over it) or the frame (the
- * tiling workspace engine — activity rail, docks, center area grid). Global
- * chrome (palette, toasts, dialogs, keybinding dispatch) lives here.
+ * The shell: the native titlebar (desktop builds only), the `desktop` — a
+ * backdrop with windows over it — and the taskbar. Global chrome (palette,
+ * toasts, dialogs, keybinding dispatch) lives here.
  *
  * The old `home` view is gone: it was a second top-level surface doing the
  * desktop's job, and it survives as the `splash` backdrop instead. See
  * docs/architecture/layout-shell.mdx and docs/architecture/desktop-shell.mdx.
  */
-export function AppShell({
-  appTitle,
-  initialWorkspaceId,
-}: {
-  appTitle: string;
-  /** When set (a per-workspace OS window), boot into this workspace, not home. */
-  initialWorkspaceId?: string;
-}) {
+export function AppShell({ appTitle }: { appTitle: string }) {
   // First run goes through setup before the desktop. Read once, at mount, from
   // the settings already loaded by `boot()` — reading it reactively would yank
   // the user back into the wizard the moment the settings store republished.
   const [view, setView] = useState<ShellView>(() =>
-    !initialWorkspaceId && getSetting<boolean>(OOBE_COMPLETE_KEY) !== true ? 'oobe' : 'desktop',
+    getSetting<boolean>(OOBE_COMPLETE_KEY) !== true ? 'oobe' : 'desktop',
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -159,10 +151,9 @@ export function AppShell({
     const sayZoom = (level: number | null) => {
       if (level !== null) toastsStore.add('info', `Zoom ${Math.round(level * 100)}%`, '', 900);
     };
-    // First: the layout engine's controller, commands and hydration. The
-    // desktop is the landing surface, so the tiling Frame may never mount —
-    // and everything from the agent's layout tools to the backdrop commands
-    // routes through the controller this installs.
+    // First: the layout engine's controller, commands and hydration. Everything
+    // from the agent's layout tools to the backdrop commands routes through the
+    // controller this installs.
     installFrameShell();
     registerDesktopModule();
     registry.register({
@@ -177,19 +168,7 @@ export function AppShell({
         // Kept under its old id: the logo button and any saved keymap override
         // name it, and "home" is still what the destination means — it is now
         // the desktop rather than a separate avatar screen.
-        // Both kept under their old ids: the logo button and any saved keymap
-        // override name them. What they mean has changed, because there is one
-        // view now — "home" is the desktop, and "the workspace" is what this
-        // desktop looks like when it is tiling.
         { id: 'shell.home', title: 'Go to the desktop', run: () => setView('desktop') },
-        {
-          id: 'shell.workspace',
-          title: 'Desktop: Switch to the tiling workspace',
-          run: () => {
-            setView('desktop');
-            setDesktopMode('tiling');
-          },
-        },
         {
           id: 'shell.setup',
           title: 'Show setup (model, account, tools)',
@@ -299,14 +278,10 @@ export function AppShell({
         },
       ],
     });
-    // Opening a pane and switching desktops no longer change the shell view —
-    // there is only one — so both go straight to the engine. `installFrameShell`
-    // queues either until hydration finishes, which is what the nonce/replay
-    // dance in the Frame used to be for.
+    // Opening a pane does not change the shell view — there is only one — so it
+    // goes straight to the engine. `installFrameShell` queues it until hydration
+    // finishes.
     registry.setPanelOpener(openPaneWhenReady);
-    registry.setWorkspaceSwitcher(switchWorkspaceWhenReady);
-    registry.setWorkspaceGate(workspacesEnabled);
-    if (initialWorkspaceId) switchWorkspaceWhenReady(initialWorkspaceId);
     // The Ctrl+wheel listener; a development double-mount must not stack two.
     return uninstallZoom;
   }, []);
@@ -325,10 +300,8 @@ export function AppShell({
         },
         dismissDialog: () => dialogsStore.dismissActive(),
         exitFullscreen: () => {
-          // Both mechanisms, one rung. `presentPane(null)` clears whichever is
-          // live — the tiling area or a presented window — and unwinds the OS
-          // fullscreen it may have escalated to. Checking only
-          // `fullscreenAreaId` here left a presented pane with no Escape at all.
+          // `presentPane(null)` also unwinds the OS fullscreen a presentation
+          // may have escalated to.
           if (!isPresenting()) return false;
           presentPane(null);
           return true;
@@ -344,63 +317,35 @@ export function AppShell({
   // `shellView == 'desktop'`.
   useEffect(() => setShellView(view), [view]);
 
-  // Which paradigm THIS desktop runs. Not a shell view and not a setting: it is
-  // a property of the workspace, so switching desktops can switch paradigm.
-  // Selected down to the one boolean: this component is the root of everything,
-  // and subscribing to the whole snapshot re-rendered the entire shell — every
-  // open pane included — on each layout change, which is every click that moves
-  // focus between panes.
-  const tiling = useSyncExternalStore(
-    layoutStore.subscribe,
-    () => layoutStore.getSnapshot().frame.mode === 'tiling',
-  );
-
-  // A per-workspace OS window is "detached": it drops the workspace-switcher
-  // strip, showing only a slim titlebar over that one desktop.
-  const detached = !!initialWorkspaceId;
-
   return (
-    <div className={`shell shell--frame${detached ? ' shell--detached' : ''}`}>
+    <div className="shell shell--frame">
       {hasCapability('chrome.workspaceTabs') && <WindowResizeHandles />}
-      {detached ? <DetachedTitlebar /> : <WorkspaceTabs />}
+      <TitleBar />
       <div className="shell-content">
-        {/* One view, two paradigms. The desktop (backdrop) is always mounted and
-            always underneath; the tiling frame — rails, docks, centre grid —
-            renders opaquely over it only while this desktop is in tiling mode.
-            They are not two shell views: a desktop IS a workspace, and its mode
-            decides what it looks like, so flipping is instant and never a
-            navigation. */}
         {/* The wizard is a view, not a modal: it owns the screen until it is
             finished or skipped, and a dismissible overlay over a half-configured
             desktop is exactly the "did I finish that?" state it exists to avoid. */}
         {view === 'oobe' && <Oobe onDone={() => setView('desktop')} />}
-        <div
-          hidden={view !== 'desktop'}
-          className={`shell-view os-shell-view${tiling ? ' is-tiling' : ''}`}
-        >
+        <div hidden={view !== 'desktop'} className="shell-view os-shell-view">
           <Desktop />
-          {tiling && <Frame />}
         </div>
         {/* Windows float over BOTH views, so this is a sibling of them rather than
             a child: `.shell-view[hidden]` is `display:none`, and a window layer
             nested inside a view would vanish the moment you went home. It is
             inside `.shell-content` (already `position: relative`) so its
-            coordinate space stops below the workspace strip — which is what keeps
-            a window's titlebar from sliding under the Tauri drag region. */}
+            coordinate space stops below the titlebar — which is what keeps a
+            window's titlebar from sliding under the Tauri drag region. */}
         <WindowLayer />
       </div>
       {/* Outside `.shell-content`, so it takes its own strip of the shell rather
           than overlapping the desktop — the window layer's coordinate space
-          then stops at the taskbar, and a maximized window cannot cover it. A
-          detached per-workspace window has no taskbar: it holds one desktop and
-          has nothing to switch between. */}
-      {/* The minibuffer on a floating desktop, where the Frame that normally
-          hosts it is not mounted. Without this `alt+x` flipped a store nothing
+          then stops at the taskbar, and a maximized window cannot cover it. */}
+      {/* The minibuffer prompt. Without it `alt+x` flipped a store nothing
           rendered, and — worse — a `dialogs.prompt()` waited forever on an
           answer the user was never shown. It renders nothing when idle; the
           taskbar's `mx` zone is the desktop's status line. */}
-      {view === 'desktop' && !tiling && <Minibuffer variant="overlay" />}
-      {!detached && view === 'desktop' && <Taskbar />}
+      {view === 'desktop' && <Minibuffer variant="overlay" />}
+      {view === 'desktop' && <Taskbar />}
       {/* Half-typed chord (mod+k …) — without this the keyboard just goes quiet
           for a second and the user has no idea the shell is waiting. */}
       {chordHint && <div className="shell-chord-hint">{chordHint}&nbsp;…</div>}

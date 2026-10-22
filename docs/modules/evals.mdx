@@ -561,7 +561,6 @@ peer runs as **failed** with that reason, rather than leaving them `running` for
 | Section | `evals.hub` → `run` | Key <kbd>r</kbd> |
 | Section | `evals.hub` → `results` | Key <kbd>e</kbd> |
 | Section | `evals.hub` → `compare` | Key <kbd>c</kbd> |
-| Layout | `evals` | "Evals" 🎯 workspace in the top tab strip; opens as the **`trainer`** agent, with `mcp.servers` and `skills.library` docked left beside `explorer.home` |
 | Command | `evals.open` | Evals: Open |
 
 One pane with four sections rather than four panes: Suites, Run, Results and
@@ -1030,11 +1029,10 @@ open is a bad trade). Both read as unknown, drawn distinctly from "these differ"
 Added to existing databases with an explicit `ALTER`, for the same reason
 `case_hash` was.
 
-This is also what earns MCP and Skills a place in the eval workspace: they are
-**variables of the experiment**, not furniture. The `evals` frame docks
-`mcp.servers` and `skills.library` in its left dock, and opens as the `trainer`
-agent — whose prompt already covers eval sweeps, conversion and serving, so it is a
-capability the layout switches to rather than a persona invented for one pane.
+MCP servers and skills are **variables of the experiment**, not furniture: an eval
+sweep measures a model *with* a given tool set. The `trainer` agent's prompt already
+covers eval sweeps, conversion and serving, so it is the agent to pick in the chat
+for this work rather than a persona invented for one pane.
 
 ### Why this reads `eval_results` and not localtrack
 

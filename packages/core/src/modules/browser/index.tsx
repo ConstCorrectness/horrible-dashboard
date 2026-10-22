@@ -8,7 +8,7 @@ const BrowserPanel = lazyPane(() => import('./panels/BrowserPanel'), 'BrowserPan
 const NetworkStrip = lazyPane(() => import('./panels/NetworkStrip'), 'NetworkStrip');
 
 /**
- * The **browser** module: a dockable pane that renders web pages inline via an
+ * The **browser** module: a pane that renders web pages inline via an
  * `<iframe>`, with a URL bar, per-pane back/forward history, bookmarks/history
  * persisted server-side, a server-side reader mode for sites that refuse framing,
  * and (desktop only) a native-window pop-out. Works in both the web and desktop

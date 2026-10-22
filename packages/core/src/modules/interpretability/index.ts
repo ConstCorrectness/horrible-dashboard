@@ -43,38 +43,6 @@ export const interpretabilityModule: ModuleManifest = {
       singleton: true,
     },
   ],
-  /**
-   * The Interpretability workspace: the context inspector front and centre, the ask
-   * bar beside it, and the wire traffic underneath.
-   *
-   * The agent chat is not decoration here — the pane only has anything to show once
-   * a turn has run, so a layout without a way to drive one is a dead end. They sit
-   * in separate visible areas (center + dock) on purpose: panes in inactive tabs
-   * unmount, which would drop the live `/ws` subscription mid-turn.
-   */
-  frames: [
-    {
-      id: 'interpretability',
-      name: 'Interpretability',
-      description:
-        'Look inside a running model — what it was shown, and what its architecture does with it.',
-      icon: '🔍',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.62, 0.38],
-          children: [
-            { pane: 'interpretability.context' },
-            { tabs: ['interpretability.architecture', 'llamacpp.server'], active: 0 },
-          ],
-        },
-        docks: {
-          right: { tools: ['agent.chat'], size: 360 },
-          bottom: { tools: ['observability.io'], size: 180, visible: false },
-        },
-      },
-    },
-  ],
   commands: [
     {
       id: 'interpretability.guide',

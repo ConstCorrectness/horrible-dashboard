@@ -478,7 +478,7 @@ export function MatchCompanion({
   );
 }
 
-/** First-class dockable panel wrapper */
+/** The companion as a pane of its own. */
 export function StandaloneMatchCompanionPanel() {
   return <MatchCompanion />;
 }

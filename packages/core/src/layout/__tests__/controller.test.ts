@@ -1,7 +1,6 @@
 /**
- * Controller-level rules that the pure model layer can't express: which docks a
- * view may be toggled into (`dockSidesOf`), and the relaxed zone guards that let
- * a dockable widget earn a rail glyph while a center area hosts anything.
+ * Controller-level rules the pure model layer can't express: what `openPane`
+ * focuses rather than duplicates, and how `openDocument` reuses a pane.
  *
  * Views are registered synthetically rather than imported from real modules —
  * a manifest that reaches the editor pulls in a WebSocket at import time and
@@ -11,268 +10,80 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
 import { setPaneDirty } from '../close-guards';
-import {
-  areaHostingView,
-  dockSidesOf,
-  isDockable,
-  movePaneTo,
-  openDocument,
-  openPane,
-  openPaneInArea,
-  openToolInDock,
-  roleOf,
-  setDesktopMode,
-} from '../controller';
-import { collectAreas, findPaneAnywhere, listPanes } from '../model';
-import { seedFromPreset, type FramePreset } from '../presets';
+import { openDocument, openPane, roleOf, tearOffPane } from '../controller';
+import { findPaneAnywhere, listPanes } from '../model';
 import { layoutStore } from '../store';
+import { current, loadFrame, windowsFrame } from './fixtures';
 
 const Stub = () => null;
 
-const preset: FramePreset = {
-  id: 'test',
-  name: 'Test',
-  frame: { center: { split: 'row', children: [{ pane: 't.doc' }, { tabs: [] }] } },
-};
-
 beforeAll(() => {
   registry.register({
-    id: 'dockable-test',
-    title: 'Dockable test',
+    id: 'controller-test',
+    title: 'Controller test',
     panels: [
       { id: 't.doc', title: 'Doc', component: Stub, role: 'document', singleton: true },
       // The notebook/browser shape: one pane per thing, identified by params.
       { id: 't.multiDoc', title: 'Multi doc', component: Stub, role: 'document' },
-      // A tool with no defaultDock: the derivation must fall back to `left`.
       { id: 't.tool', title: 'Tool', component: Stub, role: 'tool', singleton: true },
-      {
-        id: 't.rightTool',
-        title: 'Right tool',
-        component: Stub,
-        role: 'tool',
-        defaultDock: 'right',
-        singleton: true,
-      },
       // The terminal's shape: a non-singleton tool, one instance per shell.
-      { id: 't.multiTool', title: 'Multi tool', component: Stub, role: 'tool', defaultDock: 'bottom' },
+      { id: 't.multiTool', title: 'Multi tool', component: Stub, role: 'tool' },
     ],
-    widgets: [
-      { id: 't.widget', title: 'Widget', component: Stub, role: 'widget' },
-      // The phase-1 promotion shape: a widget that opts into a rail.
-      { id: 't.promoted', title: 'Promoted', component: Stub, role: 'widget', dockable: 'right' },
-      {
-        id: 't.multi',
-        title: 'Multi',
-        component: Stub,
-        role: 'widget',
-        dockable: ['bottom', 'left'],
-      },
-    ],
+    widgets: [{ id: 't.widget', title: 'Widget', component: Stub, role: 'widget' }],
   });
 });
 
 beforeEach(() => {
   layoutStore.resetForTests();
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'test',
-    frame: seedFromPreset(preset, {
-      knownViews: new Set(['t.doc', 't.tool', 't.rightTool', 't.widget', 't.promoted', 't.multi']),
-    }),
-  });
+  // `t.doc#1`: a singleton restored from an older layout, with a `#n` suffix.
+  loadFrame(windowsFrame(['t.doc']), 'test');
 });
 
-describe('movePaneTo with an edge (the split gap)', () => {
-  /**
-   * Until this landed, `move_pane`/`join_area` could only move a pane between areas
-   * that already existed, so a pane opened into the wrong place often could not be
-   * fixed at all — the agent guide had to tell the model "do not open then move".
-   * These are the cases that were impossible.
-   */
-  it('splits the target area and lands the pane in the new half', () => {
-    const inst = openPane('t.multiDoc')!;
-    const host = areaHostingView('t.doc')!;
-    expect(movePaneTo(inst, { areaId: host, edge: 'below' })).toBe(true);
+const panesOf = (viewId: string) => listPanes(current()).filter((p) => p.pane.viewId === viewId);
 
-    const snap = layoutStore.getSnapshot().frame;
-    const located = findPaneAnywhere(snap, inst)!;
-    expect(located.location.kind).toBe('area');
-    // In a NEW area beside the host, not merged into it as a tab and not left
-    // where it started — that new area is the thing that could not be created.
-    const landed = (located.location as { areaId: string }).areaId;
-    expect(landed).not.toBe(host);
-    expect(collectAreas(snap.center).some((a) => a.id === landed)).toBe(true);
-    // The host kept its own pane: a split, not a move-over-the-top.
-    expect(areaHostingView('t.doc')).toBe(host);
-  });
-
-  it('carries a pane out of a dock into a fresh split', () => {
-    // The move that was most clearly impossible: a docked tool had no route into
-    // the center grid except an area that happened to already be empty.
-    const inst = openToolInDock('t.tool', 'left')!;
-    const host = areaHostingView('t.doc')!;
-    expect(movePaneTo(inst, { areaId: host, edge: 'right' })).toBe(true);
-    const snap = layoutStore.getSnapshot().frame;
-    expect(findPaneAnywhere(snap, inst)?.location.kind).toBe('area');
-    expect(snap.docks.left.tools).toHaveLength(0);
-  });
-
-  it('does not duplicate the pane', () => {
-    const inst = openPane('t.multiDoc')!;
-    movePaneTo(inst, { areaId: areaHostingView('t.doc')!, edge: 'below' });
-    const all = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) =>
-      a.tabs.map((t) => t.instanceId),
-    );
-    expect(all.filter((id) => id === inst)).toHaveLength(1);
-  });
-
-  it('refuses to split an area off itself when the pane is its only tab', () => {
-    // That would move the pane into a new half and leave the old one empty: a
-    // no-op dressed up as a layout change.
-    const host = areaHostingView('t.doc')!;
-    const pane = collectAreas(layoutStore.getSnapshot().frame.center).find((a) => a.id === host)!
-      .tabs[0];
-    expect(movePaneTo(pane.instanceId, { areaId: host, edge: 'right' })).toBe(false);
-  });
-});
-
-describe('dockSidesOf', () => {
-  it('derives a tool’s side from defaultDock, defaulting to left', () => {
-    expect(dockSidesOf('t.tool')).toEqual(['left']);
-    expect(dockSidesOf('t.rightTool')).toEqual(['right']);
-  });
-
-  it('treats an undeclared document or widget as center-only', () => {
-    expect(dockSidesOf('t.doc')).toEqual([]);
-    expect(dockSidesOf('t.widget')).toEqual([]);
-    expect(isDockable('t.widget')).toBe(false);
-  });
-
-  it('honors an explicit dockable, preferred side first', () => {
-    expect(dockSidesOf('t.promoted')).toEqual(['right']);
-    expect(dockSidesOf('t.multi')).toEqual(['bottom', 'left']);
-    expect(isDockable('t.promoted')).toBe(true);
-  });
-
-  it('leaves a promoted widget’s default placement in the center', () => {
-    // The whole point of keeping role separate: dockable adds a home, it does
-    // not move the default one.
-    expect(roleOf('t.promoted')).toBe('widget');
-  });
-
-  it('returns nothing for an unregistered view', () => {
-    expect(dockSidesOf('nope.missing')).toEqual([]);
-  });
-});
-
-describe('openToolInDock', () => {
-  it('docks a promoted widget on its declared side', () => {
-    const id = openToolInDock('t.promoted');
-    expect(id).not.toBeNull();
-    expect(findPaneAnywhere(layoutStore.getSnapshot().frame, id!)?.location).toEqual({
-      kind: 'dock',
-      dock: 'right',
-    });
-  });
-
-  it('refuses a view that never opted in', () => {
-    expect(openToolInDock('t.widget')).toBeNull();
-    expect(openToolInDock('t.doc')).toBeNull();
-  });
-
-  it('refuses a side the view did not declare', () => {
-    expect(openToolInDock('t.promoted', 'left')).toBeNull();
-    expect(openToolInDock('t.multi', 'left')).not.toBeNull();
-  });
-  // `openPane` routes tools here, and this used to drop `opts`: the terminal's
-  // `initialCommand` never reached the pane, and a docked terminal was focused
-  // instead of a new one opening.
-  it('gives a tool its params, opening a new instance for a non-singleton', () => {
-    const first = openPane('t.multiTool', { params: { initialCommand: 'a' } })!;
-    const second = openPane('t.multiTool', { params: { initialCommand: 'b' } })!;
-    expect(second).not.toBe(first);
-    const f = layoutStore.getSnapshot().frame;
-    expect(findPaneAnywhere(f, first)?.pane.params).toEqual({ initialCommand: 'a' });
-    expect(findPaneAnywhere(f, second)?.pane.params).toEqual({ initialCommand: 'b' });
-  });
-
-  it('still focuses the docked instance on a plain open', () => {
-    const first = openPane('t.multiTool')!;
-    expect(openPane('t.multiTool')).toBe(first);
-  });
-
-  it('applies params to a singleton tool rather than duplicating it', () => {
-    const first = openPane('t.tool')!;
-    expect(openPane('t.tool', { params: { x: 1 } })).toBe(first);
-    const f = layoutStore.getSnapshot().frame;
-    expect(findPaneAnywhere(f, first)?.pane.params).toEqual({ x: 1 });
-  });
-});
-
-describe('openPaneInArea', () => {
-  it('lands a tool in the chosen area instead of routing it to a dock', () => {
-    const empty = collectAreas(layoutStore.getSnapshot().frame.center).find(
-      (a) => a.tabs.length === 0,
-    )!;
-    const id = openPaneInArea('t.tool', empty.id);
-    expect(id).not.toBeNull();
-    expect(findPaneAnywhere(layoutStore.getSnapshot().frame, id!)?.location).toEqual({
-      kind: 'area',
-      areaId: empty.id,
-    });
-  });
-
-  it('focuses an existing singleton rather than duplicating it', () => {
-    const empty = collectAreas(layoutStore.getSnapshot().frame.center).find(
-      (a) => a.tabs.length === 0,
-    )!;
-    // The seeded instance carries a `#n` suffix; the call must return THAT id.
-    expect(openPaneInArea('t.doc', empty.id)).toBe('t.doc#0');
-    const panes = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) => a.tabs);
-    expect(panes.filter((p) => p.viewId === 't.doc')).toHaveLength(1);
-  });
-
-  it('rejects an unknown area or view', () => {
-    expect(openPaneInArea('t.tool', 'nope')).toBeNull();
-    expect(openPaneInArea('nope.missing', 'a0')).toBeNull();
-  });
-
-  it('honours a caller-supplied instance id, focusing it on a second open', () => {
-    const empty = collectAreas(layoutStore.getSnapshot().frame.center).find(
-      (a) => a.tabs.length === 0,
-    )!;
-    expect(openPaneInArea('t.multiDoc', empty.id, { n: 1 }, 'doc:a')).toBe('doc:a');
-    // Same identity again: focus, don't add a second tab.
-    expect(openPaneInArea('t.multiDoc', empty.id, { n: 1 }, 'doc:a')).toBe('doc:a');
-    expect(openPaneInArea('t.multiDoc', empty.id, { n: 2 }, 'doc:b')).toBe('doc:b');
-    const area = collectAreas(layoutStore.getSnapshot().frame.center).find(
-      (a) => a.id === empty.id,
-    )!;
-    expect(area.tabs.map((t) => t.instanceId)).toEqual(['doc:a', 'doc:b']);
+describe('roleOf', () => {
+  it('falls back per kind for an unregistered view', () => {
+    expect(roleOf('t.tool')).toBe('tool');
+    expect(roleOf('nope.panel')).toBe('widget');
   });
 });
 
 describe('openPane', () => {
-  it('focuses a preset-seeded singleton rather than splitting a duplicate', () => {
-    // The seeded instance carries a `#n` suffix, so the instance-id lookup
-    // alone misses it — the games "Join splits the window" bug.
-    expect(openPane('t.doc')).toBe('t.doc#0');
-    const panes = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) => a.tabs);
-    expect(panes.filter((p) => p.viewId === 't.doc')).toHaveLength(1);
+  it('opens a new view in a window of its own, and focuses it', () => {
+    const id = openPane('t.tool')!;
+    const located = findPaneAnywhere(current(), id)!;
+    const win = current().windows.find((w) => w.id === located.location.windowId)!;
+    expect(win.area.tabs).toHaveLength(1);
+    expect(current().focusedWindowId).toBe(win.id);
+    expect(current().focusedInstanceId).toBe(id);
   });
-});
 
-describe('a singleton tool on a floating desktop', () => {
-  it('is focused on a second open, not duplicated into a second window', () => {
-    // `openPane` windows a docked tool on a floating desktop, so the second open
-    // must find it in its window — looking only in the docks opened a twin.
-    setDesktopMode('floating');
+  it('focuses a singleton on a second open instead of adding a twin', () => {
     const first = openPane('t.tool');
     expect(openPane('t.tool')).toBe(first);
-    const tools = listPanes(layoutStore.getSnapshot().frame).filter(
-      (p) => p.pane.viewId === 't.tool',
-    );
-    expect(tools).toHaveLength(1);
+    expect(panesOf('t.tool')).toHaveLength(1);
+  });
+
+  it('finds a singleton restored with a `#n` suffix by its view id', () => {
+    expect(openPane('t.doc')).toBe('t.doc#1');
+    expect(panesOf('t.doc')).toHaveLength(1);
+  });
+
+  it('opens a fresh window per call for a non-singleton', () => {
+    const a = openPane('t.multiTool');
+    const b = openPane('t.multiTool');
+    expect(a).not.toBe(b);
+    expect(panesOf('t.multiTool')).toHaveLength(2);
+  });
+
+  it('honours a caller-supplied instance id, focusing it on a second open', () => {
+    expect(openPane('t.multiDoc', { instanceId: 'doc:a' })).toBe('doc:a');
+    expect(openPane('t.multiDoc', { instanceId: 'doc:a' })).toBe('doc:a');
+    expect(panesOf('t.multiDoc')).toHaveLength(1);
+  });
+
+  it('returns null for a view that does not exist', () => {
+    expect(openPane('nope.view')).toBeNull();
   });
 });
 
@@ -280,89 +91,63 @@ describe('opening an already-open pane with params', () => {
   /*
    * The silent half of `openPane`. Focusing an open singleton used to discard the
    * params it was handed, so every deep link — "compare these runs", "score this
-   * checkpoint" — worked only while its target pane happened to be CLOSED. Which is
-   * backwards: these links fire from inside workspaces whose presets seed the target
-   * pane, so open is the normal state. Nothing threw, nothing warned; the pane just
-   * came to the front showing what it showed before.
+   * checkpoint" — worked only while its target pane happened to be CLOSED. Nothing
+   * threw, nothing warned; the pane just came to the front showing what it showed
+   * before.
    */
   it('delivers params to a singleton that is already open', () => {
-    openPane('t.doc');
     openPane('t.doc', { params: { runNames: ['a', 'b'] } });
-    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
-    expect(pane.params).toEqual({ runNames: ['a', 'b'] });
+    expect(findPaneAnywhere(current(), 't.doc#1')!.pane.params).toEqual({ runNames: ['a', 'b'] });
   });
 
   it('leaves existing params alone when a caller supplies none', () => {
-    // "Open the LocalTrack workspace" from the palette must not wipe a selection a
-    // deep link (or the user) established — absent params mean "no opinion", not
-    // "clear it".
+    // Absent params mean "no opinion", not "clear it".
     openPane('t.doc', { params: { runNames: ['a', 'b'] } });
     openPane('t.doc');
-    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
-    expect(pane.params).toEqual({ runNames: ['a', 'b'] });
-  });
-
-  it('does the same through openPaneInArea', () => {
-    const areaId = collectAreas(layoutStore.getSnapshot().frame.center)[0].id;
-    openPaneInArea('t.doc', areaId, { runNames: ['c'] });
-    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
-    expect(pane.params).toEqual({ runNames: ['c'] });
+    expect(findPaneAnywhere(current(), 't.doc#1')!.pane.params).toEqual({ runNames: ['a', 'b'] });
   });
 });
 
-describe('areaHostingView', () => {
-  it('finds the area a view already occupies, so siblings can tab into it', () => {
-    const seeded = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!;
-    expect(seeded.location).toMatchObject({ kind: 'area' });
-    const areaIdOfSeeded = (seeded.location as { areaId: string }).areaId;
-    expect(areaHostingView('t.doc')).toBe(areaIdOfSeeded);
-  });
-
-  it('is null when the view is nowhere in the center', () => {
-    expect(areaHostingView('t.multiDoc')).toBeNull();
-    // A docked tool is not a center area, so it must not be offered as a host.
-    openToolInDock('t.rightTool');
-    expect(areaHostingView('t.rightTool')).toBeNull();
+describe('tearOffPane', () => {
+  it('moves a tab into a window of its own, and refuses a pane already alone', () => {
+    loadFrame(windowsFrame([['t.doc', 't.multiDoc']]), 'test');
+    const tab = current().windows[0].area.tabs[1].instanceId;
+    expect(tearOffPane(tab)).toBe(true);
+    expect(current().windows).toHaveLength(2);
+    expect(tearOffPane(tab)).toBe(false);
   });
 });
 
 describe('openDocument', () => {
-  const docPanes = () =>
-    collectAreas(layoutStore.getSnapshot().frame.center)
-      .flatMap((a) => a.tabs)
-      .filter((p) => p.viewId === 't.multiDoc');
-
   const open = (thing: string) =>
     openDocument('t.multiDoc', `t.multiDoc:${thing}`, { thing }, () => true);
 
   it('focuses the pane that already holds the same thing', () => {
     expect(open('a')).toBe('t.multiDoc:a');
     expect(open('a')).toBe('t.multiDoc:a');
-    expect(docPanes()).toHaveLength(1);
+    expect(panesOf('t.multiDoc')).toHaveLength(1);
   });
 
-  it('takes over a clean pane in place instead of splitting a second one', () => {
+  it('takes over a clean pane in place instead of opening a second one', () => {
     open('a');
-    const before = collectAreas(layoutStore.getSnapshot().frame.center).length;
+    const windows = current().windows.length;
     expect(open('b')).toBe('t.multiDoc:b');
-    expect(docPanes().map((p) => p.instanceId)).toEqual(['t.multiDoc:b']);
-    expect(collectAreas(layoutStore.getSnapshot().frame.center)).toHaveLength(before);
-    expect(findPaneAnywhere(layoutStore.getSnapshot().frame, 't.multiDoc:b')?.pane.params).toEqual({
-      thing: 'b',
-    });
+    expect(panesOf('t.multiDoc').map((p) => p.pane.instanceId)).toEqual(['t.multiDoc:b']);
+    expect(current().windows).toHaveLength(windows);
+    expect(findPaneAnywhere(current(), 't.multiDoc:b')?.pane.params).toEqual({ thing: 'b' });
   });
 
   it('leaves a dirty pane alone and opens a new one', () => {
     open('a');
     setPaneDirty('t.multiDoc:a', true);
     expect(open('b')).toBe('t.multiDoc:b');
-    expect(docPanes()).toHaveLength(2);
+    expect(panesOf('t.multiDoc')).toHaveLength(2);
     setPaneDirty('t.multiDoc:a', false);
   });
 
   it('without a reuse rule always opens a new pane', () => {
     openDocument('t.multiDoc', 't.multiDoc:a', { thing: 'a' });
     openDocument('t.multiDoc', 't.multiDoc:b', { thing: 'b' });
-    expect(docPanes()).toHaveLength(2);
+    expect(panesOf('t.multiDoc')).toHaveLength(2);
   });
 });

@@ -132,10 +132,6 @@ export interface WindowControl {
   /** Begin an OS resize-drag from a window edge/corner. */
   startResizeDragging(edge: ResizeEdge): Promise<void>;
 
-  // window.perWorkspace — open a workspace in its own OS window.
-  /** Open (or focus) an OS window showing the given workspace. */
-  openWorkspaceWindow(workspaceId: string): Promise<void>;
-
   // browser.nativeWindow — the embedded browser pops a page out to a real
   // native window (a true browser, so sites that refuse iframing still open).
   /** Open `url` in a new decorated native browser window. */

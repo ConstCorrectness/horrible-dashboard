@@ -1,37 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { layoutStore } from '../../layout/store';
-import { seedFromPreset, type FramePreset } from '../../layout/presets';
+import { listPanes } from '../../layout/model';
+import { windowsFrame } from '../../layout/__tests__/fixtures';
 import { getCapture, releaseCapture, requestCapture } from '../capture';
 
-const KNOWN = new Set(['editor.buffer', 'hassault.play', 'files.tree']);
-
-const preset: FramePreset = {
-  id: 'test',
-  name: 'Test',
-  frame: {
-    center: {
-      split: 'row',
-      children: [{ pane: 'hassault.play' }, { pane: 'editor.buffer' }],
-    },
-    docks: { left: { tools: ['files.tree'] } },
-  },
-};
-
-const frame = () => layoutStore.getSnapshot().frame;
-
 function instanceOf(viewId: string): string {
-  const walk = (node: ReturnType<typeof frame>['center']): string | null => {
-    if (node.kind === 'area') return node.tabs.find((t) => t.viewId === viewId)?.instanceId ?? null;
-    for (const child of node.children) {
-      const hit = walk(child);
-      if (hit) return hit;
-    }
-    return null;
-  };
-  return (
-    walk(frame().center) ?? frame().docks.left.tools.find((t) => t.viewId === viewId)!.instanceId
-  );
+  return listPanes(layoutStore.getSnapshot().frame).find((p) => p.pane.viewId === viewId)!.pane
+    .instanceId;
 }
 
 function focus(instanceId: string | null): void {
@@ -44,7 +20,7 @@ beforeEach(() => {
   layoutStore.dispatch({
     type: 'LOAD_WORKSPACE',
     workspaceId: 'test',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
+    frame: windowsFrame(['hassault.play', 'editor.buffer', 'files.tree']),
   });
 });
 

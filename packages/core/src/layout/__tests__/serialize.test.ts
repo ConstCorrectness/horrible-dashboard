@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { listPanes } from '../model';
 import { deserialize, FRAME_SCHEMA, FRAME_VERSION, serialize } from '../serialize';
-import { seedFromPreset, type FramePreset } from '../presets';
 import { DEFAULT_BACKDROP } from '../types';
 import type { FrameState, RegionState } from '../types';
+import { windowsFrame } from './fixtures';
 
 const KNOWN = new Set([
   'scratch.note',
@@ -13,19 +14,6 @@ const KNOWN = new Set([
   'dashboard.welcome',
 ]);
 
-const preset: FramePreset = {
-  id: 'test',
-  name: 'Test',
-  frame: {
-    center: {
-      split: 'row',
-      sizes: [0.6, 0.4],
-      children: [{ tabs: ['editor.buffer', 'scratch.note'] }, { pane: 'dashboard.welcome' }],
-    },
-    docks: { left: { tools: ['files.tree'], size: 260 } },
-  },
-};
-
 const region: RegionState = {
   open: true,
   size: 300,
@@ -34,217 +22,66 @@ const region: RegionState = {
   activeView: 'code.outline',
 };
 
-function seeded(): FrameState {
-  return seedFromPreset(preset, { knownViews: KNOWN });
+function frame(): FrameState {
+  return windowsFrame([['editor.buffer', 'scratch.note'], 'dashboard.welcome']);
 }
+
+const viewIds = (f: FrameState) => listPanes(f).map((p) => p.pane.viewId);
 
 describe('serialize round-trip', () => {
   it('survives serialize → deserialize intact', () => {
-    const frame = seeded();
-    const back = deserialize(serialize(frame), KNOWN);
-    expect(back).toEqual(frame);
+    const f = frame();
+    expect(deserialize(serialize(f), KNOWN)).toEqual(f);
   });
 
-  it('round-trips region state per pane instance', () => {
-    // Attach a region to the first editor tab.
-    const first = JSON.parse(JSON.stringify(seeded())) as FrameState;
-    const area = (first.center as { children: Array<{ tabs?: Array<Record<string, unknown>> }> })
-      .children[0];
-    area.tabs![0].regions = { right: region };
-    const back = deserialize(serialize(first), KNOWN)!;
-    const backArea = (back.center as { children: Array<{ tabs: Array<{ regions?: unknown }> }> })
-      .children[0];
-    expect(backArea.tabs[0].regions).toEqual({ right: region });
-  });
-
-  it('round-trips a minimized pane, so a tidied workspace stays tidied', () => {
-    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
-    const area = (frame.center as { children: Array<{ tabs?: Array<Record<string, unknown>> }> })
-      .children[0];
-    area.tabs![0].minimized = true;
-    const back = deserialize(serialize(frame), KNOWN)!;
-    const backArea = (back.center as { children: Array<{ tabs: Array<{ minimized?: boolean }> }> })
-      .children[0];
-    expect(backArea.tabs[0].minimized).toBe(true);
-    // Absent rather than `false` on the ones that are showing — the flag is
-    // additive, and a blob written before minimizing existed has none at all.
-    expect(backArea.tabs[1].minimized).toBeUndefined();
-  });
-});
-
-describe('v1 → v2 migration', () => {
-  /**
-   * A blob exactly as the pre-desktop build wrote it: `floating[]` with rects that
-   * are fractions of the old center grid, no `windows`, no `mode`, no `backdrop`.
-   * This is the single most important test in the desktop refactor — it is what
-   * proves an existing user's saved workspaces still open.
-   */
-  function v1Blob() {
-    const frame = JSON.parse(JSON.stringify(seeded())) as Record<string, unknown>;
-    delete frame.windows;
-    delete frame.windowViewport;
-    delete frame.mode;
-    delete frame.backdrop;
-    delete frame.focusedWindowId;
-    frame.floating = [
-      {
-        pane: { instanceId: 'scratch.note#7', viewId: 'scratch.note' },
-        rect: { x: 0.2, y: 0.15, w: 0.5, h: 0.55 },
-        z: 3,
-      },
-    ];
-    return { schema: FRAME_SCHEMA, version: 1, frame };
-  }
-
-  it('opens a v1 workspace as a TILING desktop, unchanged', () => {
-    const back = deserialize(v1Blob(), KNOWN)!;
-    // The whole point: a workspace saved before the desktop shell existed must
-    // come back as the frame its owner left, not as a wallpaper full of windows.
-    expect(back.mode).toBe('tiling');
-    // The backdrop is the one thing that does NOT come back as it was, because
-    // there was nothing there to come back: a v1 desktop had no backdrop, so a
-    // migrated one gets the default rather than `none`. Picking `none` here
-    // would read as conservative and would in fact hand every upgrading user a
-    // blank landing surface for a feature they never turned off.
-    expect(back.backdrop).toEqual({ id: DEFAULT_BACKDROP });
-    expect(back.docks.left.tools).toHaveLength(1);
-    const area = (back.center as { children: Array<{ tabs: unknown[] }> }).children[0];
-    expect(area.tabs).toHaveLength(2);
-  });
-
-  it('migrates floating panes into windows on a unit viewport', () => {
-    const back = deserialize(v1Blob(), KNOWN)!;
-    expect(back.windows).toHaveLength(1);
-    const w = back.windows[0];
-    expect(w.area.tabs.map((t) => t.instanceId)).toEqual(['scratch.note#7']);
-    expect(w.mode).toBe('normal');
-    expect(w.z).toBe(3);
-    // The old fractions are carried through as-is against a 1×1 basis, so the
-    // ordinary rescale-on-measure path turns them into pixels with no
-    // migration-only arithmetic to get wrong.
-    expect(back.windowViewport).toEqual({ w: 1, h: 1 });
-    expect(w.rect).toEqual({ x: 0.2, y: 0.15, w: 0.5, h: 0.55 });
-  });
-
-  it('mints non-colliding ids for migrated windows', () => {
-    const blob = v1Blob();
-    (blob.frame.floating as unknown[]).push({
-      pane: { instanceId: 'files.tree#8', viewId: 'files.tree' },
-      rect: { x: 0.3, y: 0.3, w: 0.4, h: 0.4 },
-      z: 4,
-    });
-    const back = deserialize(blob, KNOWN)!;
-    expect(back.windows).toHaveLength(2);
-    const ids = back.windows.map((w) => w.id);
-    const areaIds = back.windows.map((w) => w.area.id);
-    expect(new Set([...ids, ...areaIds]).size).toBe(4);
-    // And the counter is past every id it just minted, so the next window opened
-    // cannot be handed one of them again.
-    for (const id of [...ids, ...areaIds]) {
-      expect(Number(id.slice(1))).toBeLessThan(back.paneSeq);
+  it('writes the current version and nothing the tiling frame used to carry', () => {
+    const blob = serialize(frame());
+    expect(blob.version).toBe(FRAME_VERSION);
+    for (const key of ['center', 'docks', 'mode', 'fullscreenAreaId', 'focusedAreaId']) {
+      expect(blob.frame).not.toHaveProperty(key);
     }
   });
 
-  it('still round-trips at v2 once written back', () => {
-    const migrated = deserialize(v1Blob(), KNOWN)!;
-    const rewritten = serialize(migrated);
-    expect(rewritten.version).toBe(FRAME_VERSION);
-    expect(deserialize(rewritten, KNOWN)).toEqual(migrated);
+  it('does not persist a presented pane', () => {
+    const f = { ...frame(), presentedInstanceId: 'editor.buffer#1' };
+    expect(serialize(f).frame).not.toHaveProperty('presentedInstanceId');
+    expect(deserialize(serialize(f), KNOWN)!.presentedInstanceId).toBeNull();
   });
 
-  it('refuses a blob from a newer schema rather than misreading it', () => {
-    const blob = serialize(seeded());
-    expect(deserialize({ ...blob, version: FRAME_VERSION + 1 }, KNOWN)).toBeNull();
+  it('round-trips region state per pane instance', () => {
+    const f = frame();
+    f.windows[0].area.tabs[0].regions = { right: region };
+    const back = deserialize(serialize(f), KNOWN)!;
+    expect(back.windows[0].area.tabs[0].regions).toEqual({ right: region });
+    expect(back.windows[0].area.tabs[1].regions).toBeUndefined();
   });
-});
 
-describe('window state round-trip', () => {
-  it('preserves rect, mode, snap, restoreRect and merged tabs', () => {
-    const frame = seeded();
-    const withWindow: FrameState = {
-      ...frame,
-      // Past every id below: the counter is what stops a restored layout minting
-      // an id it already uses, and the deserializer repairs it if it isn't.
-      paneSeq: 42,
+  it('preserves rect, mode, snap, restoreRect, minimizedFrom and merged tabs', () => {
+    const f: FrameState = {
+      ...frame(),
       windowViewport: { w: 1600, h: 900 },
       windows: [
         {
-          id: 'w40',
-          area: {
-            kind: 'area',
-            id: 'a41',
-            tabs: [
-              { instanceId: 'scratch.note#20', viewId: 'scratch.note' },
-              { instanceId: 'files.tree#21', viewId: 'files.tree' },
-            ],
-            activeTab: 1,
-          },
+          ...frame().windows[0],
           rect: { x: 0, y: 0, w: 800, h: 900 },
           restoreRect: { x: 120, y: 90, w: 640, h: 480 },
-          mode: 'normal',
           snap: 'left',
-          z: 2,
+          area: { ...frame().windows[0].area, activeTab: 1 },
+        },
+        {
+          ...frame().windows[1],
+          mode: 'minimized',
+          minimizedFrom: { mode: 'maximized' },
         },
       ],
-      focusedWindowId: 'w40',
+      focusedWindowId: frame().windows[0].id,
     };
-    expect(deserialize(serialize(withWindow), KNOWN)).toEqual(withWindow);
+    expect(deserialize(serialize(f), KNOWN)).toEqual(f);
   });
 
   it('drops a focusedWindowId that no longer names a window', () => {
-    const frame: FrameState = { ...seeded(), focusedWindowId: 'w-gone' };
-    expect(deserialize(serialize(frame), KNOWN)!.focusedWindowId).toBeNull();
-  });
-});
-
-describe('per-tool dock size', () => {
-  it("seeds a view's declared defaultDockSize, unless the preset sets the dock size", () => {
-    const sized = seedFromPreset(
-      {
-        ...preset,
-        frame: {
-          ...preset.frame,
-          // No explicit dock size, so the view's own declared width applies.
-          docks: { left: { tools: ['files.tree'] }, right: { tools: ['code.outline'] } },
-        },
-      },
-      { knownViews: KNOWN, dockSizeFor: (v) => (v === 'files.tree' ? 300 : undefined) },
-    );
-    expect(sized.docks.left.tools[0].dockSize).toBe(300);
-    expect(sized.docks.right.tools[0].dockSize).toBeUndefined();
-
-    // An explicit preset size is the author's call for the whole dock and wins.
-    const overridden = seedFromPreset(preset, {
-      knownViews: KNOWN,
-      dockSizeFor: () => 300,
-    });
-    expect(overridden.docks.left.tools[0].dockSize).toBeUndefined();
-    expect(overridden.docks.left.size).toBe(260);
-  });
-
-  it("round-trips a docked tool's remembered width", () => {
-    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
-    frame.docks.left.tools[0].dockSize = 340;
-    const back = deserialize(serialize(frame), KNOWN)!;
-    expect(back.docks.left.tools[0].dockSize).toBe(340);
-  });
-
-  it('reads a blob written before per-tool sizing, leaving the field absent', () => {
-    // A pre-change blob is exactly a seeded frame with no `dockSize` anywhere:
-    // docks carry a size, panes carry none. It must survive at the same version.
-    const frame = seeded();
-    expect(frame.docks.left.tools[0].dockSize).toBeUndefined();
-    const back = deserialize(serialize(frame), KNOWN)!;
-    expect(back.docks.left.tools[0].dockSize).toBeUndefined();
-    // The dock's own size still drives the render, so nothing resizes on upgrade.
-    expect(back.docks.left.size).toBe(260);
-  });
-
-  it('rejects a corrupt dockSize rather than rendering a broken dock', () => {
-    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
-    frame.docks.left.tools[0].dockSize = 4;
-    const back = deserialize(serialize(frame), KNOWN)!;
-    expect(back.docks.left.tools[0].dockSize).toBeUndefined();
+    const f: FrameState = { ...frame(), focusedWindowId: 'w-gone' };
+    expect(deserialize(serialize(f), KNOWN)!.focusedWindowId).toBeNull();
   });
 });
 
@@ -262,171 +99,283 @@ describe('deserialize rejects non-frame blobs', () => {
   });
 });
 
-describe('deserialize pruning', () => {
-  it('prunes panes with unknown views from tabs, docks, and windows', () => {
-    const frame = seeded();
-    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
-    const f = blob.frame as {
-      center: { children: Array<{ tabs: Array<{ viewId: string }> }> };
-      docks: { left: { tools: Array<{ viewId: string }> } };
-      windows: unknown[];
-    };
-    f.center.children[0].tabs[1].viewId = 'ghost.pane';
-    f.docks.left.tools[0].viewId = 'ghost.tool';
-    f.windows.push({
-      id: 'w90',
-      area: {
-        kind: 'area',
-        id: 'a91',
-        tabs: [{ instanceId: 'ghost.win#9', viewId: 'ghost.win' }],
-        activeTab: 0,
-      },
-      rect: { x: 10, y: 10, w: 300, h: 300 },
-      mode: 'normal',
-      z: 1,
-    });
-    const back = deserialize(blob, KNOWN)!;
-    const area = (back.center as { children: Array<{ tabs: unknown[] }> }).children[0];
-    expect(area.tabs).toHaveLength(1);
-    expect(back.docks.left.tools).toHaveLength(0);
-    expect(back.docks.left.visible).toBe(false);
-    // The whole window goes, not just its tab — a titlebar with nothing under it
-    // is not a state the running app can produce.
-    expect(back.windows).toHaveLength(0);
+/**
+ * Blobs written by the tiling frame. Every saved layout has one: a tiling desktop's
+ * panes lived in `center` and `docks`, and even a floating desktop kept a (hidden)
+ * centre tree. Losing them would close the user's panes on upgrade.
+ */
+describe('migrating a tiling-era layout', () => {
+  const area = (id: string, viewIds: string[], extra: Record<string, unknown> = {}) => ({
+    kind: 'area',
+    id,
+    tabs: viewIds.map((viewId, i) => ({ instanceId: `${viewId}#${id}${i}`, viewId, ...extra })),
+    activeTab: 0,
   });
 
-  it('prunes unknown region views and repairs activeView', () => {
-    const frame = seeded();
-    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
-    const f = blob.frame as {
-      center: { children: Array<{ tabs: Array<Record<string, unknown>> }> };
-    };
-    f.center.children[0].tabs[0].regions = {
-      right: { ...region, views: ['ghost.view', 'code.outline'], activeView: 'ghost.view' },
-      bottom: { ...region, views: ['ghost.only'], activeView: 'ghost.only' },
-    };
-    const back = deserialize(blob, KNOWN)!;
-    const tab = (
-      back.center as { children: Array<{ tabs: Array<{ regions?: Record<string, RegionState> }> }> }
-    ).children[0].tabs[0];
-    expect(tab.regions?.right.views).toEqual(['code.outline']);
-    expect(tab.regions?.right.activeView).toBe('code.outline');
-    expect(tab.regions?.bottom).toBeUndefined();
-  });
-
-  it('recovers paneSeq past every surviving id', () => {
-    const frame = seeded();
-    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
-    (blob.frame as { paneSeq: number }).paneSeq = 0;
-    const back = deserialize(blob, KNOWN)!;
-    expect(back.paneSeq).toBeGreaterThan(0);
-    // Every allocatable id must be fresh.
-    const ids = new Set<string>();
-    const walk = (node: FrameState['center']): void => {
-      ids.add(node.id);
-      if (node.kind === 'split') node.children.forEach(walk);
-    };
-    walk(back.center);
-    expect(ids.has(`a${back.paneSeq}`)).toBe(false);
-  });
-
-  it('repairs focus/fullscreen pointing at pruned areas', () => {
-    const frame = seeded();
-    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
-    (blob.frame as { focusedAreaId: string }).focusedAreaId = 'a999';
-    (blob.frame as { fullscreenAreaId: string }).fullscreenAreaId = 'a999';
-    const back = deserialize(blob, KNOWN)!;
-    expect(back.fullscreenAreaId).toBeNull();
-    expect(back.focusedAreaId).not.toBe('a999');
-  });
-
-  it('drops areas a prune emptied instead of leaving a placeholder', () => {
-    const frame = seeded();
-    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
-    const f = blob.frame as {
-      center: { children: Array<{ tabs: Array<{ viewId: string }> }> };
-    };
-    // The second area holds one pane; retire its view and the area has nothing left.
-    f.center.children[1].tabs[0].viewId = 'ghost.pane';
-    const back = deserialize(blob, KNOWN)!;
-    // The split collapses to the one surviving area rather than keeping an empty one.
-    expect(back.center.kind).toBe('area');
-    expect((back.center as { tabs: unknown[] }).tabs).toHaveLength(2);
-  });
-});
-
-// A saved layout outlives the code that wrote it: a workspace naming a view that
-// has since been merged away must keep working, not open with holes in it.
-describe('deserialize view renames', () => {
-  const RENAMED = new Set(['games.lobby', 'games.log', 'scratch.note']);
-
-  function blobWith(viewIds: string[]): Record<string, unknown> {
+  /** A v2 tiling desktop: editor | welcome at 60/40, a visible left dock, a window. */
+  function v2Tiling(mode: 'tiling' | 'floating' = 'tiling') {
     return {
       schema: FRAME_SCHEMA,
-      version: FRAME_VERSION,
+      version: 2,
       frame: {
         center: {
           kind: 'split',
           id: 's1',
           orientation: 'row',
-          sizes: viewIds.map(() => 1 / viewIds.length),
-          children: viewIds.map((viewId, i) => ({
-            kind: 'area',
-            id: `a${i + 1}`,
-            tabs: [{ instanceId: `${viewId}#${i + 1}`, viewId }],
-            activeTab: 0,
-          })),
+          sizes: [0.6, 0.4],
+          children: [
+            area('a2', ['editor.buffer', 'scratch.note']),
+            area('a3', ['dashboard.welcome']),
+          ],
         },
-        docks: {},
-        floating: [],
-        focusedAreaId: 'a1',
+        docks: {
+          left: {
+            visible: true,
+            size: 260,
+            tools: [{ instanceId: 'files.tree#4', viewId: 'files.tree' }],
+            activeTool: 'files.tree#4',
+          },
+          right: {
+            visible: false,
+            size: 320,
+            tools: [{ instanceId: 'code.outline#5', viewId: 'code.outline' }],
+            activeTool: 'code.outline#5',
+          },
+        },
+        windows: [
+          {
+            id: 'w6',
+            area: {
+              kind: 'area',
+              id: 'a7',
+              tabs: [{ instanceId: 'scratch.note#8', viewId: 'scratch.note' }],
+              activeTab: 0,
+            },
+            rect: { x: 100, y: 100, w: 400, h: 300 },
+            mode: 'normal',
+            z: 1,
+          },
+        ],
+        windowViewport: { w: 1000, h: 800 },
+        mode,
+        backdrop: { id: 'aurora' },
         fullscreenAreaId: null,
+        focusedAreaId: 'a2',
+        focusedInstanceId: null,
+        focusedWindowId: null,
         paneSeq: 9,
       },
     };
   }
 
-  function viewIdsOf(node: FrameState['center']): string[] {
-    if (node.kind === 'area') return node.tabs.map((t) => t.viewId);
-    return node.children.flatMap(viewIdsOf);
+  it('keeps every pane', () => {
+    const back = deserialize(v2Tiling(), KNOWN)!;
+    expect(viewIds(back).sort()).toEqual(
+      [
+        'code.outline',
+        'dashboard.welcome',
+        'editor.buffer',
+        'files.tree',
+        'scratch.note',
+        'scratch.note',
+      ].sort(),
+    );
+    expect(back.backdrop).toEqual({ id: 'aurora' });
+  });
+
+  it('turns each centre area into a window at the pixels it occupied', () => {
+    const back = deserialize(v2Tiling(), KNOWN)!;
+    const editor = back.windows.find((w) => w.area.tabs[0].viewId === 'editor.buffer')!;
+    // Tabs travel together: a tabbed area becomes a tabbed window.
+    expect(editor.area.tabs.map((t) => t.viewId)).toEqual(['editor.buffer', 'scratch.note']);
+    // The grid sat beside the visible 260px left dock, not under it: 0.6 of 740.
+    expect(editor.rect).toEqual({ x: 260, y: 0, w: 444, h: 800 });
+    expect(editor.mode).toBe('normal');
+    const welcome = back.windows.find((w) => w.area.tabs[0].viewId === 'dashboard.welcome')!;
+    expect(welcome.rect).toEqual({ x: 704, y: 0, w: 296, h: 800 });
+  });
+
+  it('lays the grid out beside only the docks that were showing', () => {
+    // The right dock was hidden, so it takes no room; on a floating desktop no dock
+    // showed at all, but its grid is minimized, so only a tiling one is checked.
+    const blob = v2Tiling();
+    (blob.frame.docks as Record<string, { visible: boolean }>).left.visible = false;
+    const back = deserialize(blob, KNOWN)!;
+    const editor = back.windows.find((w) => w.area.tabs[0].viewId === 'editor.buffer')!;
+    expect(editor.rect).toEqual({ x: 0, y: 0, w: 600, h: 800 });
+  });
+
+  it('shows a visible dock’s tool at the dock’s geometry and minimizes the rest', () => {
+    const back = deserialize(v2Tiling(), KNOWN)!;
+    const files = back.windows.find((w) => w.area.tabs[0].viewId === 'files.tree')!;
+    expect(files.mode).toBe('normal');
+    expect(files.rect).toEqual({ x: 0, y: 0, w: 260, h: 800 });
+    const outline = back.windows.find((w) => w.area.tabs[0].viewId === 'code.outline')!;
+    expect(outline.mode).toBe('minimized');
+  });
+
+  it('keeps the windows the desktop already had in front of the migrated ones', () => {
+    const back = deserialize(v2Tiling(), KNOWN)!;
+    const original = back.windows.find((w) => w.id === 'w6')!;
+    expect(original.z).toBe(Math.max(...back.windows.map((w) => w.z)));
+  });
+
+  it('minimizes everything that was hidden on a floating desktop', () => {
+    // A floating desktop never drew its centre tree or docks; the taskbar already
+    // called those panes minimized, and they stay that way.
+    const back = deserialize(v2Tiling('floating'), KNOWN)!;
+    const migrated = back.windows.filter((w) => w.id !== 'w6');
+    expect(migrated).toHaveLength(4);
+    expect(migrated.every((w) => w.mode === 'minimized')).toBe(true);
+  });
+
+  it('minimizes an area whose panes the user had all minimized', () => {
+    const blob = v2Tiling();
+    blob.frame.center.children[1] = area('a3', ['dashboard.welcome'], { minimized: true });
+    const back = deserialize(blob, KNOWN)!;
+    expect(back.windows.find((w) => w.area.tabs[0].viewId === 'dashboard.welcome')!.mode).toBe(
+      'minimized',
+    );
+  });
+
+  it('mints ids that collide with nothing, and moves the counter past them', () => {
+    const back = deserialize(v2Tiling(), KNOWN)!;
+    const ids = back.windows.flatMap((w) => [w.id, w.area.id]);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(Number(id.slice(1))).toBeLessThan(back.paneSeq);
+  });
+
+  it('prunes unknown views in the old tree, and drops an area left empty', () => {
+    const blob = v2Tiling();
+    blob.frame.center.children[1] = area('a3', ['ghost.pane']);
+    const back = deserialize(blob, KNOWN)!;
+    expect(viewIds(back)).not.toContain('ghost.pane');
+    expect(back.windows).toHaveLength(4);
+  });
+
+  it('writes the migrated layout back at the current version, and it round-trips', () => {
+    const migrated = deserialize(v2Tiling(), KNOWN)!;
+    const rewritten = serialize(migrated);
+    expect(rewritten.version).toBe(FRAME_VERSION);
+    expect(deserialize(rewritten, KNOWN)).toEqual(migrated);
+  });
+
+  describe('from v1', () => {
+    /**
+     * A blob exactly as the pre-desktop build wrote it: `floating[]` with rects that
+     * are fractions of the old centre grid, no `windows`, no `mode`, no `backdrop`.
+     */
+    function v1Blob() {
+      return {
+        schema: FRAME_SCHEMA,
+        version: 1,
+        frame: {
+          center: area('a1', ['editor.buffer']),
+          docks: {},
+          floating: [
+            {
+              pane: { instanceId: 'scratch.note#7', viewId: 'scratch.note' },
+              rect: { x: 0.2, y: 0.15, w: 0.5, h: 0.55 },
+              z: 3,
+            },
+          ],
+          focusedAreaId: 'a1',
+          fullscreenAreaId: null,
+          paneSeq: 8,
+        },
+      };
+    }
+
+    it('gets the default backdrop rather than none', () => {
+      // A v1 desktop had no backdrop at all, so there is nothing to preserve, and
+      // `none` would hand every upgrading user a blank landing surface.
+      expect(deserialize(v1Blob(), KNOWN)!.backdrop).toEqual({ id: DEFAULT_BACKDROP });
+    });
+
+    it('carries floating panes and the old grid on one unit basis', () => {
+      const back = deserialize(v1Blob(), KNOWN)!;
+      // Fractions throughout, against a 1×1 viewport, so the ordinary
+      // rescale-on-measure path turns all of them into pixels together.
+      expect(back.windowViewport).toEqual({ w: 1, h: 1 });
+      const floated = back.windows.find((w) => w.area.tabs[0].instanceId === 'scratch.note#7')!;
+      expect(floated.rect).toEqual({ x: 0.2, y: 0.15, w: 0.5, h: 0.55 });
+      const grid = back.windows.find((w) => w.area.tabs[0].viewId === 'editor.buffer')!;
+      expect(grid.rect).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    });
+  });
+});
+
+describe('deserialize pruning', () => {
+  it('drops a window whose every tab names an unknown view', () => {
+    const blob = JSON.parse(JSON.stringify(serialize(frame()))) as {
+      frame: { windows: Array<{ area: { tabs: Array<{ viewId: string }> } }> };
+    };
+    blob.frame.windows[1].area.tabs[0].viewId = 'ghost.pane';
+    blob.frame.windows[0].area.tabs[1].viewId = 'ghost.pane';
+    const back = deserialize(blob as never, KNOWN)!;
+    // The whole window goes, not just its tab — a titlebar with nothing under it
+    // is not a state the running app can produce.
+    expect(back.windows).toHaveLength(1);
+    expect(back.windows[0].area.tabs.map((t) => t.viewId)).toEqual(['editor.buffer']);
+  });
+
+  it('prunes unknown region views and repairs activeView', () => {
+    const f = frame();
+    f.windows[0].area.tabs[0].regions = {
+      right: { ...region, views: ['ghost.view', 'code.outline'], activeView: 'ghost.view' },
+      bottom: { ...region, views: ['ghost.only'], activeView: 'ghost.only' },
+    };
+    const tab = deserialize(serialize(f), KNOWN)!.windows[0].area.tabs[0];
+    expect(tab.regions?.right?.views).toEqual(['code.outline']);
+    expect(tab.regions?.right?.activeView).toBe('code.outline');
+    expect(tab.regions?.bottom).toBeUndefined();
+  });
+
+  it('recovers paneSeq past every surviving id', () => {
+    const blob = JSON.parse(JSON.stringify(serialize(frame()))) as { frame: { paneSeq: number } };
+    blob.frame.paneSeq = 0;
+    const back = deserialize(blob as never, KNOWN)!;
+    for (const w of back.windows) {
+      expect(Number(w.id.slice(1))).toBeLessThan(back.paneSeq);
+      expect(Number(w.area.id.slice(1))).toBeLessThan(back.paneSeq);
+    }
+  });
+});
+
+// A saved layout outlives the code that wrote it: a layout naming a view that has
+// since been merged away must keep working, not open with holes in it.
+describe('deserialize view renames', () => {
+  const RENAMED = new Set(['games.lobby', 'games.log', 'scratch.note']);
+
+  function blobWith(ids: string[]) {
+    const f = windowsFrame(ids);
+    return serialize(f);
   }
 
   it('renames a retired view to its replacement', () => {
     const back = deserialize(blobWith(['games.thoughts', 'scratch.note']), RENAMED)!;
-    expect(viewIdsOf(back.center)).toEqual(['games.log', 'scratch.note']);
+    expect(viewIds(back)).toEqual(['games.log', 'scratch.note']);
   });
 
   it('collapses two retired views that merged into one pane', () => {
     // games.board and games.loadout both became sections of games.lobby.
     const back = deserialize(blobWith(['games.board', 'games.loadout']), RENAMED)!;
-    expect(viewIdsOf(back.center)).toEqual(['games.lobby']);
+    expect(viewIds(back)).toEqual(['games.lobby']);
   });
 
   it('keeps the pane the layout already placed over a renamed duplicate', () => {
     const back = deserialize(blobWith(['games.lobby', 'games.board']), RENAMED)!;
-    expect(viewIdsOf(back.center)).toEqual(['games.lobby']);
+    expect(viewIds(back)).toEqual(['games.lobby']);
   });
 
   it('renames region views and their activeView', () => {
-    const blob = blobWith(['scratch.note']);
-    const center = (blob.frame as { center: { children: Array<{ tabs: Array<object> }> } }).center;
-    center.children[0].tabs[0] = {
-      instanceId: 'scratch.note#1',
-      viewId: 'scratch.note',
-      regions: {
-        right: {
-          open: true,
-          size: 300,
-          collapsed: false,
-          views: ['games.thoughts'],
-          activeView: 'games.thoughts',
-        },
-      },
+    const f = windowsFrame(['scratch.note']);
+    f.windows[0].area.tabs[0].regions = {
+      right: { ...region, views: ['games.thoughts'], activeView: 'games.thoughts' },
     };
-    const back = deserialize(blob, RENAMED)!;
-    const pane = (back.center as { tabs: Array<{ regions?: Record<string, RegionState> }> })
-      .tabs[0];
-    expect(pane.regions?.right.views).toEqual(['games.log']);
-    expect(pane.regions?.right.activeView).toBe('games.log');
+    const back = deserialize(serialize(f), RENAMED)!;
+    const pane = back.windows[0].area.tabs[0];
+    expect(pane.regions?.right?.views).toEqual(['games.log']);
+    expect(pane.regions?.right?.activeView).toBe('games.log');
   });
 });

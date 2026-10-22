@@ -23,22 +23,6 @@
   background: var(--desktop-bg, var(--bg));
 }
 
-/* Opaque, because the tiling frame covers its desktop completely — a
-   translucent frame over a moving backdrop is unreadable, not layered. */
-.os-shell-view > .frame-root {
-  position: relative;
-  z-index: 1;
-  background: var(--bg);
-}
-
-/* When in tiling mode, the desktop backdrop is completely occluded by the frame.
-   Pause layout, paint, and animations via content-visibility. */
-.os-shell-view.is-tiling > .os-desktop {
-  visibility: hidden;
-  content-visibility: hidden;
-  pointer-events: none;
-}
-
 .os-desktop-backdrop {
   position: absolute;
   inset: 0;

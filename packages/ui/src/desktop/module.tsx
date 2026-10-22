@@ -13,8 +13,8 @@ import {
   currentThemeId,
   cycleWindows,
   focusWindowDirection,
-  setPaneWindowed,
   snapFocused,
+  tearOffPane,
   toggleWindowMaximized,
   toggleWindowMinimized,
   getSetting,
@@ -22,16 +22,9 @@ import {
   openExternal,
   registry,
   toastsStore,
-  BOOT_WORKSPACE_KEY,
-  DEFAULT_BOOT_WORKSPACE,
-  framePersistence,
-  WORKSPACES_ENABLED_KEY,
-  workspacesEnabled,
   setBackdrop,
-  setDesktopMode,
   setSetting,
   taskbarEntries,
-  toggleDesktopMode,
   type ContextMenuItem,
   type ContextTarget,
   type ModuleManifest,
@@ -48,10 +41,9 @@ import {
   toggleHomeCollapsed,
 } from './backdrops/Splash';
 
-/** The four directions, in the order the frame's own bindings use. */
+/** The four directions. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
-import { DEFAULT_DESKTOP_MODE_KEY, OOBE_COMPLETE_KEY } from './constants';
-import { DesktopModeSection } from './DesktopModeSection';
+import { OOBE_COMPLETE_KEY } from './constants';
 import { ANIMATIONS_SETTING_KEY } from './window-motion';
 import {
   DEFAULT_TASKBAR,
@@ -80,14 +72,6 @@ export const desktopModule: ModuleManifest = {
   title: 'Desktop',
   backdrops: BUILTIN_BACKDROPS,
   commands: [
-    // Converting a desktop in place is **lossy** — `explodeToWindows` can only
-    // express split ratios as the rects they happened to occupy and `tileWindows`
-    // cannot recover the ratios you dragged, so a round trip quietly degrades the
-    // arrangement. The paradigm is a property of the workspace, chosen when you
-    // make one (Start ▸ New desktop, whose kind is `desktop.defaultMode`); these
-    // stay for the cases where converting is genuinely what you want, and the
-    // settings page offers the same conversion — but they say so in their titles and
-    // live in the palette rather than under an ambient one-click control.
     {
       /**
        * The app's documentation. There is no in-app help surface at all — no tour,
@@ -111,21 +95,6 @@ export const desktopModule: ModuleManifest = {
           `Your browser may have blocked it. The documentation is at ${DOCS_URL}`,
         );
       },
-    },
-    {
-      id: 'desktop.toggleMode',
-      title: 'Desktop: Convert this desktop (tiling ⇄ floating) — sizes are not preserved',
-      run: () => void toggleDesktopMode(),
-    },
-    {
-      id: 'desktop.tiling',
-      title: 'Desktop: Convert this desktop to tiling — sizes are not preserved',
-      run: () => void setDesktopMode('tiling'),
-    },
-    {
-      id: 'desktop.floating',
-      title: 'Desktop: Convert this desktop to floating windows — sizes are not preserved',
-      run: () => void setDesktopMode('floating'),
     },
     {
       // The home screen is a backdrop, so `window.minimize` cannot see it: that
@@ -156,16 +125,18 @@ export const desktopModule: ModuleManifest = {
     },
     {
       /**
-       * The way back from a tiled workspace. `desktop.showHome` only acts on the
-       * desktop you are on, and a tiling workspace covers its home screen with the
-       * frame entirely — so from there, nothing led back to the desktop.
+       * Bring the home screen up, but only on a desktop that is showing it.
+       * `desktop.showHome` *puts* the home screen in the backdrop slot, which on a
+       * desktop with a wallpaper would replace that wallpaper; this is the safe
+       * verb for the app menu and the Start menu footer.
        */
       id: 'desktop.home',
       title: 'Desktop: Go to the desktop home',
-      run: () =>
-        void goToDesktopHome().catch((err: unknown) => {
-          toastsStore.add('error', 'Could not open the desktop', String(err), 4000);
-        }),
+      run: () => {
+        if (layoutStore.getSnapshot().frame.backdrop.id === SPLASH_BACKDROP_ID) {
+          setHomeCollapsed(false);
+        }
+      },
     },
     {
       id: 'desktop.cascade',
@@ -205,11 +176,11 @@ export const desktopModule: ModuleManifest = {
       run: () => void toggleWindowMaximized(),
     },
     {
-      id: 'window.float',
-      title: 'Window: Open the focused pane in a window',
+      id: 'window.tearOff',
+      title: 'Window: Move the focused tab into a window of its own',
       run: () => {
         const id = layoutStore.getSnapshot().frame.focusedInstanceId;
-        if (id) setPaneWindowed(id, true);
+        if (id) tearOffPane(id);
       },
     },
     ...NAVS.map((dir) => ({
@@ -218,9 +189,7 @@ export const desktopModule: ModuleManifest = {
       run: () => void focusWindowDirection(dir),
     })),
     // Every zone in `snap-palette.ts` gets a command, so the palette, the chords
-    // and the command palette can never list different sets. `snapFocused` rather
-    // than `snapWindow`: on a tiling desktop the focused pane is not a window, and
-    // a snap verb that silently no-ops there reads as an unregistered binding.
+    // and the command palette can never list different sets.
     ...SNAP_CELLS.map((cell) => ({
       id: snapCommandId(cell.zone),
       title: `Window: Snap ${cell.label}`,
@@ -239,12 +208,7 @@ export const desktopModule: ModuleManifest = {
     { key: 'alt+shift+grave', command: 'window.prev' },
     { key: 'mod+alt+down', command: 'window.minimize' },
     { key: 'mod+alt+up', command: 'window.maximize' },
-    // No chord for `desktop.toggleMode`. It rearranges every pane on the desktop
-    // and cannot be undone exactly, and a lossy whole-desktop rewrite is not
-    // something a mistyped chord should be able to do. It is a palette verb.
-    // Snapping is `mod+shift+arrow` rather than `mod+alt+arrow`, which the frame
-    // already uses to split an area — the two would collide on a tiling desktop,
-    // where both are live. These four halves are the fast path and stay bare.
+    // The four halves are the fast path and stay bare.
     { key: 'mod+shift+left', command: 'window.snap:left' },
     { key: 'mod+shift+right', command: 'window.snap:right' },
     { key: 'mod+shift+up', command: 'window.snap:top' },
@@ -261,32 +225,9 @@ export const desktopModule: ModuleManifest = {
       key: `${SNAP_PREFIX} ${arrow.key}`,
       command: snapCommandId(arrow.zone),
     })),
-    // Directional window focus only while a window has focus, so on a tiling
-    // desktop the identical frame bindings (`alt+arrow` = focus area) keep
-    // working and these do not shadow them.
-    ...NAVS.map((dir) => ({
-      key: `alt+${dir}`,
-      command: `window.focus:${dir}`,
-      when: 'windowFocused',
-      priority: 1,
-    })),
+    ...NAVS.map((dir) => ({ key: `alt+${dir}`, command: `window.focus:${dir}` })),
   ],
   settings: [
-    {
-      // The paradigm choice, moved off the Start menu: a launcher lists the
-      // things you can open, and this is a preference about the ones you make.
-      // The control that converts the desktop you are *on* is in the section
-      // below (`DesktopModeSection`) rather than here, because mode is a
-      // property of each workspace and a single global key could only ever
-      // disagree with whichever desktop was in front of you.
-      key: DEFAULT_DESKTOP_MODE_KEY,
-      title: 'New desktops use',
-      description:
-        'The paradigm a newly created desktop starts in: `tiling` splits the screen between panes, `floating` gives each one a window. Existing desktops keep whatever they were made with.',
-      type: 'enum',
-      enumValues: ['tiling', 'floating'],
-      default: 'tiling',
-    },
     {
       key: TASKBAR_SETTING_KEY,
       title: 'Taskbar',
@@ -294,22 +235,6 @@ export const desktopModule: ModuleManifest = {
         'Which zones the taskbar shows and in what order, as JSON. Zones: start, windows, spacer, mx, tray, clock, agent. Also `position` (bottom/top), `showLabels`, `autoHide`.',
       type: 'string',
       default: JSON.stringify(DEFAULT_TASKBAR),
-    },
-    {
-      key: WORKSPACES_ENABLED_KEY,
-      title: 'Workspaces',
-      description:
-        'Named, pre-arranged desktops (AI Research, Training, Lab…) with their tab strip, the home screen launcher, the Start menu’s Desktops group and the workspace-switching keys. Off means one floating desktop.',
-      type: 'boolean',
-      default: false,
-    },
-    {
-      key: BOOT_WORKSPACE_KEY,
-      title: 'Desktop to open at startup',
-      description:
-        'The id of the desktop to open when the app starts — `desktop` is the empty floating one. Use `last` to reopen whichever desktop you were on. Only applies with Workspaces on; otherwise the app always opens the floating desktop. Whatever you pick, every other desktop keeps its arrangement.',
-      type: 'string',
-      default: DEFAULT_BOOT_WORKSPACE,
     },
     {
       key: ANIMATIONS_SETTING_KEY,
@@ -328,120 +253,17 @@ export const desktopModule: ModuleManifest = {
       default: false,
     },
   ],
-  settingsSections: [{ id: 'desktop.mode', title: 'Desktop', component: DesktopModeSection }],
   contextMenu: [
     { kind: 'desktop', items: () => desktopMenuItems() },
     { kind: 'taskbar.window', items: (target) => taskbarWindowMenu(target) },
     { kind: 'taskbar', items: () => taskbarMenu() },
-    { kind: 'taskbar.mode', items: () => modeMenuItems() },
     { kind: 'taskbar.theme', items: () => themeMenuItems(currentThemeId()) },
-    { kind: 'shell.app', items: () => appMenuItems() },
   ],
 };
 
 /**
- * The desktop-paradigm menu, from the tray's ▦/❐ indicator.
- *
- * Making a new desktop is offered *first* and converting this one last, because
- * converting is the lossy operation: split ratios survive a flip only as the rects
- * they happened to occupy, and coming back cannot recover them. The wording says so
- * rather than presenting the two as equivalent.
- */
-function modeMenuItems(): ContextMenuItem[] {
-  const tiling = layoutStore.getSnapshot().frame.mode === 'tiling';
-  // One row, not one per paradigm: which kind a new desktop is comes from
-  // `desktop.defaultMode` on the settings page, the same key the Start menu
-  // reads. Two menus each offering the choice is two places it can be answered
-  // differently from the setting that claims to answer it.
-  const floats = getSetting<string>(DEFAULT_DESKTOP_MODE_KEY) === 'floating';
-  return [
-    {
-      id: 'mode.new',
-      label: floats ? 'New floating desktop' : 'New tiled desktop',
-      detail: 'Change the kind in Settings ▸ Desktop',
-      run: () => void registry.runCommand(floats ? 'workspace.newFloating' : 'workspace.new'),
-    },
-    {
-      id: 'mode.saveAs',
-      label: 'Save this arrangement as a desktop',
-      run: () => void registry.runCommand('workspace.saveAs'),
-    },
-    {
-      id: 'mode.convert',
-      label: tiling ? 'Convert this desktop to floating' : 'Convert this desktop to tiling',
-      detail: 'Rearranges everything; split sizes are not preserved',
-      run: () => void toggleDesktopMode(),
-    },
-  ];
-}
-
-/**
- * The app menu, from the logo at the top-left.
- *
- * That button used to run `shell.home`, which could not do anything: `home` is
- * the desktop now, and the desktop is the only view the button is ever visible
- * from. So the one piece of permanent chrome in the corner every OS puts its
- * menu in did nothing at all. These are the app-level destinations — the things
- * that are about the *installation* rather than about what is on screen.
- */
-export function appMenuItems(): ContextMenuItem[] {
-  const { frame } = layoutStore.getSnapshot();
-  const tiling = frame.mode === 'tiling';
-  return [
-    {
-      id: 'shell.setup',
-      label: 'Setup…',
-      hint: 'Local model, account, connectors',
-      run: () => void registry.runCommand('shell.setup'),
-    },
-    {
-      id: 'settings.open',
-      label: 'Settings',
-      run: () => registry.openPanel('settings.home'),
-    },
-    {
-      id: 'shell.help',
-      label: 'Documentation',
-      hint: 'Opens in your browser',
-      run: () => void registry.runCommand('shell.help'),
-    },
-    { id: 'app.theme', label: 'Theme', run: () => {}, submenu: themeMenuItems(currentThemeId()) },
-    { id: 'app.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
-    {
-      id: 'shell.commandPalette',
-      label: 'Search everything…',
-      run: () => void registry.runCommand('shell.commandPalette'),
-    },
-    // The same menu the tray's ▦/❐ indicator opens, not a flip. You change
-    // paradigm by switching to a desktop that has the one you want; this row
-    // reports which kind you are on and offers to make another.
-    {
-      id: 'desktop.home',
-      label: 'Desktop home',
-      run: () => void registry.runCommand('desktop.home'),
-    },
-    ...(workspacesEnabled()
-      ? [
-          {
-            id: 'app.desktops',
-            label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
-            run: () => {},
-            submenu: modeMenuItems(),
-          },
-        ]
-      : []),
-    {
-      id: 'shell.oobe',
-      label: 'Run first-run setup again',
-      run: () => void registry.runCommand('shell.oobe'),
-    },
-  ];
-}
-
-/**
  * The backdrop picker, resolved from the registry at click time so a plugin's
- * backdrop appears without the menu knowing plugins exist. Shared by the
- * desktop's right-click menu and the app menu — two lists would drift.
+ * backdrop appears without the menu knowing plugins exist.
  */
 function backdropMenuItems(): ContextMenuItem[] {
   const { frame } = layoutStore.getSnapshot();
@@ -574,7 +396,6 @@ function taskbarWindowMenu(target: ContextTarget): ContextMenuItem[] {
 
 function desktopMenuItems(): ContextMenuItem[] {
   const { frame } = layoutStore.getSnapshot();
-  const tiling = frame.mode === 'tiling';
   const hasWindows = frame.windows.length > 0;
   return [
     { id: 'desktop.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
@@ -587,7 +408,7 @@ function desktopMenuItems(): ContextMenuItem[] {
             id: 'desktop.toggleHome',
             label: isHomeCollapsed() ? 'Show the home screen' : 'Minimize the home screen',
             detail: isHomeCollapsed()
-              ? 'Brings the greeting, connectors and workspaces back'
+              ? 'Brings the greeting and connectors back'
               : 'Leaves the wallpaper, the taskbar and the ask bar',
             run: () => void toggleHomeCollapsed(),
           },
@@ -631,35 +452,7 @@ function desktopMenuItems(): ContextMenuItem[] {
           },
         ]
       : []),
-    // Making, saving and converting desktops is workspace management; with
-    // workspaces off there is one desktop and nothing here to manage.
-    ...(workspacesEnabled()
-      ? [
-          {
-            id: 'desktop.desktops',
-            label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
-            run: () => {},
-            submenu: modeMenuItems(),
-          },
-        ]
-      : []),
   ];
-}
-
-/**
- * Go to the floating desktop and bring its home screen up.
- *
- * Switches first, then expands: `setHomeCollapsed` writes the *active* desktop's
- * backdrop, so expanding before the switch lands would edit the workspace being
- * left. And it only expands a desktop that is actually showing the home screen —
- * `patchHome` sets the backdrop id, so calling it on a desktop with a wallpaper
- * would silently replace that wallpaper with the home screen.
- */
-async function goToDesktopHome(): Promise<void> {
-  await framePersistence.switchWorkspace(DEFAULT_BOOT_WORKSPACE);
-  if (layoutStore.getSnapshot().frame.backdrop.id === SPLASH_BACKDROP_ID) {
-    setHomeCollapsed(false);
-  }
 }
 
 /** Idempotent, like every other `registry.register` call. */

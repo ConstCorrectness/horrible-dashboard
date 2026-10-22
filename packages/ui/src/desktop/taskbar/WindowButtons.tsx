@@ -10,7 +10,6 @@ import {
   layoutStore,
   minimizePane,
   openContextMenu,
-  setPaneWindowed,
   setWindowMode,
   taskbarEntries,
   type TaskbarEntry,
@@ -79,7 +78,6 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
 
 /** The per-button right-click menu, contributed by the `desktop` module. */
 export function windowButtonMenu(entry: TaskbarEntry) {
-  const windowed = entry.location.kind === 'window';
   // Showing (focused or merely on screen) offers Minimize; out of sight
   // (minimized, or a background tab) offers Show. Naming the verb by the state
   // rather than by focus is what makes Minimize reachable for a window you can
@@ -97,30 +95,11 @@ export function windowButtonMenu(entry: TaskbarEntry) {
           label: 'Show',
           run: () => void activateTaskbarEntry(entry.instanceId),
         },
-    windowed
-      ? {
-          id: 'taskbar.maximize',
-          label: 'Maximize',
-          run: () => void setWindowMode(entry.windowId!, 'maximized'),
-        }
-      : {
-          id: 'taskbar.window',
-          label: 'Open in a window',
-          run: () => void setPaneWindowed(entry.instanceId, true),
-        },
-    // Dock-back only on a tiling desktop. On a floating one the frame is retained
-    // but never drawn, so "dock back" and "minimize" have the same visible effect
-    // and the same recovery — and the row above already offers Minimize by name.
-    // See the matching note on the window's ⤵ button.
-    ...(windowed && layoutStore.getSnapshot().frame.mode !== 'floating'
-      ? [
-          {
-            id: 'taskbar.dock',
-            label: 'Dock back into the frame',
-            run: () => void setPaneWindowed(entry.instanceId, false),
-          },
-        ]
-      : []),
+    {
+      id: 'taskbar.maximize',
+      label: 'Maximize',
+      run: () => void setWindowMode(entry.windowId, 'maximized'),
+    },
     {
       id: 'taskbar.close',
       label: 'Close',

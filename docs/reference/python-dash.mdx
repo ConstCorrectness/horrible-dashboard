@@ -7,7 +7,7 @@ sidebar_position: 1
 
 # dash — the REPL handle
 
-`dash` is seeded into every in-app Python REPL session and scripts the running dashboard — panes, workspaces, layout, I/O, settings, git — and every module can add a `dash.<name>` facade (`dash.lens` reads llama.cpp traces as numpy). `dash.help()` prints the same list at the prompt. It is a global, not an importable module: there is no `import dash`. See [the Python SDK](../architecture/python-sdk.mdx).
+`dash` is seeded into every in-app Python REPL session and scripts the running dashboard — panes, layout, I/O, settings, git — and every module can add a `dash.<name>` facade (`dash.lens` reads llama.cpp traces as numpy). `dash.help()` prints the same list at the prompt. It is a global, not an importable module: there is no `import dash`. See [the Python SDK](../architecture/python-sdk.mdx).
 
 Also browsable, with search, in the **Python reference** pane (`/pydoc`) under *Dashboard SDKs*.
 
@@ -205,82 +205,8 @@ describe() -> Any
 ````
 
 ````text
-The whole frame: center split tree (areas, tabs, regions), docks,
-floating panes, fullscreen/focused area.
-````
-
-### `dock`
-
-````text
-dock(instance_id: str) -> Any
-````
-
-````text
-Put a windowed pane back into the tiling frame.
-````
-
-### `fullscreen`
-
-````text
-fullscreen(instance_id: str | None=None, on: bool=True) -> Any
-````
-
-````text
-Expand a pane's area to fill the frame, or restore with `on=False`.
-````
-
-### `join`
-
-````text
-join(instance_id: str, direction: str) -> Any
-````
-
-````text
-Absorb the neighboring area (`left`/`right`/`up`/`down`) into this
-pane's area; document tabs are adopted when both sides hold documents.
-````
-
-### `mode`
-
-````text
-mode(mode: str) -> Any
-````
-
-````text
-Switch this desktop between `tiling` and `floating`.
-````
-
-### `move`
-
-````text
-move(instance_id: str, area_id: str | None=None, direction: str | None=None, edge: str | None=None) -> Any
-````
-
-````text
-Move a center pane into `area_id` (from `describe()`), toward
-`direction` (`left`/`right`/`up`/`down`), or onto an area's `edge`
-(`left`/`right`/`above`/`below`), which splits it and lands the pane in
-the new half.
-````
-
-### `open_tool`
-
-````text
-open_tool(view_id: str, dock: str | None=None) -> Any
-````
-
-````text
-Open (or focus) a role:'tool' view in a dock (defaults to its own side).
-````
-
-### `resize`
-
-````text
-resize(instance_id: str, width: int | None=None, height: int | None=None) -> Any
-````
-
-````text
-Resize the area holding a pane (pixels).
+The whole desktop: every window (rect, mode, snap, tabs with their
+regions), which one is focused, and the backdrop.
 ````
 
 ### `set_region_view`
@@ -293,18 +219,6 @@ set_region_view(instance_id: str, view_id: str) -> Any
 Show a specific region view on its host pane (opens the strip).
 ````
 
-### `split`
-
-````text
-split(instance_id: str, direction: str, view_id: str | None=None) -> Any
-````
-
-````text
-Split the area holding a pane (`left`/`right`/`above`/`below`, or the
-`vertical`/`horizontal` aliases); `view_id` to open a different view in the
-new area, else the pane's own view is duplicated.
-````
-
 ### `theme`
 
 ````text
@@ -313,16 +227,6 @@ theme(theme_id: str) -> Any
 
 ````text
 Switch the app theme. Ids are in `describe()["desktop"]["themes"]`.
-````
-
-### `toggle_dock`
-
-````text
-toggle_dock(dock: str, visible: bool | None=None) -> Any
-````
-
-````text
-Show/hide a dock (`left`/`right`/`bottom`); `visible` forces a state.
 ````
 
 ### `toggle_region`
@@ -342,22 +246,20 @@ window(instance_id: str, snap: str | None=None, rect: dict[str, float] | None=No
 ````
 
 ````text
-Pop a pane out into a free-floating desktop window.
+Give a pane a window of its own (tearing it out of a tabbed window).
 
 `snap` places it in a screen region (`left`/`right`/`top`/`bottom`, a
-corner, or `max`); `rect` gives exact pixels. Windows work on a tiling
-desktop too — there they are the escape hatch for a pane that should not
-participate in the tiling.
+corner, or `max`); `rect` gives exact pixels.
 ````
 
 ### `window_state`
 
 ````text
-window_state(instance_id: str, state: str, snap: str | None=None, workspace_id: str | None=None) -> Any
+window_state(instance_id: str, state: str, snap: str | None=None) -> Any
 ````
 
 ````text
-`minimize`, `maximize`, `restore`, `snap` or `move_to_desktop`.
+`minimize`, `maximize`, `restore`, `snap`, `present` or `unpresent`.
 
 A minimized window keeps running — it is hidden, not closed.
 ````
@@ -498,7 +400,7 @@ available() -> Any
 
 ````text
 Every view that can be opened, with id, title, role (document/widget/tool),
-default dock (tools), and the region views it hosts.
+and the region views it hosts.
 ````
 
 ### `close`
@@ -518,7 +420,7 @@ focus(instance_id: str) -> Any
 ````
 
 ````text
-Bring a pane forward (tab / dock slot / floating card).
+Bring a pane forward: raise its window and show its tab.
 ````
 
 ### `open`
@@ -528,7 +430,7 @@ open(view_id: str) -> Any
 ````
 
 ````text
-Open a view by its view ID (from `available()`), routed by its role.
+Open a view by its view ID (from `available()`) in a new window.
 ````
 
 ### `open_list`
@@ -538,8 +440,8 @@ open_list() -> Any
 ````
 
 ````text
-Pane instances currently open in the active workspace (view id, instanceId,
-role, location: center area / dock / floating).
+Pane instances currently open (view id, instanceId, role, and the window
+each one is in).
 ````
 
 ## `dash.settings`
@@ -572,36 +474,4 @@ set(key: str, value: Any) -> dict[str, Any]
 
 ````text
 Persist an override for `key`.
-````
-
-## `dash.workspaces`
-
-### `create`
-
-````text
-create(name: str) -> Any
-````
-
-````text
-Create a new named workspace and switch to it.
-````
-
-### `list`
-
-````text
-list() -> Any
-````
-
-````text
-The workspace tabs and which one is active.
-````
-
-### `switch`
-
-````text
-switch(workspace_id: str) -> Any
-````
-
-````text
-Switch to a workspace tab by id (from `list()`).
 ````

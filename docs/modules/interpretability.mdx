@@ -83,7 +83,7 @@ To make the dashboard approachable for beginners and fast for researchers, both 
 
 The 🧭 **Compass** modal maps the 7 stages of AI research (Literature, Datasets, Context Window, Model Explorer, Logit Lens, Evals, Training), answering *which question each pane answers*, *when to use it*, and *common beginner pitfalls*.
 
-In the `interpretability` workspace preset, `interpretability.architecture` is tabbed beside `llamacpp.server`, putting prompt, weights, and activations within immediate reach.
+Merge `interpretability.architecture` and `llamacpp.server` into one window to keep prompt, weights, and activations within immediate reach.
 
 ## Architecture
 
@@ -762,7 +762,6 @@ to prevent.
 
 | Kind | ID | Notes |
 | --- | --- | --- |
-| Layout | `interpretability` | "Interpretability" workspace in the top tab strip |
 | Panel | `interpretability.context` | Singleton; role `document` |
 | Panel | `interpretability.architecture` | Model explorer **and designer** — two modes, one pane; sits beside the context view |
 | Command | `interpretability.open` | Inspect context window |
@@ -780,34 +779,14 @@ workspace saved before the merge opens without a hole. `interpretability.openDia
 keeps its id through the rename — a command id is an API even when its title isn't.
 :::
 
-### The Interpretability workspace
+The chat is load-bearing rather than decorative — the context pane has nothing to
+show until a turn has run. Keep the two in **separate windows** rather than tabs of
+one: panes in inactive tabs unmount, which would drop the pane's live `/ws`
+subscription mid-turn.
 
-A `FramePreset` seeds a dedicated workspace: the context inspector and the model
-diagram split the center, the agent chat sits in the right dock, and the
-observability data-flow strip is available (hidden by default) along the bottom —
-what the model *is*, what it was *given*, and a way to drive it, all at once.
-
-```mermaid
-flowchart LR
-    subgraph Frame["Interpretability workspace"]
-        Center["center left: interpretability.context"]
-        Diagram["center right: interpretability.architecture"]
-        Right["right dock: agent.chat"]
-        Bottom["bottom dock: observability.io (hidden)"]
-    end
-    Right -->|"drives a turn"| Center
-```
-
-The chat is load-bearing rather than decorative — the pane has nothing to show until
-a turn has run, so a layout with no way to drive one would be a dead end. The two
-live in **separate visible areas** (center + dock) deliberately: panes in inactive
-tabs unmount, which would drop the pane's live `/ws` subscription mid-turn.
-
-Both panes are `role: 'document'`. They were `widget`, which is centre-placeable but
-**alone** — and the `lab` preset tabs the context view, the model explorer, the Hugging
-Face hub and llama.cpp into one area, which only documents do. They also *are*
-documents by the test in [windowing.mdx](../architecture/windowing.mdx): surfaces you
-read and work in, not tiles you glance at.
+Both panes are `role: 'document'`: by the test in
+[windowing.mdx](../architecture/windowing.mdx) they are surfaces you read and work in,
+not tiles you glance at.
 
 ## Backend surface
 

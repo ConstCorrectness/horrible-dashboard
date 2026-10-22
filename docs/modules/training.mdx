@@ -840,7 +840,7 @@ project (`open_pane("training.notebook", {params: {projectId, notebook}})`).
 
 **Flow**: keyword-preload `training` → `search_environments` → `create_project` (approval
 gate, specifier `provider:ref`) → `fetch_data` → `open_pane(training.notebook, params)` →
-`split_area` for the metrics pane → `cells.insert_cell`/`run_cell` to build the
+`show("Training Metrics")` → `cells.insert_cell`/`run_cell` to build the
 starter. Verified end to end against a live Ollama model: the ask reaches
 `training.create_project`, the gate fires with the right specifier, and on approval the
 project + scaffolded notebook land on disk.
@@ -907,59 +907,26 @@ Long-running work reports over the shared `/ws` socket on the **`training` chann
 events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` /
 `run_state` / `manim_status` / `manim_done`.
 
-## The fine-tuning workspace
+## Opening a training pane without a project
 
-The `training` preset (🧠) is the whole loop in one frame — write the recipe, run
-it, watch the curves, convert the checkpoint, score it — rather than five panes
-opened one at a time from the command palette.
-
-```
-┌──────────────┬───────────────────────────────┬──────────────────┐
-│ Training     │  Training Notebook            │ Training Metrics │
-│ Projects     │  (your last project)          │ LocalTrack       │
-│ Explorer     ├───────────────────────────────┤                  │
-│              │  Evals · llama.cpp            │                  │
-└──────────────┴───────────────────────────────┴──────────────────┘
-                 Observability (bottom, closed)   Agent chat (right)
-```
-
-The pairing that carries the idea is **evals directly under the notebook**: a
-regression in Results names a case, and the code that produced it is one pane up.
-`llamacpp.server` shares that lower area because converting a checkpoint and
-serving it to be scored are the same errand, and the right column is where a run is
-*watched* — `training.metrics` live, `localtrack.workspace` for comparing it against
-previous runs.
-
-The document area seeds `training.notebook`. It used to seed **empty**:
-`training.notebook` and `training.recipe` are params-bound
-(`{projectId, notebook}`) and a preset's `tabs` carry no params, so seeding one
-opened a pane with no project bound. The consequence was that opening this workspace
-— or `ai-research`, which had the same hole — landed you on "Empty area" every time,
-and the first move was always a trip to the dock.
-
-That was a missing default rather than a preset-format limit. There is exactly one
-project someone means when they open the training workspace without saying which,
-and it is the one they were in last, so `last-project.ts` records it
-(`localStorage`, following `layout/recents.ts` — a per-viewer convenience, and
-deliberately *not* a `SettingDecl`, which would put "Last project" on the settings
-page as something to configure). Both panes fall back to it when opened with no
-params, resolved once per mount so the remembered id changing under an open pane
-cannot swap the notebook out from under you.
+`training.notebook` and `training.recipe` are params-bound (`{projectId, notebook}`),
+but most ways of opening them — the Start menu, the palette, a restored layout —
+carry no params. There is exactly one project someone means when they open the
+training notebook without saying which, and it is the one they were in last, so
+`last-project.ts` records it (`localStorage`, following `layout/recents.ts` — a
+per-viewer convenience, and deliberately *not* a `SettingDecl`, which would put "Last
+project" on the settings page as something to configure). Both panes fall back to it
+when opened with no params, resolved once per mount so the remembered id changing
+under an open pane cannot swap the notebook out from under you.
 
 A remembered project that no longer exists **forgets itself and shows the picker**,
 rather than the "no longer exists" dead-pane message. That message is right for a
 pane the user deliberately opened against that project and wrong for a fallback:
 nobody asked for this project, the value is not one they can see or clear, and
-without the self-heal the workspace would greet them with the same dead project on
+without the self-heal the pane would greet them with the same dead project on
 every open, forever.
 
-Explorer stays in the left dock as the entry point for a **different** project, and
-what it opens retargets the seeded pane in place. `training.projects` used to be
-docked *above* Explorer — whose **Projects** section is that same pane — so the
-dock opened the identical list twice, one over the other, in 280px.
-
-A params-bound pane opened **cold** — from the start menu, the palette, or an empty
-area — renders the projects picker itself rather than a sentence. It used to say
+A params-bound pane opened **cold** — from the start menu or the palette — renders the projects picker itself rather than a sentence. It used to say
 "open me from the Training projects pane", which named something the reader could
 not open: consolidation made `training.projects` `embedded`, i.e. a section of
 [Explorer](explorer.mdx). Picking a project calls `openTrainingNotebook`, whose
@@ -967,16 +934,10 @@ not open: consolidation made `training.projects` `embedded`, i.e. a section of
 notebook instead of leaving an empty one behind. `training.recipe` and the notebook
 module's [`notebook.editor`](notebook.mdx) do the same with their own pickers.
 
-A preset that names a view the registry does not have is **skipped in silence**
-(`seedFromPreset`), so a typo is a pane that simply never appears — pinned by
-`workflow-presets.test.ts`, which seeds the preset against the real ids and against
-none at all and requires the two to differ.
+### The fine-tuning agent
 
-### It opens as the fine-tuning agent
-
-`agent: 'trainer'` — the workspace switches the persona and the tool scope, not just
-the furniture. The roster spec permits `training`, `evals`, `localtrack`, `editor`
-and `files`, and **preloads only `training`**, so reading a recipe costs a
+`trainer` is the agent for this loop — pick it in the chat. The roster spec permits
+`training`, `evals`, `localtrack`, `editor` and `files`, and **preloads only `training`**, so reading a recipe costs a
 `load_tools` rather than schema space on every turn.
 
 `llamacpp` **now appears in that list, and used not to.** The original reasoning was
@@ -1005,9 +966,8 @@ is permitted but **not preloaded** — this flow already sits close to `TOOL_BUD
 | Widget `training.manim` | manim render viewer (progress log + mp4 player) |
 | Widget `training.learn` | the teaching strip: this cell's knobs and concepts, rule-based reads of the run, go-deeper links — see [Learn](#learn-the-notebook-explains-itself) |
 | Regions on `training.notebook` | learn (open by default)/metrics/architecture/manim/rollout on the right strip, projects on the left |
-| Layout preset `training` (🧠) | the fine-tuning workspace — see [The fine-tuning workspace](#the-fine-tuning-workspace) |
 | Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openLearn` |
-| Recipe pane hand-off | after a conversion, **Serve this** starts a local llama-server on the new GGUF and **Score it** opens Evals on its Run section. The training frame already docked those panes together; nothing connected them |
+| Recipe pane hand-off | after a conversion, **Serve this** starts a local llama-server on the new GGUF and **Score it** opens Evals on its Run section — those panes used to sit side by side with nothing connecting them |
 | Project row actions | open notebook, 🧪 recipe, ⇪ push to Kaggle, ⇪ push to Colab, delete |
 | Connector `trackers` | W&B API key + MLflow tracking URI, Fernet-encrypted. The one connector contributing **no agent tools**, so its id names no tool group |
 | Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality` |

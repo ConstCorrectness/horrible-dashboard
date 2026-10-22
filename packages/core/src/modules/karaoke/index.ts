@@ -1,10 +1,10 @@
 /**
  * Karaoke module: a PiKaraoke-shaped karaoke machine as a dashboard workspace.
  *
- * Three panes and one frame. The split is not cosmetic — it's the shape of a
- * karaoke night: a **stage** that faces the room, a **queue** that says who's up,
- * and a **search** pane that fills the queue. The Karaoke frame puts the stage in
- * the center with the other two in docks, which is the whole layout a host needs.
+ * Three views. The split is not cosmetic — it's the shape of a karaoke night: a
+ * **stage** that faces the room, a **queue** that says who's up, and a **search**
+ * that fills the queue. The queue and search are strips on the stage's own window,
+ * which is the whole layout a host needs.
  *
  * The interesting half is on the backend: the session (queue, now-playing,
  * transport, key) is process-global and broadcast on the `karaoke` `/ws` channel,
@@ -64,8 +64,6 @@ export const karaokeModule: ModuleManifest = {
       component: KaraokeQueuePanel,
       role: 'tool',
       icon: '📋',
-      defaultDock: 'left',
-      defaultDockSize: 300,
       singleton: true,
       embedded: true,
     },
@@ -75,8 +73,6 @@ export const karaokeModule: ModuleManifest = {
       component: KaraokeSearchPanel,
       role: 'tool',
       icon: '🔎',
-      defaultDock: 'right',
-      defaultDockSize: 340,
       singleton: true,
       embedded: true,
     },
@@ -153,18 +149,6 @@ export const karaokeModule: ModuleManifest = {
       description: 'How many YouTube hits the search pane asks for.',
       type: 'number',
       default: 20,
-    },
-  ],
-  frames: [
-    {
-      id: 'karaoke',
-      name: 'Karaoke',
-      description:
-        'A karaoke machine: the stage, the queue and search, with any phone on the LAN as a remote.',
-      icon: '🎤',
-      frame: {
-        center: { pane: 'karaoke.stage' },
-      },
     },
   ],
 };

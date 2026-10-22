@@ -5,20 +5,12 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../registry';
-import { openPaneInArea } from '../layout/controller';
-import { collectAreas } from '../layout/model';
-import { seedFromPreset, type FramePreset } from '../layout/presets';
+import { openPane } from '../layout/controller';
 import { layoutStore } from '../layout/store';
+import { loadFrame, windowsFrame } from '../layout/__tests__/fixtures';
 import { parseSpotlightQuery, spotlightResults } from '../spotlight';
 
 const Stub = () => null;
-const KNOWN = new Set(['sp.terminal', 'sp.notes']);
-
-const preset: FramePreset = {
-  id: 'sp',
-  name: 'Spotlight',
-  frame: { center: { split: 'row', children: [{ pane: 'sp.terminal' }, { tabs: [] }] } },
-};
 
 beforeAll(() => {
   registry.register({
@@ -37,11 +29,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   layoutStore.resetForTests();
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'sp',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
-  });
+  loadFrame(windowsFrame(['sp.terminal']), 'sp');
 });
 
 const frame = () => layoutStore.getSnapshot().frame;
@@ -109,14 +97,13 @@ describe('the agent', () => {
 
 describe('actions', () => {
   it('gives a pane its live instance id', () => {
-    const instanceId = collectAreas(frame().center)[0].tabs[0].instanceId;
+    const instanceId = frame().windows[0].area.tabs[0].instanceId;
     const hit = results('@terminal')[0];
     expect(hit.action).toEqual({ type: 'focusPane', instanceId });
   });
 
   it('lists a second pane opened after the first', () => {
-    const areaId = collectAreas(frame().center).find((a) => !a.tabs.length)!.id;
-    openPaneInArea('sp.notes', areaId);
+    openPane('sp.notes');
     expect(results('@notes')).toHaveLength(1);
   });
 

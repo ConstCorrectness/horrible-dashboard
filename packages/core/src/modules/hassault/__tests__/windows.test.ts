@@ -1,22 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { seedFromPreset } from '../../../layout/presets';
-import type { AreaNode, LayoutNode, SplitNode } from '../../../layout/types';
 import { hassaultModule } from '../index';
 
 const HASSAULT_VIEWS = new Set((hassaultModule.panels ?? []).map((p) => p.id));
-
-function areasOf(node: LayoutNode): AreaNode[] {
-  if (node.kind === 'area') return [node];
-  return node.children.flatMap(areasOf);
-}
-
-function splitsOf(node: LayoutNode): SplitNode[] {
-  if (node.kind === 'split') {
-    return [node, ...node.children.flatMap(splitsOf)];
-  }
-  return [];
-}
 
 const panels = hassaultModule.panels ?? [];
 const panel = (id: string) => panels.find((p) => p.id === id);
@@ -68,30 +54,5 @@ describe('hAssault windows', () => {
     ]) {
       expect(commandIds).toContain(id);
     }
-  });
-});
-
-describe('hAssault presets', () => {
-  it('defines the two presets', () => {
-    expect(hassaultModule.frames?.map((f) => f.id)).toEqual(['hassault_dev', 'hassault_play']);
-  });
-
-  it('hassault_dev puts the game beside the dev tools, with no docks', () => {
-    const preset = hassaultModule.frames!.find((f) => f.id === 'hassault_dev')!;
-    const frame = seedFromPreset(preset, { knownViews: HASSAULT_VIEWS });
-    const centerViews = areasOf(frame.center).flatMap((a) => a.tabs.map((t) => t.viewId));
-    expect(centerViews).toEqual(['hassault.play', 'hassault.studio']);
-    const splits = splitsOf(frame.center);
-    expect(splits).toHaveLength(1);
-    expect(splits[0].sizes).toEqual([0.55, 0.45]);
-    expect(frame.docks.right.tools).toEqual([]);
-    expect(frame.docks.bottom.tools).toEqual([]);
-  });
-
-  it('hassault_play is the game alone', () => {
-    const preset = hassaultModule.frames!.find((f) => f.id === 'hassault_play')!;
-    const frame = seedFromPreset(preset, { knownViews: HASSAULT_VIEWS });
-    const centerViews = areasOf(frame.center).flatMap((a) => a.tabs.map((t) => t.viewId));
-    expect(centerViews).toEqual(['hassault.play']);
   });
 });

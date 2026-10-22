@@ -49,49 +49,6 @@ export const labModule: ModuleManifest = {
       ],
     },
   ],
-  frames: [
-    {
-      id: 'lab',
-      name: 'Lab',
-      description:
-        "Write a fine-tuning script with the model, the agent's context and the Hugging Face Hub all in reach.",
-      icon: '🧪',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.62, 0.38],
-          children: [
-            // Where the work happens. The notebook already hosts the training
-            // metrics, model graph, rollout and projects as region strips, so it
-            // brings most of the training module with it.
-            { tabs: ['training.notebook', 'editor.buffer'], active: 0 },
-            // What you look things up in, tabbed rather than tiled: at this width
-            // three stacked panes would each be too short to read.
-            {
-              tabs: [
-                'lab.hub',
-                // Everything else worth finding — papers, repos, datasets beyond
-                // the Hub, docs — one tab over.
-                'discover.browse',
-                'interpretability.architecture',
-                'interpretability.context',
-                // The Lab is where you study a model; `llamacpp.server` is where
-                // the node runs one. Tabbed here so "find weights → serve them →
-                // look at what you served" is one position, not three panes.
-                'llamacpp.server',
-              ],
-              active: 0,
-            },
-          ],
-        },
-        docks: {
-          left: { tools: ['explorer.home'], size: 260 },
-          right: { tools: ['agent.chat'], size: 360 },
-          bottom: { tools: ['observability.io'], size: 180, visible: false },
-        },
-      },
-    },
-  ],
   commands: [
     {
       id: 'lab.openHub',

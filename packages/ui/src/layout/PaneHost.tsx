@@ -41,7 +41,7 @@ function bodyOfView(viewId: string | undefined) {
   return viewId ? resolveView(viewId)?.component : undefined;
 }
 
-export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string }) {
+export function PaneHost({ pane }: { pane: PaneState }) {
   const { viewId, instanceId, params } = pane;
 
   // Legacy panes read `panelId` off their params (the old engine always set it).
@@ -65,12 +65,9 @@ export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string })
   const Component = sectionBody ?? decl.component;
 
   // Focus (any descendant) and pointerdown both count — a click on non-focusable
-  // pane content still selects the pane. FOCUS_PANE resolves the owning area
-  // itself, so a docked or floating pane no longer leaves the focused area
-  // pointing at whatever center pane happened to be clicked last.
+  // pane content still selects the pane.
   const markActive = () => {
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId });
-    if (areaId) layoutStore.dispatch({ type: 'FOCUS_AREA', areaId });
     // Declarative capture follows focus. Panes that capture conditionally (a
     // game, once pointer-locked) declare nothing and request it themselves; the
     // store releases either kind as soon as focus moves on.

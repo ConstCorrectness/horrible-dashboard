@@ -150,26 +150,12 @@ player's node the moment a match begins). This is driven by `revealBoard()` in
 `game-ws.ts`, which switches to the board section and pops the log drawer: one pane,
 one section switch, so the board can't appear twice.
 
-### Coding Harnesses workspace
+### One window
 
-Harness engineering is the actual skill of the module, so there is a dedicated
-**Coding Harnesses** frame preset (`harness`, 🛠 in the workspace tab strip,
-`layouts` module): the **Games** pane (`games.lobby` — build, board, and play in
-its sections) as the center stage, with the **Games Log** and **Episodes** stacked
-beside it, and the auxiliary tools (Ladder, Replays, Players, Profile) in the left
-dock.
-
-### DashArena workspace
-
-**DashArena** (`dasharena`, 🏟 in the workspace tab strip) is the game-tuned
-preset, contributed by the games module itself (`ModuleManifest.frames` in
-`modules/games/index.tsx`): its center is **just the Games client**
-(`{ pane: 'games.lobby' }`), filling the whole window. The client is itself a
-console — Play / Board / Build / Replays / Career / Social with the Log/Episodes
-region strip — so there's nothing to tile beside it. The standalone Log/Episodes panels
-stay registered so a power user can still pop one out onto the rail. Where Coding
-Harnesses tiles the surfaces for authoring, DashArena is the single-window client
-tuned for playing and watching.
+The **Games** pane (`games.lobby`) is a console — Play / Board / Build / Replays /
+Career / Social, with the Log/Episodes region strip — so the whole module is one
+window. (It used to come with two pre-arranged workspaces, Coding Harnesses and
+DashArena; they went with the tiling frame.)
 
 :::note Layouts saved before the merge
 `games.board`, `games.loadout`, and `games.thoughts` no longer exist as panes, so a
@@ -1645,7 +1631,7 @@ never handed to the browser). Two OAuth flows produce it:
   capture points (inbound middleware, the node's outbound httpx hook, the frontend
   client recorder). `/api/games/auth/local` and `/auth/local` are in
   `_REDACT_BODY_PREFIXES` at all three — the event is still recorded, only the bodies
-  are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
+  are dropped. See [observability](observability.mdx#the-other-exception-password-bodies).
   :::
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
   tests, the agent tools and `dash` need no OAuth. Disable it with
@@ -1754,11 +1740,8 @@ point. Signing in with the **same GitHub account on both is fully supported** (s
 
 ### Panels
 
-Ladder / Challenges / Replays / Players / Profile are **standalone `tool` panels
-on the left activity rail** (they used to be folded into the hub as internal
-tabs); the Games hub itself is now just the Play/matchmaking view. Docks show one
-tool at a time — the rail switches between them, there is no in-dock tab strip
-(see [windowing](../architecture/windowing.mdx)).
+Ladder / Challenges / Replays / Players / Profile are sections of the Games pane
+(see [windowing](../architecture/windowing.mdx#embedded-views-and-sections)).
 
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |

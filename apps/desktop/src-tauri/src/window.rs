@@ -2,15 +2,12 @@
 //!
 //! Two capabilities ride these commands:
 //! - `window.fullscreen` — borderless OS-window fullscreen, distinct from the
-//!   frame's in-window "fullscreen-area" mode (a pane filling the page).
-//! - `chrome.workspaceTabs` — the workspace tab strip is the window's own
-//!   titlebar (the window is undecorated), so the frontend drives edge-resize
-//!   and minimize/maximize/close itself. (Move-drag + double-click-maximize use
-//!   the webview's native `data-tauri-drag-region`, not a command here.)
-//! - `window.perWorkspace` — a workspace can open in its own OS window
-//!   (`window_open_workspace`): a new undecorated `WebviewWindow` labelled
-//!   `ws-<id>`, loading the same frontend with `?workspace=<id>` so it boots
-//!   straight into that workspace. Re-opening focuses the existing window.
+//!   desktop's in-window presentation (a pane filling the page).
+//! - `chrome.workspaceTabs` — the app draws the window's own titlebar (the window
+//!   is undecorated), so the frontend drives edge-resize and
+//!   minimize/maximize/close itself. (Move-drag + double-click-maximize use the
+//!   webview's native `data-tauri-drag-region`, not a command here.) Named for the
+//!   workspace tab strip that used to be that titlebar.
 //!
 //! The frontend gates each behind its capability and drives them through the
 //! core `WindowControl` seam; the shell stays a thin pass-through to tao's
@@ -26,7 +23,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder, Window};
+use tauri::{AppHandle, Webview, WebviewUrl, WebviewWindowBuilder, Window};
 use tauri_runtime::ResizeDirection;
 
 /// Monotonic counter for unique `browser-<n>` pop-out window labels.
@@ -197,82 +194,8 @@ pub fn window_start_resize_dragging(window: Window, direction: String) -> Result
     window.start_resize_dragging(dir).map_err(|e| e.to_string())
 }
 
-// --- window.perWorkspace: a workspace in its own OS window --------------------
-
-/// Unique, label-safe window id for a workspace. Tauri labels allow only
-/// `[a-zA-Z0-9-/:_]`, so any other character in the workspace id collapses to
-/// `_` (workspace ids are URL-safe slugs/uuids in practice, so this is a guard).
-fn workspace_window_label(workspace_id: &str) -> String {
-    let safe: String = workspace_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("ws-{safe}")
-}
-
-/// Open a workspace in its own OS window (or focus it if already open). It
-/// receives its target workspace via an **initialization script** global
-/// (`window.__HORRIBLE_WORKSPACE__`), which the frontend reads at boot, and is
-/// undecorated to match the custom titlebar; the `ws-*` capability glob grants it
-/// the same window permissions as `main`.
-///
-/// Its URL comes from config: under `tauri dev` a runtime-created
-/// `WebviewUrl::App("index.html")` resolves to the *production* asset protocol
-/// (no built `dist` → blank webview), so in dev we load `build.devUrl` directly
-/// via `WebviewUrl::External`; packaged builds (no `devUrl`) use the bundled
-/// assets. We read the URL from `app.config()` — a cheap, lock-free read —
-/// rather than a live window's `.url()`, which round-trips to the main thread.
-///
-/// The command is **async** on purpose: sync commands run on the main thread,
-/// where `build()` (which needs the main thread to create the webview) deadlocks
-/// the whole app. Async runs it on a worker thread, so `build()` can dispatch to
-/// a free main thread and complete.
-#[tauri::command]
-pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
-    let label = workspace_window_label(&workspace_id);
-    // `get_window`, not `get_webview_window`: the latter returns None once the
-    // window hosts a native browser pane, and the duplicate label would then fail.
-    if let Some(existing) = app.get_window(&label) {
-        return existing.set_focus().map_err(|e| e.to_string());
-    }
-    let target = match app.config().build.dev_url.clone() {
-        Some(dev_url) => WebviewUrl::External(dev_url),
-        None => WebviewUrl::App("index.html".into()),
-    };
-    // serde_json quotes/escapes the id, so the script is injection-safe.
-    let init = format!(
-        "window.__HORRIBLE_WORKSPACE__ = {};",
-        serde_json::to_string(&workspace_id).map_err(|e| e.to_string())?
-    );
-    let window = WebviewWindowBuilder::new(&app, &label, target)
-        .title("horrible-dashboard")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(640.0, 480.0)
-        .decorations(false)
-        .initialization_script(&init)
-        .additional_browser_args(crate::media::WEBVIEW2_ARGS)
-        .build()
-        .map_err(|e| e.to_string())?;
-    crate::media::allow_user_media(&window);
-    Ok(())
-}
-
 // --- browser.nativeWindow: pop an embedded-browser page out to a real window ---
 
-/// Open `url` in a new **decorated** native browser window — the embedded
-/// browser's escape hatch for sites that refuse iframing (`X-Frame-Options`/CSP).
-/// A real webview window bypasses those headers entirely.
-///
-/// Only `http`/`https` URLs are accepted, so this can never be steered at
-/// `file:`/custom-scheme local resources. Each call gets a fresh `browser-<n>`
-/// label (external site, so no app permissions are needed on the new window).
-/// Async for the same main-thread `build()` reason as `window_open_workspace`.
 /// Open `url` in the user's **default system browser** — the external-link path
 /// (OAuth consent pages, docs links, the sign-in card's fallback link). Distinct
 /// from `browser_open_url` below, which opens an app-owned webview window: OAuth
@@ -309,6 +232,18 @@ pub fn open_path(path: String) -> Result<(), String> {
     open::that_detached(&resolved).map_err(|e| e.to_string())
 }
 
+/// Open `url` in a new **decorated** native browser window — the embedded
+/// browser's escape hatch for sites that refuse iframing (`X-Frame-Options`/CSP).
+/// A real webview window bypasses those headers entirely.
+///
+/// Only `http`/`https` URLs are accepted, so this can never be steered at
+/// `file:`/custom-scheme local resources. Each call gets a fresh `browser-<n>`
+/// label (external site, so no app permissions are needed on the new window).
+///
+/// The command is **async** on purpose: sync commands run on the main thread,
+/// where `build()` (which needs the main thread to create the webview) deadlocks
+/// the whole app. Async runs it on a worker thread, so `build()` can dispatch to
+/// a free main thread and complete.
 #[tauri::command]
 pub async fn browser_open_url(app: AppHandle, url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;

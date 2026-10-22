@@ -9,21 +9,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registry } from '../../registry';
-import { closePaneGuarded, minimizePane, openPaneInArea, setPaneWindowed } from '../controller';
-import { collectAreas } from '../model';
+import { closePaneGuarded, minimizePane, openPane } from '../controller';
 import { paneSession, paneSessionKey, resetPaneSessionsForTests } from '../pane-lifetime';
-import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
 import { taskbarEntries } from '../taskbar';
+import { loadFrame, windowsFrame } from './fixtures';
 
 const Stub = () => null;
-const KNOWN = new Set(['tv.a', 'tv.b']);
-
-const preset: FramePreset = {
-  id: 'tv',
-  name: 'Taskbar verbs',
-  frame: { center: { split: 'row', children: [{ pane: 'tv.a' }, { tabs: [] }] } },
-};
 
 beforeAll(() => {
   registry.register({
@@ -39,16 +31,11 @@ beforeAll(() => {
 beforeEach(() => {
   resetPaneSessionsForTests();
   layoutStore.resetForTests();
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'tv',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
-  });
+  loadFrame(windowsFrame([['tv.a', 'tv.b']]), 'tv');
 });
 
 const frame = () => layoutStore.getSnapshot().frame;
 const firstEntry = () => taskbarEntries(frame())[0];
-const emptyArea = () => collectAreas(frame().center).find((a) => a.tabs.length === 0)!.id;
 
 /** Attach a resource to a pane the way a live room / PTY / browser engine does. */
 function attach(instanceId: string) {
@@ -83,14 +70,13 @@ describe('taskbar verbs and pane-lifetime', () => {
     expect(taskbarEntries(frame()).some((e) => e.instanceId === instanceId)).toBe(true);
   });
 
-  it('Minimize keeps it alive for a windowed pane too', () => {
-    /** The windowed branch takes a different path (`setWindowMode`), and it is the
-     *  one a taskbar user is most likely to minimize. */
-    const { instanceId } = firstEntry();
-    setPaneWindowed(instanceId, true);
-    const dispose = attach(instanceId);
+  it('Minimize keeps a background tab alive too', () => {
+    /** Minimizing a tab minimizes its whole window — the tab that was not even
+     *  showing must come through it untouched. */
+    const background = taskbarEntries(frame())[1].instanceId;
+    const dispose = attach(background);
 
-    minimizePane(instanceId);
+    minimizePane(background);
 
     expect(dispose).not.toHaveBeenCalled();
   });
@@ -107,8 +93,7 @@ describe('taskbar verbs and pane-lifetime', () => {
 
   it('closing one pane leaves another pane resource alone', async () => {
     const { instanceId: first } = firstEntry();
-    openPaneInArea('tv.b', emptyArea());
-    const second = taskbarEntries(frame()).find((e) => e.instanceId !== first)!.instanceId;
+    const second = openPane('tv.b', { instanceId: 'tv.b#99' })!;
 
     const disposeFirst = attach(first);
     const disposeSecond = attach(second);

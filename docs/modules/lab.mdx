@@ -5,50 +5,16 @@ sidebar_label: Lab
 
 # Module: lab
 
-The workspace for building, studying and fine-tuning models — and the one surface
-none of the modules it composes had: a way for a **person** to browse the Hugging
-Face Hub.
+The module for building, studying and fine-tuning models — and the one surface none
+of the modules around it had: a way for a **person** to browse the Hugging Face Hub.
 
 **Status: implemented** — frontend in `packages/core/src/modules/lab/`, HTTP surface in
 `backend/modules/connectors/providers/huggingface_routes.py`.
 
-## An umbrella, not a merge
-
 `interpretability`, `training`, `mcp` and `library` keep owning their panes,
-manifests, docs and tests. This module contributes a *composition* of them plus its
-own pane. That is the same call the pane consolidation made: compose at the frame,
-don't merge manifests.
-
-Why a new frame rather than extending an existing one:
-
-- **`interpretability`** is two inspection panes beside a chat. It has nowhere to
-  write anything.
-- **`training`** is deliberately thin — an empty centre plus the metrics strip — and
-  does not place `training.notebook` at all.
-
-Neither is a place to *write a fine-tuning script* with the model, the agent's
-context, and the Hub all in reach. That working position is what the `lab` frame
-seeds, and it duplicates no other preset.
-
-```mermaid
-flowchart LR
-    subgraph Frame["Lab workspace"]
-        direction LR
-        L["centre left: training.notebook + editor.buffer"]
-        R["centre right: lab.hub | interpretability.architecture | interpretability.context"]
-        LD["left dock: explorer.home"]
-        RD["right dock: agent.chat"]
-    end
-    LD --> L
-    L -->|"what you're building"| R
-    RD -->|"drives a turn"| R
-```
-
-The centre-right area is **tabbed rather than tiled**: at that width three stacked
-panes would each be too short to read. The notebook brings most of the training
-module with it for free — it already hosts metrics, the model graph, rollout, Manim
-and peers as region strips — and `explorer.home` already carries Files, Projects and
-Notebooks as contributed sections.
+manifests, docs and tests; this module contributes the Hub pane. (It also used to
+contribute a `lab` frame preset composing them all into one tiled workspace, which
+went with the tiling frame.)
 
 ## The Hugging Face pane
 
@@ -127,7 +93,6 @@ asserts against the HTTP body for the same reason.
 
 | Kind | ID | Notes |
 | --- | --- | --- |
-| Layout | `lab` | "Lab" 🧪 workspace in the top tab strip |
 | Panel | `lab.hub` | "Hugging Face"; singleton, role `widget` (centre-capable) |
 | Section | `lab.hub` → `models` | Default section, key <kbd>m</kbd> |
 | Section | `lab.hub` → `datasets` | Key <kbd>d</kbd> |

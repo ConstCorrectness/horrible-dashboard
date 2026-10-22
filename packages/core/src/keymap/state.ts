@@ -92,16 +92,12 @@ export function readKeyContext(): KeyContext {
     captureView: capture?.viewId ?? null,
     textInput: typeof document !== 'undefined' && isEditableTarget(document.activeElement),
     dialogOpen: dialogsStore.getActive() !== null,
-    // Either mechanism counts: a `when: fullscreenArea` binding means "something
-    // is filling the screen", and a presented window is that just as much as a
-    // fullscreened centre area is.
-    fullscreenArea: frame.fullscreenAreaId !== null || frame.presentedInstanceId !== null,
+    fullscreenArea: frame.presentedInstanceId !== null,
     // Not "did a pane ask for it" — whether the lock is actually in force right
     // now. `reserved.ts` reads this to stop reporting alt+tab as unreachable, and
     // reporting a capability we don't have is the failure that table exists for.
     keyboardLock: canHoldSystemKeys(),
     windowFocused: frame.focusedWindowId !== null,
-    desktopMode: frame.mode,
     shellView,
     platform,
     host,

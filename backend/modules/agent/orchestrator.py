@@ -152,7 +152,7 @@ SYSTEM_PROMPT = (
     "of panes; you can show panes, read what they contain, and use tools.\n"
     "Rules:\n"
     "- To put something on screen — 'show/open/go to X' — call show with whatever the "
-    "user called it (a pane title, a section or side-strip name, a workspace name). It "
+    "user called it (a pane title, a section or side-strip name). It "
     "opens or focuses it and returns its contents in one step. Do NOT call "
     "list_available_panes + open_pane + get_pane_context to do this.\n"
     "- A pane may have SECTIONS: tabs inside one pane (People has Friends, Messages, "
@@ -161,7 +161,7 @@ SYSTEM_PROMPT = (
     "- When the user asks ABOUT what is on screen, answer from the workspace snapshot "
     "you were given; use show or get_pane_context to read a pane it does not cover. "
     "Do not guess.\n"
-    "- To REARRANGE the screen (split, move, resize, dock, fullscreen, workspaces), "
+    "- To REARRANGE the screen (snap, minimize, maximize, fullscreen, tile windows), "
     "first load_tools(['layout']) — those verbs are not loaded by default — and follow "
     "the guide it returns.\n"
     "- If the user refers to a file via a path prefixed with '@' (e.g. "
@@ -196,53 +196,47 @@ def _tool(
     }
 
 
-# App-level layout verbs. Generic over ids (no enums beyond directions/positions)
-# — the model discovers valid ids through the read tools, keeping the catalog
-# frontend-owned. Vocabulary: center AREAS host documents/widgets, DOCKS host
-# tools, REGIONS are per-pane strips.
+# App-level layout verbs. Generic over ids (no enums beyond zones/positions) — the
+# model discovers valid ids through the read tools, keeping the catalog
+# frontend-owned. Vocabulary: every pane lives in a WINDOW (merged panes are its
+# tabs), and REGIONS are per-pane strips.
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "show",
         "Put something in front of the user and return what it contains. Give it "
         "whatever the user called the thing — a pane title ('Friends', 'Terminal'), "
-        "a view id, a side-strip name ('Outline'), or a workspace name. It opens it, "
-        "or just focuses it if it is already on screen, and returns that pane's "
-        "current contents, so you do NOT need list_available_panes, open_pane or "
-        "get_pane_context to reach something. Use this for any 'show/open/go to X' "
-        "request; the arrangement verbs are only for moving panes around.",
+        "a view id, or a side-strip name ('Outline'). It opens it, or just focuses "
+        "it if it is already on screen, and returns that pane's current contents, "
+        "so you do NOT need list_available_panes, open_pane or get_pane_context to "
+        "reach something. Use this for any 'show/open/go to X' request; the window "
+        "verbs are only for moving things around.",
         {
             "target": {
                 "type": "string",
                 "description": "What to show, in the user's own words.",
-            },
-            "where": {
-                "type": "string",
-                "enum": ["here", "beside", "dock"],
-                "description": "Optional placement hint. Omit for the default.",
             },
         },
         ["target"],
     ),
     _tool(
         "list_available_panes",
-        "List every view that can be opened, with id, title, role "
-        "('document' = tabs in a center area, 'widget' = its own center area, "
-        "'tool' = lives in a dock), its default dock (tools), and any region "
-        "views it hosts. Call this to find a valid view ID before opening.",
+        "List every view that can be opened, with id, title, role ('document' = "
+        "a surface you work in, 'tool' = a companion, 'widget' = a readout), and "
+        "any region views it hosts. Call this to find a valid view ID before "
+        "opening.",
     ),
-    _tool("list_workspaces", "List the named workspaces and which one is active."),
     _tool(
         "list_open_panes",
-        "List the panes currently open in the active workspace, with each pane's "
-        "view ID, live instanceId, title, role, location (center area / dock / "
-        "floating), and whether it exposes agent-readable context.",
+        "List the panes currently open, with each pane's view ID, live instanceId, "
+        "title, role, the window it is in, and whether it exposes agent-readable "
+        "context.",
     ),
     _tool(
         "get_layout",
-        "Read the whole frame: the center split tree (areas with their document "
-        "tabs and region strips), the three docks and their tools, floating "
-        "panes, and which area is fullscreen/focused. The orientation read — "
-        "call it before arranging anything.",
+        "Read the whole desktop: every window with its rect, mode (normal/"
+        "minimized/maximized), snap zone, stacking order and tabs (with their "
+        "region strips), which window is focused, and the backdrop. The "
+        "orientation read — call it before arranging anything.",
     ),
     _tool(
         "get_pane_context",
@@ -260,10 +254,10 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "open_pane",
-        "Open a view in the active workspace, routed by its role (documents tab "
-        "into a center area, widgets take their own area, tools go to their "
-        "dock). Some panes take params — e.g. the training notebook needs "
-        "`params: {projectId, notebook}` to know which project to open.",
+        "Open a view in a new window (or focus it, if it is a single-instance view "
+        "that is already open). Some panes take params — e.g. the training "
+        "notebook needs `params: {projectId, notebook}` to know which project to "
+        "open.",
         {
             "id": {
                 "type": "string",
@@ -289,100 +283,15 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "focus_pane",
-        "Bring an open pane forward (activate its tab / dock slot / floating "
-        "card). instanceId from list_open_panes.",
+        "Bring an open pane forward: raise its window, restore it if minimized, "
+        "and show its tab. instanceId from list_open_panes.",
         {"instanceId": {"type": "string"}},
         ["instanceId"],
     ),
     _tool(
-        "split_area",
-        "Split the center area holding a pane. 'left'/'right' put the new area "
-        "beside it ('vertical' alias), 'above'/'below' stack it ('horizontal' "
-        "alias). viewId is OPTIONAL — omit it to duplicate the area's own view "
-        "into the new area; pass a view ID to put a different view there.",
-        {
-            "instanceId": {
-                "type": "string",
-                "description": "Pane instance (or areaId from get_layout) to split",
-            },
-            "direction": {
-                "type": "string",
-                "enum": ["vertical", "horizontal", "left", "right", "above", "below"],
-                "description": "vertical=side by side, horizontal=stacked",
-            },
-            "viewId": {
-                "type": "string",
-                "description": "Optional view for the new area; omit to duplicate",
-            },
-        },
-        ["instanceId", "direction"],
-    ),
-    _tool(
-        "join_area",
-        "Join the neighboring area in a direction into this one (the neighbor "
-        "disappears; document tabs are adopted when both hold documents). Only "
-        "aligned neighbors can join.",
-        {
-            "instanceId": {
-                "type": "string",
-                "description": "Pane instance (or areaId) that absorbs its neighbor",
-            },
-            "direction": {"type": "string", "enum": ["left", "right", "up", "down"]},
-        },
-        ["instanceId", "direction"],
-    ),
-    _tool(
-        "resize_area",
-        "Resize the center area holding a pane. Sizes are in pixels; pass width "
-        "and/or height.",
-        {
-            "instanceId": {"type": "string"},
-            "width": {"type": "number", "description": "Target width in pixels"},
-            "height": {"type": "number", "description": "Target height in pixels"},
-        },
-        ["instanceId"],
-    ),
-    _tool(
-        "move_pane",
-        "Move a center pane into another area: pass areaId (from get_layout) for "
-        "an exact target, or direction to move it to the neighboring area. "
-        "Documents stack as tabs by default; pass edge to split the target area "
-        "instead and drop the pane into the new half, which is how you place a "
-        "pane beside another one that is already open.",
-        {
-            "instanceId": {"type": "string", "description": "Pane to move"},
-            "areaId": {
-                "type": "string",
-                "description": "Target area (from get_layout)",
-            },
-            "direction": {"type": "string", "enum": ["left", "right", "up", "down"]},
-            "edge": {
-                "type": "string",
-                "enum": ["left", "right", "above", "below"],
-                "description": (
-                    "Split the target area toward this edge and put the pane in "
-                    "the new half, rather than tabbing it in. Same vocabulary as "
-                    "split_area."
-                ),
-            },
-        },
-        ["instanceId"],
-    ),
-    _tool(
-        "fullscreen_area",
-        "Temporarily expand the area holding a pane to fill the whole frame "
-        "(on: true, the default), or restore the layout (on: false — instanceId "
-        "optional when restoring).",
-        {
-            "instanceId": {"type": "string"},
-            "on": {"type": "boolean", "description": "false restores the layout"},
-        },
-        [],
-    ),
-    _tool(
         "toggle_region",
-        "Toggle a pane's region strip (the Blender-style side panel inside its "
-        "area, e.g. the editor's Outline strip). Pass open to force a state.",
+        "Toggle a pane's region strip (the Blender-style side panel inside the "
+        "pane, e.g. the editor's Outline strip). Pass open to force a state.",
         {
             "instanceId": {"type": "string", "description": "Host pane instance"},
             "position": {"type": "string", "enum": ["left", "right", "bottom"]},
@@ -402,31 +311,10 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         ["instanceId", "viewId"],
     ),
     _tool(
-        "open_tool_in_dock",
-        "Open (or focus) a role:'tool' view in a dock. Omit dock to use the "
-        "tool's default side.",
-        {
-            "id": {"type": "string", "description": "Tool view ID"},
-            "dock": {"type": "string", "enum": ["left", "right", "bottom"]},
-        },
-        ["id"],
-    ),
-    _tool(
-        "toggle_dock",
-        "Show or hide a dock (its tools stay loaded). Pass visible to force a state.",
-        {
-            "dock": {"type": "string", "enum": ["left", "right", "bottom"]},
-            "visible": {"type": "boolean"},
-        },
-        ["dock"],
-    ),
-    _tool(
         "open_window",
-        "Pop an open pane out into a free-floating desktop window. instanceId "
-        "from list_open_panes. Optionally place it: snap puts it in a screen "
-        "region, or rect gives exact pixels. Windows work on both a floating and "
-        "a tiling desktop — on a tiling one a window is the escape hatch for a "
-        "pane that should not participate in the tiling.",
+        "Give a pane a window of its own — tearing it out of a tabbed window if it "
+        "shares one — and optionally place it: snap puts it in a screen region, "
+        "or rect gives exact pixels. instanceId from list_open_panes.",
         {
             "instanceId": {"type": "string"},
             "snap": {
@@ -442,7 +330,7 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
                     "br",
                     "max",
                 ],
-                "description": "Screen region to snap to. `top` maximizes.",
+                "description": "Screen region to snap to. `max` maximizes.",
             },
             "rect": {
                 "type": "object",
@@ -458,22 +346,24 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         ["instanceId"],
     ),
     _tool(
-        "dock_window",
-        "Put a windowed pane back into the tiling frame (a center area, or its "
-        "dock for a tool pane). instanceId from list_open_panes.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
-    ),
-    _tool(
         "window_state",
-        "Minimize, maximize, restore or snap a window, or send it to another "
-        "desktop. One verb rather than five, so the whole vocabulary costs one "
-        "schema. A minimized window keeps running — it is hidden, not closed.",
+        "Minimize, maximize, restore or snap a pane's window, or present the pane "
+        "over the whole screen (past the taskbar) and back. One verb rather than "
+        "six, so the whole vocabulary costs one schema. A minimized window keeps "
+        "running — it is hidden, not closed. Two panes side by side: snap one "
+        "`left` and the other `right`.",
         {
             "instanceId": {"type": "string", "description": "A pane in the window"},
             "state": {
                 "type": "string",
-                "enum": ["minimize", "maximize", "restore", "snap", "move_to_desktop"],
+                "enum": [
+                    "minimize",
+                    "maximize",
+                    "restore",
+                    "snap",
+                    "present",
+                    "unpresent",
+                ],
             },
             "snap": {
                 "type": "string",
@@ -490,10 +380,6 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
                 ],
                 "description": "Required when state is `snap`.",
             },
-            "workspaceId": {
-                "type": "string",
-                "description": "Required when state is `move_to_desktop`.",
-            },
         },
         ["instanceId", "state"],
     ),
@@ -507,18 +393,6 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
             }
         },
         ["style"],
-    ),
-    _tool(
-        "create_workspace",
-        "Create a new named workspace and switch to it.",
-        {"name": {"type": "string", "description": "Display name for the workspace"}},
-        ["name"],
-    ),
-    _tool(
-        "switch_workspace",
-        "Switch to a workspace by its id (from list_workspaces).",
-        {"id": {"type": "string"}},
-        ["id"],
     ),
 ]
 
@@ -551,14 +425,6 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
         ["id"],
     ),
     _tool(
-        "desktop.set_mode",
-        "Switch the active desktop between the tiling frame and free-floating "
-        "windows. Every open pane survives either way, but split ratios do not "
-        "round-trip exactly — say so if the user is likely to care.",
-        {"mode": {"type": "string", "enum": ["tiling", "floating"]}},
-        ["mode"],
-    ),
-    _tool(
         "desktop.configure_taskbar",
         "Reconfigure the taskbar. Omitted fields are left alone.",
         {
@@ -567,7 +433,15 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
                 "type": "array",
                 "items": {
                     "type": "string",
-                    "enum": ["start", "windows", "spacer", "desktops", "tray", "clock"],
+                    "enum": [
+                        "start",
+                        "windows",
+                        "spacer",
+                        "mx",
+                        "tray",
+                        "clock",
+                        "agent",
+                    ],
                 },
                 "description": "Zones in render order. An empty list is a bare strip.",
             },
@@ -577,13 +451,10 @@ DESKTOP_TOOLS: list[dict[str, Any]] = [
     ),
 ]
 
-# The layout verbs split by what they cost. The five READ verbs are orientation —
-# cheap, and any agent may need to see what the user is looking at, so they stay in
-# every agent's core. The sixteen ARRANGEMENT verbs are the expensive half: a scoped
-# agent that doesn't list "layout" in its tool_groups gets them only on demand, via
-# load_tools("layout"). The main orchestrator keeps all 21 unconditionally — its job
-# *is* driving the shell. This is the single biggest lever on tool-schema tokens:
-# an agent that never rearranges panes was paying ~16 schemas every round.
+# The layout verbs split by what they cost. The READ verbs are orientation — cheap,
+# and any agent may need to see what the user is looking at, so they stay in every
+# agent's core. The ARRANGEMENT verbs are the expensive half: an agent that doesn't
+# list "layout" in its tool_groups gets them only on demand, via load_tools("layout").
 LAYOUT_READ_TOOL_NAMES = frozenset(
     {
         # `show` is a write in the sense that it opens panes, but it belongs in the
@@ -592,7 +463,6 @@ LAYOUT_READ_TOOL_NAMES = frozenset(
         # the common "show me X" turn.
         "show",
         "list_available_panes",
-        "list_workspaces",
         "list_open_panes",
         "get_layout",
         "get_pane_context",
@@ -842,13 +712,13 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "why. Read-mostly — it does not author cases."
     ),
     "layout": (
-        "Arrange the app shell: open/close/focus panes, split and resize areas, "
-        "move panes between docks and regions, create and switch workspaces. "
+        "Arrange the desktop: open/close/focus panes, snap, minimize, maximize and "
+        "tile their windows, and toggle the region strips inside a pane. "
         "(Reading the layout needs no load — those verbs are always present.)"
     ),
     "desktop": (
-        "How the desktop looks: its backdrop or wallpaper, the app theme, the "
-        "taskbar's zones, and whether the desktop tiles or floats its windows."
+        "How the desktop looks: its backdrop or wallpaper, the app theme, and the "
+        "taskbar's zones."
     ),
     "lens": (
         "Read a recorded forward pass of a local model as words: what it was "
@@ -1004,16 +874,16 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "desktop",
         "dark mode",
         "light mode",
-        "tiling",
     ),
     "layout": (
         "layout",
         "pane",
-        "workspace",
-        "dock",
-        "split",
+        "window",
+        "snap",
+        "side by side",
+        "minimize",
+        "maximize",
         "fullscreen",
-        "tab strip",
         "rearrange",
     ),
     "files": (
@@ -1320,13 +1190,13 @@ def _group_permitted(group: str, allowed: set[str] | None) -> bool:
 
 def _layout_core(spec: AgentSpec | None) -> list[dict[str, Any]]:
     """The layout verbs an agent starts with: the cheap read set plus `show`, with
-    the 16 arrangement verbs one `load_tools("layout")` away.
+    the arrangement verbs one `load_tools("layout")` away.
 
     **Including for `main`.** It used to keep all 21 unconditionally, on the reasoning
     that driving the shell is its job — but that made the *loosely prompted* agent the
     most starved one, carrying ~1.4k tokens of geometry schemas on turns that only
     wanted to read a file. `show` covers "open/go to X" in one call, and the narrow
-    `layout` keyword list (`pane`, `dock`, `split`, …) preloads the arrangement verbs
+    `layout` keyword list (`pane`, `window`, `snap`, …) preloads the arrangement verbs
     on the turns that genuinely rearrange things. A spec that names `layout`
     explicitly still opts back into all of them up front.
     """
@@ -1957,10 +1827,10 @@ def _workspace_context_message(context: dict[str, Any] | None) -> dict[str, Any]
 
     The companion to `_active_editor_message`: that one hands over the focused
     buffer's full text, this one is a compact index of every *other* visible pane's
-    snapshot. It's what makes a preset workspace a role rather than furniture — the
-    agent in a records workspace sees which record is open without spending a
-    list_open_panes + get_pane_context round on it. The frontend has already applied
-    the pane/char budget (`agent.workspaceContext*` settings); this only formats."""
+    snapshot. It's what lets the agent see which record the Review pane has open
+    without spending a list_open_panes + get_pane_context round on it. The frontend
+    has already applied the pane/char budget (`agent.workspaceContext*` settings);
+    this only formats."""
     if not isinstance(context, dict):
         return None
     panes = context.get("panes")

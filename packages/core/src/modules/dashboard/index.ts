@@ -2,9 +2,8 @@ import { registry, type ModuleManifest } from '../../registry';
 import { WelcomeWidget } from './widgets';
 
 /**
- * See docs/modules/dashboard.md. The dashboard is no longer a grid panel — it is
- * the default seeded **workspace** (a layout of common widget-panes). This module
- * contributes those widgets and a command to jump to the Dashboard tab.
+ * See docs/modules/dashboard.md. Contributes the welcome card and a command to
+ * open it.
  */
 export const dashboardModule: ModuleManifest = {
   id: 'dashboard',
@@ -14,7 +13,7 @@ export const dashboardModule: ModuleManifest = {
     {
       id: 'dashboard.open',
       title: 'Dashboard: Open',
-      run: () => registry.switchWorkspace('dashboard'),
+      run: () => registry.openPanel('dashboard.welcome'),
     },
   ],
   widgets: [

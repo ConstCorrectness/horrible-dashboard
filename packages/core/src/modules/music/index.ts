@@ -79,8 +79,6 @@ export const musicModule: ModuleManifest = {
       component: MusicLibraryPanel,
       role: 'tool',
       icon: '📚',
-      defaultDock: 'left',
-      defaultDockSize: 360,
       singleton: true,
       embedded: true,
     },
@@ -90,8 +88,6 @@ export const musicModule: ModuleManifest = {
       component: MusicQueuePanel,
       role: 'tool',
       icon: '📋',
-      defaultDock: 'right',
-      defaultDockSize: 300,
       singleton: true,
       embedded: true,
     },
@@ -101,7 +97,6 @@ export const musicModule: ModuleManifest = {
       component: MusicNowPlayingWidget,
       role: 'widget',
       icon: '🎵',
-      dockable: 'right',
       singleton: true,
     },
   ],
@@ -195,17 +190,6 @@ export const musicModule: ModuleManifest = {
   ],
   settingsSections: [
     { id: 'music.connections', title: 'Music connections', component: MusicConnectionsSection },
-  ],
-  frames: [
-    {
-      id: 'music',
-      name: 'Music',
-      description: 'Your music library and player: library, now playing with lyrics, and up next.',
-      icon: '🎵',
-      frame: {
-        center: { pane: 'music.player' },
-      },
-    },
   ],
 };
 

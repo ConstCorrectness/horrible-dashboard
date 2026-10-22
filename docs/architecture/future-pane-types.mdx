@@ -27,13 +27,14 @@ flag on the View decl plus a lifecycle hook in `PanelHost`:
 - **Ephemeral / "Glance" panes** — auto-dismiss on blur or after N seconds. For
   agent-surfaced "here's what I found" cards that shouldn't permanently clutter the
   layout. Decl flag: `ephemeral?: { dismissOn: 'blur' | 'timeout', ms? }`.
-- **Companion panes** — a View *bound to* another pane instance: it docks beside its
+- **Companion panes** — a View *bound to* another pane instance: it sits beside its
   host, follows focus, and closes with it. e.g. an LSP-diagnostics companion that
   shadows whichever editor buffer is focused. Needs a binding field on the instance
   and a `PanelHost` subscription to the host's lifecycle.
-- **Ambient / backdrop panes** — render *behind* the dock as a living backdrop (the
-  home avatar, but as a workspace layer). Zero interaction; pure atmosphere/status.
-  A new layer in `Frame.tsx` below the center grid.
+- **Ambient / backdrop panes** — render *behind* the windows as a living backdrop
+  (the home avatar, but as a desktop layer). Zero interaction; pure
+  atmosphere/status. Largely landed as **backdrop providers** — see
+  [desktop-shell.mdx](desktop-shell.mdx#backdrops).
 
 ## New *Window* behaviors (engine layer)
 

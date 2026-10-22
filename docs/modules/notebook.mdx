@@ -505,11 +505,9 @@ it was published, and the next publish makes a new copy.
   what was missing and why the two stacks are mutually exclusive.
 - **Commands** — `notebook.open` (open the catalog).
 - **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`). The browser is no longer a dock tool of its own: it is the **Notebooks** section of [Explorer](explorer.mdx) (`embedded`), which is exactly the doubling `embedded` exists to remove.
-- **Layout preset** — `notebook`, named **Notebooks** in the workspace strip. The
-  preset *id* stays `notebook` (it is persisted on workspace rows and is what
-  `switch_workspace` takes); only the display name changed. `show "notebook"` is
-  pinned by a `VIEW_ALIASES` entry to the editor pane, since the workspace pass
-  runs before pane titles and would otherwise claim the word.
+- **Agent vocabulary** — `show "notebook"` is pinned by a `VIEW_ALIASES` entry to the
+  editor pane: two panes answer to the bare word, so it resolves through nothing on
+  its own.
 - **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`,
   `notebook.python.packages`, `notebook.python.torchIndex`, `notebook.publish.pagesRepo`.
 

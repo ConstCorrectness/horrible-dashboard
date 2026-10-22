@@ -58,13 +58,10 @@ export const shareModule: ModuleManifest = {
       title: 'Share',
       component: SessionPanel,
       role: 'tool',
-      // The rail glyph is a manifest string and follows the rail's convention;
-      // iconography *inside* the pane is vector-only.
+      // The taskbar glyph is a manifest string and follows the taskbar's
+      // convention; iconography *inside* the pane is vector-only.
       icon: '🖧',
       singleton: true,
-      // `role: 'tool'` already makes it dockable; `defaultDock` names the side.
-      defaultDock: 'right',
-      defaultDockSize: 340,
     },
     {
       id: 'share.mirror',

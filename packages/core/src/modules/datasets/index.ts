@@ -62,7 +62,6 @@ export const datasetsModule: ModuleManifest = {
       role: 'document',
       icon: '📚',
       singleton: true,
-      dockable: 'left',
     },
   ],
   widgets: [

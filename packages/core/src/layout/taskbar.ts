@@ -1,14 +1,14 @@
 /**
  * Taskbar derivation: what the window buttons say, and what clicking one does.
  *
- * Pure over `FrameState` + the registry, in the same shape and for the same
- * reason as `railEntries` — the taskbar should have no opinion of its own about
- * what is open. The rendering half lives in packages/ui/src/desktop/taskbar/.
+ * Pure over `FrameState` + the registry — the taskbar should have no opinion of
+ * its own about what is open. The rendering half lives in
+ * packages/ui/src/desktop/taskbar/.
  *
  * See docs/architecture/desktop-shell.mdx.
  */
 import { registry } from '../registry';
-import { findArea, listPanes } from './model';
+import { listPanes } from './model';
 import type { FrameState, PaneLocation } from './types';
 
 /**
@@ -18,13 +18,13 @@ import type { FrameState, PaneLocation } from './types';
  * unreachable from here.
  */
 export type TaskbarState =
-  /** The focused window, or the active tab of the focused area. Click hides it. */
+  /** The active tab of the focused window. Click minimizes it. */
   | 'focused'
   /** Open and on screen, but not focused. Click focuses. */
   | 'open'
-  /** Minimized — a minimized window, or a minimized centre pane. Click restores. */
+  /** In a minimized window. Click restores. */
   | 'minimized'
-  /** Open but not showing: a background tab, or a tool in a hidden dock. */
+  /** Open but not showing: a background tab of its window. */
   | 'hidden';
 
 export interface TaskbarEntry {
@@ -35,8 +35,8 @@ export interface TaskbarEntry {
   state: TaskbarState;
   /** The pane's background work finished while it was out of sight. */
   attention: boolean;
-  /** Set when the pane lives in a window — the taskbar's minimize target. */
-  windowId?: string;
+  /** The pane's window — the taskbar's minimize target. */
+  windowId: string;
   /** Where the pane actually is, for callers that need to route the click. */
   location: PaneLocation;
 }
@@ -104,7 +104,7 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
           icon: resolveViewIcon(pane.viewId, d.icon, d.title),
           state: stateOf(frame, located),
           attention: pane.attention ?? false,
-          ...(location.kind === 'window' ? { windowId: location.windowId } : {}),
+          windowId: location.windowId,
           location,
         },
       ];
@@ -114,40 +114,12 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
 
 function stateOf(frame: FrameState, located: ReturnType<typeof listPanes>[number]): TaskbarState {
   const { pane, location } = located;
-  if (location.kind === 'window') {
-    const win = frame.windows.find((w) => w.id === location.windowId);
-    if (!win) return 'hidden';
-    if (win.mode === 'minimized') return 'minimized';
-    // A merged window's background tabs are open but not showing, exactly like a
-    // background tab in a centre area.
-    if (win.area.tabs[win.area.activeTab]?.instanceId !== pane.instanceId) return 'hidden';
-    return frame.focusedWindowId === win.id ? 'focused' : 'open';
-  }
-  if (location.kind === 'dock') {
-    const dock = frame.docks[location.dock];
-    if (!dock.visible || dock.activeTool !== pane.instanceId) return 'hidden';
-    return frame.focusedInstanceId === pane.instanceId ? 'focused' : 'open';
-  }
-  // Minimized beats every other reading: the pane may still be its area's
-  // `activeTab` (nothing else in the area was live to hand it to), and reporting
-  // that as "focused" would offer to minimize something already minimized.
-  if (pane.minimized) return 'minimized';
-  // On a floating desktop the centre tree is retained but never rendered, so a
-  // pane living there cannot be on screen no matter what its area says. It is
-  // running and not displayed — which is precisely "minimized", and reporting it
-  // as `hidden`/`open` is what left "Dock back into the frame" looking like the
-  // pane had been destroyed: the button offered to focus something unreachable.
-  if (frame.mode === 'floating') return 'minimized';
-  // Centre area: showing only if it is its area's active tab.
-  //
-  // "Focused" here is the active tab of the **focused area**, not
-  // `focusedInstanceId`. That field tracks DOM focus and only moves when
-  // something is actually clicked or focused, so a pane opened by a command or
-  // by the agent would never show as focused and its taskbar button would offer
-  // to focus what you are already looking at.
-  const area = findArea(frame.center, location.areaId);
-  if (!area || area.tabs[area.activeTab]?.instanceId !== pane.instanceId) return 'hidden';
-  return frame.focusedAreaId === location.areaId ? 'focused' : 'open';
+  const win = frame.windows.find((w) => w.id === location.windowId);
+  if (!win) return 'hidden';
+  if (win.mode === 'minimized') return 'minimized';
+  // A merged window's background tabs are open but not showing.
+  if (win.area.tabs[win.area.activeTab]?.instanceId !== pane.instanceId) return 'hidden';
+  return frame.focusedWindowId === win.id ? 'focused' : 'open';
 }
 
 /**

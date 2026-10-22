@@ -32,8 +32,8 @@ contracts, and the marketplace is where their work arrives.
 
 ## Product Purpose
 
-A unified one-stop app for everything — "emacs for the agentic era". One dockable
-workspace of panes in which a **local-model agent is a first-class citizen**: it
+A unified one-stop app for everything — "emacs for the agentic era". One desktop
+of windowed panes in which a **local-model agent is a first-class citizen**: it
 opens windows, reads the user's library, drives a real browser, queries their
 databases, plays games against friends' agents, and phones other people's nodes.
 
@@ -66,11 +66,10 @@ harness rather than by playing.
 
 ## Operating Context
 
-- The app is a **frame**: roles of document / tool / widget, a center grid,
-  activity rails left and right, a bottom dock, and named workspaces switched
-  from a top tab strip. Widgets are first-class panes, not a separate grid.
-- A desktop mode layers an OS-style shell on that frame — windows, edge snapping,
-  taskbar, start menu, spotlight, wallpaper.
+- The app is an OS-style **desktop**: every pane is a window (merge them into tabs),
+  with edge snapping, a taskbar, a start menu, the spotlight and a wallpaper. Panes
+  declare a role of document / tool / widget; widgets are first-class panes, not a
+  separate grid. There is one desktop and no tiling mode.
 - The keyboard is a single authority (`packages/core/src/keymap/`), not
   per-component listeners. Panes that need the keyboard take capture; Escape
   unwinds one ordered ladder.

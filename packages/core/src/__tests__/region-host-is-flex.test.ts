@@ -3,10 +3,10 @@
  * container, and this pins the one that is easy to miss.
  *
  * `PaneWithRegions`'s root is `.frame-pane-regions`, which sizes itself with
- * `flex: 1` and declares **no height of its own**. That is fine inside
- * `.frame-area` and `.frame-dock`, which have always been `display: flex`. It was
- * not fine inside `.os-window-body`, which was not — and the failure is about as
- * quiet as a layout bug gets: with no flex context the `flex: 1` is inert, the
+ * `flex: 1` and declares **no height of its own**. That was fine inside the tiling
+ * frame's areas and docks, which were always `display: flex`. It was not fine
+ * inside `.os-window-body`, which was not — and the failure is about as quiet as a
+ * layout bug gets: with no flex context the `flex: 1` is inert, the
  * div collapses to its content's natural height, and a floating window renders as
  * **a titlebar with nothing under it**. Measured on the hAssault pane: 44px of
  * pane header instead of 648px, with the game canvas at zero.
@@ -71,9 +71,7 @@ describe('a region host establishes a flex context', () => {
     ).toBe(true);
   });
 
-  it('keeps the contexts that always worked', () => {
-    for (const selector of ['.frame-area', '.frame-pane-host']) {
-      expect(declares(ruleBody(frameCss, selector), 'display', 'flex'), selector).toBe(true);
-    }
+  it('keeps the pane host a flex context too', () => {
+    expect(declares(ruleBody(frameCss, '.frame-pane-host'), 'display', 'flex')).toBe(true);
   });
 });

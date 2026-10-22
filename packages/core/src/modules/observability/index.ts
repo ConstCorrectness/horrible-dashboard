@@ -23,7 +23,6 @@ export const observabilityModule: ModuleManifest = {
       role: 'document',
       icon: '📡',
       singleton: true,
-      dockable: ['bottom', 'right'],
     },
   ],
   widgets: [
@@ -33,7 +32,6 @@ export const observabilityModule: ModuleManifest = {
       component: ObservabilityWidget,
       role: 'tool',
       icon: '◉',
-      defaultDock: 'bottom',
       // The fuller inspector rides along as a bottom region strip.
       regions: [{ id: 'observability.logs', label: 'Inspector', icon: '⊡', position: 'bottom' }],
       // The agent reads the I/O snapshot via getAgentContext (see view.tsx); this

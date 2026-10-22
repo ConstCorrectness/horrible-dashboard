@@ -1,16 +1,18 @@
 /**
- * Data model for the frame layout engine — the pure, React-free source of truth
- * for everything the workspace shows: the Blender-style center area grid, the
- * three fixed tool docks, the desktop's windows and backdrop, fullscreen, and
- * per-pane region strips. Rendering lives in packages/ui/src/layout and
- * packages/ui/src/desktop; this layer is plain data +
- * pure functions so it can be unit-tested and driven identically by user
- * gestures, keybindings, and the agent's layout tools. See
- * docs/architecture/windowing.mdx.
+ * Data model for the desktop — the pure, React-free source of truth for
+ * everything it shows: its windows, its backdrop, and the per-pane region strips
+ * inside them. Rendering lives in packages/ui/src/desktop and
+ * packages/ui/src/layout; this layer is plain data + pure functions so it can be
+ * unit-tested and driven identically by user gestures, keybindings, and the
+ * agent's layout tools. See docs/architecture/windowing.mdx.
+ *
+ * There is one paradigm. The tiling frame (a Blender-style centre grid, tool
+ * docks and activity rails) was removed in 2026-10; a blob saved by it is turned
+ * into windows on load by `legacy-frame.ts`.
  */
-import type { DockSide, PaneRole, RegionPosition } from '@horribledashboard/sdk';
+import type { PaneRole, RegionPosition } from '@horribledashboard/sdk';
 
-export type { DockSide, PaneRole, RegionPosition };
+export type { PaneRole, RegionPosition };
 
 /**
  * Live state of one region strip (Blender N/T-panel style) on a pane instance.
@@ -44,29 +46,6 @@ export interface PaneState {
    */
   activeSection?: string;
   /**
-   * For a pane docked as a tool: the dock extent it was last dragged to, in px.
-   * Remembered per tool rather than per dock so two tools sharing a side (a
-   * narrow file tree and a wide agent chat) don't fight over one width. Absent
-   * until the user resizes — the dock's own `size` is the fallback.
-   */
-  dockSize?: number;
-  /**
-   * Minimized: open, listed in the taskbar, but not showing.
-   *
-   * A *window* has its own `mode: 'minimized'`, so this flag is only ever set on
-   * a pane in a centre area — which is precisely where minimizing used to be
-   * impossible, because the taskbar's one verb could hide a window and nothing
-   * else, and most workspaces are tiling.
-   *
-   * It is a flag rather than a parking list on the frame, so the pane stays in
-   * its area at its index: the split geometry, the tab order and the area itself
-   * all survive, and restoring puts the pane back exactly where it was. Pulling
-   * it out of the tree instead would collapse a single-pane area, and rebuilding
-   * the split afterwards means guessing at the orientation and sizes it had
-   * (`movePaneTo`'s `edge` form can *make* a split, but not restore that one).
-   */
-  minimized?: boolean;
-  /**
    * The pane wants looking at: a long job it was running has finished.
    *
    * The counterpart to minimizing being non-destructive. Once a pane can be put
@@ -83,46 +62,22 @@ export interface PaneState {
 }
 
 /**
- * A leaf of the center grid. Invariant (enforced by the controller's role
- * routing, not the tree): `tabs` is either all `document` panes (rendered with a
- * tab strip), exactly one `widget` pane (no strip), or empty (view picker).
+ * A window's content: its tab list. Invariant (enforced by the controller's role
+ * routing, not here): `tabs` is either `document` panes, which stack as tabs, or
+ * exactly one pane of another role.
+ *
+ * Named for the centre-grid leaf it used to be, and kept as its own type rather
+ * than inlined into `WindowState` because every tab verb (`SET_ACTIVE_TAB`,
+ * `REORDER_TAB`, `INSERT_PANE`, `dropPaneOnTab`) addresses a window by its area
+ * id.
  */
 export interface AreaNode {
   kind: 'area';
   id: string;
   tabs: PaneState[];
   activeTab: number;
-  /** Hide the area header (chrome-less dashboards). */
+  /** Hide the window's tab strip (chrome-less panes). */
   headerCollapsed?: boolean;
-}
-
-/** An interior node of the center grid: children side by side (`row`) or stacked (`column`). */
-export interface SplitNode {
-  kind: 'split';
-  id: string;
-  orientation: 'row' | 'column';
-  /** Always ≥ 2 after `normalize`. */
-  children: LayoutNode[];
-  /** Fractions of this split's extent, same length as `children`, sum 1. */
-  sizes: number[];
-}
-
-export type LayoutNode = SplitNode | AreaNode;
-
-/** One fixed tool dock. Tools stack like an activity-bar list; one is visible. */
-export interface DockState {
-  visible: boolean;
-  /**
-   * Px width (left/right) or height (bottom) — the dock's fallback extent, used
-   * for tools that have no remembered `dockSize` of their own. Tracks the last
-   * size the user dragged on this side, so a freshly opened tool lands near where
-   * they left things rather than snapping back to the built-in default.
-   */
-  size: number;
-  /** Role `tool` panes only. */
-  tools: PaneState[];
-  /** Instance id of the visible tool, or null when empty. */
-  activeTool: string | null;
 }
 
 /** A window's position and size, in pixels within the desktop surface. */
@@ -170,12 +125,10 @@ export type SnapZone =
 /**
  * One OS-style window on the desktop.
  *
- * Its content is an **`AreaNode` — the same node type the center grid uses**. That is
- * the whole trick behind "one pane per window, tabs optional": a plain window is an
- * area with one tab, a merged window is an area with several, and every piece of tab
- * machinery that already exists (the tab strip in `AreaHeader`, `dropPaneOnTab`,
- * `SET_ACTIVE_TAB`, `REORDER_TAB`, the role invariant) applies to windows unchanged
- * instead of being duplicated in a parallel vocabulary.
+ * Its content is an **`AreaNode`**. That is the whole trick behind "one pane per
+ * window, tabs optional": a plain window is an area with one tab, a merged window is
+ * an area with several, and the tab verbs (`dropPaneOnTab`, `SET_ACTIVE_TAB`,
+ * `REORDER_TAB`) address it by area id.
  *
  * Geometry is **pixels**, against `FrameState.windowViewport` — the surface size the
  * rects were last measured on. Fractions survive a resize but cannot express a minimum
@@ -204,9 +157,6 @@ export interface WindowState {
   minimizedFrom?: { mode: 'normal' | 'maximized'; snap?: SnapZone };
   z: number;
 }
-
-/** Which paradigm a desktop runs: free windows, or the tiling frame engine. */
-export type DesktopMode = 'floating' | 'tiling';
 
 /** The backdrop a desktop renders behind its windows (a registered provider id). */
 export interface BackdropRef {
@@ -239,15 +189,9 @@ export interface BackdropRef {
  */
 export const DEFAULT_BACKDROP = 'splash';
 
-/** Everything one workspace shows. Serialized as the workspace's layout blob. */
+/** Everything the desktop shows. Serialized as the workspace's layout blob. */
 export interface FrameState {
-  center: LayoutNode;
-  docks: Record<DockSide, DockState>;
-  /**
-   * The windows on this desktop. Present in **both** modes: a floating window on a
-   * tiling desktop is the deliberate escape hatch (i3's floating layer), so the
-   * center tree and the window list always coexist.
-   */
+  /** The windows on this desktop, in no particular order — `z` is the stacking. */
   windows: WindowState[];
   /**
    * The desktop-surface size `windows[].rect` was last measured against, or null
@@ -258,47 +202,32 @@ export interface FrameState {
    * with no special case.
    */
   windowViewport: { w: number; h: number } | null;
-  /** This desktop's paradigm. Rails and docks render only when `tiling`. */
-  mode: DesktopMode;
   /** What paints behind the windows. */
   backdrop: BackdropRef;
-  /** Area temporarily filling the whole frame (Blender ctrl+space), or null. */
-  fullscreenAreaId: string | null;
   /**
-   * A **windowed** pane instance presented over the entire shell — past the
-   * workspace strip and the taskbar, which a maximized window deliberately stops
-   * short of. Null unless something is presented.
-   *
-   * The floating-mode counterpart of `fullscreenAreaId`, and separate from it
-   * because the two name different things: an area in the centre tree versus a
-   * pane instance in a window, validated against different halves of the state.
-   * `presentPane` picks whichever applies, so callers use one verb.
+   * A windowed pane instance presented over the entire shell — past the taskbar,
+   * which a maximized window deliberately stops short of. Null unless something
+   * is presented.
    *
    * Deliberately **not serialized**. It is a way of looking at a pane for a
-   * moment, not a property of the workspace; restoring a saved layout into a
+   * moment, not a property of the desktop; restoring a saved layout into a
    * full-screen pane with the chrome hidden is a state the user has to guess
    * their way out of.
    */
   presentedInstanceId: string | null;
-  /** Focused center area — area verbs (split/join/nav) and role routing target it. */
-  focusedAreaId: string | null;
   /**
-   * The focused pane **instance**, wherever it lives — a center tab, a docked
-   * tool, or a window tab. This is the keyboard's idea of "where you are":
-   * `focusedAreaId` only ever names a center area, so before this existed,
-   * clicking a docked tool left every pane-scoped command pointed at whatever
-   * center area was focused last. The view id and location are derived from it
-   * (`findPaneAnywhere`) rather than stored, so they cannot drift.
+   * The focused pane **instance** — the keyboard's idea of "where you are". The
+   * window and location are derived from it (`findPaneAnywhere`) rather than
+   * stored, so they cannot drift.
    */
   focusedInstanceId: string | null;
   /**
    * The focused **window**, for the keyboard's window verbs (snap, minimize, cycle).
-   * Null means focus is in the tiled frame or a dock. Distinct from
-   * `focusedInstanceId`, which names a pane: a window verb acts on the whole window,
-   * including the tabs that aren't showing.
+   * Distinct from `focusedInstanceId`, which names a pane: a window verb acts on the
+   * whole window, including the tabs that aren't showing.
    */
   focusedWindowId: string | null;
-  /** Monotonic id counter for pane instances and tree nodes. Never reset. */
+  /** Monotonic id counter for pane instances, windows and their areas. Never reset. */
   paneSeq: number;
 }
 
@@ -317,20 +246,16 @@ export interface LayoutStoreState {
   revision: number;
 }
 
-/** Unit-square bounds of an area within the center grid (for neighbor queries). */
-export interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+/**
+ * Where a pane instance currently lives: always a window. `areaId` is the window's
+ * own area, which the tab verbs address. Still a tagged object rather than a bare
+ * window id, so a caller's `location.windowId` reads the same as it always has.
+ */
+export interface PaneLocation {
+  kind: 'window';
+  windowId: string;
+  areaId: string;
 }
-
-/** Where a pane instance currently lives. */
-export type PaneLocation =
-  | { kind: 'area'; areaId: string }
-  | { kind: 'dock'; dock: DockSide }
-  /** `areaId` is the window's own area, so area verbs work on window tabs too. */
-  | { kind: 'window'; windowId: string; areaId: string };
 
 /** A pane plus its location, as returned by `listPanes`. */
 export interface LocatedPane {
@@ -338,12 +263,5 @@ export interface LocatedPane {
   location: PaneLocation;
 }
 
-/** Directions for focus-move / neighbor queries (viewport axes, not tree axes). */
+/** Directions for focus-move / neighbor queries (viewport axes). */
 export type NavDirection = 'left' | 'right' | 'up' | 'down';
-
-/**
- * Directions an area can be split toward. Mirrors the registry's
- * `SplitDirection` (kept literal here so this layer stays dependency-free):
- * `left`/`right` produce a `row` split, `above`/`below` a `column` one.
- */
-export type AreaSplitDirection = 'left' | 'right' | 'above' | 'below';

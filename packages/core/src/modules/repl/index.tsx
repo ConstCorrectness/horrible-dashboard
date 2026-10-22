@@ -21,7 +21,6 @@ export const replModule: ModuleManifest = {
       component: ReplPane,
       role: 'tool',
       icon: '🐍',
-      defaultDock: 'bottom',
       // Not a singleton: each open is its own kernel/namespace.
     },
   ],

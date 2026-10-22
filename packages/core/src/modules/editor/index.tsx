@@ -8,7 +8,7 @@
  * tools (C4), and the recent-notes dashboard widget (C5). See docs/modules/editor.md.
  */
 import { lazyPane } from '../../lazy-pane';
-import { areaHostingView, openPaneInArea, retargetPane } from '../../layout/controller';
+import { retargetPane } from '../../layout/controller';
 import { getLocus, subscribeLocus } from '../../locus';
 import { minibuffer } from '../../minibuffer';
 import { registry, type ModuleManifest } from '../../registry';
@@ -43,12 +43,8 @@ function blankBufferPane(target: string): string | null {
  * Open a buffer for a source URI (`note:<id>`, `workspace-file:<path>`). The
  * instance id is derived from the source so reopening the same source focuses the
  * existing buffer instead of duplicating it, and a blank current buffer is reused
- * in place instead of accumulating empty editors.
- *
- * When neither applies, the buffer joins whatever area the editor already occupies
- * as another tab. Role-routed `openPanel` would split off a fresh area instead —
- * correct for the first document, but it means every file clicked in the tree
- * carves the frame up further.
+ * in place instead of accumulating empty editors. Otherwise it opens in a window
+ * of its own.
  */
 export function openBuffer(source: string, opts?: OpenBufferOptions): void {
   // A host that renders buffers itself claims the open first, so every existing
@@ -59,8 +55,6 @@ export function openBuffer(source: string, opts?: OpenBufferOptions): void {
   const params = { source, title: sourceTitle(source), language: opts?.language };
   const blank = blankBufferPane(source);
   if (blank && retargetPane(blank, instanceId, params)) return;
-  const area = areaHostingView('editor.buffer');
-  if (area && openPaneInArea('editor.buffer', area, params, instanceId)) return;
   registry.openPanel('editor.buffer', { instanceId, params });
 }
 
@@ -115,8 +109,6 @@ function newBuffer(): void {
   const params = { title: 'untitled.md' };
   const instanceId = `editor.buffer:untitled:${++untitledSeq}`;
   if (blank && retargetPane(blank, instanceId, params)) return;
-  const area = areaHostingView('editor.buffer');
-  if (area && openPaneInArea('editor.buffer', area, params, instanceId)) return;
   registry.openPanel('editor.buffer', { instanceId, params });
 }
 

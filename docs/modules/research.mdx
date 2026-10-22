@@ -9,25 +9,13 @@ Collect, read, and (soon) synthesize research material. The research module is t
 home of the **artifact store** viewers and the flows that fill it: capture any URL
 as a **self-contained HTML archive**, store and read **PDFs**, and mirror everything
 into an **Obsidian vault**. Later phases add the ArXiv browser and the durable
-deep-research engine, and the `research` workspace preset composes it all with the
-[browser](browser.mdx) and [library](library.mdx) panes.
+deep-research engine, which work alongside the [browser](browser.mdx) and
+[library](library.mdx) panes.
 
 **Status: implemented** (all four phases) — artifact store, page capture
 (engine + fallback), PDF pipeline + viewer, saved-page viewer, Obsidian export,
-the ArXiv browser, the **durable deep-research engine** + console, the
-**Research workspace preset**, and full `research.*` / `arxiv.*` agent
-awareness.
-
-## The Research workspace
-
-The **Research** entry in the top tab strip (declared with the other
-cross-module presets in `packages/core/src/modules/layouts/index.ts`) seeds a
-discovery/reading split: the deep-research console, ArXiv browser, and a
-browser tab share the left area; the PDF/page viewers stack over the library on
-the right, so opening a paper never steals the console; the agent chat docks
-right (the researcher persona one keystroke away) with the observability I/O
-strip hidden in the bottom dock. As with every preset, unknown views are
-skipped, user rearrangements persist per workspace, and `layout.reset` reseeds.
+the ArXiv browser, the **durable deep-research engine** + console, and full
+`research.*` / `arxiv.*` agent awareness.
 
 ## The artifact store
 

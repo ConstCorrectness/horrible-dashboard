@@ -147,37 +147,6 @@ export const hassaultModule: ModuleManifest = {
       embedded: true,
     },
   ],
-  frames: [
-    {
-      id: 'hassault_dev',
-      name: 'hAssault: Game Dev & Testing',
-      icon: '⚒',
-      description:
-        'The game beside its dev tools: a live match on the left, the model and level studio on the right with the console strip below it.',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.55, 0.45],
-          children: [
-            { pane: 'hassault.play', headerCollapsed: true },
-            { pane: 'hassault.studio', headerCollapsed: false },
-          ],
-        },
-        docks: {},
-      },
-    },
-    {
-      id: 'hassault_play',
-      name: 'hAssault: Arena Match',
-      icon: '🎮',
-      description:
-        'Just the match, at full width. The match companion, radar, voice and console are strips on the game window — open them from its edge.',
-      frame: {
-        center: { pane: 'hassault.play', headerCollapsed: true },
-        docks: {},
-      },
-    },
-  ],
   // The retired openers stay as commands — keybindings and muscle memory point
   // at them — and now land on the strip or studio tab that replaced each pane.
   commands: [

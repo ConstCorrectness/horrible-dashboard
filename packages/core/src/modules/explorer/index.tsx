@@ -69,8 +69,6 @@ export const explorerModule: ModuleManifest = {
       component: ExplorerEmpty,
       role: 'tool',
       icon: '🗂',
-      defaultDock: 'left',
-      defaultDockSize: 280,
       singleton: true,
       // Sections are contributed, not declared — see `withExplorerSources`.
       explorerHost: true,

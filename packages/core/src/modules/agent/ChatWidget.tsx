@@ -224,8 +224,7 @@ function ReasoningBlock({ reasoning, hasText }: ReasoningBlockProps) {
 export function ChatWidget() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
   // The roster agent this pane is talking to; each agent keeps its own sessions.
-  // It follows the *workspace*: a preset declares the persona its layout is for
-  // (`FramePreset.agent`), so switching to Data Entry or Data Ops switches who answers.
+  // `main` unless the user picked another, which is remembered per workspace row.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
   const { activeId: workspaceId } = useWorkspaces();
   const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
@@ -297,15 +296,14 @@ export function ChatWidget() {
       });
   }, []);
 
-  // Follow the workspace: each preset workspace opens as its declared persona
-  // (or the user's override for it). Switching workspaces re-points the pane,
+  // Follow the workspace row once the desktop has hydrated (it is null before),
   // which then reloads that agent's own sessions through the effect below.
   useEffect(() => {
     setAgentId(agentForWorkspace(workspaceId));
   }, [workspaceId]);
 
-  /** Picking an agent by hand overrides the workspace's declared persona, and the
-   * override sticks so switching away and back doesn't undo the choice. */
+  /** Picking an agent by hand overrides `main`, and the override sticks across
+   * reloads. */
   const pickAgent = (id: string) => {
     setWorkspaceAgent(workspaceId, id);
     setAgentId(id);

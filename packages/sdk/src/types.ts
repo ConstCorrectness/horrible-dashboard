@@ -7,15 +7,14 @@
 import type { ComponentType } from 'react';
 
 /** Platform capabilities — see docs/architecture/layout-shell.mdx for the table.
- * The `window.*`/`chrome.*` entries are the contract for the phase-2 native
- * shell (workspace-per-OS-window, native chrome hosting the workspace tabs,
- * OS fullscreen); nothing implements them yet. */
+ * The `window.*`/`chrome.*` entries are the native shell's: several OS windows,
+ * an app-drawn titlebar (`chrome.workspaceTabs`, named for the workspace tab strip
+ * that used to be it), and OS fullscreen. */
 export type Capability =
   | 'fs.nativeDialogs'
   | 'shell.revealInOS'
   | 'notifications.system'
   | 'window.multi'
-  | 'window.perWorkspace'
   | 'window.fullscreen'
   | 'chrome.workspaceTabs'
   | 'shortcuts.global'
@@ -184,22 +183,9 @@ export interface PanelDecl {
   /** Overrides the owning module's launcher category. See `PaneCategory`. */
   category?: PaneCategory;
   component: ComponentType;
-  /**
-   * Where this pane opens by *default*: `document` panes tab into center areas,
-   * `widget` panes take a center area of their own, `tool` panes go to a dock.
-   * This is a default, not a restriction — see `dockable`.
-   * See docs/architecture/windowing.mdx.
-   */
+  /** What kind of pane this is. See `PaneRole`. */
   role: PaneRole;
-  /**
-   * Docks this view may be toggled into from a rail, beyond wherever `role` puts
-   * it by default. Omit and the view is dockable only if `role: 'tool'` (in which
-   * case `defaultDock` names the side) — so declaring this is how a `widget` or
-   * `document` view earns a rail glyph while still opening in the center.
-   * The first entry is the preferred side.
-   */
-  dockable?: DockSide | DockSide[];
-  /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
+  /** Region strips (Blender N/T-panel style) this view hosts inside its window. */
   regions?: RegionViewDecl[];
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
   sections?: SectionDecl[];
@@ -214,26 +200,15 @@ export interface PanelDecl {
    * This view exists only *inside* another pane — as a region strip, a section
    * body, or an explorer source — and is not a destination of its own.
    *
-   * It stays fully registered, so regions, sections, `openPaneInArea` and
-   * dragging a strip out into the center all keep working. What it loses is
-   * every affordance that would present it as a second, competing home for the
-   * same content: no `pane.open:<id>` command, no entry in the area-header type
-   * switcher or empty-area picker, no rail glyph (embedded implies never
-   * dockable), and no top-level row in the agent's `list_available_panes` — it
-   * is listed under its host instead, so `show` still reaches it by name.
+   * It stays fully registered, so regions and sections keep working. What it
+   * loses is every affordance that would present it as a second, competing home
+   * for the same content: no `pane.open:<id>` command, no Start-menu row, and no
+   * top-level row in the agent's `list_available_panes` — it is listed under its
+   * host instead, so `show` still reaches it by name.
    */
   embedded?: boolean;
-  /** Glyph for the activity rail / area-header type switcher. */
+  /** Glyph for the window titlebar, the taskbar and the Start menu. */
   icon?: string;
-  /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
-  defaultDock?: DockSide;
-  /**
-   * For role `tool`: the dock extent (px width for left/right, height for bottom)
-   * this view opens at the first time. Thereafter the pane remembers whatever the
-   * user dragged it to (`PaneState.dockSize`), so this is only the starting point.
-   * Omit to inherit the dock's current size.
-   */
-  defaultDockSize?: number;
   /**
    * When true, only one Pane instance running this view can exist in a workspace —
    * opening it again focuses the existing one. When false/omitted, each open
@@ -261,7 +236,7 @@ export interface PanelDecl {
   capture?: PaneCaptureDecl;
   /**
    * This view can be **presented**: shown over the entire shell, past the
-   * workspace strip and the taskbar, and — on a native shell — taking the OS
+   * titlebar and the taskbar, and — on a native shell — taking the OS
    * window fullscreen with it. For a game, a karaoke stage or a full-page
    * browser, the surrounding chrome is not context, it is a border.
    *
@@ -271,7 +246,7 @@ export interface PanelDecl {
    * something the user has to find their way back out of.
    *
    * Close to but not the same as `capture`, which is about the keyboard. A
-   * terminal captures keys and should stay in its dock; a game wants both.
+   * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
 }
@@ -288,22 +263,9 @@ export interface WidgetDecl {
   category?: PaneCategory;
   component: ComponentType;
   requiredCapabilities?: Capability[];
-  /**
-   * Where this pane opens by *default*: `document` panes tab into center areas,
-   * `widget` panes take a center area of their own, `tool` panes go to a dock.
-   * This is a default, not a restriction — see `dockable`.
-   * See docs/architecture/windowing.mdx.
-   */
+  /** What kind of pane this is. See `PaneRole`. */
   role: PaneRole;
-  /**
-   * Docks this view may be toggled into from a rail, beyond wherever `role` puts
-   * it by default. Omit and the view is dockable only if `role: 'tool'` (in which
-   * case `defaultDock` names the side) — so declaring this is how a `widget` or
-   * `document` view earns a rail glyph while still opening in the center.
-   * The first entry is the preferred side.
-   */
-  dockable?: DockSide | DockSide[];
-  /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
+  /** Region strips (Blender N/T-panel style) this view hosts inside its window. */
   regions?: RegionViewDecl[];
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
   sections?: SectionDecl[];
@@ -318,26 +280,15 @@ export interface WidgetDecl {
    * This view exists only *inside* another pane — as a region strip, a section
    * body, or an explorer source — and is not a destination of its own.
    *
-   * It stays fully registered, so regions, sections, `openPaneInArea` and
-   * dragging a strip out into the center all keep working. What it loses is
-   * every affordance that would present it as a second, competing home for the
-   * same content: no `pane.open:<id>` command, no entry in the area-header type
-   * switcher or empty-area picker, no rail glyph (embedded implies never
-   * dockable), and no top-level row in the agent's `list_available_panes` — it
-   * is listed under its host instead, so `show` still reaches it by name.
+   * It stays fully registered, so regions and sections keep working. What it
+   * loses is every affordance that would present it as a second, competing home
+   * for the same content: no `pane.open:<id>` command, no Start-menu row, and no
+   * top-level row in the agent's `list_available_panes` — it is listed under its
+   * host instead, so `show` still reaches it by name.
    */
   embedded?: boolean;
-  /** Glyph for the activity rail / area-header type switcher. */
+  /** Glyph for the window titlebar, the taskbar and the Start menu. */
   icon?: string;
-  /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
-  defaultDock?: DockSide;
-  /**
-   * For role `tool`: the dock extent (px width for left/right, height for bottom)
-   * this view opens at the first time. Thereafter the pane remembers whatever the
-   * user dragged it to (`PaneState.dockSize`), so this is only the starting point.
-   * Omit to inherit the dock's current size.
-   */
-  defaultDockSize?: number;
   /** Actions/state-reads this widget exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
@@ -359,7 +310,7 @@ export interface WidgetDecl {
   capture?: PaneCaptureDecl;
   /**
    * This view can be **presented**: shown over the entire shell, past the
-   * workspace strip and the taskbar, and — on a native shell — taking the OS
+   * titlebar and the taskbar, and — on a native shell — taking the OS
    * window fullscreen with it. For a game, a karaoke stage or a full-page
    * browser, the surrounding chrome is not context, it is a border.
    *
@@ -369,7 +320,7 @@ export interface WidgetDecl {
    * something the user has to find their way back out of.
    *
    * Close to but not the same as `capture`, which is about the keyboard. A
-   * terminal captures keys and should stay in its dock; a game wants both.
+   * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
 }
@@ -494,8 +445,7 @@ export interface KeybindingDecl {
   /**
    * Restrict this default to certain hosts. Use when a chord is unreachable in
    * one of them — `mod+1..9` is browser tab switching and never reaches the page,
-   * so the workspace-switch bindings ship as `mod+` on desktop and `alt+` in the
-   * browser.
+   * so a binding on it ships as `mod+` on desktop and `alt+` in the browser.
    */
   hosts?: ('browser' | 'desktop')[];
   /** Restrict this default to certain platforms (IME and macOS collisions). */
@@ -549,15 +499,18 @@ export interface WsMessage {
 }
 
 /**
- * A pane's *default* placement in the frame. `document` panes live in center
- * areas and stack as tabs; `tool` panes live in the shell docks (left/right/
- * bottom), one visible per dock; `widget` panes live in center areas one-per-area
- * with no tab strip.
+ * What kind of pane a view is. Every pane opens in a window of its own; the role
+ * is how the view describes itself, to the agent (`list_available_panes`) and to
+ * anything that groups panes:
  *
- * Roles are no longer strict zones. Any view can be moved into a center area,
- * and a view opts into being dock/rail-toggleable with `dockable` (implied for
- * `role: 'tool'`). The role only decides where an `openPanel` with no further
- * instruction puts it. See docs/architecture/windowing.mdx.
+ * - a **document** is a surface you work *in* — one per subject, several open at
+ *   once, and it benefits from tabs;
+ * - a **tool** is a *companion* to whatever you are working on — narrow,
+ *   singleton, always the same thing;
+ * - a **widget** is a *readout* — glanceable, sized to a tile, the thing you
+ *   would put on the `board` backdrop.
+ *
+ * See docs/architecture/windowing.mdx.
  */
 export type PaneRole = 'document' | 'tool' | 'widget';
 
@@ -569,11 +522,8 @@ export type PaneRole = 'document' | 'tool' | 'widget';
  */
 export type PaneCategory = 'research' | 'agents' | 'build' | 'data' | 'play' | 'people' | 'system';
 
-/** Positions a region strip can occupy inside its host pane's area. */
+/** Positions a region strip can occupy inside its host pane. */
 export type RegionPosition = 'left' | 'right' | 'bottom';
-
-/** The shell's fixed tool docks. */
-export type DockSide = 'left' | 'right' | 'bottom';
 
 /**
  * One section of a multi-section pane — an in-pane tab, the sibling of a region

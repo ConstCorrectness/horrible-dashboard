@@ -6,7 +6,7 @@ sidebar_label: Explorer
 # Module: Explorer
 
 **One place to browse a workspace**, replacing three. `explorer.home` is a `tool`
-(left dock) whose [sections](../architecture/windowing.mdx#embedded-views-and-sections)
+whose [sections](../architecture/windowing.mdx#embedded-views-and-sections)
 are **contributed by other modules**:
 
 | Section | What it browses | Came from |
@@ -17,11 +17,11 @@ are **contributed by other modules**:
 
 ## Why three became one
 
-All three were the same pane wearing three hats: a narrow left-dock list you pick
-something out of and open in the center. They were separate for one structural
-reason — **there was no way for a module to contribute to another module's pane**.
-So each shipped its own, each earned its own rail glyph, and the left dock became a
-row of near-identical strips distinguished only by remembering their names.
+All three were the same pane wearing three hats: a narrow list you pick something
+out of and open elsewhere. They were separate for one structural reason — **there was
+no way for a module to contribute to another module's pane**. So each shipped its
+own, and the launcher grew a row of near-identical browsers distinguished only by
+remembering their names.
 
 They are **not deleted**, they are `embedded`. Two of them (Notebooks, Projects) are
 also region strips of their own document pane, and that keeps working untouched — a
@@ -97,7 +97,7 @@ the table-driven test in `layout/__tests__/sections.test.ts`.
 
 ## Contributions
 
-- **Panel:** `explorer.home` (`tool`, left dock, `explorerHost`).
+- **Panel:** `explorer.home` (`tool`, `explorerHost`).
 - **Commands:** `explorer.open`, `explorer.files`. The contributing modules keep
   their own verbs (`files.open`, `notebook.open`, `training.open`) — they now
   `revealSection` instead of opening a pane. `flow.openLibrary` reveals its region
@@ -125,6 +125,6 @@ source to write a provider. The remaining gap is a *background* section, which h
 no mounted body and so can only be answered by a declarative, module-scope payload
 on `SectionDecl`.
 
-**Restored layouts drop docked embedded views** (`deserialize`'s `embeddedViews`), so
-an old workspace loses its `files.tree` strip and gains Explorer from the preset. A
-workspace the user had customised keeps everything else.
+**An embedded view saved as a pane of its own is restored as one.** A layout from
+before the merge that still holds a `files.tree` window keeps it; opening Files by
+name lands in Explorer.

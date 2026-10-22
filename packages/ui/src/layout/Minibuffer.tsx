@@ -31,7 +31,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   backendHealth,
   dialogsStore,
-  findArea,
   layoutStore,
   matchCommands,
   minibuffer,
@@ -52,10 +51,8 @@ function useStatusText(): string {
   const workspaces = useSyncExternalStore(workspaceStore.subscribe, workspaceStore.getSnapshot);
   const workspace =
     workspaces.workspaces.find((w) => w.id === layout.workspaceId)?.name ?? layout.workspaceId;
-  const area = layout.frame.focusedAreaId
-    ? findArea(layout.frame.center, layout.frame.focusedAreaId)
-    : null;
-  const pane = area?.tabs[area.activeTab];
+  const win = layout.frame.windows.find((w) => w.id === layout.frame.focusedWindowId);
+  const pane = win?.area.tabs[win.area.activeTab];
   const paneTitle = pane ? (resolveView(pane.viewId)?.title ?? pane.viewId) : null;
   if (!workspace) return '';
   return paneTitle ? `${workspace} › ${paneTitle}` : workspace;

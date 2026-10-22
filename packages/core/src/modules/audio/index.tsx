@@ -37,8 +37,6 @@ export const audioModule: ModuleManifest = {
       component: AudioMixerPanel,
       role: 'tool',
       icon: '🎚️',
-      defaultDock: 'right',
-      defaultDockSize: 420,
       singleton: true,
     },
   ],

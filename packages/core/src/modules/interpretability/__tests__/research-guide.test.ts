@@ -65,24 +65,10 @@ describe('GLOSSARY_ENTRIES', () => {
   });
 });
 
-describe('interpretabilityModule commands & frame', () => {
+describe('interpretabilityModule commands', () => {
   it('registers the interpretability.guide command for the workflow guide', () => {
     const cmd = interpretabilityModule.commands?.find((c) => c.id === 'interpretability.guide');
     expect(cmd).toBeDefined();
     expect(cmd?.title).toContain('Workflow Guide');
-  });
-
-  it('tabs architecture with llamacpp in the interpretability frame', () => {
-    const frame = interpretabilityModule.frames?.find((f) => f.id === 'interpretability');
-    expect(frame).toBeDefined();
-
-    const center = frame?.frame.center;
-    expect(center).toBeDefined();
-    if (center && 'children' in center && center.children) {
-      const rightChild = center.children[1];
-      expect(rightChild).toBeDefined();
-      expect('tabs' in rightChild ? rightChild.tabs : []).toContain('interpretability.architecture');
-      expect('tabs' in rightChild ? rightChild.tabs : []).toContain('llamacpp.server');
-    }
   });
 });

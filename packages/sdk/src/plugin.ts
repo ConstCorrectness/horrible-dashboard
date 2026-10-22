@@ -22,8 +22,10 @@ import type {
  * the loader skips plugins whose version doesn't match.
  * v2: pane `role` is required; `defaultPlacement` and panel groups are gone —
  * views declare `regions` (per-pane strips) instead.
+ * v3: the tiling frame is gone — `defaultDock`, `defaultDockSize`, `dockable`,
+ * `DockSide` and `ModuleManifest.frames` are removed; every pane opens in a window.
  */
-export const SDK_API_VERSION = 2;
+export const SDK_API_VERSION = 3;
 
 /** The `horrible-plugin.json` package manifest, as served by the backend. */
 export interface PluginPackageManifest {

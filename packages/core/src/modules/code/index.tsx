@@ -26,7 +26,6 @@ export const codeModule: ModuleManifest = {
       component: OutlinePane,
       role: 'tool',
       icon: '≡',
-      defaultDock: 'right',
       singleton: true,
       // Embedded: it follows the editor's buffer and has nothing to show without
       // one, so a dock glyph would be a competing surface for the same content.
@@ -40,7 +39,6 @@ export const codeModule: ModuleManifest = {
       component: SymbolSearch,
       role: 'tool',
       icon: '⌕',
-      defaultDock: 'right',
       singleton: true,
       // Lives as the editor buffer's right strip (declared there), and `mod+p`
       // opens the modal; a launcher entry was a third home for one search.

@@ -38,22 +38,17 @@ backend surface — workspace layouts persist through
   app, stopped when nothing is listening) and renders in the **minibuffer**
   status line. It is **silent while healthy**: a status line that always says
   "fine" trains you to stop reading it.
-- **Commands:** `dashboard.open` — selects the Dashboard workspace tab
-  (`registry.switchWorkspace('dashboard')`).
-
-The default Dashboard is seeded on first run from the `dashboard` frame preset
-(`modules/layouts/index.ts`): `dashboard.welcome` beside `clubhouse.account`,
-with `observability.io` on the bottom rail.
+- **Commands:** `dashboard.open` — opens the welcome card
+  (`registry.openPanel('dashboard.welcome')`).
 
 ## The widget contract
 
 A **widget** is a registry contribution (`id`, `title`, React component, optional
 `requiredCapabilities`, `role`, optional `icon`). Widgets are opened as
-**panes** in the workspace — dockable, resizable, floatable like panels (one
-level, no separate board). Every widget is openable from the command palette
-(synthesized `widget.open:<id>` → "Open widget: &lt;title&gt;") and from the
-"Add widget…" picker in the workspace tab strip. Capability-gated widgets are
-filtered by the capability service before they appear in the picker.
+**panes** — each in a window, like panels (one level, no separate board). Every
+widget is openable from the command palette (synthesized `pane.open:<id>`) and from
+the Start menu. Capability-gated widgets are filtered by the capability service
+before they appear there.
 
 Widget data comes from each owning module's own backend routes; the dashboard
 module knows nothing about other widgets' internals — the same inversion as

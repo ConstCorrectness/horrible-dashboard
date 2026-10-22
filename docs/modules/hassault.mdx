@@ -4350,7 +4350,7 @@ sign-in crosses three capture points — the backend's inbound middleware, its
 outbound httpx hook (the node proxies the call onward), and the frontend client
 recorder — so `/api/games/auth/local` and `/auth/local` are in
 `_REDACT_BODY_PREFIXES` at all three. The event is still recorded; only the bodies
-are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
+are dropped. See [observability](observability.mdx#the-other-exception-password-bodies).
 :::
 
 ### The username is the identity
@@ -8669,25 +8669,6 @@ survive its unmount, and the whole point here is to outlive one.
 `resetWorkspaceBusForTesting()` clears every parked intent and listener, which is
 what lets `workspace-bus.test.ts` run each channel in isolation.
 
-### The two workspaces
-
-The windows are arranged by `frames:` presets rather than left to the user to
-assemble, since the useful combinations are few and specific:
-
-| Preset | Layout |
-| --- | --- |
-| `hassault_dev` | The game beside the dev tools (55/45). Console and radar are strips on either. |
-| `hassault_play` | Just the game; its strips hold the match companion, radar, voice and console. |
-
-`hassault_mapmaker` and `hassault_armory_studio` were retired with the panes they
-arranged: the first was `hassault_dev` at different proportions, and the second
-paired a pane that no longer exists with the studio.
-
-Each carries a `description`, which is not optional decoration:
-`presets-described.test.ts` fails the build without one, because a preset with no
-description renders as a bare name in the home launcher and the welcome widget —
-the two places a user is offered a way of working.
-
 ## Contributions to the layout shell
 
 - **Panels:**
@@ -8703,10 +8684,9 @@ the two places a user is offered a way of working.
   | `hassault.voice` | tool, embedded | — | Voice comms. |
 
   `hassault.play` is the only `fullscreen: true`. It is a `document` because it
-  wants the centre area and a lot of pixels, and it grabs pointer lock, which
-  would be hostile in a narrow dock. The `fullscreen` opt-in earns it the `⛶`
-  titlebar control and Escape-able presentation over the taskbar and the
-  workspace strip — and on the desktop build that escalates to OS-window
+  wants a lot of pixels, and it grabs pointer lock. The `fullscreen` opt-in earns
+  it the `⛶` titlebar control and Escape-able presentation over the taskbar and the
+  titlebar — and on the desktop build that escalates to OS-window
   fullscreen, which is what makes pointer lock and the full field of view behave
   the way the game assumes. See
   [desktop-shell.mdx](../architecture/desktop-shell.mdx#presenting-a-pane).
@@ -8722,8 +8702,6 @@ the two places a user is offered a way of working.
   `POST`/`DELETE /matches/{room}/bots`, `POST /matches/{room}/invite` — so the
   window and the agent cannot describe one room two ways. "Join in game" opens
   `hassault.play` and parks the join with `requestJoin`, the invite toast's path.
-- **Workspace presets:** `hassault_dev`, `hassault_play` — see
-  [The two workspaces](#the-two-workspaces).
 - **Commands:** `hassault.open`, `hassault.openServer`, `hassault.openStudio`; the
   retired openers (`openModelViewer`/`openModelEditor`/`openAnimEditor`,
   `openConsole`/`openCompanion`/`openRadar`/`openVoice`) now land on the studio tab
@@ -9983,8 +9961,8 @@ The skin system provides distinct faction styling and collectible operator skins
 10. **A workspace, not a pane** — done, then consolidated: three windows (game,
     dev tools, server) whose companions are strips, wired together by a typed
     [event bus](#the-workspace-three-windows-and-their-strips) that parks an intent for a
-    pane that has not mounted yet, and two
-    [workspace presets](#the-two-workspaces) that arrange them.
+    pane that has not mounted yet. (Two workspace presets once arranged them; they
+    went with the tiling frame.)
 11. **Full 3D levels** — in progress: `gltf` maps run a Rapier capsule controller
     for slopes, stairs and a shrinking crouch capsule. The
     [conformance fixture does not yet cover that path](#the-heightfield-physics-does-not-run-on-a-gltf-map),

@@ -49,13 +49,6 @@ const ZONE_SINCE: Record<string, number> = { mx: 2, agent: 3 };
 /**
  * The strip as shipped: launcher, what's open, then the status end of the bar.
  *
- * There is deliberately **no workspace switcher here**. A desktop is a workspace,
- * and switching between them is a rare, deliberate act, not a thing to keep six
- * labels on screen for — the Start menu's Desktops group both switches *and*
- * manages (rename, create, reset, delete), which one strip of pips never could,
- * and a tiling desktop still has the top strip. The taskbar's own width belongs
- * to the panes you actually have open.
- *
  * `agent` is last, past the clock: the orchestrator is the one thing you reach
  * for from anywhere, so it gets the corner every OS reserves for the control you
  * can always hit without looking.

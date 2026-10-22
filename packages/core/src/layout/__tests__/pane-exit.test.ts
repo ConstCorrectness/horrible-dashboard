@@ -11,15 +11,10 @@ import { closePaneGuarded } from '../controller';
 import { listPanes } from '../model';
 import { PANE_EXIT_MAX_MS, setPaneExitAnimator } from '../pane-exit';
 import { resetPaneSessionsForTests } from '../pane-lifetime';
-import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
+import { windowsFrame } from './fixtures';
 
 const Stub = () => null;
-const preset: FramePreset = {
-  id: 'px',
-  name: 'Pane exit',
-  frame: { center: { split: 'row', children: [{ pane: 'px.a' }, { tabs: [] }] } },
-};
 
 beforeAll(() => {
   registry.register({
@@ -37,7 +32,7 @@ beforeEach(() => {
   layoutStore.dispatch({
     type: 'LOAD_WORKSPACE',
     workspaceId: 'px',
-    frame: seedFromPreset(preset, { knownViews: new Set(['px.a']) }),
+    frame: windowsFrame(['px.a']),
   });
 });
 

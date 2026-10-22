@@ -31,7 +31,7 @@ PAGES: dict[str, dict[str, str]] = {
         "position": "1",
         "intro": (
             "`dash` is seeded into every in-app Python REPL session and scripts the "
-            "running dashboard — panes, workspaces, layout, I/O, settings, git — and "
+            "running dashboard — panes, layout, I/O, settings, git — and "
             "every module can add a `dash.<name>` facade (`dash.lens` reads llama.cpp "
             "traces as numpy). "
             "`dash.help()` prints the same list at the prompt. It is a global, not "

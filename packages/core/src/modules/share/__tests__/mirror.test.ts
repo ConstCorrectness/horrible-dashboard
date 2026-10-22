@@ -23,8 +23,18 @@ function area(id: string, tabs: PaneState[], activeTab = 0): AreaNode {
   return { kind: 'area', id, tabs, activeTab };
 }
 
-function frameWith(center: FrameState['center']): FrameState {
-  return { ...createEmptyFrame(), center };
+/** One window per area, in order. */
+function frameWith(...areas: AreaNode[]): FrameState {
+  return {
+    ...createEmptyFrame(),
+    windows: areas.map((a, i) => ({
+      id: `w${i + 1}`,
+      area: a,
+      rect: { x: 40 * i, y: 40 * i, w: 400, h: 300 },
+      mode: 'normal' as const,
+      z: i + 1,
+    })),
+  };
 }
 
 /** A registry where `shared.*` may be seen and `secret.*` never declared. */
@@ -110,20 +120,12 @@ describe('redactFrame', () => {
     expect(JSON.stringify(out)).not.toContain('SECRET');
   });
 
-  it('redacts panes in docks and windows, not just the centre tree', () => {
-    // Three places hold panes. Covering only the centre tree is the obvious
-    // half-fix, and a docked settings pane is a very ordinary thing to have open.
-    const frame = createEmptyFrame();
-    frame.docks.right.tools = [pane('secret.connectors')];
-    frame.windows = [
-      {
-        id: 'w1',
-        area: area('wa1', [pane('secret.settings')]),
-        rect: { x: 0, y: 0, w: 100, h: 100 },
-        mode: 'normal',
-        z: 1,
-      },
-    ];
+  it('redacts panes in every window, minimized ones included', () => {
+    const frame = frameWith(
+      area('a1', [pane('secret.connectors')]),
+      area('a2', [pane('secret.settings')]),
+    );
+    frame.windows[1].mode = 'minimized';
     const out = redactFrame(frame, lookup);
     expect(out.redactedCount).toBe(2);
     const blob = JSON.stringify(out);
@@ -131,19 +133,16 @@ describe('redactFrame', () => {
     expect(blob).not.toContain('secret.settings');
   });
 
-  it('preserves the split geometry so both sides mean the same thing by "on the left"', () => {
-    const frame = frameWith({
-      kind: 'split',
-      id: 's1',
-      orientation: 'row',
-      children: [area('a1', [pane('shared.note')]), area('a2', [pane('secret.settings')])],
-      sizes: [0.7, 0.3],
-    });
+  it('preserves window geometry so both sides mean the same thing by "on the left"', () => {
+    const frame = frameWith(
+      area('a1', [pane('shared.note')]),
+      area('a2', [pane('secret.settings')]),
+    );
+    frame.windows[1].mode = 'minimized';
     const out = redactFrame(frame, lookup);
-    expect(out.center.kind).toBe('split');
-    if (out.center.kind !== 'split') throw new Error('unreachable');
-    expect(out.center.sizes).toEqual([0.7, 0.3]);
-    expect(out.center.children).toHaveLength(2);
+    expect(out.windows.map((w) => w.rect)).toEqual(frame.windows.map((w) => w.rect));
+    expect(out.windows.map((w) => w.z)).toEqual([1, 2]);
+    expect(out.windows.map((w) => w.minimized)).toEqual([false, true]);
   });
 
   it('reports how many panes were withheld', () => {

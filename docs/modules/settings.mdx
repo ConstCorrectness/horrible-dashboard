@@ -222,12 +222,9 @@ the param changes, not on every search keystroke.
 ## Contributions to the layout shell
 
 - **Panels:** `settings.home` (singleton, **`document`**) — the settings page,
-  grouped by the module/plugin that declared each setting. A centre tab, the way
-  VS Code opens its Settings editor. It was a `tool` pane with
-  `defaultDock: 'right'`, which gave a two-column page ~20rem and wrapped every
-  row; note that changing `role` only affects *new* opens, so the already-saved
-  layouts are migrated by `undockableViews()` in `layout/persistence.ts` — see
-  [../architecture/windowing.mdx](../architecture/windowing.mdx).
+  grouped by the module/plugin that declared each setting, the way VS Code opens its
+  Settings editor. It was a right-docked `tool` pane once, which gave a two-column
+  page ~20rem and wrapped every row.
 - **Commands:** `settings.open`.
 - **Keybindings:** `mod+,` → `settings.open` (VS Code parity).
 

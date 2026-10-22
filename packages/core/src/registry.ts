@@ -4,7 +4,6 @@ import type { ComponentType } from 'react';
 
 import { frameCommandHandler } from './layout/frame-bus';
 import { noteViewOpened } from './layout/recents';
-import type { FramePreset } from './layout/presets';
 import type { ContextMenuProvider } from './overlay/context-menu';
 
 import type {
@@ -15,7 +14,6 @@ import type {
   CollabDecl,
   PaneShareDecl,
   CommandDecl,
-  DockSide,
   ExplorerSourceDecl,
   JSONSchema,
   KeybindingDecl,
@@ -40,7 +38,6 @@ export type {
   CollabDecl,
   PaneShareDecl,
   CommandDecl,
-  DockSide,
   ExplorerSourceDecl,
   JSONSchema,
   KeybindingDecl,
@@ -83,16 +80,6 @@ export const PANE_CATEGORY_LABELS: Record<PaneCategory | 'plugins', string> = {
   plugins: 'Plugins',
 };
 
-/** Where a pane is placed relative to a reference pane. */
-export type PaneDirection = 'left' | 'right' | 'above' | 'below' | 'within';
-
-/**
- * Directions an area can be **split** toward. Excludes `within` (which adds a tab
- * to the same area rather than splitting). `left`/`right` produce a `row` split,
- * `above`/`below` a `column` one.
- */
-export type SplitDirection = 'left' | 'right' | 'above' | 'below';
-
 export interface ModuleManifest {
   id: string;
   title: string;
@@ -105,8 +92,6 @@ export interface ModuleManifest {
   commands?: CommandDecl[];
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
-  /** Predefined full-frame workspaces (center tree + docks). */
-  frames?: FramePreset[];
   /** Backdrops this module offers a desktop. See `BackdropDecl`. */
   backdrops?: BackdropDecl[];
   keybindings?: KeybindingDecl[];
@@ -126,8 +111,8 @@ export interface ModuleManifest {
    */
   contextMenu?: ContextMenuProvider[];
   /**
-   * Small always-visible status surfaces in the shell chrome — the workspace tab
-   * strip and the taskbar tray. See `ShellIndicatorDecl`.
+   * Small always-visible status surfaces in the shell chrome — the taskbar tray.
+   * See `ShellIndicatorDecl`.
    */
   shellIndicators?: ShellIndicatorDecl[];
 }
@@ -151,12 +136,9 @@ export interface ShellIndicatorDecl {
  * There is exactly **one** main surface: `desktop`. `boot` and `oobe` are the
  * states before you reach it.
  *
- * Both of the old views are gone, for the same reason. `workspace` was not a
- * surface at all — a desktop IS a workspace, and whether it shows the tiling
- * frame or free windows is that desktop's `mode`, so making it a view meant one
- * fact had two homes that could disagree. `home` was a second landing screen
- * competing with the desktop for the same job; it survives as the `splash`
- * **backdrop**, which is strictly more useful, since windows can float over it.
+ * The old `home` view was a second landing screen competing with the desktop
+ * for the same job; it survives as the `splash` **backdrop**, which is strictly
+ * more useful, since windows can float over it.
  */
 export type ShellView = 'boot' | 'oobe' | 'desktop';
 
@@ -175,11 +157,6 @@ export interface OpenPaneInfo {
   hasContext: boolean;
 }
 
-export interface WorkspaceInfo {
-  id: string;
-  name: string;
-}
-
 /** Options for opening a pane: an explicit instance ID (so reopening the same
  * logical pane focuses it instead of duplicating) and initial parameters. */
 export interface OpenPaneOptions {
@@ -188,38 +165,20 @@ export interface OpenPaneOptions {
 }
 
 /**
- * Workspace mutations the agent relay and shell chrome drive, decoupled from the
- * engine. Implemented by the frame controller (core/layout/controller.ts,
- * installed by the Frame on mount); richer frame verbs (areas, regions, docks)
- * are plain controller exports rather than part of this seam.
+ * Desktop mutations the agent relay and shell chrome drive, decoupled from the
+ * engine. Implemented by the desktop controller (core/layout/controller.ts,
+ * installed by the shell); richer verbs (windows, regions) are plain controller
+ * exports rather than part of this seam.
  */
 export interface LayoutController {
   /** Close a pane. Accepts either a View ID or a Pane Instance ID. */
   closePane(id: string): boolean;
   /** Bring a pane instance forward (activate its tab). Returns false if unknown. */
   focusPane(instanceId: string): boolean;
-  /** List all active pane instances in the active workspace. */
+  /** List all open pane instances on the desktop. */
   listOpenPanes(): OpenPaneInfo[];
-  /**
-   * Create a workspace. `mode` is the desktop's paradigm, which belongs to the
-   * workspace rather than to a global switch; `fromCurrent` seeds it with the
-   * arrangement on screen instead of an empty frame.
-   */
-  createWorkspace(
-    name: string,
-    options?: { mode?: 'tiling' | 'floating'; fromCurrent?: boolean },
-  ): Promise<WorkspaceInfo>;
-  listWorkspaces(): Promise<{ active: string | null; workspaces: WorkspaceInfo[] }>;
-  /** Re-seed the active workflow layout from its preset (discarding tweaks). */
-  resetLayout(): void;
-  /** Delete the active workspace if it's a custom one (presets reset instead). */
-  deleteActiveWorkspace(): void;
-  /** Rename a specific workspace. */
-  renameWorkspace(id: string, name: string): Promise<void>;
-  /** Delete a specific workspace. */
-  deleteWorkspace(id: string): Promise<void>;
-  /** Pop a pane out to a floating card (`true`) or dock it back (`false`). */
-  setPaneFloating(instanceId: string, floating: boolean): boolean;
+  /** Tear a tab out of its window into a window of its own. */
+  tearOffPane(instanceId: string): boolean;
   /**
    * Swap an open pane's view content in place (preserves geometry and instanceId).
    * Returns false if either the pane instance or the target `viewId` is unknown.
@@ -230,7 +189,6 @@ export interface LayoutController {
 class ModuleRegistry {
   private modules = new Map<string, ModuleManifest>();
   private panelOpener: ((panelId: string, opts?: OpenPaneOptions) => void) | null = null;
-  private workspaceSwitcher: ((workspaceId: string) => void) | null = null;
   private layoutControllerImpl: LayoutController | null = null;
   private services = new Map<string, unknown>();
   private changeListeners = new Set<() => void>();
@@ -314,30 +272,7 @@ class ModuleRegistry {
 
   get commands(): CommandDecl[] {
     const declared = [...this.modules.values()].flatMap((m) => m.commands ?? []);
-    return [...declared, ...this.frameSynthesizedCommands(), ...this.workspaceCommands()];
-  }
-
-  /**
-   * `Workspace: AI Research` — one palette entry per preset, by **name**.
-   *
-   * `workspace.switch:1..9` switch by position, which nobody can type from memory,
-   * and the launcher tiles only render on the home surface with workspaces on. A
-   * preset is the product's table of contents; its entries belong in the palette
-   * under the names the launcher shows. Synthesized, so a plugin's frames get one
-   * too, and routed through `switchWorkspace` — the same call the launcher makes,
-   * which seeds the preset when the workspace does not exist yet.
-   */
-  private workspaceCommands(): CommandDecl[] {
-    // Workspaces are opt-in (`desktop.workspaces`, off by default), and with them off
-    // the launcher, the tab strip and `workspace.switch:N` all stand down. A palette
-    // entry that still switched would be the one way into a tiled preset with no UI
-    // left to get back out by — so these are *absent*, not disabled.
-    if (!this.workspaceGate()) return [];
-    return this.framePresets.map((preset) => ({
-      id: `workspace.open:${preset.id}`,
-      title: `Workspace: ${preset.name}`,
-      run: () => this.switchWorkspace(preset.id),
-    }));
+    return [...declared, ...this.frameSynthesizedCommands()];
   }
 
   /** Every view (panel or widget) declaration, panels first. */
@@ -346,7 +281,7 @@ class ModuleRegistry {
   }
 
   /**
-   * Frame-engine synthesis: role-aware openers plus the region commands behind
+   * Frame-engine synthesis: one opener per view, plus the region commands behind
    * the universal `t`/`n`/`b` toggles and per-view pick letters. The handlers
    * route through the region command bus (installed by the frame controller) so
    * the registry never imports the controller.
@@ -446,11 +381,6 @@ class ModuleRegistry {
       cache.set(view.id, merged);
       return merged;
     });
-  }
-
-  /** Predefined full-frame workspaces, in module registration order. */
-  get framePresets(): FramePreset[] {
-    return [...this.modules.values()].flatMap((m) => m.frames ?? []);
   }
 
   /** Every contributed desktop backdrop, in module registration order. */
@@ -622,28 +552,7 @@ class ModuleRegistry {
     this.panelOpener?.(panelId, opts);
   }
 
-  private workspaceGate: () => boolean = () => true;
-
-  /**
-   * Whether workspaces are available — installed by the shell from the
-   * `desktop.workspaces` setting. Injected rather than imported because
-   * `settings.ts` already imports this module.
-   */
-  setWorkspaceGate(gate: () => boolean): void {
-    this.workspaceGate = gate;
-  }
-
-  /** The workspace installs the switcher; commands call switchWorkspace. */
-  setWorkspaceSwitcher(switcher: (workspaceId: string) => void): void {
-    this.workspaceSwitcher = switcher;
-  }
-
-  /** Select a named workspace tab by id (e.g. `dashboard.open` → 'dashboard'). */
-  switchWorkspace(workspaceId: string): void {
-    this.workspaceSwitcher?.(workspaceId);
-  }
-
-  /** The workspace installs the layout controller; the agent executor uses it. */
+  /** The shell installs the layout controller; the agent executor uses it. */
   setLayoutController(controller: LayoutController): void {
     this.layoutControllerImpl = controller;
   }

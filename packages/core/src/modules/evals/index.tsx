@@ -53,47 +53,6 @@ export const evalsModule: ModuleManifest = {
       default: false,
     },
   ],
-  frames: [
-    {
-      id: 'evals',
-      name: 'Evals',
-      description:
-        'Score a model against a suite, read the failures beside their source, and compare runs.',
-      icon: '🎯',
-      // The `trainer` persona already covers eval sweeps, conversion and serving —
-      // the whole flywheel this workspace sits in — so it is a capability the
-      // layout switches to, not a second persona invented for one pane.
-      agent: 'trainer',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.55, 0.45],
-          children: [
-            // The scoreboard, and the suite file next to it. This pairing is the
-            // whole working position: a failing row names a case, and the case is
-            // one buffer away.
-            { tabs: ['evals.hub'], active: 0 },
-            // Where a fine-tune is compared against its base over time, and where
-            // the notebook for an HF-backed benchmark lives.
-            { tabs: ['editor.buffer', 'localtrack.workspace'], active: 0 },
-          ],
-        },
-        docks: {
-          // MCP and Skills are docked here because they are **variables of the
-          // experiment**, not furniture: an enabled skill rides every turn and a
-          // connected server contributes a whole tool group, so both change the
-          // catalog under test. The run records which ones were on (see
-          // `evals/fingerprint.py`); this puts the switches where the results are.
-          left: {
-            tools: ['explorer.home', 'mcp.servers', 'skills.library'],
-            size: 260,
-          },
-          right: { tools: ['agent.chat'], size: 360 },
-          bottom: { tools: ['observability.io'], size: 180, visible: false },
-        },
-      },
-    },
-  ],
   commands: [
     {
       id: 'evals.open',

@@ -16,7 +16,7 @@ Backend `backend/modules/skills/`; frontend `packages/core/src/modules/skills/`.
 
 ## Contributions to the layout shell
 
-- **Panels** — `skills.library` ("Skills", 🎓, `role: 'document'` + `dockable: 'left'` — a browsable catalogue, the same shape as the marketplace; `dockable` keeps the rail glyph,
+- **Panels** — `skills.library` ("Skills", 🎓, `role: 'document'` — a browsable catalogue, the same shape as the marketplace;
   singleton).
   Two **sections**: `library` (<kbd>l</kbd>, default) and `editor` (<kbd>e</kbd>).
 - **Commands** — `skills.open`, `skills.new` (opens the pane *and* switches it to the
@@ -29,7 +29,7 @@ Backend `backend/modules/skills/`; frontend `packages/core/src/modules/skills/`.
   see [Enablement](#enablement-is-not-a-setting).
 
 The editor is a **section**, not a swap of the pane body from local state. It used to be
-the latter, which left it with no address at all: the tab strip did not know it was open,
+the latter, which left it with no address at all: the shell did not know it was open,
 a reload dropped you back in the list, and the only way out was the component's own
 Cancel button. One honest limit remains — the section is addressable, but *which skill is
 loaded into it* is still component state, so a reload returns to an empty editor rather

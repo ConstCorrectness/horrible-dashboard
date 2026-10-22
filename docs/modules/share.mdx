@@ -31,7 +31,7 @@ is written down where the host can read it.
 
 ## Contributions to the layout shell
 
-- **Panels:** `share.session` (role `tool`, singleton, right dock at 340px) —
+- **Panels:** `share.session` (role `tool`, singleton) —
   the host's control surface. It is a *permission* surface, not a video one; see
   [why that ordering](#why-the-pane-is-a-permission-surface). `share.mirror`
   (role `document`, singleton) — the guest's window onto the host's workspace.
@@ -219,9 +219,7 @@ only discoverable by somebody on the other end saying so.
 A share outlives the pane that started it, so "you are broadcasting" cannot live
 only in that pane. The module contributes a **shell indicator**
 (`ModuleManifest.shellIndicators`, see [windowing](../architecture/windowing.mdx))
-that the shell draws in **both** the workspace tab strip and the floating desktop's
-taskbar tray: a desktop never shows both, and the default boot desktop is floating,
-so either one alone would miss half the cases.
+that the shell draws in the taskbar tray, and in the native titlebar too.
 
 | State | Reads | Stop button |
 | --- | --- | --- |

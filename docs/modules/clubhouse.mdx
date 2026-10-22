@@ -1503,18 +1503,18 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
 
 ## Contributions to the Layout Shell
 
-- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Inside a room it is a three-panel view — participants, chat, and agent settings — each independently toggleable, so a narrow pane can show only what is being used. Declares `dockable: 'right'`, so it opens in a center area by default but can also be toggled into the right dock from the rail — see [Windowing](../architecture/windowing.mdx).
+- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Inside a room it is a three-panel view — participants, chat, and agent settings — each independently toggleable, so a narrow pane can show only what is being used. It opens in a window like every pane — see [Windowing](../architecture/windowing.mdx).
 - **One room for the whole app.** The room session (`clubhouseSession()` in
   `roomSession.ts`) is app-wide, not per pane: one account is in at most one room, and
   `singleton` only means one pane per *desktop*. While it was pane-scoped, Clubhouse
   opened on a second desktop got its own empty session, and closing that window left
   the first desktop's call playing out of sight until the app was closed. Now every
   Clubhouse pane — and a desktop board tile — renders the same room.
-  - **Unmount never leaves** (tab switch, hidden dock, desktop switch): see
+  - **Unmount never leaves** (tab switch, minimize): see
     [pane lifetime](../architecture/windowing.mdx).
   - **A real close of any Clubhouse pane leaves the room** — the ✕, the taskbar, an
-    agent `close_pane`, a workspace delete, or a layout reset that drops it.
-- **Shell indicator:** `clubhouse.room` — a chip in the taskbar tray / tab strip while
+    or an agent `close_pane`.
+- **Shell indicator:** `clubhouse.room` — a chip in the taskbar tray / titlebar while
   in a room (people count, muted), with **Leave**. It reads `presence.ts`, a
   dependency-free store the session publishes to, so the shell never loads the Agora
   SDK just to learn that nothing is playing.

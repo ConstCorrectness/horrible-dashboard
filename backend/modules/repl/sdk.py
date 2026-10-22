@@ -3,7 +3,7 @@
 `dash` is the Python handle for driving the running app. Two kinds of surface
 hang off it:
 
-* **UI facades** (`panes`, `workspaces`, `layout`, `context`, `call`) — a thin,
+* **UI facades** (`panes`, `layout`, `context`, `call`) — a thin,
   **synchronous** veneer over the same relay the agent drives: each method becomes
   a tool call relayed to the originating browser, where `executeTool` runs it
   against the registry + layout controller (packages/core/src/modules/agent/
@@ -29,24 +29,23 @@ class RelayCall(Protocol):
 
 
 class _Panes:
-    """Open, close, and inspect open panes (role-routed: documents tab into center
-    areas, widgets take their own area, tools go to their dock)."""
+    """Open, close, and inspect open panes. Every pane opens in a window of its own."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
     def available(self) -> Any:
         """Every view that can be opened, with id, title, role (document/widget/tool),
-        default dock (tools), and the region views it hosts."""
+        and the region views it hosts."""
         return self._call("list_available_panes", {})
 
     def open_list(self) -> Any:
-        """Pane instances currently open in the active workspace (view id, instanceId,
-        role, location: center area / dock / floating)."""
+        """Pane instances currently open (view id, instanceId, role, and the window
+        each one is in)."""
         return self._call("list_open_panes", {})
 
     def open(self, view_id: str) -> Any:
-        """Open a view by its view ID (from `available()`), routed by its role."""
+        """Open a view by its view ID (from `available()`) in a new window."""
         return self._call("open_pane", {"id": view_id})
 
     def close(self, instance_id: str) -> Any:
@@ -54,95 +53,22 @@ class _Panes:
         return self._call("close_pane", {"id": instance_id})
 
     def focus(self, instance_id: str) -> Any:
-        """Bring a pane forward (tab / dock slot / floating card)."""
+        """Bring a pane forward: raise its window and show its tab."""
         return self._call("focus_pane", {"instanceId": instance_id})
 
 
-class _Workspaces:
-    """List, create, and switch the named workspace tabs."""
-
-    def __init__(self, call: RelayCall) -> None:
-        self._call = call
-
-    def list(self) -> Any:
-        """The workspace tabs and which one is active."""
-        return self._call("list_workspaces", {})
-
-    def create(self, name: str) -> Any:
-        """Create a new named workspace and switch to it."""
-        return self._call("create_workspace", {"name": name})
-
-    def switch(self, workspace_id: str) -> Any:
-        """Switch to a workspace tab by id (from `list()`)."""
-        return self._call("switch_workspace", {"id": workspace_id})
-
-
 class _Layout:
-    """Arrange the frame — split/join/resize center areas, move panes, toggle
-    regions and docks, fullscreen, float — the same verbs the agent's layout
-    control uses. Pane targets are **instance ids** (from `dash.panes.open_list()`);
-    area ids come from `describe()`."""
+    """Arrange the desktop — snap, minimize, maximize and tile windows, toggle a
+    pane's regions — the same verbs the agent's layout control uses. Pane targets are
+    **instance ids** (from `dash.panes.open_list()`)."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
     def describe(self) -> Any:
-        """The whole frame: center split tree (areas, tabs, regions), docks,
-        floating panes, fullscreen/focused area."""
+        """The whole desktop: every window (rect, mode, snap, tabs with their
+        regions), which one is focused, and the backdrop."""
         return self._call("get_layout", {})
-
-    def split(
-        self, instance_id: str, direction: str, view_id: str | None = None
-    ) -> Any:
-        """Split the area holding a pane (`left`/`right`/`above`/`below`, or the
-        `vertical`/`horizontal` aliases); `view_id` to open a different view in the
-        new area, else the pane's own view is duplicated."""
-        args: dict[str, Any] = {"instanceId": instance_id, "direction": direction}
-        if view_id is not None:
-            args["viewId"] = view_id
-        return self._call("split_area", args)
-
-    def join(self, instance_id: str, direction: str) -> Any:
-        """Absorb the neighboring area (`left`/`right`/`up`/`down`) into this
-        pane's area; document tabs are adopted when both sides hold documents."""
-        return self._call(
-            "join_area", {"instanceId": instance_id, "direction": direction}
-        )
-
-    def move(
-        self,
-        instance_id: str,
-        area_id: str | None = None,
-        direction: str | None = None,
-        edge: str | None = None,
-    ) -> Any:
-        """Move a center pane into `area_id` (from `describe()`), toward
-        `direction` (`left`/`right`/`up`/`down`), or onto an area's `edge`
-        (`left`/`right`/`above`/`below`), which splits it and lands the pane in
-        the new half."""
-        args: dict[str, Any] = {"instanceId": instance_id}
-        if area_id is not None:
-            args["areaId"] = area_id
-        if direction is not None:
-            args["direction"] = direction
-        if edge is not None:
-            args["edge"] = edge
-        return self._call("move_pane", args)
-
-    def resize(
-        self, instance_id: str, width: int | None = None, height: int | None = None
-    ) -> Any:
-        """Resize the area holding a pane (pixels)."""
-        return self._call(
-            "resize_area", {"instanceId": instance_id, "width": width, "height": height}
-        )
-
-    def fullscreen(self, instance_id: str | None = None, on: bool = True) -> Any:
-        """Expand a pane's area to fill the frame, or restore with `on=False`."""
-        args: dict[str, Any] = {"on": on}
-        if instance_id is not None:
-            args["instanceId"] = instance_id
-        return self._call("fullscreen_area", args)
 
     def toggle_region(
         self, instance_id: str, position: str, open: bool | None = None
@@ -159,32 +85,16 @@ class _Layout:
             "set_region_view", {"instanceId": instance_id, "viewId": view_id}
         )
 
-    def open_tool(self, view_id: str, dock: str | None = None) -> Any:
-        """Open (or focus) a role:'tool' view in a dock (defaults to its own side)."""
-        args: dict[str, Any] = {"id": view_id}
-        if dock is not None:
-            args["dock"] = dock
-        return self._call("open_tool_in_dock", args)
-
-    def toggle_dock(self, dock: str, visible: bool | None = None) -> Any:
-        """Show/hide a dock (`left`/`right`/`bottom`); `visible` forces a state."""
-        args: dict[str, Any] = {"dock": dock}
-        if visible is not None:
-            args["visible"] = visible
-        return self._call("toggle_dock", args)
-
     def window(
         self,
         instance_id: str,
         snap: str | None = None,
         rect: dict[str, float] | None = None,
     ) -> Any:
-        """Pop a pane out into a free-floating desktop window.
+        """Give a pane a window of its own (tearing it out of a tabbed window).
 
         `snap` places it in a screen region (`left`/`right`/`top`/`bottom`, a
-        corner, or `max`); `rect` gives exact pixels. Windows work on a tiling
-        desktop too — there they are the escape hatch for a pane that should not
-        participate in the tiling.
+        corner, or `max`); `rect` gives exact pixels.
         """
         args: dict[str, Any] = {"instanceId": instance_id}
         if snap is not None:
@@ -193,35 +103,24 @@ class _Layout:
             args["rect"] = rect
         return self._call("open_window", args)
 
-    def dock(self, instance_id: str) -> Any:
-        """Put a windowed pane back into the tiling frame."""
-        return self._call("dock_window", {"instanceId": instance_id})
-
     def window_state(
         self,
         instance_id: str,
         state: str,
         snap: str | None = None,
-        workspace_id: str | None = None,
     ) -> Any:
-        """`minimize`, `maximize`, `restore`, `snap` or `move_to_desktop`.
+        """`minimize`, `maximize`, `restore`, `snap`, `present` or `unpresent`.
 
         A minimized window keeps running — it is hidden, not closed.
         """
         args: dict[str, Any] = {"instanceId": instance_id, "state": state}
         if snap is not None:
             args["snap"] = snap
-        if workspace_id is not None:
-            args["workspaceId"] = workspace_id
         return self._call("window_state", args)
 
     def arrange(self, style: str = "grid") -> Any:
         """Lay every open window out: `grid`, `cascade`, `columns` or `rows`."""
         return self._call("arrange_windows", {"style": style})
-
-    def mode(self, mode: str) -> Any:
-        """Switch this desktop between `tiling` and `floating`."""
-        return self._call("desktop.set_mode", {"mode": mode})
 
     def backdrop(self, backdrop_id: str, **params: Any) -> Any:
         """Set the desktop backdrop. Ids are in `describe()["desktop"]["backdrops"]`."""
@@ -389,14 +288,13 @@ class _Git:
 
 
 class Dash:
-    """The dashboard handle. Drives workspace layouts, manages and rearranges panes,
+    """The dashboard handle. Opens and arranges panes on the desktop,
     reads live pane state and I/O telemetry, and reads/writes settings. `call` is the
     escape hatch for any other relayed tool. Run `dash.help()` for the full surface."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
         self.panes = _Panes(call)
-        self.workspaces = _Workspaces(call)
         self.layout = _Layout(call)
         self.io = _Io()
         self.settings = _Settings()
@@ -442,7 +340,7 @@ def render_help(dash: Dash) -> str:
     """Introspect a `Dash` instance into a readable cheat-sheet (kept in lockstep
     with the code because it reads the live objects)."""
     lines = ["dash — drive horrible-dashboard from Python.", ""]
-    # Sub-facades (panes, workspaces, layout, io, settings).
+    # Sub-facades (panes, layout, io, settings).
     for name, attr in vars(dash).items():
         if name.startswith("_"):
             continue

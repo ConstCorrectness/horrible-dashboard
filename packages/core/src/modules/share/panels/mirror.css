@@ -1,8 +1,7 @@
-/* The session mirror: the host's workspace drawn as a map.
+/* The session mirror: the host's desktop drawn as a map.
  *
- * The geometry is the message, so the tiles are deliberately plain — a split is
- * a flex row, an area is a tile, and the proportions come straight from the
- * host's own `sizes`. What carries meaning is the *ground*: a shared tile is a
+ * The geometry is the message, so the tiles are deliberately plain — a window is
+ * a tile, placed at the fraction of the host's surface it occupies there. What carries meaning is the *ground*: a shared tile is a
  * clean raised surface, a redacted one is hatched and quiet, and the pane the
  * host is looking at is the only thing wearing the accent. A guest should be able
  * to tell those three apart from across the room.
@@ -35,38 +34,39 @@
 
 .share-workspace {
   display: flex;
+  flex-direction: column;
   gap: var(--space-3);
-  flex: 1;
-  min-height: 16rem;
   padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-inset);
 }
 
-.share-center {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  flex: 1;
-  min-width: 0;
+/* The host's surface at its own aspect ratio; windows are placed in it by %. */
+.share-desktop {
+  position: relative;
+  width: 100%;
+  max-height: 70vh;
+  min-height: 12rem;
 }
 
-.share-split {
+.share-window {
+  position: absolute;
   display: flex;
-  gap: var(--space-3);
-  height: 100%;
-  min-height: 0;
-}
-
-.share-split[data-orientation='column'] {
-  flex-direction: column;
-}
-
-.share-split-child {
-  display: flex;
+  padding: 2px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.share-minimized {
+  display: flex;
+  gap: var(--space-3);
+  height: 4.5rem;
+}
+
+.share-minimized .share-area {
+  flex: 0 1 10rem;
 }
 
 .share-area {
@@ -75,20 +75,6 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-}
-
-.share-dock {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  width: 8.5rem;
-  flex: none;
-}
-
-.share-dock[data-horizontal='true'] {
-  flex-direction: row;
-  width: auto;
-  height: 4.5rem;
 }
 
 /* -- tabs ---------------------------------------------------------------- */

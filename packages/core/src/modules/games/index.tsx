@@ -33,24 +33,6 @@ export const gamesModule: ModuleManifest = {
   id: 'games',
   title: 'Games',
   category: 'play',
-  // DashArena: the game-tuned workspace. The Games client fills the whole window —
-  // it is a single-window console (Play / Board / Build / Replays / Career / Social),
-  // with the live spectator surfaces (Games Log, Episodes) folded into its own bottom
-  // drawer rather than tiled as sibling documents. Log/Episodes are registered as
-  // `embedded` views: they exist so the region strip has something to render, not
-  // as panes of their own — a launcher entry for one would be a second home for
-  // content the lobby already shows.
-  frames: [
-    {
-      id: 'dasharena',
-      name: 'DashArena',
-      description: 'The games lobby on its own — play, watch the board, build your agent.',
-      icon: '🏟',
-      frame: {
-        center: { pane: 'games.lobby' },
-      },
-    },
-  ],
   panels: [
     {
       id: 'games.lobby',

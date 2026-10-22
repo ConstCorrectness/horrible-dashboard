@@ -23,7 +23,6 @@ export const gitModule: ModuleManifest = {
       component: ProvenancePane,
       role: 'tool',
       icon: '⎇',
-      defaultDock: 'right',
       singleton: true,
       // Embedded: it follows the editor's buffer and has nothing to show without
       // one, so a dock glyph would be a competing surface for the same content.

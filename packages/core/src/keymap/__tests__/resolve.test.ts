@@ -15,7 +15,6 @@ function ctx(over: Partial<KeyContext> = {}): KeyContext {
     fullscreenArea: false,
     keyboardLock: false,
     windowFocused: false,
-    desktopMode: 'tiling',
     shellView: 'desktop',
     platform: 'win',
     host: 'browser',

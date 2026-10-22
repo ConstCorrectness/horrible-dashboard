@@ -10,21 +10,14 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
-import { setPaneWindowed } from '../controller';
-import { seedFromPreset, type FramePreset } from '../presets';
+import { instanceId } from '../model';
 import { rectForZone } from '../snap';
 import { layoutStore } from '../store';
-import type { FrameState, LayoutNode, WindowState } from '../types';
+import type { FrameState, WindowState } from '../types';
+import { loadFrame, windowsFrame } from './fixtures';
 
 const Stub = () => null;
-const KNOWN = new Set(['wm.a', 'wm.b']);
 const VIEW = { w: 1600, h: 900 };
-
-const preset: FramePreset = {
-  id: 'wm',
-  name: 'Window mode',
-  frame: { center: { split: 'row', children: [{ pane: 'wm.a' }, { pane: 'wm.b' }] } },
-};
 
 beforeAll(() => {
   registry.register({
@@ -39,28 +32,20 @@ beforeAll(() => {
 
 beforeEach(() => {
   layoutStore.resetForTests();
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'wm',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
-  });
+  loadFrame(windowsFrame([], { windowViewport: null }), 'wm');
   layoutStore.dispatch({ type: 'SET_WINDOW_VIEWPORT', viewport: VIEW });
 });
 
 const frame = (): FrameState => layoutStore.getSnapshot().frame;
 const byId = (id: string): WindowState => frame().windows.find((w) => w.id === id)!;
 
-/**
- * Float the first remaining centre pane and return its window id. Always the
- * first: floating one removes it from the centre tree, so a fixed index would
- * name a different pane on the second call — and on the third, nothing at all.
- */
+/** Open a fresh pane in a window of its own and return the window id. */
 function float(): string {
-  const walk = (node: LayoutNode): string[] =>
-    node.kind === 'area' ? node.tabs.map((t) => t.instanceId) : node.children.flatMap(walk);
-  const instanceId = walk(frame().center)[0];
-  expect(instanceId).toBeDefined();
-  setPaneWindowed(instanceId, true);
+  const viewId = frame().windows.length % 2 ? 'wm.b' : 'wm.a';
+  layoutStore.dispatch({
+    type: 'OPEN_WINDOW',
+    pane: { instanceId: instanceId(viewId, frame().paneSeq), viewId },
+  });
   return frame().windows[frame().windows.length - 1].id;
 }
 

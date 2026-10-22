@@ -3,55 +3,38 @@
  * can run against the registry + frame controller. Both the agent orchestrator
  * (orchestrator-client.ts) and the Python REPL (../repl/client.ts) relay tool
  * calls over the `/ws` socket and execute them here, so any verb one can run, the
- * other can too — one source of truth. The vocabulary is the frame engine's:
- * center **areas** hold documents/widgets, **docks** hold tools, **regions** are
- * the strips inside a pane. See docs/modules/agent-chat.md and docs/modules/repl.md.
+ * other can too — one source of truth. The vocabulary is the desktop's: every
+ * pane lives in a **window** (several merged panes are its tabs), and **regions**
+ * are the strips inside a pane. See docs/modules/agent-chat.md and
+ * docs/modules/repl.md.
  */
 import {
   arrangeDesktop,
   describeLayout,
-  fullscreenArea,
-  joinAreaDirection,
   listOpenPanesDetailed,
-  movePaneTo,
-  moveWindowToDesktop,
-  openToolInDock,
+  presentPane,
   readPaneAgentContext,
-  resizeAreaPx,
-  resolveView,
   roleOf,
   setBackdrop,
-  setDesktopMode,
   setPaneSection,
-  setPaneWindowed,
   setRegionView,
   setWindowMode,
   showTarget,
   snapWindow,
-  splitAreaBy,
-  toggleDock,
+  tearOffPane,
+  resolveView,
   toggleRegion,
 } from '../../layout/controller';
 import { windowOfInstance } from '../../layout/model';
 import { isSnapZone, SNAP_ZONES } from '../../layout/snap';
 import { layoutStore } from '../../layout/store';
-import type {
-  DesktopMode,
-  DockSide,
-  NavDirection,
-  RegionPosition,
-  SnapZone,
-  WindowRect,
-} from '../../layout/types';
+import type { RegionPosition, SnapZone, WindowRect } from '../../layout/types';
 import { applyTheme, isKnownTheme, THEME_SETTING_KEY } from '../../theme';
 import { getSetting, setSetting } from '../../settings';
-import { registry, type SplitDirection } from '../../registry';
+import { registry } from '../../registry';
 import { executeDynamicTool, serializeManifest } from './manifest';
 import { LAYOUT_VERBS, nearestToolNames } from './tool-names';
 
-const SPLIT_DIRS: readonly SplitDirection[] = ['left', 'right', 'above', 'below'];
-const NAV_DIRS: readonly NavDirection[] = ['left', 'right', 'up', 'down'];
-const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
 const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
 
@@ -82,35 +65,6 @@ function resolveRect(value: unknown): WindowRect | null {
     : null;
 }
 
-/**
- * Orientation aliases the agent may pass instead of a concrete side: `vertical`
- * means side-by-side areas (split toward the right), `horizontal` means stacked
- * areas (split below). The UI corner-grip still uses the four concrete sides; this
- * only widens what `split_area` accepts so the model can reason in the simpler
- * vertical/horizontal terms. See docs/architecture/agent-tools.mdx.
- */
-const SPLIT_ALIASES: Record<string, SplitDirection> = { vertical: 'right', horizontal: 'below' };
-
-/** Resolve a split arg (a concrete side or a vertical/horizontal alias) to a side. */
-function resolveSplitDirection(raw: unknown): SplitDirection | null {
-  const v = String(raw);
-  if (SPLIT_DIRS.includes(v as SplitDirection)) return v as SplitDirection;
-  return SPLIT_ALIASES[v] ?? null;
-}
-
-/** Viewport nav direction; accepts the split-style `above`/`below` synonyms. */
-function resolveNavDirection(raw: unknown): NavDirection | null {
-  const v = String(raw);
-  if (NAV_DIRS.includes(v as NavDirection)) return v as NavDirection;
-  if (v === 'above') return 'up';
-  if (v === 'below') return 'down';
-  return null;
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-}
-
 /** Display title for a pane id (panel or widget), falling back to the id. */
 export function paneTitle(id: string): string {
   return resolveView(id)?.title ?? id;
@@ -133,7 +87,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
             id: v.id,
             title: v.title,
             role: roleOf(v.id),
-            ...(roleOf(v.id) === 'tool' ? { defaultDock: v.defaultDock ?? 'left' } : {}),
             ...(v.sections?.length
               ? { sections: v.sections.map((s) => ({ id: s.id, label: s.label })) }
               : {}),
@@ -149,9 +102,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           })),
       };
     case 'show':
-      return showTarget(String(args.target ?? ''), args.where as 'here' | 'beside' | 'dock');
-    case 'list_workspaces':
-      return lc ? await lc.listWorkspaces() : { error: 'workspace not ready' };
+      return showTarget(String(args.target ?? ''));
     case 'list_open_panes':
       return { panes: listOpenPanesDetailed() };
     case 'get_layout':
@@ -188,42 +139,17 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { closed: lc?.closePane(String(args.id)) ?? false };
     case 'focus_pane':
       return { focused: lc?.focusPane(String(args.instanceId)) ?? false };
-    case 'move_pane': {
-      const direction = args.direction != null ? resolveNavDirection(args.direction) : null;
-      const areaId = args.areaId != null ? String(args.areaId) : undefined;
-      // `edge` splits the destination and drops the pane into the new half. This
-      // is what closes the long-standing gap where a pane opened into the wrong
-      // place could not be moved beside another one at all — `move_pane` could
-      // only tab into an existing area or step to an adjacent one.
-      // Same vocabulary as `split_area` — including its `vertical`/`horizontal`
-      // aliases — so one concept has one spelling across the whole tool surface.
-      const edge = args.edge != null ? resolveSplitDirection(args.edge) : null;
-      if (args.edge != null && !edge) {
-        return { error: `edge must be one of ${SPLIT_DIRS.join(', ')}, vertical, or horizontal` };
-      }
-      // `edge` counts as having named a destination. It is checked here rather
-      // than only alongside areaId/direction because `edge` ALONE is the natural
-      // call — "split where this pane already is" — and `movePaneTo` resolves the
-      // host from the pane's own area. Requiring a companion argument made the
-      // most useful form of the verb unreachable.
-      if (!areaId && !direction && !edge) {
-        return { error: `pass areaId, direction (${NAV_DIRS.join(', ')}), or edge` };
-      }
-      const ok = movePaneTo(String(args.instanceId), {
-        areaId,
-        direction: direction ?? undefined,
-        edge: edge ?? undefined,
-      });
-      return ok ? { ok } : { error: 'unknown pane/area, or the move breaks area rules' };
-    }
     // ----------------------------------------------------------- windows
     case 'open_window': {
+      // Give a pane a window of its own — tearing it out of a tabbed window if it
+      // shares one — and optionally place that window.
       const instanceId = String(args.instanceId);
-      if (!setPaneWindowed(instanceId, true)) {
-        return { error: 'already a window, or unknown instanceId' };
+      if (!windowOfInstance(layoutStore.getSnapshot().frame, instanceId)) {
+        return { error: `unknown instanceId: ${instanceId}` };
       }
-      // Placement is applied after the window exists, so a bad snap/rect leaves
-      // an ordinary window rather than failing the whole call.
+      tearOffPane(instanceId);
+      // Placement is applied after the tear, so a bad snap/rect leaves an ordinary
+      // window rather than failing the whole call.
       if (args.snap != null) {
         const zone = resolveSnapZone(args.snap);
         if (!zone) return { ok: true, warning: `unknown snap zone "${String(args.snap)}"` };
@@ -235,10 +161,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         if (win) layoutStore.dispatch({ type: 'SET_WINDOW_RECT', windowId: win.id, rect });
       }
       return { ok: true };
-    }
-    case 'dock_window': {
-      const ok = setPaneWindowed(String(args.instanceId), false);
-      return ok ? { ok } : { error: 'not a window, or unknown instanceId' };
     }
     case 'window_state': {
       const instanceId = String(args.instanceId);
@@ -254,17 +176,13 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           if (!zone) return { error: `snap must be one of ${SNAP_ZONES.join(', ')}` };
           return { ok: snapWindow(instanceId, zone) };
         }
-        case 'move_to_desktop': {
-          const workspaceId = args.workspaceId != null ? String(args.workspaceId) : '';
-          if (!workspaceId) return { error: 'move_to_desktop needs workspaceId' };
-          // Async: it edits another workspace's stored blob. Reported as started
-          // rather than awaited, matching the other cross-workspace verbs.
-          void moveWindowToDesktop(instanceId, workspaceId);
-          return { ok: true };
-        }
+        case 'present':
+          return { ok: presentPane(instanceId) };
+        case 'unpresent':
+          return { ok: presentPane(null) };
         default:
           return {
-            error: 'state must be minimize, maximize, restore, snap or move_to_desktop',
+            error: 'state must be minimize, maximize, restore, snap, present or unpresent',
           };
       }
     }
@@ -301,13 +219,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       void setSetting(THEME_SETTING_KEY, id);
       return { ok: true };
     }
-    case 'desktop.set_mode': {
-      const mode = String(args.mode);
-      if (mode !== 'tiling' && mode !== 'floating') {
-        return { error: 'mode must be tiling or floating' };
-      }
-      return { ok: setDesktopMode(mode as DesktopMode) };
-    }
     case 'desktop.configure_taskbar': {
       // Merged over what is stored, not replaced: the tool documents omitted
       // fields as "left alone", and a whole-object write would silently reset
@@ -327,42 +238,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { ok: true, taskbar: next };
     }
 
-    // ------------------------------------------------------------- areas
-    case 'split_area': {
-      const direction = resolveSplitDirection(args.direction);
-      if (!direction) {
-        return {
-          error: `direction must be one of ${SPLIT_DIRS.join(', ')}, vertical, or horizontal`,
-        };
-      }
-      // viewId is optional: omitted → duplicate the split area's own view.
-      const viewId = args.viewId != null ? String(args.viewId) : undefined;
-      const target = String(args.instanceId ?? args.areaId ?? '');
-      const newInstanceId = splitAreaBy(target, direction, viewId);
-      return newInstanceId === null
-        ? { error: 'unknown area/instanceId or viewId' }
-        : { ok: true, newInstanceId };
-    }
-    case 'join_area': {
-      const direction = resolveNavDirection(args.direction);
-      if (!direction) return { error: `direction must be one of ${NAV_DIRS.join(', ')}` };
-      const ok = joinAreaDirection(String(args.instanceId ?? args.areaId ?? ''), direction);
-      return ok ? { ok } : { error: 'no aligned neighbor to join in that direction' };
-    }
-    case 'resize_area': {
-      const ok = resizeAreaPx(String(args.instanceId ?? args.areaId ?? ''), {
-        width: num(args.width),
-        height: num(args.height),
-      });
-      return ok ? { ok } : { error: 'unknown area/instanceId (or no resizable axis)' };
-    }
-    case 'fullscreen_area': {
-      const on = args.on !== false;
-      const target = args.instanceId ?? args.areaId;
-      const ok = fullscreenArea(on ? String(target ?? '') : null, on);
-      return ok ? { ok, fullscreen: on } : { error: 'unknown area/instanceId' };
-    }
-
     // ----------------------------------------------------------- regions
     case 'toggle_region': {
       const position = String(args.position) as RegionPosition;
@@ -377,32 +252,6 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       const ok = setRegionView(String(args.instanceId), String(args.viewId));
       return ok ? { ok } : { error: 'unknown instanceId, or viewId is not one of its regions' };
     }
-
-    // ------------------------------------------------------------- docks
-    case 'open_tool_in_dock': {
-      const dock = args.dock != null ? (String(args.dock) as DockSide) : undefined;
-      if (dock && !DOCK_SIDES.includes(dock)) {
-        return { error: `dock must be one of ${DOCK_SIDES.join(', ')}` };
-      }
-      const instanceId = openToolInDock(String(args.id), dock);
-      return instanceId ? { ok: true, instanceId } : { error: 'unknown id, or not a tool view' };
-    }
-    case 'toggle_dock': {
-      const dock = String(args.dock) as DockSide;
-      if (!DOCK_SIDES.includes(dock)) {
-        return { error: `dock must be one of ${DOCK_SIDES.join(', ')}` };
-      }
-      const visible = typeof args.visible === 'boolean' ? args.visible : undefined;
-      const ok = toggleDock(dock, visible);
-      return ok ? { ok } : { error: 'dock has no tools to show' };
-    }
-
-    // -------------------------------------------------------- workspaces
-    case 'create_workspace':
-      return lc ? await lc.createWorkspace(String(args.name)) : { error: 'workspace not ready' };
-    case 'switch_workspace':
-      registry.switchWorkspace(String(args.id));
-      return { ok: true, switched: args.id };
 
     default: {
       // Not a layout verb — try the dynamic tools the manifest advertised

@@ -26,7 +26,7 @@ exists today:
   the final answer — so a turn shows the thinking instead of looking silent if the
   final `content` is sparse. See "The orchestrator" below.
 - **Conversational chat widget** (`agent.chat`, command `agent.openChat`): a
-  dockable pane with a multi-turn transcript, a per-turn action log, and the
+  pane with a multi-turn transcript, a per-turn action log, and the
   model's reply. Each turn replays prior user/assistant turns to the backend as
   `history` (the backend stays stateless per turn). It drives the same
   orchestrator, so it reasons about the live layout and widget contents (via the
@@ -113,10 +113,10 @@ turn, the draft and the active session id in a small module-level store keyed by
 agent id; `ChatWidget` reads it through `useSyncExternalStore` and owns none of it.
 
 That is not tidiness, it is the fix for "the chat resets when I prompt". The shell
-unmounts this pane routinely — a workspace switch tears down every pane, an inactive
-tab is unmounted rather than hidden ([Unmount is not close](../architecture/desktop-shell.mdx)),
-and the agent's **own layout tools** (`open_pane`, `split_area`) restructure the tree
-it is rendered in. With the conversation in `useState`, each of those blanked it: the
+unmounts this pane routinely — an inactive tab is unmounted rather than hidden
+([Unmount is not close](../architecture/windowing.mdx#pane-lifetime-unmount-is-not-close)),
+and the agent's **own layout tools** (`open_window` tearing it out of a tabbed window,
+say) re-parent it. With the conversation in `useState`, each of those blanked it: the
 pane came back showing the starter prompts, re-read the node, and got the last
 _saved_ state — which for a turn still streaming is the conversation as it was before
 the question. So the most reliable way to lose a conversation was to ask the agent to
@@ -461,16 +461,14 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `intake`     | records, browser, research, library                                | records, research        | session mode  |
 | `trainer`    | training, recipe, cells, evals, localtrack, datasets, llamacpp, wandb, editor, files | training                 | session mode  |
 
-Two of `researcher`'s groups are load-bearing for the workspaces it backs, and both
-were **dead buttons** before: Research and Web Ops dock the Review pane (`records` —
-it could display a proposal but not file one), and Web Ops docks the search panel
-(`search` — the pane's own results were unreachable to the agent beside it). A
-docked pane whose agent lacks the matching group is the failure mode to watch for
-when adding a preset.
+Two of `researcher`'s groups are load-bearing for the panes it works beside, and
+both were **dead buttons** before: the Review pane (`records` — it could display a
+proposal but not file one), and the search panel (`search` — the pane's own results
+were unreachable to the agent beside it). A pane whose agent lacks the matching group
+is the failure mode to watch for.
 
-`trainer` backs the [fine-tuning workspace](training.mdx#the-fine-tuning-workspace)
-and shows the _other_ half of that trap. `hardware` is pointedly **not** in its scope,
-even though the workspace reads a hardware probe: a group is a tool name's prefix
+`trainer` shows the _other_ half of that trap. `hardware` is pointedly **not** in its
+scope, even though the training panes read a hardware probe: a group is a tool name's prefix
 (`_group_of`), that namespace holds settings keys rather than tools, so naming it
 would permit nothing at all and say nothing about it. Check that a group you list has
 tools under it, not just a module with that name.
@@ -499,13 +497,11 @@ Mechanics (`run_agent_turn(agent_id=…)`):
   the spec's `preload_groups`, and `list_tool_groups`/`load_tools` only see its
   allowed groups (no forgiveness auto-load outside them). The peer tools and
   `agent.delegate` are core only for specs that declare them (`main`).
-- **A workspace picks the agent.** A `FramePreset` may declare `agent: '<id>'`, and
-  the docked chat opens as that agent for that workspace — Data Ops as the `dba`,
-  Research and Web Ops as `researcher`, Data Entry as `intake`. Choosing another
-  from the picker is a
-  per-workspace override (kept in `localStorage`, keyed by workspace id) so it
-  survives switching away and back; the declared agent is the default, not a lock.
-  See [windowing](../architecture/windowing.mdx).
+- **The picker chooses the agent.** The chat opens as `main`; choosing another from
+  the picker is remembered (in `localStorage`, keyed by the desktop's workspace row)
+  so it survives a reload. (Workspace presets used to declare a persona each — Data
+  Ops as the `dba`, Data Entry as `intake` — until they were removed with the tiling
+  frame.)
 - **Per-agent settings**
   `agent.<id>.provider/endpoint/model/temperature/contextSize/maxTokens/topP/permissionMode`
   fall back to the `agent.orchestrator.*` keys, then defaults (`roster.agent_setting`).
@@ -635,11 +631,11 @@ write. Pinned by
 
 **Workspace context.** Alongside the focused pane, `askAgent` attaches
 `context.panes` — a snapshot of every _visible_ pane that exposes one
-(`readVisibleAgentContexts`: each area's active tab, each visible dock's active
-tool, floating panes; background tabs are unmounted, so their state isn't readable
-anyway). The backend formats it as a compact index just before the user turn
-(`_workspace_context_message`). This is what makes a preset workspace a role rather
-than furniture: the researcher already knows which row the Review pane has open,
+(`readVisibleAgentContexts`: each non-minimized window's active tab, topmost first;
+background tabs are unmounted, so their state isn't readable anyway). The backend
+formats it as a compact index just before the user turn
+(`_workspace_context_message`). This is what lets the agent see the desk it sits at:
+the researcher already knows which row the Review pane has open,
 and the intake agent which document is on screen, without spending a
 `list_open_panes` +
 `get_pane_context` round on it. It rides on **every** turn, so it is budgeted —
@@ -649,8 +645,8 @@ rather than the whole object, so the JSON stays parseable and the note points th
 model at `get_pane_context` for the full read).
 
 The frontend executes each relayed `tool_call` against the registry and the
-`registry.layoutController` seam and the frame controller (installed by
-`Frame.tsx`), then replies. This
+`registry.layoutController` seam and the desktop controller (installed by the shell,
+`layout/install.ts`), then replies. This
 runs in an **always-on relay handler** (`initAgentRelay` in
 `packages/core/src/modules/agent/orchestrator-client.ts`, registered at boot) rather
 than inside a chat turn — so the same relay serves chat turns **and**
@@ -660,33 +656,25 @@ lives in `packages/core/src/modules/agent/tool-exec.ts` (`executeTool`) — the
 **shared relay surface** the [Python REPL](./repl.mdx)'s `dash` SDK drives too, so
 they all stay in lockstep.
 
-**`LAYOUT_TOOLS`** (app-level verbs over the frame — center **areas**, tool
-**docks**, per-pane **regions**; the model discovers ids via the read tools, so
-the catalog stays frontend-owned). Reads: `list_available_panes` (views with
-role + regions), `list_open_panes` (instances with location), **`get_layout`**
-(the whole frame — the orientation read), `list_workspaces`,
-`get_pane_context(instanceId)`. Panes: `open_pane(id)` (role-routed),
-`close_pane(id)`, `focus_pane(instanceId)`, `move_pane(instanceId, areaId? |
-direction? | edge?)`. Windows: `open_window(instanceId, snap?, rect?)`,
-`dock_window(instanceId)`, `window_state(instanceId, state, …)`,
-`arrange_windows(style)`. Areas:
-`split_area(instanceId, direction, viewId?)`, `join_area(instanceId,
-direction)`, `resize_area(instanceId, width?, height?)`,
-`fullscreen_area(instanceId?, on?)`. Regions & docks: `toggle_region(instanceId,
-position, open?)`, `set_region_view(instanceId, viewId)`,
-`open_tool_in_dock(id, dock?)`, `toggle_dock(dock, visible?)`. Workspaces:
-`create_workspace(name)`, `switch_workspace(id)`. `split_area`'s `direction`
-takes the model-friendly orientations **`vertical`** (areas side by side) and
-**`horizontal`** (stacked) as well as the four concrete sides
-(`left`/`right`/`above`/`below`), resolved in `tool-exec.ts`. `move_pane`'s `edge`
-takes the same vocabulary and is what lets a pane opened in the wrong place be moved
-_beside_ another one — without it, `move_pane` could only tab into an existing area
-or step to an adjacent one, which is why the guide used to say "do not open then
-move". `edge` alone is a valid call: it means "split where this pane already is".
+**`LAYOUT_TOOLS`** (app-level verbs over the desktop — every pane lives in a
+**window**, merged panes are its tabs, and **regions** are per-pane strips; the model
+discovers ids via the read tools, so the catalog stays frontend-owned). Reads:
+`list_available_panes` (views with role, sections + regions), `list_open_panes`
+(instances with their window), **`get_layout`** (every window — the orientation
+read), `get_pane_context(instanceId)`. Panes: `open_pane(id)` (a new window, or
+focus a single-instance view), `close_pane(id)`, `focus_pane(instanceId)`. Windows:
+`open_window(instanceId, snap?, rect?)` (a window of its own, torn out of a tabbed
+one), `window_state(instanceId, state, …)` (`minimize`/`maximize`/`restore`/`snap`/
+`present`/`unpresent`), `arrange_windows(style)`. Regions:
+`toggle_region(instanceId, position, open?)`, `set_region_view(instanceId, viewId)`.
+Two panes side by side is two snaps, `left` and `right`. (The tiling verbs —
+`split_area`, `join_area`, `resize_area`, `move_pane`, `fullscreen_area`,
+`open_tool_in_dock`, `toggle_dock`, `dock_window` — and the workspace verbs went with
+the tiling frame.)
 
 **Appearance verbs are a separate, lazily-loaded `desktop` group**
-(`desktop.set_backdrop`, `desktop.set_theme`, `desktop.set_mode`,
-`desktop.configure_taskbar`) rather than part of the layout core. Restyling the
+(`desktop.set_backdrop`, `desktop.set_theme`, `desktop.configure_taskbar`) rather
+than part of the layout core. Restyling the
 desktop is a rare request and every always-on tool is paid for on every turn by every
 agent — the same reasoning that cut the core 34 → 11 below. The group loads on demand
 or on a theme/wallpaper/taskbar keyword, and `get_layout` carries the backdrop and
@@ -694,10 +682,10 @@ theme **catalogs** so those verbs have ids the model cannot guess without two mo
 always-on `list_*` schemas.
 
 The layout verbs are **layout-only and ungated** (like `open_pane`), and they
-execute through the same frame-controller functions the user's gestures and
-keybindings use — one set of operations, three callers (see
+execute through the same controller functions the user's gestures and keybindings
+use — one set of operations, three callers (see
 [windowing](../architecture/windowing.mdx)). Each mutation triggers the store's
-autosave, so an agent split persists exactly like a user drag.
+autosave, so an agent's snap persists exactly like a user's drag.
 
 The `/ws` handler (`backend/app.py`) is now a bidirectional router: one inbound
 receive loop dispatches by channel (`agent` → the orchestrator) while a telemetry
@@ -1008,12 +996,12 @@ trigger), the instructions arrive only when `use_skill` asks, and a skill's
 instructions never name tools the model cannot see. See [Skills](skills.mdx).
 
 The **layout verbs split by cost**, because they were the largest always-on block
-and most agents never rearrange anything. The five _read_ verbs
-(`list_available_panes`, `list_workspaces`, `list_open_panes`, `get_layout`,
-`get_pane_context`) plus [`show`](../architecture/agent-tools.mdx#show-the-intent-verb)
+and most agents never rearrange anything. The four _read_ verbs
+(`list_available_panes`, `list_open_panes`, `get_layout`, `get_pane_context`) plus
+[`show`](../architecture/agent-tools.mdx#show-the-intent-verb)
 stay in every agent's core — any agent may need to see what the user is looking at, and
-`show` is how it puts something there. The sixteen _arrangement_ verbs are loaded on
-demand via `load_tools("layout")`.
+`show` is how it puts something there. The _arrangement_ verbs are loaded on demand
+via `load_tools("layout")`.
 
 **Including for `main`.** They used to stay in `main`'s core on the reasoning that
 driving the shell is its job — but that made the _loosely prompted_ agent the most
@@ -1028,7 +1016,7 @@ only decides whether it costs schema space up front. Two traps worth knowing:
 `_all_dynamic_tools` dedupes against the core, and that dedupe base **must** be
 spec-aware or the arrangement verbs are swallowed and `load_tools("layout")`
 silently returns nothing; and the `layout` keyword list is deliberately narrow
-(`pane`, `dock`, `split`, … but never `open`/`close`), since a keyword that fires
+(`pane`, `window`, `snap`, … but never `open`/`close`), since a keyword that fires
 on most turns would give back exactly what the split saves.
 
 `run_agent_turn` recomputes the presented list **each round** from `active_groups`,
@@ -1086,9 +1074,8 @@ rules it used to carry moved into the `layout` group's guide.
 
 ## Contributions to the layout shell
 
-- **Panels:** `chat.conversation` (main chat view, default: center tab group),
-  `chat.sessions` (session list, default: left dock), `chat.inspector`
-  (tool-call/trace detail, default: right dock, opened on demand).
+- **Panels:** `chat.conversation` (main chat view), `chat.sessions` (session list),
+  `chat.inspector` (tool-call/trace detail, opened on demand) — each in a window.
 - **Commands:** `chat.new`, `chat.focusInput`, `chat.openSession`,
   `chat.toggleInspector`, `chat.stopGeneration`.
 - **Default keybindings:** declared for new-session and focus-input; bound through

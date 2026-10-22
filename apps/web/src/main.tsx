@@ -33,7 +33,6 @@ import {
   musicModule,
   initMusic,
   keymapModule,
-  layoutsModule,
   libraryModule,
   docviewerModule,
   kbModule,
@@ -117,15 +116,6 @@ async function boot(): Promise<void> {
   const root = document.getElementById('root');
   if (!root) throw new Error('Missing #root element');
 
-  // A per-workspace OS window (window.perWorkspace) opens straight into a target
-  // workspace instead of the desktop. The desktop shell injects the id as a
-  // global via an initialization script (window_open_workspace); the
-  // `?workspace=` query is a fallback for browser/dev testing.
-  const initialWorkspaceId =
-    (window as { __HORRIBLE_WORKSPACE__?: string }).__HORRIBLE_WORKSPACE__ ??
-    new URLSearchParams(window.location.search).get('workspace') ??
-    undefined;
-
   // Rendered FIRST, so the boot splash can narrate the steps below rather than
   // the user staring at a white window while plugins load and the backend is
   // probed. `AppRoot` shows the splash until `bootReady()`; the shell itself
@@ -163,7 +153,7 @@ async function boot(): Promise<void> {
 
   reactRoot.render(
     <StrictMode>
-      <AppRoot appTitle="horrible-dashboard" initialWorkspaceId={initialWorkspaceId} />
+      <AppRoot appTitle="horrible-dashboard" />
     </StrictMode>,
   );
 
@@ -178,8 +168,8 @@ async function boot(): Promise<void> {
   // (native dialogs, window control, tray…) and wire the native window control;
   // the browser gets the browser set and leaves the seam null.
   // The keymap has to know its host and platform before any binding resolves:
-  // `mod+1..9` is workspace switching on the desktop and unreachable browser tab
-  // switching in a tab, so the two ship different defaults for the same command.
+  // some chords the native shell can claim are browser-owned in a tab, so the two
+  // ship different defaults for the same command.
   const platform = detectPlatform();
   initKeymapHost({ platform, host: isTauri() ? 'desktop' : 'browser' });
 
@@ -206,7 +196,6 @@ async function boot(): Promise<void> {
   }
   await bootStep('modules', 'Registering modules', () => {
     registry.register(dashboardModule);
-    registry.register(layoutsModule);
     registry.register(agentModule);
     registry.register(scratchModule);
     registry.register(mcpModule);
@@ -227,10 +216,7 @@ async function boot(): Promise<void> {
     registry.register(storageModule);
     registry.register(updatesModule);
     registry.register(interpretabilityModule);
-    // After interpretability so the Lab workspace tab sits beside it, and because the
-    // Lab frame composes its panes more heavily than any other module's.
     registry.register(labModule);
-    // After the Lab, whose frame tabs it beside the Hugging Face browser.
     registry.register(discoverModule);
     registry.register(evalsModule);
     // After evals: an eval case runs through the same orchestrator loop, so a

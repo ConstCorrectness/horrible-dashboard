@@ -45,10 +45,10 @@ function freshFrame(): FrameState {
   return createEmptyFrame();
 }
 
-/** Any edit that bumps the store's revision. `SET_DOCK` is the smallest one that
- * does not need a pane to exist first. */
+/** Any edit that bumps the store's revision. `SET_BACKDROP` is the smallest one
+ * that does not need a pane to exist first. */
 function makeAnEdit(size: number): void {
-  layoutStore.dispatch({ type: 'SET_DOCK', side: 'left', patch: { size } });
+  layoutStore.dispatch({ type: 'SET_BACKDROP', backdrop: { id: 'aurora', params: { size } } });
 }
 
 describe('layout autosave durability', () => {

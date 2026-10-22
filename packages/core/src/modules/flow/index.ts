@@ -40,7 +40,6 @@ export const flowModule: ModuleManifest = {
       component: FlowLibraryPanel,
       role: 'tool',
       icon: '🗂',
-      defaultDock: 'left',
       singleton: true,
       // Embedded, and its one home is the left region strip of `flow.editor`
       // above. It was briefly also an Explorer section, which was a mistake: a
@@ -66,18 +65,6 @@ export const flowModule: ModuleManifest = {
       // first when none is up, so this works from a cold workspace too.
       run: () => {
         revealRegionView('flow.library');
-      },
-    },
-  ],
-  frames: [
-    {
-      id: 'orchestration',
-      name: 'Orchestration',
-      description: 'Wire agents and tools into a graph, then run it.',
-      icon: '🕸',
-      frame: {
-        center: { pane: 'flow.editor' },
-        docks: { left: { tools: ['explorer.home'], size: 280 } },
       },
     },
   ],

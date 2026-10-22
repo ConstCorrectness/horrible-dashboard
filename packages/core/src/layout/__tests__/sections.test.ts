@@ -17,8 +17,6 @@ import { registry } from '../../registry';
 import {
   activeSectionOf,
   defaultSectionFor,
-  dockSidesOf,
-  isDockable,
   openPane,
   revealSection,
   sectionsOf,
@@ -27,7 +25,6 @@ import {
   VIEW_ALIASES,
 } from '../controller';
 import { findPaneAnywhere } from '../model';
-import { railEntries } from '../rail';
 import { resolveShowTarget } from '../show';
 import { deserialize, serialize } from '../serialize';
 import { layoutStore } from '../store';
@@ -45,7 +42,6 @@ beforeAll(() => {
         title: 'Host Pane',
         component: Stub,
         role: 'tool',
-        defaultDock: 'right',
         singleton: true,
         sections: [
           { id: 'play', label: 'Play', key: 'p' },
@@ -59,7 +55,6 @@ beforeAll(() => {
         title: 'Embedded Body',
         component: Stub,
         role: 'tool',
-        defaultDock: 'left',
         embedded: true,
         singleton: true,
       },
@@ -87,17 +82,6 @@ describe('embedded views', () => {
     expect(ids).toContain('pane.open:s.plain');
     expect(ids).toContain('pane.open:s.host');
     expect(ids).not.toContain('pane.open:s.embedded');
-  });
-
-  it('are never dockable, so they earn no rail glyph', () => {
-    expect(isDockable('s.plain')).toBe(true);
-    expect(dockSidesOf('s.embedded')).toEqual([]);
-    expect(isDockable('s.embedded')).toBe(false);
-
-    const frame = layoutStore.getSnapshot().frame;
-    const glyphs = railEntries(frame, 'left').map((e) => e.viewId);
-    expect(glyphs).toContain('s.plain');
-    expect(glyphs).not.toContain('s.embedded');
   });
 
   it('stay reachable by name, revealed inside their host', () => {
@@ -369,24 +353,6 @@ describe('sections', () => {
     const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId!)!.pane;
     expect(pane.viewId).toBe('s.host');
     expect(activeSectionOf(pane)).toBe('play');
-  });
-
-  it('drops an embedded view from a restored dock, but keeps it in the centre', () => {
-    // A layout saved before the view was embedded. Docking it again would rebuild
-    // exactly the competing home embedding removes — and `dockSidesOf` says that
-    // state is impossible, so restoring it is restoring something today's code
-    // cannot produce. A centre placement is a deliberate act and survives.
-    const docked = openPane('s.plain')!;
-    const centred = openPane('s.host')!;
-    const blob = serialize(layoutStore.getSnapshot().frame);
-    const known = new Set([...registry.panels, ...registry.widgets].map((v) => v.id));
-
-    const kept = deserialize(blob, known)!;
-    expect(findPaneAnywhere(kept, docked)).not.toBeNull();
-
-    const pruned = deserialize(blob, known, new Set(['s.plain']))!;
-    expect(pruned.docks.left.tools.map((t) => t.viewId)).not.toContain('s.plain');
-    expect(findPaneAnywhere(pruned, centred)).not.toBeNull();
   });
 
   it('survives a serialize → deserialize round trip', () => {

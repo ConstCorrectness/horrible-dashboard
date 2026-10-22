@@ -6,7 +6,7 @@ sidebar_label: People
 # Module: People
 
 **One pane for everyone you know**, replacing nine. `people.home` is a `tool`
-(right dock) with five [sections](../architecture/windowing.mdx#embedded-views-and-sections):
+with five [sections](../architecture/windowing.mdx#embedded-views-and-sections):
 
 | Section | What it is | Came from |
 | --- | --- | --- |
@@ -175,7 +175,7 @@ The roster must never acquire a network dependency to draw.
 
 ## Contributions
 
-- **Widget:** `people.home` (`tool`, right dock, 5 sections). **One**
+- **Widget:** `people.home` (`tool`, 5 sections). **One**
   `useAgentContext` provider, per the sections contract — section bodies render
   inside this pane's instance id, so two providers would silently overwrite each other.
 - **Commands:** `people.open`, `people.find` (jumps to Discover), `people.me`.

@@ -26,18 +26,15 @@ export interface KeyContext {
   textInput: boolean;
   /** A modal dialog is open. */
   dialogOpen: boolean;
-  /** An area is fullscreened in-window. */
+  /**
+   * A pane is presented over the whole shell. Named for the tiled area it used to
+   * mean; kept so user `when` clauses written against it still resolve.
+   */
   fullscreenArea: boolean;
   /** Keyboard Lock is live and holding the OS's own chords (`alt+tab`). */
   keyboardLock: boolean;
-  /**
-   * A desktop window holds focus. Lets the window bindings and the frame's
-   * identical `alt+arrow` area bindings coexist on a tiling desktop, where both
-   * are live at once.
-   */
+  /** A desktop window holds focus. */
   windowFocused: boolean;
-  /** The active desktop's paradigm. */
-  desktopMode: 'floating' | 'tiling';
   shellView: 'boot' | 'oobe' | 'desktop';
   platform: KeyPlatform;
   host: 'browser' | 'desktop';
@@ -76,7 +73,11 @@ export const CONTEXT_KEYS: ContextKeyDoc[] = [
     description: 'An input, textarea or contenteditable holds DOM focus.',
   },
   { key: 'dialogOpen', type: 'boolean', description: 'A modal dialog is open.' },
-  { key: 'fullscreenArea', type: 'boolean', description: 'An area is fullscreened in-window.' },
+  {
+    key: 'fullscreenArea',
+    type: 'boolean',
+    description: 'A pane is presented over the whole shell.',
+  },
   {
     key: 'keyboardLock',
     type: 'boolean',
@@ -85,13 +86,7 @@ export const CONTEXT_KEYS: ContextKeyDoc[] = [
   {
     key: 'windowFocused',
     type: 'boolean',
-    description: 'A desktop window (not a tiled area) holds focus.',
-  },
-  {
-    key: 'desktopMode',
-    type: 'string',
-    description: "The active desktop's paradigm.",
-    values: ['floating', 'tiling'],
+    description: 'A desktop window holds focus.',
   },
   {
     key: 'shellView',

@@ -19,21 +19,15 @@
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  layoutStore,
   openContextMenu,
   recentViewIds,
   PANE_CATEGORY_LABELS,
   registry,
   resolveViewIcon,
   subscribeRecents,
-  useSetting,
-  useWorkspaces,
-  WORKSPACES_ENABLED_KEY,
   type PanelDecl,
   type WidgetDecl,
 } from '@horrible/core';
-
-import { DEFAULT_DESKTOP_MODE_KEY } from '../constants';
 
 export function StartButton({ showLabels }: { showLabels: boolean }) {
   const [open, setOpen] = useState(false);
@@ -211,14 +205,11 @@ function StartMenu({ onClose }: { onClose: () => void }) {
               </div>
             ))}
         {!matches.length && <p className="os-start-empty">Nothing matches “{query}”.</p>}
-        {!searching && <DesktopsGroup onClose={onClose} />}
       </div>
       {/* The footer. Settings is what people come to this corner for, and it was
           previously reachable only as one row of sixty, filed under S. */}
       <div className="os-start-footer">
-        {/* Home first: the taskbar is on screen in both paradigms, so this is the
-            way back to the desktop from a tiled workspace, where the frame covers
-            the home screen completely. */}
+        {/* Home first: it brings the home screen back up when it is minimized. */}
         <button
           type="button"
           role="menuitem"
@@ -311,198 +302,6 @@ function RecentGroup({ views, onLaunch }: { views: View[]; onLaunch: (id: string
       {recent.map((v) => (
         <StartItem key={v.id} view={v} onLaunch={onLaunch} />
       ))}
-    </div>
-  );
-}
-
-/** How many desktops the group lists before it folds the rest away. */
-const DESKTOPS_SHOWN = 5;
-
-/**
- * Desktops: switch between them, and manage them.
- *
- * This is the **home for workspace management** now that the top strip hides itself
- * on a floating desktop. The strip was the only surface that could rename, create,
- * reset and delete a workspace, so hiding it without moving management would have
- * left those verbs unreachable — the constraint that kept a switcher out of the
- * taskbar in the first place.
- *
- * It switches *and* manages, which is what the taskbar could never do — see
- * `Taskbar.tsx`, which states plainly that it carries no workspace switcher. (Three
- * comments in this file and its neighbours used to describe "the pips in the
- * taskbar" doing the switching. There are no pips; they were removed. The comments
- * outlived them, and on the floating desktop we boot into they were describing the
- * *only* switcher a user had.)
- *
- * **The list is presets first, then custom desktops.** It used to be `useWorkspaces()`
- * alone, which is the set of *persisted rows* — a preset becomes one only when it is
- * first opened. So on a clean install this group listed a single entry while the
- * comment below claimed it carried "well over a dozen", and every hand-designed
- * workspace was unreachable here. `WorkspaceTabs` has always merged the two; this
- * now merges them identically, and a preset already opened appears once, not twice.
- *
- * Two things keep it from swallowing the launcher, because every module that
- * declares a `frames:` preset contributes a desktop and there are well over a
- * dozen of them:
- *
- * - **The list is folded past `DESKTOPS_SHOWN`.** Expanding is one click and the
- *   fold never hides the *active* desktop, which is kept in the short list
- *   wherever it sorts — a switcher whose current position is off-screen reads as
- *   though you are on none of them.
- * - **Creating a desktop is one row, not two.** Tiled-vs-floating is a preference
- *   (`desktop.defaultMode`) and lives on the settings page next to the control
- *   that converts the desktop you are on; a launcher is not where a paradigm
- *   should be chosen. See `DesktopModeSection`.
- */
-function DesktopsGroup({ onClose }: { onClose: () => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const { workspaces, activeId } = useWorkspaces();
-  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
-  const defaultMode = useSetting<string>(DEFAULT_DESKTOP_MODE_KEY) ?? 'tiling';
-  const floats = defaultMode === 'floating';
-  // Every row here switches, makes or manages a workspace; with workspaces off
-  // (`desktop.workspaces`) there is one desktop and the group has nothing to offer.
-  const workspacesOn = useSetting<boolean>(WORKSPACES_ENABLED_KEY) === true;
-  if (!workspacesOn) return null;
-  const presets = registry.framePresets;
-  const presetIds = new Set(presets.map((p) => p.id));
-  const run = (command: string) => {
-    void registry.runCommand(command);
-    onClose();
-  };
-
-  // Presets first (a preset is a desktop whether or not it has been opened yet),
-  // then the custom ones — the same merge, in the same order, as `WorkspaceTabs`.
-  // A preset already opened has a row too, so it is filtered out of the second
-  // half or it would appear twice under two different names.
-  const entries = [
-    ...presets.map((p) => ({ id: p.id, name: p.name, glyph: p.icon ?? p.name[0] })),
-    ...workspaces
-      .filter((w) => !presetIds.has(w.id))
-      .map((w) => ({ id: w.id, name: w.name, glyph: undefined as string | undefined })),
-  ];
-
-  const shown = expanded ? entries : entries.slice(0, DESKTOPS_SHOWN);
-  // The active desktop is never folded away, even when it sorts past the cut.
-  const active = entries.find((e) => e.id === activeId);
-  const listed = active && !shown.includes(active) ? [...shown, active] : shown;
-  const hidden = entries.length - listed.length;
-
-  return (
-    <div className="os-start-group">
-      <h3 className="os-start-group-head">Desktops</h3>
-      {listed.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          role="menuitem"
-          className={`os-start-item${entry.id === activeId ? ' is-active' : ''}`}
-          aria-current={entry.id === activeId}
-          onClick={() => {
-            registry.switchWorkspace(entry.id);
-            onClose();
-          }}
-        >
-          {/* The active desktop shows which paradigm it is running; the rest show
-              their own preset glyph, which is how they are identified everywhere
-              else (the tab strip, the home launcher). A custom desktop has none
-              and keeps the neutral dot. */}
-          <span className="os-start-icon" aria-hidden="true">
-            {entry.id === activeId ? (frame.mode === 'tiling' ? '▦' : '❐') : (entry.glyph ?? '·')}
-          </span>
-          <span className="os-start-title">{entry.name}</span>
-        </button>
-      ))}
-      {hidden > 0 && (
-        <button
-          type="button"
-          role="menuitem"
-          className="os-start-item os-start-more"
-          onClick={() => setExpanded(true)}
-        >
-          <span className="os-start-icon" aria-hidden="true">
-            ⋯
-          </span>
-          <span className="os-start-title">{hidden} more desktops</span>
-        </button>
-      )}
-      {expanded && entries.length > DESKTOPS_SHOWN && (
-        <button
-          type="button"
-          role="menuitem"
-          className="os-start-item os-start-more"
-          onClick={() => setExpanded(false)}
-        >
-          <span className="os-start-icon" aria-hidden="true">
-            ⋯
-          </span>
-          <span className="os-start-title">Show fewer</span>
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        className="os-start-item"
-        onClick={() => run(floats ? 'workspace.newFloating' : 'workspace.new')}
-      >
-        <span className="os-start-icon" aria-hidden="true">
-          {floats ? '❐' : '▦'}
-        </span>
-        {/* The kind is reported, not chosen: it comes from `desktop.defaultMode`,
-            and saying which one you are about to get is the difference between a
-            preference and a surprise. */}
-        <span className="os-start-title">New {floats ? 'floating' : 'tiled'} desktop</span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="os-start-item"
-        onClick={() => run('workspace.saveAs')}
-      >
-        <span className="os-start-icon" aria-hidden="true">
-          ⎘
-        </span>
-        <span className="os-start-title">Save this arrangement as a desktop</span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="os-start-item"
-        onClick={() => run('workspace.rename')}
-      >
-        <span className="os-start-icon" aria-hidden="true">
-          ✎
-        </span>
-        <span className="os-start-title">Rename this desktop</span>
-      </button>
-      {/* Reset for a preset, delete for a custom one — the same either/or the tab
-          strip's menu makes, and for the same reason: a preset's tab comes straight
-          back from its manifest, so "delete" would be a lie. */}
-      {activeId && presetIds.has(activeId) ? (
-        <button
-          type="button"
-          role="menuitem"
-          className="os-start-item"
-          onClick={() => run('layout.reset')}
-        >
-          <span className="os-start-icon" aria-hidden="true">
-            ↺
-          </span>
-          <span className="os-start-title">Reset this desktop to its preset</span>
-        </button>
-      ) : (
-        <button
-          type="button"
-          role="menuitem"
-          className="os-start-item is-danger"
-          onClick={() => run('workspace.delete')}
-        >
-          <span className="os-start-icon" aria-hidden="true">
-            ✕
-          </span>
-          <span className="os-start-title">Delete this desktop</span>
-        </button>
-      )}
     </div>
   );
 }

@@ -1,10 +1,9 @@
 /* ------------------------------------------------------------------ welcome --
  *
- * The dashboard's welcome card. Prose, then the workspace launcher — which brings
- * its own grid (`workspace-launcher.css`), so nothing here styles a tile.
+ * The dashboard's welcome card.
  *
- * Measured rather than full-bleed: the card sits in a center area that can be most
- * of a monitor wide, and a paragraph running the whole way across is unreadable.
+ * Measured rather than full-bleed: the card sits in a window that can be most of a
+ * monitor wide, and a paragraph running the whole way across is unreadable.
  */
 .welcome {
   display: flex;

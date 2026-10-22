@@ -17,7 +17,6 @@ export type {
   CollabDecl,
   PaneShareDecl,
   CommandDecl,
-  DockSide,
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,

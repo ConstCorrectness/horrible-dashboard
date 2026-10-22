@@ -1,35 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { layoutStore } from '../store';
-import { areaId, createEmptyFrame, findArea, findPaneAnywhere, instanceId } from '../model';
-import { seedFromPreset, type FramePreset } from '../presets';
-import type { AreaNode, PaneState } from '../types';
+import { areaId, findPaneAnywhere, instanceId, windowId } from '../model';
+import type { PaneState } from '../types';
+import { current, loadFrame, windowsFrame } from './fixtures';
 
-const KNOWN = new Set(['scratch.note', 'files.tree', 'editor.buffer', 'dashboard.welcome']);
-
-const preset: FramePreset = {
-  id: 'test',
-  name: 'Test',
-  frame: {
-    center: {
-      split: 'row',
-      children: [{ tabs: ['editor.buffer'] }, { pane: 'dashboard.welcome' }],
-    },
-    docks: { left: { tools: ['files.tree'] } },
-  },
-};
-
+/** Two windows: an editor with a second tab, and the welcome card. */
 function load(): void {
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'test',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
-  });
+  loadFrame(windowsFrame([['editor.buffer', 'scratch.note'], 'dashboard.welcome']), 'test');
 }
 
 function freshPane(viewId: string): PaneState {
-  const seq = layoutStore.getSnapshot().frame.paneSeq;
-  return { instanceId: instanceId(viewId, seq), viewId };
+  return { instanceId: instanceId(viewId, current().paneSeq), viewId };
 }
 
 beforeEach(() => {
@@ -41,7 +23,7 @@ describe('hydration and revisions', () => {
     const snap = layoutStore.getSnapshot();
     expect(snap.hydrated).toBe(false);
     expect(snap.workspaceId).toBeNull();
-    expect(snap.frame.center.kind).toBe('area');
+    expect(snap.frame.windows).toEqual([]);
   });
 
   it('LOAD_WORKSPACE swaps id+frame atomically without bumping revision', () => {
@@ -55,73 +37,28 @@ describe('hydration and revisions', () => {
 
   it('mutations bump revision; no-ops return the same snapshot', () => {
     load();
-    const snap = layoutStore.getSnapshot();
-    const focused = snap.frame.focusedAreaId!;
-    // No-op: focusing the already-focused area.
-    expect(layoutStore.dispatch({ type: 'FOCUS_AREA', areaId: focused })).toBe(snap);
-    // Real mutation.
-    const areas = collectAreaIds();
-    const other = areas.find((a) => a !== focused)!;
-    const next = layoutStore.dispatch({ type: 'FOCUS_AREA', areaId: other });
-    expect(next.revision).toBe(snap.revision + 1);
-    expect(next.frame.focusedAreaId).toBe(other);
+    const [editor, welcome] = current().windows;
+    const focused = layoutStore.dispatch({
+      type: 'FOCUS_PANE',
+      instanceId: editor.area.tabs[0].instanceId,
+    });
+    // No-op: focusing the already-focused pane.
+    expect(
+      layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: editor.area.tabs[0].instanceId }),
+    ).toBe(focused);
+    const next = layoutStore.dispatch({
+      type: 'FOCUS_PANE',
+      instanceId: welcome.area.tabs[0].instanceId,
+    });
+    expect(next.revision).toBe(focused.revision + 1);
+    expect(next.frame.focusedInstanceId).toBe(welcome.area.tabs[0].instanceId);
   });
 });
 
-function collectAreaIds(): string[] {
-  const out: string[] = [];
-  const walk = (node: AreaNode | { kind: 'split'; children: unknown[] }): void => {
-    if (node.kind === 'area') out.push((node as AreaNode).id);
-    else for (const c of (node as { children: AreaNode[] }).children) walk(c);
-  };
-  walk(layoutStore.getSnapshot().frame.center as AreaNode);
-  return out;
-}
-
-describe('pane and area actions', () => {
-  it('SPLIT_AREA with a pane focuses the new area (precomputable id)', () => {
-    load();
-    const snap = layoutStore.getSnapshot();
-    const target = snap.frame.focusedAreaId!;
-    const expectedAreaId = areaId(snap.frame.paneSeq);
-    const pane = {
-      instanceId: instanceId('scratch.note', snap.frame.paneSeq),
-      viewId: 'scratch.note',
-    };
-    const next = layoutStore.dispatch({
-      type: 'SPLIT_AREA',
-      areaId: target,
-      direction: 'below',
-      pane,
-    });
-    expect(next.frame.focusedAreaId).toBe(expectedAreaId);
-    const area = findArea(next.frame.center, expectedAreaId)!;
-    expect(area.tabs[0].viewId).toBe('scratch.note');
-  });
-
-  it('MOVE_PANE relocates a tab and refocuses the target area', () => {
-    load();
-    const snap = layoutStore.getSnapshot();
-    const editor = snap.frame.center as { children: AreaNode[] };
-    const source = editor.children[0];
-    const target = editor.children[1];
-    const inst = source.tabs[0].instanceId;
-    const next = layoutStore.dispatch({
-      type: 'MOVE_PANE',
-      instanceId: inst,
-      targetAreaId: target.id,
-    });
-    expect(findPaneAnywhere(next.frame, inst)?.location).toEqual({
-      kind: 'area',
-      areaId: target.id,
-    });
-    expect(next.frame.focusedAreaId).toBe(target.id);
-  });
-
+describe('pane actions', () => {
   it('SET_REGION patches per-instance region state', () => {
     load();
-    const snap = layoutStore.getSnapshot();
-    const inst = (snap.frame.center as { children: AreaNode[] }).children[0].tabs[0].instanceId;
+    const inst = current().windows[0].area.tabs[0].instanceId;
     const region = {
       open: true,
       size: 280,
@@ -147,8 +84,7 @@ describe('pane and area actions', () => {
 
   it('RETARGET_PANE renames in place, keeping position and regions', () => {
     load();
-    const children = (layoutStore.getSnapshot().frame.center as { children: AreaNode[] }).children;
-    const inst = findPaneAnywhere(layoutStore.getSnapshot().frame, children[0].tabs[0].instanceId)!;
+    const inst = findPaneAnywhere(current(), current().windows[0].area.tabs[0].instanceId)!;
     const region = {
       open: true,
       size: 300,
@@ -178,198 +114,105 @@ describe('pane and area actions', () => {
 
   it('RETARGET_PANE refuses to mint an id another pane already holds', () => {
     load();
-    const frame = layoutStore.getSnapshot().frame;
-    const children = (frame.center as { children: AreaNode[] }).children;
+    const frame = current();
     const next = layoutStore.dispatch({
       type: 'RETARGET_PANE',
-      instanceId: children[0].tabs[0].instanceId,
-      newInstanceId: children[1].tabs[0].instanceId,
+      instanceId: frame.windows[0].area.tabs[0].instanceId,
+      newInstanceId: frame.windows[1].area.tabs[0].instanceId,
     });
     expect(next.frame).toBe(frame);
   });
 
-  it('SET_FULLSCREEN validates the area and clears on null', () => {
+  it('INSERT_PANE adds a tab to a window and advances the id counter', () => {
     load();
-    expect(
-      layoutStore.dispatch({ type: 'SET_FULLSCREEN', areaId: 'a999' }).frame.fullscreenAreaId,
-    ).toBeNull();
-    const areaIdReal = collectAreaIds()[0];
-    expect(
-      layoutStore.dispatch({ type: 'SET_FULLSCREEN', areaId: areaIdReal }).frame.fullscreenAreaId,
-    ).toBe(areaIdReal);
-    expect(
-      layoutStore.dispatch({ type: 'SET_FULLSCREEN', areaId: null }).frame.fullscreenAreaId,
-    ).toBeNull();
-  });
-});
-
-describe('dock and floating actions', () => {
-  it('INSERT_TOOL activates and reveals the dock; SET_DOCK cannot open an empty dock', () => {
-    load();
-    const tool = freshPane('files.tree');
-    const next = layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: tool });
-    expect(next.frame.docks.right.visible).toBe(true);
-    expect(next.frame.docks.right.activeTool).toBe(tool.instanceId);
-    const bottom = layoutStore.dispatch({
-      type: 'SET_DOCK',
-      side: 'bottom',
-      patch: { visible: true },
-    });
-    expect(bottom.frame.docks.bottom.visible).toBe(false);
-  });
-
-  it('SET_TOOL_SIZE remembers a width per tool and mirrors it as the dock fallback', () => {
-    load();
-    const files = freshPane('files.tree');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: files });
-    const chat = freshPane('agent.chat');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: chat });
-
-    layoutStore.dispatch({
-      type: 'SET_TOOL_SIZE',
-      side: 'right',
-      instanceId: files.instanceId,
-      size: 280,
-    });
-    const after = layoutStore.dispatch({
-      type: 'SET_TOOL_SIZE',
-      side: 'right',
-      instanceId: chat.instanceId,
-      size: 500,
-    });
-
-    const tools = after.frame.docks.right.tools;
-    // Each tool keeps its own width — the whole point of the per-tool field.
-    expect(tools.find((t) => t.instanceId === files.instanceId)?.dockSize).toBe(280);
-    expect(tools.find((t) => t.instanceId === chat.instanceId)?.dockSize).toBe(500);
-    // ...and the dock tracks the last one, so the next tool opened here inherits it.
-    expect(after.frame.docks.right.size).toBe(500);
-  });
-
-  it('SET_TOOL_SIZE is a no-op for an unknown tool or an unchanged size', () => {
-    load();
-    const tool = freshPane('files.tree');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: tool });
-    const sized = layoutStore.dispatch({
-      type: 'SET_TOOL_SIZE',
-      side: 'right',
-      instanceId: tool.instanceId,
-      size: 300,
-    });
-    expect(
-      layoutStore.dispatch({
-        type: 'SET_TOOL_SIZE',
-        side: 'right',
-        instanceId: tool.instanceId,
-        size: 300,
-      }),
-    ).toBe(sized);
-    expect(
-      layoutStore.dispatch({
-        type: 'SET_TOOL_SIZE',
-        side: 'right',
-        instanceId: 'nope#9',
-        size: 400,
-      }),
-    ).toBe(sized);
-  });
-
-  it('WINDOW_FROM_PANE → DOCK_WINDOW round-trips a pane through the window layer', () => {
-    load();
-    const snap = layoutStore.getSnapshot();
-    const areaNode = (snap.frame.center as { children: AreaNode[] }).children[0];
-    const inst = areaNode.tabs[0].instanceId;
-    const windowed = layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: inst });
-    const located = findPaneAnywhere(windowed.frame, inst)!;
-    expect(located.location.kind).toBe('window');
-    expect(windowed.frame.windows).toHaveLength(1);
-    const windowId = (located.location as { windowId: string }).windowId;
-    const target = collectAreaIds()[0];
-    const docked = layoutStore.dispatch({ type: 'DOCK_WINDOW', windowId, areaId: target });
-    expect(findPaneAnywhere(docked.frame, inst)?.location).toEqual({
-      kind: 'area',
-      areaId: target,
-    });
-    expect(docked.frame.windows).toHaveLength(0);
-    expect(docked.frame.focusedWindowId).toBeNull();
-  });
-
-  it('REMOVE_PANE keeps a valid frame when the last center pane closes', () => {
-    layoutStore.dispatch({
-      type: 'LOAD_WORKSPACE',
-      workspaceId: 'mini',
-      frame: (() => {
-        const f = createEmptyFrame();
-        return f;
-      })(),
-    });
+    const win = current().windows[1];
     const pane = freshPane('scratch.note');
-    const root = layoutStore.getSnapshot().frame.center.id;
-    layoutStore.dispatch({ type: 'INSERT_PANE', areaId: root, pane });
-    const next = layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: pane.instanceId });
-    expect(next.frame.center.kind).toBe('area');
-    expect((next.frame.center as AreaNode).tabs).toHaveLength(0);
+    const seq = current().paneSeq;
+    const next = layoutStore.dispatch({ type: 'INSERT_PANE', areaId: win.area.id, pane });
+    const area = next.frame.windows.find((w) => w.id === win.id)!.area;
+    expect(area.tabs.map((t) => t.instanceId)).toContain(pane.instanceId);
+    expect(area.activeTab).toBe(area.tabs.length - 1);
+    expect(next.frame.paneSeq).toBe(seq + 1);
+  });
+
+  it('REMOVE_PANE closes a window when its last tab goes', () => {
+    load();
+    const welcome = current().windows[1];
+    layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: welcome.id });
+    const next = layoutStore.dispatch({
+      type: 'REMOVE_PANE',
+      instanceId: welcome.area.tabs[0].instanceId,
+    });
+    expect(next.frame.windows.map((w) => w.id)).not.toContain(welcome.id);
+    expect(next.frame.focusedWindowId).toBeNull();
+  });
+
+  it('REMOVE_PANE of one tab leaves its window open', () => {
+    load();
+    const editor = current().windows[0];
+    const next = layoutStore.dispatch({
+      type: 'REMOVE_PANE',
+      instanceId: editor.area.tabs[1].instanceId,
+    });
+    const win = next.frame.windows.find((w) => w.id === editor.id)!;
+    expect(win.area.tabs).toHaveLength(1);
+    expect(win.area.activeTab).toBe(0);
   });
 });
 
-describe('MOVE_TOOL (rail customization drop verb)', () => {
-  it('moves a docked tool to another dock and makes it active there', () => {
+describe('window actions', () => {
+  it('OPEN_WINDOW mints precomputable ids and stacks the window on top', () => {
     load();
-    const files = freshPane('files.tree');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
-    const next = layoutStore.dispatch({
-      type: 'MOVE_TOOL',
-      instanceId: files.instanceId,
-      side: 'right',
-    });
-    expect(findPaneAnywhere(next.frame, files.instanceId)?.location).toEqual({
-      kind: 'dock',
-      dock: 'right',
-    });
-    expect(next.frame.docks.right.activeTool).toBe(files.instanceId);
-    // It was the left dock's visible tool, so the right dock reveals it.
-    expect(next.frame.docks.right.visible).toBe(true);
+    const seq = current().paneSeq;
+    const pane = { instanceId: instanceId('scratch.note', seq), viewId: 'scratch.note' };
+    const next = layoutStore.dispatch({ type: 'OPEN_WINDOW', pane });
+    const win = next.frame.windows.at(-1)!;
+    expect(win.id).toBe(windowId(seq + 1));
+    expect(win.area.id).toBe(areaId(seq + 2));
+    expect(win.area.tabs).toEqual([pane]);
+    expect(win.z).toBe(Math.max(...next.frame.windows.map((w) => w.z)));
+    expect(next.frame.focusedWindowId).toBe(win.id);
+    expect(next.frame.paneSeq).toBe(seq + 3);
   });
 
-  it('keeps a hidden target dock hidden when the tool was stacked out of sight', () => {
+  it('OPEN_WINDOW refuses a pane that is already open', () => {
     load();
-    const files = freshPane('files.tree');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
-    const scratch = freshPane('scratch.note');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: scratch });
-    // files.tree is now stacked behind scratch.note; bottom dock is hidden.
-    const next = layoutStore.dispatch({
-      type: 'MOVE_TOOL',
-      instanceId: files.instanceId,
-      side: 'bottom',
-    });
-    expect(findPaneAnywhere(next.frame, files.instanceId)?.location).toEqual({
-      kind: 'dock',
-      dock: 'bottom',
-    });
-    expect(next.frame.docks.bottom.visible).toBe(false);
-    expect(next.frame.docks.bottom.activeTool).toBe(files.instanceId);
+    const frame = current();
+    const pane = frame.windows[1].area.tabs[0];
+    expect(layoutStore.dispatch({ type: 'OPEN_WINDOW', pane }).frame).toBe(frame);
   });
 
-  it('re-docks a pane living in a center area, revealing the dock', () => {
+  it('WINDOW_FROM_PANE tears a tab out into a window of its own', () => {
     load();
-    const children = (layoutStore.getSnapshot().frame.center as { children: AreaNode[] }).children;
-    const inst = children[0].tabs[0].instanceId;
-    const next = layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: inst, side: 'right' });
-    expect(findPaneAnywhere(next.frame, inst)?.location).toEqual({ kind: 'dock', dock: 'right' });
-    expect(next.frame.docks.right.visible).toBe(true);
+    const editor = current().windows[0];
+    const tab = editor.area.tabs[1].instanceId;
+    const next = layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: tab });
+    expect(next.frame.windows).toHaveLength(3);
+    const located = findPaneAnywhere(next.frame, tab)!;
+    expect(located.location.windowId).not.toBe(editor.id);
+    expect(next.frame.windows.find((w) => w.id === editor.id)!.area.tabs).toHaveLength(1);
   });
 
-  it('no-ops for the same side or an unknown instance', () => {
+  it('WINDOW_FROM_PANE is a no-op for a pane already alone in its window', () => {
     load();
-    const files = freshPane('files.tree');
-    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
-    const snap = layoutStore.getSnapshot();
+    const frame = current();
+    const alone = frame.windows[1].area.tabs[0].instanceId;
+    expect(layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: alone }).frame).toBe(frame);
+  });
+
+  it('SET_PRESENTED takes only a pane that exists, and clears when it closes', () => {
+    load();
+    const welcome = current().windows[1].area.tabs[0].instanceId;
     expect(
-      layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: files.instanceId, side: 'left' }),
-    ).toBe(snap);
-    expect(layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: 'nope#9', side: 'right' })).toBe(
-      snap,
-    );
+      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: 'nope#9' }).frame
+        .presentedInstanceId,
+    ).toBeNull();
+    expect(
+      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: welcome }).frame
+        .presentedInstanceId,
+    ).toBe(welcome);
+    expect(
+      layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: welcome }).frame.presentedInstanceId,
+    ).toBeNull();
   });
 });

@@ -7,10 +7,9 @@
 //! "permission was denied" there while the identical build worked on Windows
 //! (WebView2 prompts) and macOS (wry's UI delegate answers).
 //!
-//! Granted only on windows that load the app itself (`main` and the `ws-*`
-//! workspace windows). The embedded browser's child webviews and `browser-*`
-//! windows show arbitrary sites and are deliberately left alone, so an open tab
-//! can never listen to the room.
+//! Granted only on the window that loads the app itself (`main`). The embedded
+//! browser's child webviews and `browser-*` windows show arbitrary sites and are
+//! deliberately left alone, so an open tab can never listen to the room.
 
 use tauri::{Runtime, WebviewWindow};
 

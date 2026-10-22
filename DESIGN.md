@@ -428,10 +428,9 @@ changes how the app looks, not which glyphs line up.
 
 ## Layout
 
-The app is a **frame**, not a page: an activity rail on each side, a bottom dock,
-a top workspace tab strip, and a center grid of panes that split, tab and float.
-A desktop mode layers OS-style windows, snapping and a taskbar on the same frame.
-Panes are resized by the user, so **the app has essentially no viewport
+The app is a **desktop**, not a page: every pane is a window that snaps, tabs,
+minimizes to a taskbar and can be presented full-screen. Panes are resized by the
+user, so **the app has essentially no viewport
 breakpoints** — only three exist in the entire stylesheet set (`width <= 720px`
 in four places, `max-width: 620px` in one). Density adapts to the _pane_, via
 intrinsic sizing, `min-width: 0` on every flex child, and `auto-fill` grids at a
@@ -678,8 +677,8 @@ animated component adds the eighth.
   containers.
 - **Don't** use native OS emojis as UI icons or decorative badges inside a pane.
   Vector stroke icons that inherit `currentColor` only. The single documented
-  exception is a pane manifest's `icon:` field, which is the activity rail's own
-  convention.
+  exception is a pane manifest's `icon:` field, which is the taskbar's and the Start
+  menu's own convention.
 - **Don't** hardcode a colour, a radius, or a `999px` pill. A pill is
   `calc(var(--radius-sm) * 4)`; hud and retro chose square corners and a literal
   overrides that decision app-wide.

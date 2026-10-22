@@ -14,7 +14,7 @@
  *    in-flight rect is local state; dispatching per frame would bump `revision` a
  *    hundred times per drag and drive the autosave debounce into a write loop.
  */
-import { memo, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
   clampRect,
   closePaneGuarded,
@@ -25,7 +25,6 @@ import {
   presentPane,
   releaseCapture,
   resolveView,
-  setPaneWindowed,
   toggleWindowMaximized,
   toggleWindowMinimized,
   type SnapZone,
@@ -96,14 +95,6 @@ export const DesktopWindow = memo(function DesktopWindow({
   const rect = live ?? win.rect;
   const active = win.area.tabs[win.area.activeTab];
   const decl = active ? resolveView(active.viewId) : null;
-  // Windows exist on a tiling desktop too (a pane popped out of the frame), so
-  // this is read per render rather than assumed from "we are rendering a window".
-  // Selected granularly so other layout dispatches don't force a re-render.
-  const floatingDesktop = useSyncExternalStore(
-    layoutStore.subscribe,
-    useCallback(() => layoutStore.getSnapshot().frame.mode === 'floating', []),
-  );
-
   const startGesture = useCallback(
     (e: React.PointerEvent, kind: 'move' | 'resize', edge?: readonly [string, number, number]) => {
       if (e.button !== 0) return;
@@ -354,25 +345,6 @@ export const DesktopWindow = memo(function DesktopWindow({
           </span>
         )}
         <div className="os-window-controls">
-          {/* Dock-back is a **tiling-desktop** verb, and only there.
-           *
-           * A floating desktop retains the centre tree but never draws it, so
-           * putting a pane back in the frame there hides it and leaves it on the
-           * taskbar as minimized — the same outcome, and the same recovery, as
-           * the ─ button beside it. Two controls doing one thing under different
-           * names is what made this corner confusing, so the one that describes a
-           * destination the user cannot see is the one that goes. */}
-          {!floatingDesktop && (
-            <button
-              className="os-window-btn"
-              title="Dock back into the frame"
-              aria-label="Dock back into the frame"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => active && setPaneWindowed(active.instanceId, false)}
-            >
-              ⤵
-            </button>
-          )}
           <button
             className="os-window-btn"
             title="Minimize"
@@ -419,10 +391,9 @@ export const DesktopWindow = memo(function DesktopWindow({
         </div>
       </div>
 
-      {/* `PaneWithRegions`, not a bare `PaneHost`: a region host dragged into a
-          floating window would otherwise lose every strip it declares — the
-          workbench's whole sidebar — with nothing to say it had one. Areas and
-          docks already wrap their active pane this way. */}
+      {/* `PaneWithRegions`, not a bare `PaneHost`: a region host would otherwise
+          lose every strip it declares — the workbench's whole sidebar — with
+          nothing to say it had one. */}
       <div className="os-window-body">{active && <PaneWithRegions pane={active} />}</div>
 
       {/* Resize grips last so they sit above the body's own pointer handlers. */}

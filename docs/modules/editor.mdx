@@ -26,9 +26,8 @@ the component.
 
 ## Contributions to the layout shell
 
-- **Panels:** `editor.buffer` (one panel instance per open buffer, default:
-  center tab group). Buffer tabs are workspace tabs — the shell owns tab UX, the
-  editor owns content. The pane receives its `source` via pane params
+- **Panels:** `editor.buffer` (one panel instance per open buffer, each in a window;
+  merge windows to tab them). The shell owns tab UX, the editor owns content. The pane receives its `source` via pane params
   (`usePaneParams`); the instance id is derived from the source so reopening the
   same file/note focuses the existing buffer (generic windowing support added with
   `openPanel(id, { instanceId, params })`).
@@ -316,7 +315,7 @@ neither the Drive mount nor the GitHub viewer ships a file viewer of its own.
 Closing a buffer with unsaved edits prompts before discarding them, VS Code-style.
 The mechanism is a generic **pane close guard** in the frame engine
 (`layout/close-guards.ts`): a pane registers `registerCloseGuard(instanceId, fn)`,
-and every close path — the area-menu **Close pane**, the dock/floating **✕**, and
+and every close path — the window's **✕**, a tab's middle-click, the taskbar, and
 `LayoutController.closePane` (so agent-driven closes are covered too) — routes
 through `closePaneGuarded`, which runs the guard and only dispatches `REMOVE_PANE`
 when it resolves `true`. `BufferView` registers a guard that, when the buffer is

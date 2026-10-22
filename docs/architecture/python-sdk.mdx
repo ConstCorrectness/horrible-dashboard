@@ -67,59 +67,38 @@ which the call returns `{'error': 'tool timed out'}`).
 
 ### `dash.panes`
 
-Open, close, and inspect panes (panels and widgets) in the **active workspace**.
+Open, close, and inspect panes (panels and widgets) on the desktop.
 
 | Method | Relayed tool | Returns |
 | --- | --- | --- |
-| `dash.panes.available()` | `list_available_panes` | `{'views': [{'id', 'title', 'role', 'defaultDock'?, 'regions'?}]}` — everything openable |
+| `dash.panes.available()` | `list_available_panes` | `{'views': [{'id', 'title', 'role', 'sections'?, 'regions'?}]}` — everything openable |
 | `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'role', 'hasContext', 'location'}]}` — what's open now |
-| `dash.panes.open(view_id)` | `open_pane` | `{'ok': True, 'opened': view_id}` — role-routed (documents tab, widgets take an area, tools dock) |
+| `dash.panes.open(view_id)` | `open_pane` | `{'ok': True, 'opened': view_id}` — opens in a new window, or focuses a single-instance view already open |
 | `dash.panes.close(instance_id)` | `close_pane` | `{'closed': bool}` (`False` if no such open pane) |
 | `dash.panes.focus(instance_id)` | `focus_pane` | `{'focused': bool}` |
 
 - `id` is the **view** id (e.g. `settings.home`); `instanceId` identifies a
   **live instance** (e.g. `repl.console#1`) and is what `dash.context` takes.
-- `role` is the view's frame role (`document`/`tool`/`widget`); `location` says
-  where the instance lives (`{'kind': 'area', 'areaId'}`, `{'kind': 'dock',
-  'dock'}`, or `{'kind': 'floating'}`).
+- `role` is what the view says it is (`document`/`tool`/`widget`); `location` names
+  the window the instance lives in (`{'kind': 'window', 'windowId', 'areaId'}`).
 - `hasContext` is `True` when that instance exposes a readable state snapshot.
 - `regions` lists the [region views](panel-groups.mdx) the view hosts.
 - `open` of an unknown id is a no-op on the UI but still returns `{'ok': True}`;
   always discover ids with `available()` first.
 
-### `dash.workspaces`
-
-List, create, and switch the named workspace tabs.
-
-| Method | Relayed tool | Returns |
-| --- | --- | --- |
-| `dash.workspaces.list()` | `list_workspaces` | `{'active': str \| None, 'workspaces': [{'id', 'name'}]}` |
-| `dash.workspaces.create(name)` | `create_workspace` | `{'id', 'name'}` — created **and switched to** |
-| `dash.workspaces.switch(workspace_id)` | `switch_workspace` | `{'ok': True, 'switched': workspace_id}` |
-
 ### `dash.layout`
 
-Arrange the frame — the same layout verbs the agent drives. Targets are
-**instance ids** (from `dash.panes.open_list()`); area ids come from
-`dash.layout.describe()`.
+Arrange the desktop — the same layout verbs the agent drives. Targets are
+**instance ids** (from `dash.panes.open_list()`).
 
 | Method | Relayed tool | Notes |
 | --- | --- | --- |
-| `dash.layout.describe()` | `get_layout` | the whole frame: center split tree (areas, tabs, regions), docks, windows, fullscreen/focus, plus `desktop` (mode, backdrop, and the backdrop/theme catalogs) |
-| `dash.layout.split(instance_id, direction, view_id=None)` | `split_area` | `direction` `left`/`right`/`above`/`below` (or `vertical`/`horizontal`); `view_id` opens a different view in the new area, else duplicates |
-| `dash.layout.join(instance_id, direction)` | `join_area` | absorb the aligned neighbor (`left`/`right`/`up`/`down`); document tabs are adopted |
-| `dash.layout.move(instance_id, area_id=None, direction=None, edge=None)` | `move_pane` | into an exact area, toward a neighbor, or onto an area's `edge` — which splits it and lands the pane in the new half |
-| `dash.layout.resize(instance_id, width=None, height=None)` | `resize_area` | pixels |
-| `dash.layout.fullscreen(instance_id=None, on=True)` | `fullscreen_area` | expand an area to fill the frame / restore |
+| `dash.layout.describe()` | `get_layout` | every window (rect, mode, snap, z, tabs with their regions), the focused window and presented pane, plus `desktop` (backdrop, and the backdrop/theme catalogs) |
 | `dash.layout.toggle_region(instance_id, position, open=None)` | `toggle_region` | flip a pane's `left`/`right`/`bottom` region strip |
 | `dash.layout.set_region_view(instance_id, view_id)` | `set_region_view` | show a specific region view on its host pane |
-| `dash.layout.open_tool(view_id, dock=None)` | `open_tool_in_dock` | open/focus a tool in a dock |
-| `dash.layout.toggle_dock(dock, visible=None)` | `toggle_dock` | show/hide a dock |
-| `dash.layout.window(instance_id, snap=None, rect=None)` | `open_window` | pop out into a desktop window, optionally snapped or at an exact rect |
-| `dash.layout.dock(instance_id)` | `dock_window` | put a windowed pane back into the tiling frame |
-| `dash.layout.window_state(instance_id, state, snap=None, workspace_id=None)` | `window_state` | `minimize` / `maximize` / `restore` / `snap` / `move_to_desktop` |
+| `dash.layout.window(instance_id, snap=None, rect=None)` | `open_window` | give the pane a window of its own (tearing it out of a tabbed one), optionally snapped or at an exact rect |
+| `dash.layout.window_state(instance_id, state, snap=None)` | `window_state` | `minimize` / `maximize` / `restore` / `snap` / `present` / `unpresent` |
 | `dash.layout.arrange(style='grid')` | `arrange_windows` | lay every open window out (`grid`/`cascade`/`columns`/`rows`) |
-| `dash.layout.mode(mode)` | `desktop.set_mode` | flip this desktop between `tiling` and `floating` |
 | `dash.layout.backdrop(id, **params)` | `desktop.set_backdrop` | ids from `describe()["desktop"]["backdrops"]` |
 | `dash.layout.theme(id)` | `desktop.set_theme` | ids from `describe()["desktop"]["themes"]` |
 
@@ -245,12 +224,16 @@ src = dash.context(ed["instanceId"])["context"]   # read the editor
 dash.panes.open("explorer.home")
 ```
 
-**Build a focused workspace**
+**Put two panes side by side**
 
 ```python
-dash.workspaces.create("debugging")     # new tab, switched to
 dash.panes.open("terminal.instance")
-dash.panes.open("observability.logs")
+dash.panes.open("observability.io")
+for pane in dash.panes.open_list()["panes"]:
+    if pane["id"] == "terminal.instance":
+        dash.layout.window_state(pane["instanceId"], "snap", snap="left")
+    if pane["id"] == "observability.io":
+        dash.layout.window_state(pane["instanceId"], "snap", snap="right")
 ```
 
 ## State & lifetime

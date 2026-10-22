@@ -57,12 +57,6 @@ describe('karaoke module manifest', () => {
       expect(declared).toContain(binding.command);
     }
   });
-
-  it('ships a Karaoke frame with the stage centered', () => {
-    const frame = karaokeModule.frames?.find((f) => f.id === 'karaoke');
-    expect(frame).toBeDefined();
-    expect(frame?.frame.center).toEqual({ pane: 'karaoke.stage' });
-  });
 });
 
 describe('pending entries', () => {

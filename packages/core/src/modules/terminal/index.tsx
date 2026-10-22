@@ -1,6 +1,6 @@
 /**
- * Terminal module: xterm.js panes over backend PTYs (panel `terminal.instance`,
- * bottom dock). Commands manage terminals; `runCommand` opens one pre-running a
+ * Terminal module: xterm.js panes over backend PTYs (panel `terminal.instance`).
+ * Commands manage terminals; `runCommand` opens one pre-running a
  * command (visibly — never hidden execution). The agent's gated `terminal.exec`
  * tool is D3. See docs/modules/terminal.md.
  */
@@ -62,7 +62,6 @@ export const terminalModule: ModuleManifest = {
       // the `terminal` grant and a content protocol, both of which land
       // with co-editing — declaring `mirror` now does not leak a byte of it.
       share: { mode: 'mirror' },
-      defaultDock: 'bottom',
       agentTools: terminalAgentTools,
       // Not a singleton: each open is its own PTY.
     },

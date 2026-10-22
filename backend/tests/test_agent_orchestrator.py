@@ -537,11 +537,11 @@ def test_tools_for_merges_manifest_with_layout_tools() -> None:
     tools = orchestrator._tools_for(conn, prompt="run a terminal command")
     names = [t["function"]["name"] for t in tools]
     # the always-on layout tools are still present — the cheap read set plus `show`.
-    # The 16 arrangement verbs are NOT: they moved to the loadable `layout` group, and
+    # The arrangement verbs are NOT: they moved to the loadable `layout` group, and
     # a terminal-flavoured prompt has no reason to preload them.
     for layout in orchestrator.LAYOUT_READ_TOOLS:
         assert layout["function"]["name"] in names
-    assert "split_area" not in names
+    assert "window_state" not in names
     # ...plus the runtime-registered tool.
     assert "terminal.exec" in names
     # The schema crossed the wire; the handler never appears in the tool def.

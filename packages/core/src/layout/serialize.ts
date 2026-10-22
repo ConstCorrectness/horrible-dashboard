@@ -5,28 +5,16 @@
  * `deserialize` is defensive — it validates shapes, prunes panes whose view ids
  * are no longer registered (uninstalled plugin, renamed pane), and returns null
  * for anything that isn't a frame blob (e.g. a legacy dockview layout), which
- * callers treat as "reseed from preset".
+ * callers treat as "start empty".
  */
 import type { SerializedLayout } from '../workspace';
-import {
-  areaId,
-  createDock,
-  createEmptyFrame,
-  findArea,
-  firstArea,
-  normalize,
-  windowId,
-} from './model';
-import { isSnapZone } from './snap';
+import { windowsFromLegacyFrame } from './legacy-frame';
+import { areaId, windowId } from './model';
+import { isSnapZone, NOMINAL_VIEWPORT } from './snap';
 import { DEFAULT_BACKDROP } from './types';
 import type {
-  AreaNode,
   BackdropRef,
-  DesktopMode,
-  DockSide,
-  DockState,
   FrameState,
-  LayoutNode,
   PaneState,
   RegionPosition,
   RegionState,
@@ -40,20 +28,22 @@ export const FRAME_SCHEMA = 'horrible.frame';
  * v2 added the desktop shell: `floating[]` (fractions of the center grid) became
  * `windows[]` (pixels against `windowViewport`), plus `mode` and `backdrop`.
  *
+ * v3 removed the tiling frame: no `center`, `docks`, `mode`, `fullscreenAreaId` or
+ * `focusedAreaId`. An older blob's grid and docks become windows on the way in
+ * (`legacy-frame.ts`).
+ *
  * The guard in `deserialize` rejects a blob whose version is *higher* than this, so
- * an older build reading a v2 blob reseeds from the preset — i.e. **downgrading
- * discards the layout rather than corrupting it**. That is the intended trade; the
- * alternative is an old build interpreting pixel rects as fractions and putting every
- * window in the top-left few pixels.
+ * an older build reading a newer blob starts fresh — i.e. **downgrading discards
+ * the layout rather than corrupting it**. That is the intended trade: a v2 build
+ * reading a v3 blob would find no `center` and could only show its own empty grid.
  */
-export const FRAME_VERSION = 2;
+export const FRAME_VERSION = 3;
 
 /** Where a v2 window with an unreadable rect lands. */
 const DEFAULT_WINDOW_RECT: WindowRect = { x: 60, y: 48, w: 720, h: 480 };
 /** The v1 default, in the old fractional basis. */
 const LEGACY_RECT: WindowRect = { x: 0.2, y: 0.15, w: 0.5, h: 0.55 };
 
-const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
 
 /**
@@ -110,21 +100,11 @@ export function serialize(frame: FrameState): SerializedLayout {
  * Parse a stored layout blob into a FrameState, or null when the blob is not a
  * frame layout (wrong schema — including legacy dockview blobs) or too corrupt
  * to salvage. `knownViews` filters out panes/regions whose views no longer
- * exist. A future `version` bump adds a `migrate(v)` step here.
- *
- * `undockableViews` drops **dock** entries for views that can no longer be docked
- * at all (`dockSidesOf` returns `[]`) — a view since marked `embedded`, or one
- * whose `role` changed from `tool` to `document`. Either way the saved dock entry
- * is a state today's code cannot produce: for an embedded view it would resurrect
- * exactly the second, competing home that embedding removes, and for a document
- * view it would pin a centre-only pane into a dock no opener would ever put it in
- * again. It only filters docks: a *centre* pane or a region is a placement the
- * user made deliberately and `openPaneInArea` still supports.
+ * exist.
  */
 export function deserialize(
   blob: SerializedLayout | null | undefined,
   knownViews: ReadonlySet<string>,
-  undockableViews: ReadonlySet<string> = new Set(),
 ): FrameState | null {
   if (!blob || typeof blob !== 'object') return null;
   if (blob.schema !== FRAME_SCHEMA) return null;
@@ -162,11 +142,6 @@ export function deserialize(
       if (p.params && typeof p.params === 'object') {
         pane.params = p.params as Record<string, unknown>;
       }
-      // Optional and additive: a blob written before per-tool sizing simply has
-      // none, and the pane falls back to its dock's size. No version bump needed.
-      if (typeof p.dockSize === 'number' && Number.isFinite(p.dockSize) && p.dockSize >= 48) {
-        pane.dockSize = p.dockSize;
-      }
       const regions = readRegions(p.regions);
       if (regions) pane.regions = regions;
       // Kept as written, without checking it against the view's declarations:
@@ -174,12 +149,6 @@ export function deserialize(
       // removed is resolved away by `activeSectionOf`, which has to handle that
       // case regardless (sections can disappear while a pane is open).
       if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
-      // Additive, like `dockSize`: an older blob simply has none and the pane
-      // comes back showing. Persisted rather than cleared on load because a
-      // minimized pane is still the user's arrangement — restoring the workspace
-      // with everything they had put away popped back open would be the frame
-      // undoing their tidying every reload.
-      if (p.minimized === true) pane.minimized = true;
       return pane;
     };
 
@@ -217,77 +186,13 @@ export function deserialize(
       return Object.keys(out).length ? out : undefined;
     };
 
-    const readNode = (value: unknown): LayoutNode | null => {
-      if (!value || typeof value !== 'object') return null;
-      const n = value as Record<string, unknown>;
-      if (n.kind === 'area') {
-        if (typeof n.id !== 'string') return null;
-        trackNodeSeq(n.id);
-        const rawTabs = Array.isArray(n.tabs) ? n.tabs : [];
-        const tabs = rawTabs.map(readPane).filter((p): p is PaneState => p !== null);
-        const area: AreaNode = {
-          kind: 'area',
-          id: n.id,
-          tabs,
-          activeTab: Math.min(
-            typeof n.activeTab === 'number' && n.activeTab >= 0 ? n.activeTab : 0,
-            Math.max(tabs.length - 1, 0),
-          ),
-        };
-        if (n.headerCollapsed === true) area.headerCollapsed = true;
-        return area;
-      }
-      if (n.kind === 'split') {
-        if (typeof n.id !== 'string') return null;
-        if (n.orientation !== 'row' && n.orientation !== 'column') return null;
-        if (!Array.isArray(n.children)) return null;
-        trackNodeSeq(n.id);
-        const children = n.children.map(readNode).filter((c): c is LayoutNode => c !== null);
-        if (children.length === 0) return null;
-        const sizes = Array.isArray(n.sizes)
-          ? children.map((_, i) => {
-              const s = (n.sizes as unknown[])[i];
-              return typeof s === 'number' && s > 0 ? s : 1 / children.length;
-            })
-          : children.map(() => 1 / children.length);
-        return { kind: 'split', id: n.id, orientation: n.orientation, children, sizes };
-      }
-      return null;
-    };
-
-    // `w` joins `a`/`s`: window ids draw from the same counter, so a restored
-    // layout must not mint a window id that already exists.
+    // Window and area ids draw from the same counter as pane instances, so a
+    // restored layout must not mint one that already exists. (`s` is a split id
+    // from a pre-v3 grid: not reused, but it still says how far the counter got.)
     const trackNodeSeq = (id: string): void => {
       const m = /^[asw](\d+)$/.exec(id);
       if (m) maxSeq = Math.max(maxSeq, Number(m[1]));
     };
-
-    const fallback = createEmptyFrame();
-    const read = readNode(src.center);
-    const center = normalize((read && pruneEmptyAreas(read)) ?? fallback.center);
-
-    const docks = {} as Record<DockSide, DockState>;
-    for (const side of DOCK_SIDES) {
-      const d = (src.docks as Record<string, unknown> | undefined)?.[side];
-      if (!d || typeof d !== 'object') {
-        docks[side] = createDock(side);
-        continue;
-      }
-      const dock = d as Record<string, unknown>;
-      const tools = (Array.isArray(dock.tools) ? dock.tools : [])
-        .map(readPane)
-        .filter((p): p is PaneState => p !== null && !undockableViews.has(p.viewId));
-      const activeTool =
-        typeof dock.activeTool === 'string' && tools.some((t) => t.instanceId === dock.activeTool)
-          ? dock.activeTool
-          : (tools[0]?.instanceId ?? null);
-      docks[side] = {
-        visible: dock.visible === true && tools.length > 0,
-        size: clampSize(dock.size, createDock(side).size),
-        tools,
-        activeTool,
-      };
-    }
 
     const num = (v: unknown, d: number): number =>
       typeof v === 'number' && Number.isFinite(v) ? v : d;
@@ -306,7 +211,7 @@ export function deserialize(
       : legacy && Array.isArray(src.floating)
         ? src.floating
         : [];
-    const windows: WindowState[] = rawWindows
+    const read: WindowState[] = rawWindows
       .map((w, index): WindowState | null => {
         if (!w || typeof w !== 'object') return null;
         const entry = w as Record<string, unknown>;
@@ -365,16 +270,32 @@ export function deserialize(
       .filter((w): w is WindowState => w !== null);
 
     const rawViewport = src.windowViewport as Record<string, unknown> | undefined;
-    const windowViewport = legacy
+    let windowViewport = legacy
       ? // See above: unit basis, so old fractions become pixels on first measure.
-        windows.length > 0
+        read.length > 0
         ? { w: 1, h: 1 }
         : null
       : rawViewport && num(rawViewport.w, 0) > 0 && num(rawViewport.h, 0) > 0
         ? { w: num(rawViewport.w, 0), h: num(rawViewport.h, 0) }
         : null;
 
-    const mode: DesktopMode = src.mode === 'floating' ? 'floating' : 'tiling';
+    // A pre-v3 tiling grid and its docks. Converted against whatever basis the
+    // blob's own windows use — the unit square for v1, which the first measure then
+    // scales up like everything else — so both land in the same coordinates.
+    let windows = read;
+    if (blob.version < 3 && (src.center || src.docks)) {
+      const surface = windowViewport ?? (legacy ? { w: 1, h: 1 } : NOMINAL_VIEWPORT);
+      const seq = Math.max(maxSeq + 1 + read.length * 2, 1);
+      const migrated = windowsFromLegacyFrame(src, readPane, surface, seq);
+      if (migrated.windows.length > 0) {
+        maxSeq = Math.max(maxSeq, migrated.seq - 1);
+        // Beneath the windows the blob already had: those floated above the grid.
+        const below = migrated.windows.length;
+        windows = [...migrated.windows, ...read.map((w) => ({ ...w, z: w.z + below }))];
+        windowViewport ??= surface;
+      }
+    }
+
     const backdropSrc = src.backdrop as Record<string, unknown> | undefined;
     const backdrop: BackdropRef =
       backdropSrc && typeof backdropSrc.id === 'string'
@@ -386,14 +307,6 @@ export function deserialize(
           }
         : { id: DEFAULT_BACKDROP };
 
-    const focusedAreaId =
-      typeof src.focusedAreaId === 'string' && findArea(center, src.focusedAreaId)
-        ? src.focusedAreaId
-        : firstArea(center).id;
-    const fullscreenAreaId =
-      typeof src.fullscreenAreaId === 'string' && findArea(center, src.fullscreenAreaId)
-        ? src.fullscreenAreaId
-        : null;
     const paneSeq = Math.max(
       typeof src.paneSeq === 'number' && Number.isFinite(src.paneSeq) ? src.paneSeq : 0,
       maxSeq + 1,
@@ -410,19 +323,13 @@ export function deserialize(
         : null;
 
     return {
-      center,
-      docks,
       windows,
       windowViewport,
-      mode,
       backdrop,
-      fullscreenAreaId,
-      // Never restored, and never written either (see `serializeFrame`). A
-      // presented pane covers the workspace strip and the taskbar; bringing a
-      // workspace back into that state hands the user a screen with no visible
-      // way out and no memory of having asked for it.
+      // Never restored, and never written either (see `serialize`). A presented
+      // pane covers the taskbar; bringing a desktop back into that state hands the
+      // user a screen with no visible way out and no memory of having asked for it.
       presentedInstanceId: null,
-      focusedAreaId,
       focusedInstanceId,
       focusedWindowId,
       paneSeq,
@@ -451,30 +358,6 @@ function collectViewIds(src: unknown): Set<string> {
   };
   walk(src);
   return out;
-}
-
-/** Drop areas left with no tabs, so a pane pruned (or merged away) by this
- * deserializer doesn't leave an "Empty area" placeholder where it used to sit.
- * Returns null when nothing survives, letting the caller reseed from the preset;
- * a genuinely empty single-area frame is preserved by the caller's fallback. */
-function pruneEmptyAreas(node: LayoutNode): LayoutNode | null {
-  if (node.kind === 'area') return node.tabs.length > 0 ? node : null;
-  const kept: LayoutNode[] = [];
-  const sizes: number[] = [];
-  node.children.forEach((child, i) => {
-    const pruned = pruneEmptyAreas(child);
-    if (pruned) {
-      kept.push(pruned);
-      sizes.push(node.sizes[i] ?? 1 / node.children.length);
-    }
-  });
-  if (kept.length === 0) return null;
-  return { ...node, children: kept, sizes: renormalizeSizes(sizes) };
-}
-
-function renormalizeSizes(sizes: number[]): number[] {
-  const total = sizes.reduce((a, b) => a + b, 0);
-  return total > 0 ? sizes.map((s) => s / total) : sizes.map(() => 1 / sizes.length);
 }
 
 function clampSize(value: unknown, fallback: number): number {

@@ -250,30 +250,22 @@ def _capturing_dash() -> tuple[Dash, list[tuple[str, dict[str, Any]]]]:
     return Dash(call), calls
 
 
-def test_dash_layout_relays_split() -> None:
+def test_dash_layout_relays_window_verbs() -> None:
     dash, calls = _capturing_dash()
-    dash.layout.split("editor.buffer#1", "right")
+    dash.layout.window("editor.buffer#1", snap="left")
+    dash.layout.window_state("editor.buffer#1", "present")
+    dash.layout.arrange("columns")
     assert calls == [
-        ("split_area", {"instanceId": "editor.buffer#1", "direction": "right"})
+        ("open_window", {"instanceId": "editor.buffer#1", "snap": "left"}),
+        ("window_state", {"instanceId": "editor.buffer#1", "state": "present"}),
+        ("arrange_windows", {"style": "columns"}),
     ]
 
 
-def test_dash_layout_split_with_view_id() -> None:
-    dash, calls = _capturing_dash()
-    dash.layout.split("a#1", "below", "scratch.note")
-    assert calls[0] == (
-        "split_area",
-        {"instanceId": "a#1", "direction": "below", "viewId": "scratch.note"},
-    )
-
-
-def test_dash_layout_region_and_dock_verbs() -> None:
+def test_dash_layout_region_verbs() -> None:
     dash, calls = _capturing_dash()
     dash.layout.toggle_region("editor.buffer#1", "right", open=True)
     dash.layout.set_region_view("editor.buffer#1", "git.provenance")
-    dash.layout.open_tool("files.tree")
-    dash.layout.toggle_dock("bottom", visible=False)
-    dash.layout.fullscreen("games.lobby#2")
     assert calls == [
         (
             "toggle_region",
@@ -283,9 +275,6 @@ def test_dash_layout_region_and_dock_verbs() -> None:
             "set_region_view",
             {"instanceId": "editor.buffer#1", "viewId": "git.provenance"},
         ),
-        ("open_tool_in_dock", {"id": "files.tree"}),
-        ("toggle_dock", {"dock": "bottom", "visible": False}),
-        ("fullscreen_area", {"on": True, "instanceId": "games.lobby#2"}),
     ]
 
 
@@ -316,7 +305,6 @@ def test_dash_help_lists_every_facade() -> None:
     text = render_help(dash)
     for facade in (
         "dash.panes",
-        "dash.workspaces",
         "dash.layout",
         "dash.io",
         "dash.settings",

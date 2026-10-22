@@ -1,10 +1,10 @@
 # Regions
 
-Regions are toggleable, resizable **strips inside a pane's area** — Blender's
+Regions are toggleable, resizable **strips inside a pane** — Blender's
 N/T-panel idea applied to every view. They replaced **panel groups**: instead of
 a hand-rolled mini-dock rendered inside one pane (the old `PaneGroupShell`),
 regions are **engine-native and persisted** — part of the pane's state in the
-layout store, saved with the workspace, restored exactly as left.
+layout store, saved with the layout, restored exactly as left.
 
 ## Concept
 
@@ -149,7 +149,7 @@ REPL with `dash.layout.toggle_region()` / `set_region_view()`.
 | `observability.io` (tool) | bottom: Inspector |
 
 A view being someone's region view doesn't stop it opening standalone (e.g. the
-Agent Harness is also a left-dock tool; the Game Board is also a document).
+Agent Harness also opens as a pane of its own; the Game Board is also a document).
 
 The two notebook hosts above are different documents on different kernels, and
 they are titled apart to say so: `notebook.editor` is **Notebook Editor** (the
@@ -160,10 +160,10 @@ once, which made two identical `Open: Notebook` palette rows and an ambiguous
 
 ## Where a region host may live
 
-Areas, docks **and floating windows**. A pane dragged out into a window keeps the
-strips it declares — which is worth stating because it was not always true: a
-window rendered a bare `PaneHost`, so popping a region host out silently dropped
-every strip it had, with nothing to say a companion view had gone missing.
+A **window** — every pane is in one, and keeps the strips it declares. That is worth
+stating because it was not always true: a window used to render a bare `PaneHost`,
+so a region host in a window silently dropped every strip it had, with nothing to
+say a companion view had gone missing.
 
 That fix carries a constraint for anything that hosts `PaneWithRegions`:
 
@@ -173,14 +173,14 @@ That fix carries a constraint for anything that hosts `PaneWithRegions`:
 > content's natural height.
 
 The bare `PaneHost` it replaced got away with any parent, because
-`.frame-pane-host` sets `height: 100%`. `.frame-area` and `.frame-dock` were
+`.frame-pane-host` sets `height: 100%`. The tiling frame's areas and docks were
 already flex containers; `.os-window-body` was not, and the result was a floating
 window drawn as **a titlebar with nothing under it** — measured at 44px of pane
 header where there should have been 648px, with the pane's canvas at zero.
 
 It is worth knowing how that hid, because the shape recurs: floating windows are
-the *desktop* layout's ordinary way of showing a pane, while the browser layout
-puts panes in areas and docks. So the browser build looked completely healthy
+the *desktop* layout's ordinary way of showing a pane, while the browser layout of
+the time put panes in areas and docks. So the browser build looked completely healthy
 while every pane in the desktop build was empty. `region-host-is-flex.test.ts`
 pins the rule, and also asserts its own premises — that windows still render
 regions, and that `.frame-pane-regions` still has no height — so it fails loudly

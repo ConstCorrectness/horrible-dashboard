@@ -11,27 +11,20 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { registry } from '../../registry';
 import { setSettingsBackend, type SettingValue } from '../../settings';
-import { installFrameController, setPaneWindowed } from '../controller';
-import { seedFromPreset, type FramePreset } from '../presets';
+import { installFrameController } from '../controller';
 import { rectForZone } from '../snap';
 import { layoutStore } from '../store';
-import type { FrameState, LayoutNode } from '../types';
+import type { FrameState } from '../types';
 import {
   flushPlacements,
   lastPlacement,
   PLACEMENT_FLUSH_MS,
   WINDOW_PLACEMENT_KEY,
 } from '../window-placement';
+import { loadFrame, windowsFrame } from './fixtures';
 
 const Stub = () => null;
-const KNOWN = new Set(['wp.a']);
 const VIEW = { w: 1600, h: 900 };
-
-const preset: FramePreset = {
-  id: 'wp',
-  name: 'Window placement',
-  frame: { center: { pane: 'wp.a' } },
-};
 
 const puts: [string, SettingValue][] = [];
 
@@ -54,11 +47,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers();
   layoutStore.resetForTests();
-  layoutStore.dispatch({
-    type: 'LOAD_WORKSPACE',
-    workspaceId: 'wp',
-    frame: seedFromPreset(preset, { knownViews: KNOWN }),
-  });
+  loadFrame(windowsFrame([], { windowViewport: null }), 'wp');
   layoutStore.dispatch({ type: 'SET_WINDOW_VIEWPORT', viewport: VIEW });
   flushPlacements();
   puts.length = 0;
@@ -71,10 +60,9 @@ afterEach(() => {
 const frame = (): FrameState => layoutStore.getSnapshot().frame;
 const placementWrites = () => puts.filter(([key]) => key === WINDOW_PLACEMENT_KEY);
 
+/** Open `wp.a` in a window of its own and return the window id. */
 function float(): string {
-  const walk = (node: LayoutNode): string[] =>
-    node.kind === 'area' ? node.tabs.map((t) => t.instanceId) : node.children.flatMap(walk);
-  setPaneWindowed(walk(frame().center)[0], true);
+  layoutStore.dispatch({ type: 'OPEN_WINDOW', pane: { instanceId: 'wp.a#1', viewId: 'wp.a' } });
   return frame().windows[0].id;
 }
 

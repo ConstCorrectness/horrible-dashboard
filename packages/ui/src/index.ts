@@ -10,5 +10,4 @@ export {
 } from '@horrible/core';
 export { Spotlight } from './Spotlight';
 export { HomeView } from './HomeView';
-export { Frame } from './layout/Frame';
 export { Toasts } from './Toasts';

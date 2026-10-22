@@ -17,28 +17,17 @@
  */
 export const LAYOUT_VERBS: readonly string[] = [
   'list_available_panes',
-  'list_workspaces',
   'list_open_panes',
   'get_layout',
   'get_pane_context',
   'open_pane',
   'close_pane',
   'focus_pane',
-  'split_area',
-  'join_area',
-  'resize_area',
-  'move_pane',
-  'fullscreen_area',
   'toggle_region',
   'set_region_view',
-  'open_tool_in_dock',
-  'toggle_dock',
   'open_window',
-  'dock_window',
   'window_state',
   'arrange_windows',
-  'create_workspace',
-  'switch_workspace',
 ];
 
 /** Case/separator-insensitive key: `openPane`, `open-pane` and `open_pane` collapse. */

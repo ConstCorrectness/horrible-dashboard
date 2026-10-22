@@ -200,7 +200,6 @@ export const filesModule: ModuleManifest = {
       component: FileTree,
       role: 'tool',
       icon: '🗀',
-      defaultDock: 'left',
       singleton: true,
       // A section of Explorer now, not a dock strip of its own. Still registered
       // so `show("files.tree")` and `openPaneInArea` keep working; the tools stay
