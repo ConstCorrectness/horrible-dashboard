@@ -87,7 +87,17 @@ export const keymapModule: ModuleManifest = {
  * user will conclude is broken.
  */
 export function initKeymapPreset(): () => void {
-  const apply = () => setKeymapPreset(presetBindings(getSetting<string>(KEYMAP_PRESET_KEY)));
+  // Only on a change of preset. The settings store emits on every write to any
+  // key — window placement writes one per geometry change — and rebuilding the
+  // bindings each time hands every `useKeymap` consumer a new array, which is a
+  // full Shortcuts re-render (~300ms) on every maximize.
+  let applied: string | undefined;
+  const apply = () => {
+    const preset = getSetting<string>(KEYMAP_PRESET_KEY);
+    if (applied !== undefined && preset === applied) return;
+    applied = preset;
+    setKeymapPreset(presetBindings(preset));
+  };
   apply();
   return settingsStore.subscribe(apply);
 }

@@ -58,6 +58,7 @@ import type {
   SnapZone,
   WindowMode,
   WindowRect,
+  WindowState,
 } from './types';
 
 type ViewDecl = PanelDecl | WidgetDecl;
@@ -2070,28 +2071,75 @@ export function resizeAreaPx(
  * has one rect and three views, and filing that rect under each of them would
  * teach every pane in the group a placement that belonged to the group.
  * `rememberPlacement` no-ops when nothing changed, so this is a cheap walk.
+ *
+ * A change of the **surface** is not a placement. Resizing the app rescales every
+ * window's rect once per frame; recording those wrote a setting per window per
+ * frame (each one a `PUT` and an app-wide settings notification) and taught each
+ * view a size the user never chose. The rect the user last gave it stays on file,
+ * and opening clamps it to whatever the surface is then.
  */
 function installPlacementRecorder(): void {
   if (placementRecorderBound) return;
   placementRecorderBound = true;
+  // What each window looked like at the last notification. Comparing against the
+  // snapshot, not against the stored placement, is what keeps a rescale out: the
+  // dispatch after a resize sees rescaled rects that differ from the stored ones
+  // but not from the last snapshot.
+  let seen = new Map<string, Placed>();
+  let viewport = layoutStore.getSnapshot().frame.windowViewport;
   layoutStore.subscribe(() => {
     const f = layoutStore.getSnapshot().frame;
+    const before = seen;
+    seen = new Map();
     for (const win of f.windows) {
-      // A minimized window's rect is where it will come *back* to, so it stays
-      // worth recording; its `mode` is not, since reopening minimized would be a
-      // pane that answers a click by not appearing.
-      if (win.area.tabs.length !== 1) continue;
-      // A minimized window carries its zone in `minimizedFrom`, not `snap`. Read
-      // only `snap` and a maximized-then-minimized window records a full-surface
-      // rect with no zone — so the view reopens the size of the screen and un-
-      // snapped, which is neither what it was nor anything the user asked for.
-      const snap =
-        win.mode === 'minimized' && win.minimizedFrom
-          ? (win.minimizedFrom.snap ?? (win.minimizedFrom.mode === 'maximized' ? 'max' : undefined))
-          : win.snap;
-      rememberPlacement(win.area.tabs[0].viewId, win.rect, snap);
+      const placed = placedOf(win);
+      if (placed) seen.set(win.id, placed);
+    }
+    const next = f.windowViewport;
+    if (next?.w !== viewport?.w || next?.h !== viewport?.h) {
+      viewport = next;
+      return;
+    }
+    for (const [id, placed] of seen) {
+      if (samePlaced(before.get(id), placed)) continue;
+      rememberPlacement(placed.viewId, placed.rect, placed.snap);
     }
   });
+}
+
+interface Placed {
+  viewId: string;
+  rect: WindowRect;
+  snap?: SnapZone;
+}
+
+/** The placement a window would record, or null if it records none. */
+function placedOf(win: WindowState): Placed | null {
+  // A minimized window's rect is where it will come *back* to, so it stays
+  // worth recording; its `mode` is not, since reopening minimized would be a
+  // pane that answers a click by not appearing.
+  if (win.area.tabs.length !== 1) return null;
+  // A minimized window carries its zone in `minimizedFrom`, not `snap`. Read
+  // only `snap` and a maximized-then-minimized window records a full-surface
+  // rect with no zone — so the view reopens the size of the screen and un-
+  // snapped, which is neither what it was nor anything the user asked for.
+  const snap =
+    win.mode === 'minimized' && win.minimizedFrom
+      ? (win.minimizedFrom.snap ?? (win.minimizedFrom.mode === 'maximized' ? 'max' : undefined))
+      : win.snap;
+  return { viewId: win.area.tabs[0].viewId, rect: win.rect, snap };
+}
+
+function samePlaced(a: Placed | undefined, b: Placed): boolean {
+  return (
+    !!a &&
+    a.viewId === b.viewId &&
+    a.snap === b.snap &&
+    a.rect.x === b.rect.x &&
+    a.rect.y === b.rect.y &&
+    a.rect.w === b.rect.w &&
+    a.rect.h === b.rect.h
+  );
 }
 
 let placementRecorderBound = false;

@@ -163,7 +163,10 @@ export const settingsStore = {
 
 /** Reactive read of a setting's effective value for built-in components. */
 export function useSetting<T extends SettingValue>(key: string): T | undefined {
-  // Re-render on any settings change, then resolve this key (override ?? default).
-  useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot);
-  return getSetting<T>(key);
+  // Select this key, not the whole bag. Values are primitives, so an unrelated
+  // write compares equal and React skips the render. Subscribing to the bag
+  // re-rendered every bound control on every write — and `frame.windowPlacement`
+  // is written on each window geometry change, so a maximize re-rendered all of
+  // Settings (~600ms) and an app resize did it once per frame.
+  return useSyncExternalStore(settingsStore.subscribe, () => getSetting<T>(key));
 }

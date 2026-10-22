@@ -66,6 +66,13 @@ mutate; `useSetting(key)` is the hook built-in components use for a live read.
 Setting a value is optimistic (local update + `PUT`), so widgets bound via
 `useSetting` re-render immediately.
 
+`useSetting(key)` re-renders only when **its own key** changes. The store itself
+has no per-key channel — `settingsStore.subscribe` fires on a write to any key —
+and some keys are written often (`frame.windowPlacement` changes on every window
+maximize, snap and drag). A raw `settingsStore.subscribe` consumer must compare
+the value it cares about before doing work; rebuilding on every emit turned a
+window maximize into a whole-app re-render.
+
 ## Never put a secret in a setting
 
 `GET /api/settings` returns the bag to the browser, and **every value in it is
