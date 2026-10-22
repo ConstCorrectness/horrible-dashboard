@@ -367,3 +367,63 @@ def test_a_doorway_on_bank_can_be_walked_through(bank, name):
     dist, _ = routes_tool.dijkstra(world, cells, [a])
     assert b in dist, f"{name}: the two sides are not joined"
     assert dist[b] < 2.5 * hop, f"{name}: the way through is {dist[b]:.0f} cubes"
+
+
+# --- Assault ----------------------------------------------------------------
+# Assault had its spawn sets labelled the wrong way round, and once they were
+# swapped T still reached B, out on the warehouse floor by the forklift, in 3.9 s
+# through Bay 1. Both sites moved to the back of the warehouse (A under the
+# hostage office, B at the workshop) with CT spawning between them, and a door
+# in the west wall gives T a third way into B, up the alley. Not cut: the
+# footprint is the same 56 m square.
+
+ASSAULT = MAP.with_name("hd_assault.json")
+
+
+@pytest.fixture(scope="module")
+def assault():
+    return routes_tool.measure(str(ASSAULT))
+
+
+def test_every_team_can_walk_to_every_site_on_assault(assault):
+    routes, _, _ = assault
+    assert set(routes) == {(t, s) for t in (0, 1) for s in ("A", "B")}
+    for pair, times in routes.items():
+        assert times, f"{pair} cannot be reached on foot"
+
+
+def test_t_has_three_ways_to_each_site_on_assault(assault):
+    # A: Bay 2, the east door off the rail yard, and the fire escape.
+    # B: Bay 1, the west catwalk, and the alley door.
+    routes, _, _ = assault
+    for site in ("A", "B"):
+        assert len(routes[(1, site)]) >= 3, routes[(1, site)]
+
+
+def test_the_attackers_walk_is_in_the_band_of_the_other_large_maps_on_assault(assault):
+    # 6.4 s to A and 6.7 s to B; B was 3.9 s.
+    routes, _, _ = assault
+    for site in ("A", "B"):
+        assert routes[(1, site)][0] > 6.0, routes[(1, site)]
+        assert routes[(1, site)][0] > 2 * routes[(0, site)][0]
+
+
+ASSAULT_DOORS = {
+    "the alley door into B": ((23, 152), "y"),
+    "Bay 1": ((54, 65), "x"),
+    "the street door by Bay 2": ((120, 65), "x"),
+    "the east door off the rail yard": ((139, 136), "y"),
+}
+
+
+@pytest.mark.parametrize("name", ASSAULT_DOORS)
+def test_a_doorway_on_assault_can_be_walked_through(assault, name):
+    _, world, cells = assault
+    (x, y), along = ASSAULT_DOORS[name]
+    hop = 9
+    dx, dy = (0, hop) if along == "x" else (hop, 0)
+    a = routes_tool.nearest(cells, x - dx, y - dy)
+    b = routes_tool.nearest(cells, x + dx, y + dy)
+    dist, _ = routes_tool.dijkstra(world, cells, [a])
+    assert b in dist, f"{name}: the two sides are not joined"
+    assert dist[b] < 2.5 * hop, f"{name}: the way through is {dist[b]:.0f} cubes"

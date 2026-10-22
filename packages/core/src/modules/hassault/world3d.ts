@@ -1255,7 +1255,7 @@ export function createProceduralAssault3D(THREE: typeof import('three'), info: M
   // 8a. Rooftop Intake Cowl (Entry point on roof at x=25.0, y=29.5)
   builder.addBox(23.8, 27.8, 9.0, 26.2, 28.6, 9.15, 'vault_steel'); // Entry curb
   builder.addBox(23.8, 28.6, 9.0, 26.2, 30.3, 9.06, 'vault_steel'); // Intake floor
-  builder.addBox(23.7, 28.5, 10.22, 26.3, 30.3, 10.30, 'vault_steel'); // Intake cowl roof
+  builder.addBox(23.7, 28.5, 10.22, 26.3, 30.3, 10.3, 'vault_steel'); // Intake cowl roof
   builder.addBox(23.7, 28.5, 9.06, 23.8, 30.3, 10.22, 'vault_steel'); // West cheek wall
   builder.addBox(26.2, 28.5, 9.06, 26.3, 30.3, 10.22, 'vault_steel'); // East cheek wall
 
@@ -1273,34 +1273,34 @@ export function createProceduralAssault3D(THREE: typeof import('three'), info: M
   // 8d. Drop 1: West Catwalk Drop Shaft (x: 12.2..13.8, y: 30.2..31.8)
   // Shaft drops down from roof (z=10.22) through roof cutout down to z=5.8m over West Catwalk
   builder.addBox(12.14, 30.24, 10.16, 13.86, 31.76, 10.22, 'vault_steel'); // Ceiling cap
-  builder.addBox(12.14, 30.24, 5.8, 12.20, 31.76, 10.16, 'vault_steel'); // West wall
-  builder.addBox(13.80, 30.24, 5.8, 13.86, 31.76, 9.06, 'vault_steel'); // East wall
-  builder.addBox(12.20, 31.70, 5.8, 13.80, 31.76, 10.16, 'vault_steel'); // North wall
-  builder.addBox(12.20, 30.24, 5.8, 13.80, 30.30, 10.16, 'vault_steel'); // South wall
-  builder.addBox(12.10, 30.15, 5.75, 13.90, 31.85, 5.85, 'vault_steel', false); // Grille rim
+  builder.addBox(12.14, 30.24, 5.8, 12.2, 31.76, 10.16, 'vault_steel'); // West wall
+  builder.addBox(13.8, 30.24, 5.8, 13.86, 31.76, 9.06, 'vault_steel'); // East wall
+  builder.addBox(12.2, 31.7, 5.8, 13.8, 31.76, 10.16, 'vault_steel'); // North wall
+  builder.addBox(12.2, 30.24, 5.8, 13.8, 30.3, 10.16, 'vault_steel'); // South wall
+  builder.addBox(12.1, 30.15, 5.75, 13.9, 31.85, 5.85, 'vault_steel', false); // Grille rim
 
   // 8e. East Crawlway Trunk: Central Junction to corner at x=34.2
   builder.addBox(26.5, 30.3, 9.0, 34.2, 31.7, 9.06, 'vault_steel'); // Floor
   builder.addBox(26.5, 30.3, 10.16, 34.2, 31.7, 10.22, 'vault_steel'); // Ceiling
   builder.addBox(26.5, 31.7, 9.06, 34.2, 31.76, 10.16, 'vault_steel'); // North wall
-  builder.addBox(26.2, 30.24, 9.06, 35.8, 30.30, 10.16, 'vault_steel'); // South wall
+  builder.addBox(26.2, 30.24, 9.06, 35.8, 30.3, 10.16, 'vault_steel'); // South wall
 
   // 8f. North Crawlway Trunk: Corner at (x=35.0, y=31.0) North to Hostage Office Drop (y=45.2)
   builder.addBox(34.2, 30.3, 9.0, 35.8, 31.7, 9.06, 'vault_steel'); // Corner floor
   builder.addBox(34.2, 30.3, 10.16, 35.8, 31.7, 10.22, 'vault_steel'); // Corner ceiling
-  builder.addBox(35.74, 30.24, 9.06, 35.80, 45.2, 10.16, 'vault_steel'); // East wall
+  builder.addBox(35.74, 30.24, 9.06, 35.8, 45.2, 10.16, 'vault_steel'); // East wall
   builder.addBox(34.3, 31.7, 9.0, 35.7, 45.2, 9.06, 'vault_steel'); // North trunk floor
   builder.addBox(34.3, 31.7, 10.16, 35.7, 45.2, 10.22, 'vault_steel'); // North trunk ceiling
-  builder.addBox(34.24, 31.7, 9.06, 34.30, 45.2, 10.16, 'vault_steel'); // West wall
+  builder.addBox(34.24, 31.7, 9.06, 34.3, 45.2, 10.16, 'vault_steel'); // West wall
 
   // 8g. Drop 2: Hostage Office Drop Shaft (x: 34.2..35.8, y: 45.2..46.8)
   // Shaft drops down into 2nd-floor Hostage Office to z=6.2m
   builder.addBox(34.24, 45.24, 10.16, 35.76, 46.86, 10.22, 'vault_steel'); // Ceiling cap
-  builder.addBox(34.24, 46.80, 6.2, 35.76, 46.86, 10.16, 'vault_steel'); // North wall
-  builder.addBox(34.30, 45.24, 6.2, 35.70, 45.30, 9.06, 'vault_steel'); // South wall
-  builder.addBox(34.24, 45.24, 6.2, 34.30, 46.80, 10.16, 'vault_steel'); // West wall
-  builder.addBox(35.70, 45.24, 6.2, 35.76, 46.80, 10.16, 'vault_steel'); // East wall
-  builder.addBox(34.15, 45.15, 6.15, 35.85, 46.90, 6.25, 'vault_steel', false); // Diffuser rim
+  builder.addBox(34.24, 46.8, 6.2, 35.76, 46.86, 10.16, 'vault_steel'); // North wall
+  builder.addBox(34.3, 45.24, 6.2, 35.7, 45.3, 9.06, 'vault_steel'); // South wall
+  builder.addBox(34.24, 45.24, 6.2, 34.3, 46.8, 10.16, 'vault_steel'); // West wall
+  builder.addBox(35.7, 45.24, 6.2, 35.76, 46.8, 10.16, 'vault_steel'); // East wall
+  builder.addBox(34.15, 45.15, 6.15, 35.85, 46.9, 6.25, 'vault_steel', false); // Diffuser rim
 
   // Rooftop Chiller Unit
   builder.addBox(36, 28, 9, 40, 34, 10.4, 'vault_steel');
@@ -1840,10 +1840,10 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
     },
     spawns: {
       cla: [
-        { x: 78, y: 144, z: 0, yaw: 270, team: 0 },
-        { x: 111, y: 115, z: 0, yaw: 270, team: 0 },
-        { x: 120, y: 114, z: 0, yaw: 270, team: 0 },
         { x: 78, y: 156, z: 0, yaw: 270, team: 0 },
+        { x: 84, y: 162, z: 0, yaw: 270, team: 0 },
+        { x: 72, y: 162, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 159, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
         { x: 48, y: 21, z: 0.54, yaw: 90, team: 1 },
@@ -1852,10 +1852,10 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
         { x: 84, y: 21, z: 0.54, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 78, y: 144, z: 0, yaw: 270, team: 0 },
-        { x: 111, y: 115, z: 0, yaw: 270, team: 0 },
-        { x: 120, y: 114, z: 0, yaw: 270, team: 0 },
         { x: 78, y: 156, z: 0, yaw: 270, team: 0 },
+        { x: 84, y: 162, z: 0, yaw: 270, team: 0 },
+        { x: 72, y: 162, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 159, z: 0, yaw: 270, team: 0 },
         { x: 48, y: 21, z: 0.54, yaw: 90, team: 1 },
         { x: 57, y: 24, z: 0.6, yaw: 90, team: 1 },
         { x: 72, y: 21, z: 0.54, yaw: 90, team: 1 },
@@ -1868,10 +1868,10 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
       { id: 3, kind: 'health', x: 114, y: 156, z: 12.6 },
       { id: 4, kind: 'armour', x: 60, y: 108, z: 0 },
       { id: 5, kind: 'armour', x: 96, y: 132, z: 12.6 },
-      { id: 6, kind: 'ammo_assault', x: 63, y: 46.5, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 65, y: 46, z: 0 },
       { id: 7, kind: 'ammo_assault', x: 162, y: 90, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 72, y: 21, z: 22.5 },
-      { id: 9, kind: 'clips', x: 31.5, y: 120, z: 12.6 },
+      { id: 8, kind: 'ammo_sniper', x: 75, y: 21, z: 0.54 },
+      { id: 9, kind: 'clips', x: 31, y: 120, z: 12.6 },
       { id: 10, kind: 'grenade', x: 48, y: 90, z: 27 },
     ],
     ladders: [{ x: 139.2, y: 108, base: 0, top: 27 }],

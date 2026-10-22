@@ -8,13 +8,14 @@ same code. That is the whole design, and it buys two things worth having — a b
 cannot do anything a player could not (no wall-clipping, no infinite ammo, no
 firing faster than time passes), and there is only ever one simulation to debug.
 
-The AI is deliberately reactive rather than planned. There is no navmesh: an
-AssaultCube map is a heightfield of columns, and building a graph over it is a
-larger piece of work than the rest of this file. Instead a bot steers toward
-something it wants and probes ahead with the *movement code's own* `can_stand`
-before committing — so what it believes it can walk through is precisely what it
-can walk through. It gets lost in complicated geometry sometimes. It also, when
-it rounds a corner and shoots you, feels like an opponent, which is the point.
+The AI is reactive with a little planning. A bot steers toward something it
+wants and probes ahead with the *movement code's own* `can_stand` before
+committing — so what it believes it can walk through is precisely what it can
+walk through. When the straight line to where it is going is not walkable, and
+the map has a waypoint graph (`nav.py`), it follows the graph instead, one
+waypoint at a time, still steering and probing between them. Without a graph
+it gets lost in complicated geometry sometimes. Either way, when it rounds a
+corner and shoots you, it feels like an opponent, which is the point.
 
 Aim is the part that has to be wrong on purpose. A bot can compute the exact
 angle to your head every tick; a bot that *uses* it is not difficult, it is
@@ -31,7 +32,7 @@ import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from backend.modules.hassault import grenades, physics, weapons
+from backend.modules.hassault import grenades, nav, physics, weapons
 from backend.modules.hassault.modes import Goal
 from backend.modules.hassault.weapons import PLAYER_EYE_HEIGHT
 
@@ -141,6 +142,19 @@ LONG_RANGE = 42.0
 STUCK_WINDOW = 1.0
 STUCK_DISTANCE = 1.5
 
+# How often a bot re-asks whether it can walk straight to where it is going, and
+# whether it can skip the waypoint it is heading for. Not every tick: a long
+# line is a few hundred `can_stand` samples, and the answer rarely changes in a
+# tenth of a second.
+LINE_CHECK = 0.5
+# How long a planned route is trusted before it is planned again from wherever
+# the bot has got to — a fight or a dodge can carry it well off the route.
+REPLAN = 3.0
+# A waypoint this close counts as reached.
+WAYPOINT_REACHED = 2.5
+# A destination that moves less than this keeps the route already planned.
+SAME_DESTINATION = 3.0
+
 #: Tactical cover waypoints on key competitive maps.
 #:
 #: A bot roaming on these maps mixes between enemy spawn pressure and holding
@@ -206,6 +220,18 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (162.0, 102.0, "long_doors"),
         (91.5, 142.5, "lower_dark_door"),
         (95.0, 219.0, "b_doors"),
+    ],
+    # The rebuilt Assault: both sites at the back of the warehouse, A under the
+    # hostage office and B at the workshop, with the alley door into B.
+    "hd_assault": [
+        (120.0, 147.0, "site_a_under_office"),
+        (42.0, 150.0, "site_b_workshop"),
+        (27.0, 152.0, "b_alley_door"),
+        (54.0, 72.0, "bay1_inside"),
+        (69.0, 99.0, "mid_forklift"),
+        (117.0, 84.0, "rack_aisle"),
+        (132.0, 136.5, "a_east_door"),
+        (31.5, 105.0, "west_catwalk"),
     ],
     "hd_bank": [
         (96.0, 102.0, "hall_compass"),
@@ -313,6 +339,13 @@ class BotBrain:
         self.moved = 0.0
         self.avoid_bias = 0.0
         self.buy_in = 0.0
+        #: Waypoints to `route_to`, nearest first, from the map's graph. Empty
+        #: while the straight line is walkable or the map has no graph.
+        self.route: list[tuple[float, float]] = []
+        self.route_to: tuple[float, float] | None = None
+        self.route_in = 0.0
+        self.line_in = 0.0
+        self.direct = True
 
     # -- perception ---------------------------------------------------------
 
@@ -423,6 +456,54 @@ class BotBrain:
                 return heading
         return wanted + math.pi
 
+    def _toward(
+        self, room: MatchRoom, me: MatchPlayer, x: float, y: float, dt: float
+    ) -> float:
+        """The heading to walk to reach `(x, y)`: straight there, or along the graph.
+
+        Straight whenever the line is walkable, so a bot in the open moves exactly
+        as it always did. Only when it is not, and the map has a graph, does the
+        bot plan a route and head for its next waypoint. Every `LINE_CHECK` it
+        also checks whether it can already walk to the waypoint after that one,
+        and skips ahead if so, so it cuts corners rather than touching every node.
+        """
+        graph = nav.load(_map_name(room))
+        if graph is None:
+            return math.atan2(y - me.state.y, x - me.state.x)
+        here = (me.state.x, me.state.y)
+        if math.hypot(x - here[0], y - here[1]) < WAYPOINT_REACHED * 2:
+            # Close enough to steer the rest: the point itself may be one no
+            # body fits at (a door's frame, a site under its table).
+            return math.atan2(y - me.state.y, x - me.state.x)
+        if self.route_to is None or math.hypot(
+            x - self.route_to[0], y - self.route_to[1]
+        ) > SAME_DESTINATION:
+            self.route_to = (x, y)
+            self.route = []
+            self.line_in = 0.0
+        self.line_in -= dt
+        self.route_in -= dt
+        if self.line_in <= 0:
+            self.line_in = LINE_CHECK
+            self.direct = nav.walkable(room.world, *here, x, y)
+            if self.direct:
+                self.route = []
+            elif not self.route or self.route_in <= 0:
+                self.route = nav.path(room.world, graph, here, (x, y)) or []
+                self.route_in = REPLAN
+            elif len(self.route) > 1 and nav.walkable(
+                room.world, *here, *self.route[1]
+            ):
+                self.route.pop(0)
+        while (
+            len(self.route) > 1
+            and math.hypot(self.route[0][0] - here[0], self.route[0][1] - here[1])
+            < WAYPOINT_REACHED
+        ):
+            self.route.pop(0)
+        tx, ty = self.route[0] if self.route and not self.direct else (x, y)
+        return math.atan2(ty - me.state.y, tx - me.state.x)
+
     def _objective(self, room: MatchRoom, me: MatchPlayer, dt: float) -> Goal | None:
         """What the mode wants of this bot, cached until it expires.
 
@@ -469,10 +550,7 @@ class BotBrain:
                 return
 
         enemy = 1 - me.team
-        map_name = getattr(room, "map_name", "") or getattr(
-            getattr(room, "world", None), "name", ""
-        )
-        tactical_pts = TACTICAL_COVER_NODES.get(map_name.lower(), [])
+        tactical_pts = TACTICAL_COVER_NODES.get(_map_name(room), [])
         valid_tactical = [
             (pt[0], pt[1])
             for pt in tactical_pts
@@ -700,7 +778,7 @@ class BotBrain:
             if goal is not None:
                 if math.hypot(goal.x - me.state.x, goal.y - me.state.y) <= goal.radius:
                     self.goal_in = 0.0
-                wanted_heading = math.atan2(goal.y - me.state.y, goal.x - me.state.x)
+                wanted_heading = self._toward(room, me, goal.x, goal.y, dt)
             elif self.investigate is not None:
                 # Steer towards investigated sound source
                 if (
@@ -712,14 +790,10 @@ class BotBrain:
                 ):
                     self.investigate = None
                     self._pick_roam(room, me)
-                    wanted_heading = math.atan2(
-                        self.roam[1] - me.state.y, self.roam[0] - me.state.x
-                    )
+                    assert self.roam is not None
+                    wanted_heading = self._toward(room, me, *self.roam, dt)
                 else:
-                    wanted_heading = math.atan2(
-                        self.investigate[1] - me.state.y,
-                        self.investigate[0] - me.state.x,
-                    )
+                    wanted_heading = self._toward(room, me, *self.investigate, dt)
             else:
                 self.roam_in -= dt
                 if self.roam is None or self.roam_in <= 0:
@@ -727,9 +801,7 @@ class BotBrain:
                 assert self.roam is not None
                 if math.hypot(self.roam[0] - me.state.x, self.roam[1] - me.state.y) < 4:
                     self._pick_roam(room, me)
-                wanted_heading = math.atan2(
-                    self.roam[1] - me.state.y, self.roam[0] - me.state.x
-                )
+                wanted_heading = self._toward(room, me, *self.roam, dt)
 
         # **Outside the fight/roam branch on purpose.** A bot standing on the
         # objective holds the action key whether or not it can see somebody:
@@ -758,6 +830,7 @@ class BotBrain:
                 # a doorway it keeps clipping. Turn hard and try a hop.
                 heading += self.rng.choice((-1.0, 1.0)) * (1.2 + self.rng.random())
                 self.roam = None
+                self.route = []
                 jump = True
             self.stuck_in = STUCK_WINDOW
             self.moved = 0.0
@@ -981,3 +1054,11 @@ def add_bots(
         room.mode.outfit(room, bot)
         out.append(bot)
     return out
+
+
+def _map_name(room: MatchRoom) -> str:
+    """The room's map name, lowercased: the key for cover nodes and waypoints."""
+    name = getattr(room, "map_name", "") or getattr(
+        getattr(room, "world", None), "name", ""
+    )
+    return name.lower()
