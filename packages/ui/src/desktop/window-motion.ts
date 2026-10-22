@@ -9,10 +9,11 @@
  * no state, no re-render, nothing to clean up, and a later animation simply
  * replaces an earlier one.
  *
- * Geometry is animated by transform (FLIP: measure before and after, play the
- * difference back), never by left/top/width/height. A window's body can hold a
- * canvas, a terminal or a browser engine, and resizing those per frame would cost
- * far more than one composited transform.
+ * Geometry is animated by translate, an `inset()` clip and opacity (measure
+ * before and after, play the difference back), never by left/top/width/height —
+ * and never by `scale()`, which distorts the content (see `animateGeometry`). A
+ * window's body can hold a canvas, a terminal or a browser engine, and resizing
+ * those per frame would cost far more than a composited transform.
  *
  * Off under `prefers-reduced-motion` and with the `desktop.animations` setting
  * off; every function is then a no-op and the state simply changes.
@@ -60,16 +61,6 @@ export function boxesDiffer(a: Box, b: Box): boolean {
     Math.abs(a.w - b.w) > 1 ||
     Math.abs(a.h - b.h) > 1
   );
-}
-
-/**
- * The transform that draws a window laid out at `to` as if it were at `from`:
- * origin top-left, so translate by the corner and scale by the size ratio.
- */
-export function flipTransform(from: Box, to: Box): string {
-  const sx = to.w ? from.w / to.w : 1;
-  const sy = to.h ? from.h / to.h : 1;
-  return `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${sx}, ${sy})`;
 }
 
 /** A new window settles into place. */
@@ -175,23 +166,98 @@ export function noteViewportChange(): void {
   viewportChangedAt = performance.now();
 }
 
-/** The window's geometry changed under it: slide from the old box to the new one. */
+/** `clip-path: inset()` that shows `box` of an element laid out at `frame`. */
+export function insetFor(box: Box, frame: Box, radius: string): string {
+  const top = box.y - frame.y;
+  const left = box.x - frame.x;
+  const right = frame.x + frame.w - (box.x + box.w);
+  const bottom = frame.y + frame.h - (box.y + box.h);
+  return `inset(${top}px ${right}px ${bottom}px ${left}px round ${radius})`;
+}
+
+/** The ghost frame a window's shrink is drawn with, if one is mid-flight. */
+const ghosts = new WeakMap<HTMLElement, HTMLElement>();
+
+/**
+ * The window's geometry changed under it: travel from the old box to the new one.
+ *
+ * **Never by scaling the window.** The window is already laid out at its new
+ * size when this runs, so a FLIP `scale()` draws that layout squashed back into
+ * the old box — at a maximize, roughly 0.5 × 0.7 with different factors on each
+ * axis, so text visibly stretches as it plays — and a restore-down scales a
+ * small raster up to screen size, which is where the blocky look came from.
+ * Instead:
+ *
+ * - **Growing or moving** (maximize, snap to a bigger zone): the real window
+ *   slides from the old corner while a clip opens from the old size to the new.
+ *   Content is drawn at 1:1 throughout and simply revealed.
+ * - **Shrinking on either axis** (restore-down, snap to a smaller zone): a clip
+ *   cannot draw outside the element, so a plain frame — no content, nothing to
+ *   distort — closes from the old box onto the new one while the window fades in
+ *   over it.
+ *
+ * Both are transform/opacity plus an `inset()` clip: no layout and no repaint of
+ * the window's content per frame.
+ */
 export function animateGeometry(el: HTMLElement, from: Box, to: Box): void {
   if (!motionEnabled() || !boxesDiffer(from, to)) return;
   if (performance.now() - viewportChangedAt < VIEWPORT_SETTLE_MS) return;
-  // Origin top-left, as `flipTransform` assumes; the other animations scale
-  // about the centre, so it is set per keyframe rather than in the stylesheet.
-  const origin = '0 0';
-  el.animate(
-    [
-      { transform: flipTransform(from, to), transformOrigin: origin },
-      { transform: 'none', transformOrigin: origin },
-    ],
-    {
-      duration: WINDOW_MOTION.move,
-      easing: WINDOW_MOTION.easeOut,
-    },
-  );
+  ghosts.get(el)?.remove();
+  const timing = { duration: WINDOW_MOTION.move, easing: WINDOW_MOTION.easeOut };
+  const radius = getComputedStyle(el).borderTopLeftRadius || '0px';
+
+  if (to.w >= from.w && to.h >= from.h) {
+    // The old box at the new box's corner, then translated back to where it was.
+    const shown = { x: to.x, y: to.y, w: from.w, h: from.h };
+    el.animate(
+      [
+        {
+          transform: `translate(${from.x - to.x}px, ${from.y - to.y}px)`,
+          clipPath: insetFor(shown, to, radius),
+        },
+        { transform: 'none', clipPath: insetFor(to, to, radius) },
+      ],
+      timing,
+    );
+    return;
+  }
+
+  const parent = el.parentElement;
+  if (!parent) return;
+  const union: Box = {
+    x: Math.min(from.x, to.x),
+    y: Math.min(from.y, to.y),
+    w: Math.max(from.x + from.w, to.x + to.w) - Math.min(from.x, to.x),
+    h: Math.max(from.y + from.h, to.y + to.h) - Math.min(from.y, to.y),
+  };
+  const ghost = document.createElement('div');
+  ghost.className = 'os-window-ghost';
+  ghost.setAttribute('aria-hidden', 'true');
+  Object.assign(ghost.style, {
+    left: `${union.x}px`,
+    top: `${union.y}px`,
+    width: `${union.w}px`,
+    height: `${union.h}px`,
+    zIndex: el.style.zIndex,
+  });
+  // Before the window, at the same z: document order keeps the window on top.
+  parent.insertBefore(ghost, el);
+  ghosts.set(el, ghost);
+  const done = () => {
+    ghost.remove();
+    if (ghosts.get(el) === ghost) ghosts.delete(el);
+  };
+  ghost
+    .animate(
+      [
+        { clipPath: insetFor(from, union, radius), opacity: 1 },
+        { clipPath: insetFor(to, union, radius), opacity: 1, offset: 0.7 },
+        { clipPath: insetFor(to, union, radius), opacity: 0 },
+      ],
+      timing,
+    )
+    .finished.then(done, done);
+  el.animate([{ opacity: 0 }, { opacity: 0, offset: 0.3 }, { opacity: 1 }], timing);
 }
 
 /**

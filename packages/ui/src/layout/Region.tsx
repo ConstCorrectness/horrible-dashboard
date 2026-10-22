@@ -6,6 +6,7 @@
  * `PaneWithRegions` wraps a pane's content with its three strips and is shared
  * by center areas and docks.
  */
+import { memo } from 'react';
 import {
   collapseRegion,
   layoutStore,
@@ -264,8 +265,21 @@ function latestRegion(instanceId: string, position: RegionPosition): RegionState
   );
 }
 
-/** A pane's content wrapped with its three region strips (center areas + docks). */
-export function PaneWithRegions({ pane, areaId }: { pane: PaneState; areaId?: string }) {
+/**
+ * A pane's content wrapped with its three region strips (center areas + docks).
+ *
+ * Memoized because its parents re-render on chrome changes the pane does not see:
+ * a window's mode or rect, an area's focus. The reducers spread the window, so
+ * `pane` keeps its identity through those, and without the memo every maximize
+ * re-rendered the whole pane — 500ms+ for a large one (Settings).
+ */
+export const PaneWithRegions = memo(function PaneWithRegions({
+  pane,
+  areaId,
+}: {
+  pane: PaneState;
+  areaId?: string;
+}) {
   return (
     <div className="frame-pane-regions">
       <div className="frame-pane-regions-middle">
@@ -278,4 +292,4 @@ export function PaneWithRegions({ pane, areaId }: { pane: PaneState; areaId?: st
       <Region pane={pane} position="bottom" />
     </div>
   );
-}
+});

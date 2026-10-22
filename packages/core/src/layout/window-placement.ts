@@ -73,22 +73,54 @@ function all(): Record<string, WindowPlacement> {
   return cache.value;
 }
 
+/**
+ * Placements recorded but not yet written. Read before the setting, so a view
+ * reopened inside the debounce window still finds where it was just left.
+ */
+const pending = new Map<string, WindowPlacement>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let flushOnHideBound = false;
+
+/** Quiet time before a burst of placement changes becomes one settings write. */
+export const PLACEMENT_FLUSH_MS = 500;
+
 /** Where this view's window was last left, or undefined if it never had one. */
 export function lastPlacement(viewId: string): WindowPlacement | undefined {
-  return all()[viewId];
+  return pending.get(viewId) ?? all()[viewId];
 }
 
 /**
  * Record where a view's window is now.
  *
  * A no-op when nothing moved, because this is called from a store subscriber on
- * every layout change — writing an identical value would emit a settings change
- * and a network PUT for every focus, tab switch and keystroke-driven relayout.
+ * every layout change. And **debounced** when something did: a settings write
+ * notifies every settings subscriber in the app and sends a `PUT`, and doing that
+ * synchronously inside a maximize put the cost in the very frame the window
+ * animation starts on. A snap-then-drag lands as one write once it settles.
  */
 export function rememberPlacement(viewId: string, rect: WindowRect, snap?: SnapZone): void {
-  const current = all()[viewId];
+  const current = lastPlacement(viewId);
   if (current && sameRect(current.rect, rect) && current.snap === snap) return;
-  const next = { ...all(), [viewId]: { rect, ...(snap ? { snap } : {}) } };
+  pending.set(viewId, { rect, ...(snap ? { snap } : {}) });
+  if (flushTimer !== null) clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushPlacements, PLACEMENT_FLUSH_MS);
+  if (!flushOnHideBound && typeof window !== 'undefined') {
+    // Closing the app inside the debounce window would otherwise drop the last
+    // move. Best effort: the PUT may not outlive the page either.
+    flushOnHideBound = true;
+    window.addEventListener('pagehide', flushPlacements);
+  }
+}
+
+/** Write every pending placement now, as one settings change. */
+export function flushPlacements(): void {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (pending.size === 0) return;
+  const next = { ...all(), ...Object.fromEntries(pending) };
+  pending.clear();
   // Optimistic: `setSetting` updates the local override synchronously, so the
   // next open reads the new placement even if the network write is still in
   // flight or fails outright. A dropped write costs durability, not correctness.

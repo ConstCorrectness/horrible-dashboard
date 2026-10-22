@@ -108,6 +108,16 @@
   border-radius: 0;
 }
 
+/* The frame a shrinking window is drawn with (window-motion.ts). Contentless on
+   purpose — it is clipped from the old box to the new one, and anything inside
+   it would be cut mid-glyph. Never hit-testable: it lives for one animation. */
+.os-window-ghost {
+  position: absolute;
+  pointer-events: none;
+  background: var(--win-titlebar-bg, var(--bg-elevated));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* The presented window: over the workspace strip and the taskbar, which a
    maximized window deliberately stops short of. `fixed`, not `absolute`, because
    the window layer is inset below the strip and above the taskbar — the two
