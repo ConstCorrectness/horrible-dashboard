@@ -59,6 +59,13 @@ def volume_name(user_id: str) -> str:
     return "hd_" + hashlib.sha256(user_id.encode()).hexdigest()[:24]
 
 
+def mounted_volume(machine: dict[str, Any] | None) -> str | None:
+    """The volume a Fly machine has mounted, if it has one."""
+    mounts = ((machine or {}).get("config") or {}).get("mounts") or []
+    volume = mounts[0].get("volume") if mounts else None
+    return str(volume) if volume else None
+
+
 def auth_header(token: str) -> str:
     # `fly tokens create` prints a macaroon that already carries its scheme.
     token = token.strip()
@@ -165,6 +172,9 @@ class FlySpawner:
         )
         if machine is not None and machine.get("state") == "destroyed":
             machine = None
+        # Read before the machine can be replaced below, so a replacement inherits
+        # the same data.
+        mounted = mounted_volume(machine)
 
         if machine is not None and token is None:
             # The hub lost this machine's token: replace the machine, keep the volume.
@@ -175,7 +185,21 @@ class FlySpawner:
             token = secrets.token_urlsafe(32)
             self._store.set_instance_token(user.id, token)
 
-        volume_id = await self._ensure_volume(user, placement)
+        # A live machine's own mount is the volume of record, not the placement: a
+        # Fly volume is pinned to the host its machine runs on, so an update naming
+        # any other volume is refused ("volume does not exist"). Found live — a
+        # placement that had drifted onto a fresh, empty volume went unnoticed for
+        # days, because starting a stopped machine sends no config, and the first
+        # image roll after it took the user's dashboard down.
+        volume_id = mounted or await self._ensure_volume(user, placement)
+        if mounted and placement.get("volume_id") not in (None, mounted):
+            logger.warning(
+                "placement for %s named volume %s; machine %s mounts %s",
+                user.id,
+                placement.get("volume_id"),
+                machine_id,
+                mounted,
+            )
         if machine is None:
             machine_id = await self._create_machine(user, volume_id, token)
         else:

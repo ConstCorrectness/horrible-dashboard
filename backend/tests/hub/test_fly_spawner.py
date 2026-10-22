@@ -154,6 +154,31 @@ def test_a_new_image_is_rolled_onto_the_existing_machine(setup, tmp_path) -> Non
     assert len(fake.machines) == 1
 
 
+def test_a_roll_keeps_the_volume_the_machine_mounts(setup) -> None:
+    """Found live: the placement had drifted onto a second, empty volume. Starting
+    a stopped machine sends no config, so nothing noticed until an image roll asked
+    Fly to remount — refused, because a volume is pinned to its machine's host."""
+    spawner, fake, store, config = setup()
+    asyncio.run(spawner.ensure(ALICE))
+    [machine] = fake.machines.values()
+    fake.volumes["vol_stray"] = {"id": "vol_stray", "name": volume_name(ALICE.id)}
+    store.set_placement(
+        ALICE.id, {"machine_id": machine["id"], "volume_id": "vol_stray"}
+    )
+    upgraded = FlySpawner(
+        HubConfig(
+            **{**config.__dict__, "instance_image": "registry.fly.io/hd-instances:v2"}
+        ),
+        store,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(fake.handler)),
+    )
+    asyncio.run(upgraded.ensure(ALICE))
+    assert machine["config"]["image"] == "registry.fly.io/hd-instances:v2"
+    assert machine["config"]["mounts"] == [{"volume": "vol_1", "path": "/data"}]
+    # The placement is put right, so a later recreate lands on the user's data.
+    assert store.placement(ALICE.id)["volume_id"] == "vol_1"
+
+
 def test_lost_token_replaces_the_machine_but_keeps_the_volume(setup) -> None:
     spawner, fake, store, _ = setup()
     old = asyncio.run(spawner.ensure(ALICE))
