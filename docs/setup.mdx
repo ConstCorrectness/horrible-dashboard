@@ -85,7 +85,12 @@ build stays local-only.
 
 :::note Reusing an already-running backend
 The supervisor reuses a backend already listening on :8000 rather than spawning a
-duplicate, and it cannot change how that one was bound. So `pnpm dev` (loopback) in one
+duplicate, and it cannot change how that one was bound. It only reuses one it can
+identify: the listener has to answer `GET /api/health` as `horrible-dashboard`. If
+something else holds the port (a Docker container, another dev server), the terminal
+prints `[desktop] port 8000 is held by something that is not this app's backend` and the
+shell starts its own backend on a free port instead. Set `HORRIBLE_DEV_BACKEND_PORT` to
+pick a different port. So `pnpm dev` (loopback) in one
 terminal plus `pnpm dev:desktop` in another leaves the node **unreachable from the LAN**
 despite the desktop default. Use `pnpm dev:lan` for the browser stack, or stop it and let
 the desktop shell own the backend.

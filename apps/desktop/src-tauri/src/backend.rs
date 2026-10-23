@@ -200,13 +200,27 @@ fn run(sup: Arc<BackendSupervisor>, resource_dir: Option<PathBuf>) {
 
     // Dev coexistence: an already-running backend (scripts/dev-backend.ps1)
     // wins; don't spawn a duplicate.
+    //
+    // *Ours*, though — not merely something listening. 8000 is a popular port (Docker
+    // containers, other dev servers), and adopting whatever holds it meant spawning no
+    // backend at all and pointing the whole UI at a stranger: every call came back 500
+    // and nothing anywhere said why. A checkout whose `.env` moves the port never sees
+    // it, which is why it only showed up on fresh clones.
+    let mut avoid_target = false;
     if port_listening(target_port) {
-        sup.set_status("ready", Some(origin_for(target_port)), None);
-        return;
+        if is_our_backend(target_port) {
+            sup.set_status("ready", Some(origin_for(target_port)), None);
+            return;
+        }
+        eprintln!(
+            "[desktop] port {target_port} is held by something that is not this app's backend; \
+             starting ours on another port (set HORRIBLE_DEV_BACKEND_PORT to choose one)"
+        );
+        avoid_target = true;
     }
 
     let host = bind_host();
-    let port = match pick_port(&host, target_port) {
+    let port = match pick_port(&host, (!avoid_target).then_some(target_port)) {
         Ok(port) => port,
         Err(err) => {
             sup.set_status("failed", None, Some(format!("no free port: {err}")));
@@ -227,11 +241,11 @@ fn run(sup: Arc<BackendSupervisor>, resource_dir: Option<PathBuf>) {
         {
             Ok(child) => child,
             Err(err) => {
-                sup.set_status(
-                    "failed",
-                    None,
-                    Some(format!("failed to spawn backend: {err}")),
-                );
+                // Said here as well as in the status: the status only reaches the
+                // webview's console, and the terminal is where `pnpm dev:desktop` is read.
+                let error = format!("failed to spawn backend: {err}");
+                eprintln!("[desktop] {error}");
+                sup.set_status("failed", None, Some(error));
                 return;
             }
         };
@@ -423,15 +437,51 @@ fn port_listening(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
+/// Whether the server on `port` is this app's backend: `GET /api/health` names the app.
+///
+/// Hand-rolled HTTP/1.0 rather than a client crate — one request, one read, and
+/// HTTP/1.0 means the server closes when it is done, so reading to EOF is the whole
+/// protocol. Anything that does not answer that way in time is not ours.
+fn is_our_backend(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!("GET /api/health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = Vec::new();
+    // Capped: a stranger is free to answer with anything, at any length.
+    let _ = stream.take(16 * 1024).read_to_end(&mut response);
+    is_health_response(&String::from_utf8_lossy(&response))
+}
+
+/// The pure half of [`is_our_backend`]: a 200 whose body names the app
+/// (`backend/app.py`'s `health`).
+fn is_health_response(response: &str) -> bool {
+    let status_ok = response
+        .lines()
+        .next()
+        .is_some_and(|line| line.split_whitespace().nth(1) == Some("200"));
+    status_ok && response.contains("\"horrible-dashboard\"")
+}
+
 /// Prefer the configured default port (browser tabs / curl keep working); else ephemeral.
+/// `None` skips straight to ephemeral — the default is held by something that is not us.
 ///
 /// The probe binds the SAME host uvicorn will. Testing loopback while uvicorn takes
 /// 0.0.0.0 is not equivalent — a port held by another process on a different
 /// interface would pass the probe and then fail the real bind.
-fn pick_port(host: &str, target_port: u16) -> std::io::Result<u16> {
-    if let Ok(listener) = TcpListener::bind((host, target_port)) {
-        drop(listener);
-        return Ok(target_port);
+fn pick_port(host: &str, target_port: Option<u16>) -> std::io::Result<u16> {
+    if let Some(target_port) = target_port {
+        if let Ok(listener) = TcpListener::bind((host, target_port)) {
+            drop(listener);
+            return Ok(target_port);
+        }
     }
     let listener = TcpListener::bind((host, 0))?;
     let port = listener.local_addr()?.port();
@@ -662,6 +712,50 @@ mod tests {
         // that a missing resource dir is not itself an error.
         let resolved = Runtime::resolve(None);
         assert!(matches!(resolved, Some(Runtime::Checkout(_)) | None));
+    }
+
+    #[test]
+    fn only_a_healthy_response_naming_the_app_is_ours() {
+        let ours = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n\
+                    {\"status\":\"ok\",\"app\":\"horrible-dashboard\",\"version\":\"0.4.2\"}";
+        assert!(is_health_response(ours));
+        // The case that shipped: something else on 8000 answering everything with 500.
+        assert!(!is_health_response(
+            "HTTP/1.0 500 Internal Server Error\r\n\r\nInternal Server Error"
+        ));
+        // Healthy, but somebody else's health endpoint.
+        assert!(!is_health_response(
+            "HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\"}"
+        ));
+        // Naming the app is not enough without the 200.
+        assert!(!is_health_response(
+            "HTTP/1.1 404 Not Found\r\n\r\nno route for horrible-dashboard"
+        ));
+        assert!(!is_health_response(""));
+    }
+
+    /// Serve one canned response on an ephemeral loopback port; returns the port.
+    fn serve_once(response: &'static str) -> u16 {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_probe_tells_our_backend_from_a_stranger_on_the_wire() {
+        let ours =
+            serve_once("HTTP/1.0 200 OK\r\n\r\n{\"status\":\"ok\",\"app\":\"horrible-dashboard\"}");
+        assert!(is_our_backend(ours));
+        let stranger = serve_once("HTTP/1.0 500 Internal Server Error\r\n\r\nnope");
+        assert!(!is_our_backend(stranger));
     }
 
     /// cp1252's em dash (0x97) is not UTF-8. Stopping on it closed the backend's

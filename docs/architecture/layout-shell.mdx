@@ -262,8 +262,10 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
 - **Desktop:** the Tauri shell **spawns and supervises the backend itself**
   (`apps/desktop/src-tauri/src/backend.rs`). On launch it locates the repo
   checkout, reuses an already-running backend on `:8000` if there is one
-  (dev-backend.ps1 coexistence), otherwise picks a port (8000 preferred,
-  ephemeral fallback) and spawns uvicorn bound to `127.0.0.1` — via the repo's
+  (dev-backend.ps1 coexistence; it must answer `GET /api/health` as
+  `horrible-dashboard`, so a stranger holding the port is skipped rather than
+  adopted), otherwise picks a port (8000 preferred, ephemeral fallback) and
+  spawns uvicorn bound to `127.0.0.1` — via the repo's
   `.venv` python when present, else `uv run` — with MinGW dirs stripped from the
   child PATH (the `no OPENSSL_Applink` crash). It restarts the process with
   backoff if it dies (3 fast failures → `failed` with the stderr tail) and kills
