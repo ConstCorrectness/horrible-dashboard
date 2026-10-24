@@ -12,7 +12,7 @@
 #
 # Each release:
 #   pnpm --filter @horrible/web build   (the image still copies dist; it is not served)
-#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v6
+#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v7
 #   fly deploy -c fly.hub.toml
 #   (frontend: nothing to do — Vercel deploys apps/web on every push to main)
 #
@@ -31,7 +31,7 @@ primary_region = 'iad'
   HUB_FLY_REGION = 'iad'
   # Bump the label here and in the instances push to roll every user's machine
   # onto a new build the next time they connect.
-  HUB_INSTANCE_IMAGE = 'registry.fly.io/horrible-hub-instances:v6'
+  HUB_INSTANCE_IMAGE = 'registry.fly.io/horrible-hub-instances:v7'
   GAMES_SERVER_URL = 'wss://horrible-games.fly.dev'
   HUB_DB_PATH = '/hub-data/hub.db'
   HUB_MEM = '1g'
