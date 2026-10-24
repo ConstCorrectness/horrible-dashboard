@@ -38,7 +38,7 @@ use tauri_plugin_updater::UpdaterExt;
 /// same thing next month. The manifests point at assets on the *real* release —
 /// only the index lives here.
 const MANIFEST_BASE: &str =
-    "https://github.com/horriblecpp/horrible-dashboard/releases/download/updater";
+    "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/updater";
 
 /// The placeholder a fresh checkout ships with. Replaced by the public half of
 /// the key produced by `pnpm tauri signer generate` — see docs/architecture/releases.mdx.

@@ -17,8 +17,8 @@ classifiers = [
 dependencies = ["httpx>=0.27"]
 
 [project.urls]
-Homepage = "https://github.com/horriblecpp/horrible-dashboard"
-Documentation = "https://github.com/horriblecpp/horrible-dashboard/blob/main/docs/modules/trajectories.mdx"
+Homepage = "https://github.com/ConstCorrectness/horrible-dashboard"
+Documentation = "https://github.com/ConstCorrectness/horrible-dashboard/blob/main/docs/modules/trajectories.mdx"
 
 [build-system]
 requires = ["hatchling"]

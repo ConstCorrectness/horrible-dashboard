@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 #: The repository CI publishes client assets to. The same one `updater.rs` reads
 #: its signed manifest from — these assets ride along on the very same releases.
-REPO = "horriblecpp/horrible-dashboard"
+REPO = "ConstCorrectness/horrible-dashboard"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases"
 
 #: Asset stem. The CI job in `.github/workflows/release.yml` writes exactly this,

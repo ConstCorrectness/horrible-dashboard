@@ -1,7 +1,7 @@
 # horrible-trajectories
 
 Record what your agent **did** — its tool calls, their results, and how the run
-turned out — into a [horrible-dashboard](https://github.com/horriblecpp/horrible-dashboard)
+turned out — into a [horrible-dashboard](https://github.com/ConstCorrectness/horrible-dashboard)
 node, where it becomes queryable, searchable and exportable as training data.
 
 ```bash
