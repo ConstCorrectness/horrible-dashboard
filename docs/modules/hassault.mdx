@@ -363,27 +363,49 @@ could get to.
 ### The modelled maps: how one is built, and what each revision changed
 
 A modelled map is a Blender generator (`tools/blender/generate_<map>.py`) plus the
-shared helpers in `maplib.py`. Changing one means running four steps in order,
+shared helpers in `maplib.py`. Changing one means running five steps in order,
 because each reads what the step before it wrote:
 
 1. **Generate:** `blender --background --factory-startup --python
    tools/blender/generate_dust2.py`. This writes the GLB to both homes
    (`backend/modules/hassault/maps/` and `apps/web/public/`). It also writes the
-   map's lights and atmosphere into its JSON (see below).
+   map's lights and atmosphere into its JSON (see below), and the hash of the
+   collision mesh as `collisionSource`. The export refuses two things the bake
+   would silently get wrong. The first is an object name at Blender's 63-byte
+   limit: it was probably cut short, and Assault's batches lost their `_NonCol`
+   that way, so sprinkler pipes and floor stripes became invisible walls. The
+   second is a collider island that is open (and not a flat sheet) or inside-out
+   (`maplib.audit_colliders`). `HASSAULT_MAP_STRICT=0` exports anyway, for
+   looking at the result.
 2. **Bake:** `blender --background --factory-startup --python
    tools/blender/bake_collision.py -- hd_dust2` rasterises the GLB into the
-   JSON's brushes, which is what the server simulates.
+   JSON's brushes, which is what the server simulates. It writes the hash of what
+   it read as `collisionBaked`; `test_bake_is_of_the_current_model` fails until
+   the two hashes match. It stops if the generator's collision mesh is missing,
+   unless you pass `--from-shipped`, which bakes the shipped GLB (and so fails
+   that test).
 3. **Fit:** `uv run python tools/hassault_fit_placements.py hd_dust2` moves any
    spawn, item, site or **light** the new geometry swallowed to the nearest valid
    cell. Never skip it: step 1 rewrites every light from the generator, a few of
    those land inside a wall, and the committed JSON holds them only after fitting.
    Skipping it shows up as lights "drifting" in a diff that changed none.
-4. **Check:** `maplint`, then the native `test_spawn_clearance` (which checks the
-   offline `MAP_CONFIGS` tables in `world3d.ts` and `world3d.rs` against the GLB).
-   Also run the `glb-surfaces` vector test, whose golden list gains a row for any
-   new material. Regenerate it with `UPDATE_GLB_SURFACE_VECTORS=1`. And run
-   `map-geometry.test.ts`, which reads every shipped GLB and fails on an
-   inside-out mesh or two surfaces fighting for one plane.
+4. **Sync Train's spawns:** `uv run python tools/hassault_sync_client_spawns.py
+   hd_dust2` copies the fitted JSON spawns into the offline tables in
+   `world3d.ts` and `world3d.rs`. Each row's `z` is where `spawn_at` stands the
+   body. Offline Train grounds each row on the mesh at its cell's middle
+   (`groundSpawn` / `ground_spawn`).
+5. **Check:** `maplint`, then the native `test_spawn_clearance`, which grounds
+   every offline spawn the way Train does and fails if the row's floor is not the
+   mesh's. Also run the `glb-surfaces` vector test, whose golden list gains a row
+   for any new material. Regenerate it with `UPDATE_GLB_SURFACE_VECTORS=1`. And
+   run `map-geometry.test.ts`, which reads every shipped GLB and fails on an
+   inside-out mesh or two surfaces fighting for one plane. Then check the grid
+   against the model with `blender --background --factory-startup --python
+   tools/blender/audit_collision.py -- hd_dust2`. It exits 1 on any reachable
+   cell where the grid's floor is not the mesh's, or where something solid stands
+   at body height in a cell the grid calls open, and it reports roofed-over rooms
+   that baked into solid boxes. Last, run `probe_eye_inside.py`: an eye inside
+   any mesh, colliders included, is a see-through bug.
 
 Run the generators on Blender **4.1**. They call `read_factory_settings`, which the
 Blender MCP sandbox refuses. With `HASSAULT_MAP_OUT` set to a scratch directory a
@@ -867,8 +889,10 @@ purpose: it fixes every map, and every future map, without touching a generator.
 3. **`soften_edges`** rounds every edge sharper than 50° with a two-segment
    bevel. The radius comes from the material's kind in `glb-surfaces.json`:
    15 cm for masonry, 12 cm for plaster, 4 cm for wood, 2.5 cm for steel, and
-   none for glass or emissive surfaces. It is capped at a fraction of the
-   object's thinnest side. Edges where a face carries on into another surface
+   none for glass or emissive surfaces. It is capped at a fraction of each
+   island's thinnest side, not the object's: Dust II's 5 cm crate lids share one
+   mesh with the crates, and a crate's rounding folded them inside out. A bevel
+   that leaves an island inside out is thrown away. Edges where a face carries on into another surface
    (floor slabs laid edge to edge, a wall standing on the ground) are **seams**
    and stay sharp, otherwise every joint would become a gutter. Above 45° on
    purpose: an eight-sided post's facets meet at 45°, and rounding them collapses
@@ -1568,16 +1592,35 @@ walls, so online every crate, van and building was walk-through.
 `glb-colliders.json` rule) into that grid and writes the result back as merged
 `room` rects, marking the JSON `"collision": "baked"`:
 
-- 4×4 vertical rays per cell, counting solid by face orientation **per object**
-  (one tree for the scene steps past coincident faces and unbalances the count),
-  with a one-sided plane read as a thin slab, not as rock all the way down.
+- 4×4 vertical rays per cell, counting solid by face orientation **per welded
+  part**. Each part's up-facing and down-facing faces go in separate trees,
+  because a ray query returns only the nearest hit, and stepping past it skips a
+  face lying in the same plane. Per object was not enough: Dust II's crate
+  dressing is one joined mesh, and with each crate's bottom flush on the top of
+  the crate below, the whole stack read as a 0.5-cube slab you walked straight
+  through online. A one-sided plane is read as a thin slab, not as rock all the
+  way down.
 - A column holds one opening, so the bake walks from the spawns over every
   opening of every column — step, running jump, drop — and keeps the lowest
   opening that was *reached*: the street under a catwalk, never the void under a
   floor slab. An unreached column keeps its top only when it is open to the sky
-  (a crate or wall top you can shoot over); anything else closes.
-- Footprints are conservative (a cell is blocked if any sample is), floors round
-  to the nearest cube and ceilings round down.
+  (a crate or wall top you can shoot over); anything else closes. Under a roof
+  that makes a prop nobody reaches (a fridge in the bank's office) solid up to
+  the roof, which is why the server places bodies only where they fit
+  (`physics.place_body`) rather than on whatever floor the column has.
+- Footprints are conservative (a cell is blocked if any sample is), minus
+  slivers. When at most one row of a cell's samples, all on one side, stand on
+  something higher, and the neighbour on that side is mostly that thing, the cell
+  keeps the floor most of it stands on. Trimming any minority went too far: it
+  shrank an office chair enough to leave a pocket a body fits in and cannot walk
+  to. A floor is never trimmed down through a slab into the opening below it
+  (Nuke's vent hatch), and a gap too short to stand in is never trimmed at all.
+  A part thinner than the sample spacing (a rail, a pole, a steel plate) gets an
+  extra blocking sample on its centreline, so it no longer falls between them. A crate's edge no longer reads a cube
+  wider than it is, which had players standing on air beside every ledge. A thin
+  wall that straddles a cell line has no such neighbour, so it still blocks.
+  Floors round to the nearest cube and ceilings round down, after a 1e-3 margin
+  for the float32 trees.
 
 `maplint` holds a baked world to what these maps are built for: reachability
 allows a **running jump** (`JUMP_CLIMB = 4`, measured against `physics.step` by
@@ -1585,16 +1628,19 @@ allows a **running jump** (`JUMP_CLIMB = 4`, measured against `physics.step` by
 and raised islands — standable tops beside ground someone does reach — are
 geometry, not a sealed room. Drawn maps keep the stricter on-foot rule.
 
-Rebuilding a modelled map is therefore three steps, in order: the generator
+Rebuilding a modelled map is therefore the generator
 (`blender --background --factory-startup --python tools/blender/generate_<map>.py`),
 the bake (`... --python tools/blender/bake_collision.py -- hd_<map>`), then
-`uv run python tools/hassault_fit_placements.py hd_<map>`.
+`uv run python tools/hassault_fit_placements.py hd_<map>` and
+`tools/hassault_sync_client_spawns.py hd_<map>`, in that order.
 `test_modelled_maps_simulate_their_model` fails if a `gltf` map ships without
 baked brushes.
 
 Fixing solidity surfaced traversal the models never had: Dust II's Long A and CT
 "ramps" and Inferno's apartment stairs were boxes (cliffs), now wedges via
-`maplib.add_wedge`, and Nuke's reactor hall was four unbroken walls — Site A was
+`maplib.add_wedge`. Until October 2026 every wedge was an open mesh: the top
+corners at the low end were separate vertices that never merged with the bottom
+ones, so the bake read each ramp as a thin sheet. And Nuke's reactor hall was four unbroken walls — Site A was
 unreachable by anyone — and now has three doorways (`maplib.add_wall_with_door`).
 
 ### The heightfield rule, which is easy to get backwards

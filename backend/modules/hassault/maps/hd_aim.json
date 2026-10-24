@@ -39,9 +39,9 @@
     },
     {
       "op": "room",
-      "rect": [4, 4, 119, 10],
+      "rect": [4, 4, 119, 9],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
@@ -51,33 +51,63 @@
     },
     {
       "op": "room",
-      "rect": [4, 14, 3, 84],
+      "rect": [4, 13, 3, 85],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 14, 6, 7],
+      "rect": [7, 13, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 13, 111, 1],
+      "floor": 0,
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [12, 14, 1, 7],
       "floor": 1,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
       "rect": [13, 14, 110, 17],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 21, 6, 24],
+      "rect": [7, 15, 5, 5],
+      "floor": 1,
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 20, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 21, 1, 24],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 22, 5, 22],
+      "floor": 0,
+      "ceil": 24
     },
     {
       "op": "room",
       "rect": [13, 31, 3, 67],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
@@ -89,25 +119,49 @@
       "op": "room",
       "rect": [120, 31, 3, 67],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
       "rect": [16, 33, 104, 31],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 45, 6, 7],
+      "rect": [7, 44, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 45, 1, 7],
       "floor": 1,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 52, 6, 26],
+      "rect": [7, 46, 5, 5],
+      "floor": 1,
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 51, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 52, 1, 26],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 53, 5, 24],
+      "floor": 0,
+      "ceil": 24
     },
     {
       "op": "room",
@@ -119,19 +173,43 @@
       "op": "room",
       "rect": [16, 66, 104, 32],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 78, 6, 7],
+      "rect": [7, 77, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 78, 1, 7],
       "floor": 1,
-      "ceil": 23
+      "ceil": 24
     },
     {
       "op": "room",
-      "rect": [7, 85, 6, 13],
+      "rect": [7, 79, 5, 5],
+      "floor": 1,
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 84, 5, 2],
+      "floor": 25,
+      "ceil": 33
+    },
+    {
+      "op": "room",
+      "rect": [12, 85, 1, 13],
       "floor": 0,
-      "ceil": 23
+      "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [7, 86, 5, 12],
+      "floor": 0,
+      "ceil": 24
     },
     {
       "op": "room",
@@ -185,9 +263,9 @@
     {"type": "playerstart", "x": 116, "y": 48, "yaw": 180, "team": 1},
     {"type": "playerstart", "x": 116, "y": 81, "yaw": 180, "team": 1},
     {"type": "playerstart", "x": 116, "y": 10, "yaw": 180, "team": 1},
-    {"type": "ammo", "x": 12, "y": 22, "z": 0},
-    {"type": "ammo", "x": 12, "y": 53, "z": 0},
-    {"type": "ammo", "x": 12, "y": 86, "z": 0},
+    {"type": "ammo", "x": 13, "y": 22, "z": 0},
+    {"type": "ammo", "x": 13, "y": 53, "z": 0},
+    {"type": "ammo", "x": 13, "y": 86, "z": 0},
     {"type": "clips", "x": 80, "y": 17, "z": 0},
     {"type": "clips", "x": 80, "y": 48, "z": 0},
     {"type": "clips", "x": 80, "y": 81, "z": 0},
@@ -340,5 +418,7 @@
     {"x": 116, "y": 48, "yaw": 180, "team": 1},
     {"x": 116, "y": 81, "yaw": 180, "team": 1},
     {"x": 116, "y": 10, "yaw": 180, "team": 1}
-  ]
+  ],
+  "collisionSource": "11ab4659216332a8",
+  "collisionBaked": "11ab4659216332a8"
 }

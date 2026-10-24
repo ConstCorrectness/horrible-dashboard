@@ -239,6 +239,21 @@ impl RapierPhysicsWorld {
         }
     }
 
+    /// Where a map's spawn row puts a body here: the middle of its cell, feet on
+    /// the mesh under it. The rows are the map JSON's cell coordinates (the
+    /// server adds the half cell in `spawn_at`) and its whole-cube floor; used
+    /// as they were, Train started a body on a cell corner at the grid's rounded
+    /// height, which on Dust II and Bank was inside a table and a counter, and
+    /// Rapier has no push-out. Probed from a step above the row's floor, so a
+    /// floor the grid rounded up or down is met where it is modelled. The same
+    /// rule as `groundSpawn` in the browser's `physics-rapier.ts`.
+    pub fn ground_spawn(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        let (x, y) = (x + 0.5, y + 0.5);
+        let from = z + STEP_HEIGHT;
+        let (hit, dist, _) = self.cast_ray([x, y, from], [0.0, 0.0, -1.0], STEP_HEIGHT * 3.0);
+        (x, y, if hit { from - dist } else { z })
+    }
+
     pub fn set_position(&mut self, x: f32, y: f32, z: f32) {
         if let Some(body) = self.bodies.get_mut(self.player_body_handle) {
             body.set_translation(vector![x, y, z], true);

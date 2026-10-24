@@ -1620,9 +1620,17 @@ impl App {
                 }
             })
             .or_else(|| {
+                // A map row is a cell on a rounded floor: grounded on the mesh.
+                // An override is already exactly where it means.
                 self.world3d
                     .as_ref()
                     .and_then(|w| w.spawns.first().copied())
+                    .map(|mut sp| {
+                        if let Some(rapier) = &self.rapier_physics {
+                            (sp.x, sp.y, sp.z) = rapier.ground_spawn(sp.x, sp.y, sp.z);
+                        }
+                        sp
+                    })
             });
         if let Some(sp) = spawn_3d {
             self.camera.yaw = sp.yaw;

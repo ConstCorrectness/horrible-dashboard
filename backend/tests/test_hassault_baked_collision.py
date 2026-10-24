@@ -53,3 +53,22 @@ def test_modelled_maps_simulate_their_model(name):
     bake of the GLB — a hand-drawn sketch there is every prop walk-through online."""
     world = mapsource.load_bundled(name)
     assert world is not None and world.baked_collision
+
+
+@pytest.mark.parametrize("name", GLB_MAPS)
+def test_bake_is_of_the_current_model(name):
+    """The grid was baked from the mesh the generator last exported.
+
+    The generator writes the hash of its collision mesh as `collisionSource`, the
+    bake the hash of what it read as `collisionBaked`. A map regenerated and not
+    re-baked keeps the old grid under the new model — players walking into
+    walls that moved, standing on floors that are gone — and nothing else
+    notices. A bake from the shipped GLB (`--from-shipped`) fails here too: its
+    floors move.
+    """
+    source = json.loads(mapsource.source_path(name).read_text(encoding="utf-8"))
+    assert source.get("collisionSource"), "regenerate the map: no collisionSource"
+    assert source.get("collisionBaked") == source["collisionSource"], (
+        "re-bake: the grid is not the bake of the current model "
+        "(tools/blender/bake_collision.py)"
+    )

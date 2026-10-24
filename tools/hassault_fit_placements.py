@@ -72,9 +72,16 @@ def fit(name: str) -> list[str]:
     moved: list[str] = []
 
     def stands(cell) -> bool:
-        """`maplint`'s spawn question: rest where `spawn_at` puts you, then fit?"""
+        """`maplint`'s spawn question: rest where `spawn_at` puts you, then fit?
+
+        And on the cell's own floor: `spawn_at` rests a body on the highest
+        floor under its footprint, so a spawn beside a stall table started on
+        the table, and in Train (no grid, a capsule on the mesh) inside it.
+        """
         spawn = MapEntity(type=PLAYERSTART, name="playerstart", x=cell[0], y=cell[1], z=0)
         state = physics.spawn_at(sim, spawn)
+        if state.z > sim.floor_at(*cell) + 1:
+            return False
         return physics.can_stand(sim, state.x, state.y, state.z)
 
     starts = [e for e in source["entities"] if e["type"] == "playerstart"]

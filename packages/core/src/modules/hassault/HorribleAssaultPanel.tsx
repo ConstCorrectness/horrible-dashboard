@@ -1623,7 +1623,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         noclipRef.current = next;
         consoleRegistry.set('player.noclip', next ? '1' : '0');
       } else if (cmd === 'respawn' && playerRef.current && worldRef.current) {
-        const s = world3dRef.current?.spawns.all[0] ?? worldRef.current.spawns()[0];
+        const row = world3dRef.current?.spawns.all[0];
+        const s = row ? (rapierRef.current?.groundSpawn(row) ?? row) : worldRef.current.spawns()[0];
         if (s) {
           playerRef.current.x = s.x;
           playerRef.current.y = s.y;
@@ -3087,11 +3088,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             : world.spawns()[0];
 
         if (spawn) {
+          // A map row is a cell on a rounded floor; a pending spawn (a teleport)
+          // is already exactly where it means.
+          const at =
+            !pendingSpawn && is3D && rapierPhysics ? rapierPhysics.groundSpawn(spawn) : spawn;
           playerRef.current = is3D
-            ? createPlayer(spawn.x, spawn.y, spawn.z, ((spawn.yaw ?? 0) * Math.PI) / 180)
+            ? createPlayer(at.x, at.y, at.z, ((spawn.yaw ?? 0) * Math.PI) / 180)
             : spawnAt(world, { ...spawn, yaw: spawn.yaw ?? null });
           if (is3D && rapierPhysics) {
-            rapierPhysics.setPosition(spawn.x, spawn.y, spawn.z);
+            rapierPhysics.setPosition(at.x, at.y, at.z);
           }
         } else {
           playerRef.current = createPlayer(world.ssize / 2, world.ssize / 2, 0);
@@ -3670,13 +3675,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     const spawn = spawns[Math.floor(Math.random() * spawns.length)];
     if (spawn) {
       if (world3dRef.current && rapierRef.current) {
-        playerRef.current = createPlayer(
-          spawn.x,
-          spawn.y,
-          spawn.z,
-          ((spawn.yaw ?? 0) * Math.PI) / 180,
-        );
-        rapierRef.current.setPosition(spawn.x, spawn.y, spawn.z);
+        const at = rapierRef.current.groundSpawn(spawn);
+        playerRef.current = createPlayer(at.x, at.y, at.z, ((spawn.yaw ?? 0) * Math.PI) / 180);
+        rapierRef.current.setPosition(at.x, at.y, at.z);
       } else {
         playerRef.current = spawnAt(world, spawn);
       }

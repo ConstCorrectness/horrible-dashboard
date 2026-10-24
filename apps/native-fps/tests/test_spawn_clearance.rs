@@ -75,7 +75,18 @@ fn spawn_failures(name: &str) -> Vec<String> {
         .iter()
         .enumerate()
         .filter_map(|(i, s)| {
-            obstruction(&physics, s.x, s.y, s.z)
+            // Where Train actually puts the body (`ground_spawn`), and the row's
+            // floor must be the floor there. Probing from the row's own corner
+            // and three above it let a spawn inside a table pass: the ray found
+            // the table top and called it the floor.
+            let (x, y, z) = physics.ground_spawn(s.x, s.y, s.z);
+            if (z - s.z).abs() > 1.0 {
+                return Some(format!(
+                    "{name} spawn {i} ({}, {}): the row says floor {} but the mesh is at {z:.2}",
+                    s.x, s.y, s.z
+                ));
+            }
+            obstruction(&physics, x, y, z)
                 .map(|why| format!("{name} spawn {i} ({}, {}): {why}", s.x, s.y))
         })
         .collect()

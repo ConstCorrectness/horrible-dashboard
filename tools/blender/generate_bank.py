@@ -1414,6 +1414,10 @@ def build_bank_scene():
         add_box(c_vault, f"Cash_Cart_Rail_W_{int(side_z*100)}", (cart_cx - 1.18, cart_cy - 1.15, side_z), (cart_cx - 1.14, cart_cy + 1.15, side_z + 0.03), mats["Chrome_Polished"], is_collider=False)
         add_box(c_vault, f"Cash_Cart_Rail_E_{int(side_z*100)}", (cart_cx + 1.14, cart_cy - 1.15, side_z), (cart_cx + 1.18, cart_cy + 1.15, side_z + 0.03), mats["Chrome_Polished"], is_collider=False)
 
+    # The cage is posts and rails (trim, walk-through) on a frame you can step
+    # onto: without this a body stood inside it, its eye among the posts.
+    add_box(c_vault, "Cash_Cart_Cage_ColOnly", (cart_cx - 1.18, cart_cy - 1.18, 0.0), (cart_cx + 1.18, cart_cy + 1.18, 1.45), mats["Steel_Structural"])
+
     # Layered Stacks of Banded Currency Bundles ($10,000 Straps)
     for b_z in [0.35, 0.55, 0.75, 0.95, 1.15]:
         for b_x in [-0.8, -0.4, 0.0, 0.4, 0.8]:

@@ -29,8 +29,8 @@ export async function ensureRapierInitialized(): Promise<typeof RAPIER> {
 
 export interface RapierMoveInput {
   forward: number; // -1 to 1
-  strafe: number;  // -1 to 1
-  yaw: number;     // degrees
+  strafe: number; // -1 to 1
+  yaw: number; // degrees
   jump: boolean;
   crouch: boolean;
   sprint?: boolean;
@@ -54,9 +54,9 @@ export interface RapierPlayerState {
 
 export const MATERIAL_PENETRATION: Record<string, number> = {
   wood: 0.85,
-  drywall: 0.90,
+  drywall: 0.9,
   metal: 0.45,
-  stone: 0.30,
+  stone: 0.3,
   glass: 0.95,
 };
 
@@ -79,7 +79,7 @@ export function calculateMaterialPenetration(
     maxThickness = 0.45 * matFactor;
     baseFalloff = 0.35;
   } else if (weaponId === 'shotgun') {
-    maxThickness = 0.30 * matFactor;
+    maxThickness = 0.3 * matFactor;
     baseFalloff = 0.25;
   } else {
     return { canPenetrate: false, damageFactor: 0 };
@@ -164,7 +164,11 @@ export class RapierPhysicsWorld {
     const offset = 0.04 * RapierPhysicsWorld.U;
     this.characterController = this.world.createCharacterController(offset);
     this.characterController.setUp(new RAPIER.Vector3(0.0, 0.0, 1.0));
-    this.characterController.enableAutostep(RapierPhysicsWorld.STEP_HEIGHT, 0.2 * RapierPhysicsWorld.U, true);
+    this.characterController.enableAutostep(
+      RapierPhysicsWorld.STEP_HEIGHT,
+      0.2 * RapierPhysicsWorld.U,
+      true,
+    );
     this.characterController.setMaxSlopeClimbAngle(RapierPhysicsWorld.MAX_SLOPE);
     this.characterController.setMinSlopeSlideAngle(RapierPhysicsWorld.MAX_SLOPE);
     this.characterController.enableSnapToGround(0.35 * RapierPhysicsWorld.U);
@@ -179,7 +183,11 @@ export class RapierPhysicsWorld {
       RapierPhysicsWorld.CAPSULE_RADIUS,
     );
     standingDesc.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
-    standingDesc.setTranslation(0, 0, RapierPhysicsWorld.STANDING_HALF_HEIGHT + RapierPhysicsWorld.CAPSULE_RADIUS);
+    standingDesc.setTranslation(
+      0,
+      0,
+      RapierPhysicsWorld.STANDING_HALF_HEIGHT + RapierPhysicsWorld.CAPSULE_RADIUS,
+    );
     this.standingCollider = this.world.createCollider(standingDesc, this.playerBody);
 
     // Crouching Capsule Collider
@@ -188,7 +196,11 @@ export class RapierPhysicsWorld {
       RapierPhysicsWorld.CAPSULE_RADIUS,
     );
     crouchDesc.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
-    crouchDesc.setTranslation(0, 0, RapierPhysicsWorld.CROUCH_HALF_HEIGHT + RapierPhysicsWorld.CAPSULE_RADIUS);
+    crouchDesc.setTranslation(
+      0,
+      0,
+      RapierPhysicsWorld.CROUCH_HALF_HEIGHT + RapierPhysicsWorld.CAPSULE_RADIUS,
+    );
     this.crouchingCollider = this.world.createCollider(crouchDesc, this.playerBody);
     this.crouchingCollider.setEnabled(false);
 
@@ -201,6 +213,37 @@ export class RapierPhysicsWorld {
   public setPosition(x: number, y: number, z: number): void {
     this.playerBody.setTranslation(new RAPIER.Vector3(x, y, z), true);
     this.world.step();
+  }
+
+  /**
+   * Where a map's spawn row puts a body here: the middle of its cell, feet on
+   * the mesh under it. The rows are the map JSON's cell coordinates (the server
+   * adds the half cell in `spawn_at`) and its whole-cube floor; used as they
+   * were, Train started a body on a cell corner at the grid's rounded height,
+   * which on Dust II and Bank was inside a table and a counter, and Rapier has
+   * no push-out. Probed from a step above the row's floor, so a floor the grid
+   * rounded up or down is met where it is modelled.
+   */
+  public groundSpawn(spawn: { x: number; y: number; z: number }): {
+    x: number;
+    y: number;
+    z: number;
+  } {
+    const x = spawn.x + 0.5;
+    const y = spawn.y + 0.5;
+    const from = spawn.z + RapierPhysicsWorld.STEP_HEIGHT;
+    const ray = new RAPIER.Ray(new RAPIER.Vector3(x, y, from), new RAPIER.Vector3(0, 0, -1));
+    const reach = RapierPhysicsWorld.STEP_HEIGHT * 3;
+    const hit = this.world.castRay(
+      ray,
+      reach,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      this.playerBody,
+    );
+    return { x, y, z: hit ? from - hit.timeOfImpact : spawn.z };
   }
 
   public getPosition(): { x: number; y: number; z: number } {
@@ -219,12 +262,20 @@ export class RapierPhysicsWorld {
     state.sprinting = isSprinting;
     state.stamina = isSprinting
       ? Math.max(0, stamina - RapierPhysicsWorld.STAMINA_DRAIN * dt)
-      : Math.min(RapierPhysicsWorld.MAX_STAMINA, stamina + RapierPhysicsWorld.STAMINA_RECOVERY * dt);
+      : Math.min(
+          RapierPhysicsWorld.MAX_STAMINA,
+          stamina + RapierPhysicsWorld.STAMINA_RECOVERY * dt,
+        );
 
     const hSpeed = Math.hypot(state.vx, state.vy);
 
     // Crouch Power-Slide Trigger & Slide-Canceling
-    if (input.crouch && state.grounded && !state.sliding && (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)) {
+    if (
+      input.crouch &&
+      state.grounded &&
+      !state.sliding &&
+      (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)
+    ) {
       state.sliding = true;
       state.slideTime = 0;
       const boost = Math.max(1.15, RapierPhysicsWorld.SLIDE_INITIAL_SPEED / Math.max(0.1, hSpeed));
@@ -251,10 +302,11 @@ export class RapierPhysicsWorld {
           if (curSpeed > 0.1) {
             const dirX = state.vx / curSpeed;
             const dirY = state.vy / curSpeed;
-            const downhillDot = dirX * (-norm.x) + dirY * (-norm.y);
+            const downhillDot = dirX * -norm.x + dirY * -norm.y;
             const slopeSin = Math.sqrt(norm.x * norm.x + norm.y * norm.y);
             if (downhillDot > 0.05 && slopeSin > 0.05) {
-              const downhillAccel = Math.abs(RapierPhysicsWorld.GRAVITY) * slopeSin * downhillDot * 1.5;
+              const downhillAccel =
+                Math.abs(RapierPhysicsWorld.GRAVITY) * slopeSin * downhillDot * 1.5;
               state.vx += dirX * downhillAccel * dt;
               state.vy += dirY * downhillAccel * dt;
             }
@@ -353,11 +405,7 @@ export class RapierPhysicsWorld {
     }
 
     // Desired displacement this tick
-    const desiredTranslation = new RAPIER.Vector3(
-      state.vx * dt,
-      state.vy * dt,
-      desiredZ,
-    );
+    const desiredTranslation = new RAPIER.Vector3(state.vx * dt, state.vy * dt, desiredZ);
 
     // Compute kinematic movement with collision resolution
     this.characterController.computeColliderMovement(this.activeCollider, desiredTranslation);
@@ -424,12 +472,20 @@ export class RapierPhysicsWorld {
     player.isSprinting = isSprinting;
     player.stamina = isSprinting
       ? Math.max(0, stamina - RapierPhysicsWorld.STAMINA_DRAIN * dt)
-      : Math.min(RapierPhysicsWorld.MAX_STAMINA, stamina + RapierPhysicsWorld.STAMINA_RECOVERY * dt);
+      : Math.min(
+          RapierPhysicsWorld.MAX_STAMINA,
+          stamina + RapierPhysicsWorld.STAMINA_RECOVERY * dt,
+        );
 
     const hSpeed = Math.hypot(player.velX, player.velY);
 
     // Crouch Power-Slide & Slide Cancel
-    if (input.crouch && player.onGround && !player.isSliding && (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)) {
+    if (
+      input.crouch &&
+      player.onGround &&
+      !player.isSliding &&
+      (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)
+    ) {
       player.isSliding = true;
       player.slideTime = 0;
       const boost = Math.max(1.15, RapierPhysicsWorld.SLIDE_INITIAL_SPEED / Math.max(0.1, hSpeed));
@@ -455,10 +511,11 @@ export class RapierPhysicsWorld {
           if (curSpeed > 0.1) {
             const dirX = player.velX / curSpeed;
             const dirY = player.velY / curSpeed;
-            const downhillDot = dirX * (-norm.x) + dirY * (-norm.y);
+            const downhillDot = dirX * -norm.x + dirY * -norm.y;
             const slopeSin = Math.sqrt(norm.x * norm.x + norm.y * norm.y);
             if (downhillDot > 0.05 && slopeSin > 0.05) {
-              const downhillAccel = Math.abs(RapierPhysicsWorld.GRAVITY) * slopeSin * downhillDot * 1.5;
+              const downhillAccel =
+                Math.abs(RapierPhysicsWorld.GRAVITY) * slopeSin * downhillDot * 1.5;
               player.velX += dirX * downhillAccel * dt;
               player.velY += dirY * downhillAccel * dt;
             }
@@ -538,7 +595,7 @@ export class RapierPhysicsWorld {
     }
 
     // Bunny-hop landing grace period (80ms timing window)
-    const bhopTiming = player.onGround && input.jump && (player.t - player.landedAt <= 0.08);
+    const bhopTiming = player.onGround && input.jump && player.t - player.landedAt <= 0.08;
 
     if ((input.jump && player.onGround) || bhopTiming) {
       player.velZ = RapierPhysicsWorld.JUMP_VELOCITY;
@@ -552,11 +609,7 @@ export class RapierPhysicsWorld {
       desiredZ = -0.05 * RapierPhysicsWorld.U;
     }
 
-    const desired = new RAPIER.Vector3(
-      player.velX * dt,
-      player.velY * dt,
-      desiredZ,
-    );
+    const desired = new RAPIER.Vector3(player.velX * dt, player.velY * dt, desiredZ);
 
     this.characterController.computeColliderMovement(this.activeCollider, desired);
     const movement = this.characterController.computedMovement();

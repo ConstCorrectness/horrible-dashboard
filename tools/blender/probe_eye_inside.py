@@ -10,7 +10,9 @@ point, at the crouched and standing eye heights, against every visible mesh:
     blender --background --factory-startup --python tools/blender/probe_eye_inside.py -- hd_dust2 dust2-bodies.json
 
 Each hit is classed by the bake's own `collides`. A `NonCol` or decoration mesh
-with an eye in it is a bug: make it solid, or move it where no eye reaches. A
+with an eye in it is a bug: make it solid, or move it where no eye reaches. So
+is an eye inside a collider, read the way the bake reads it (the grid is a
+coarse copy of the mesh, and the copy is what lets the body there). A
 breakable pane is reported apart, because hosted play treats glass as open on
 purpose (see `bake_collision.py`), so a body can always stand in one. Exits 1 when
 anything other than glass is hit.
@@ -82,6 +84,24 @@ for obj in bpy.context.scene.objects:
                         example = example or (round(x, 2), round(y, 2), round(z, 2))
     if inside:
         rows.append((breakable, inside, obj.name, example))
+
+
+# Colliders too, through the bake's own reading of them (per welded part, by
+# face orientation; plain parity miscounts boxes stacked inside one batch). The
+# server keeps a body's footprint out of solid cells, but the grid is a coarse
+# copy of the mesh, and an eye inside a crate the grid trimmed is the same
+# see-through bug as one inside a lamp. Loaded last: it resets the scene.
+index, zlo, zhi = bake_collision.load_colliders(name)
+inside, example = 0, None
+for x, y, floor in probe["bodies"]:
+    free = bake_collision.free_intervals(index, x, y, zlo, zhi)
+    for eye in eyes:
+        z = floor + eye
+        if not any(a <= z <= b for a, b in free):
+            inside += 1
+            example = example or (round(x, 2), round(y, 2), round(z, 2))
+if inside:
+    rows.append((False, inside, "(colliders, as baked)", example))
 
 bugs = 0
 for breakable, inside, obj_name, example in sorted(rows, key=lambda r: (r[0], -r[1])):

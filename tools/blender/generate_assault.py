@@ -80,6 +80,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import maplib  # noqa: E402  (a sibling, found via the path above)
+import bake_collision  # noqa: E402  (the collider rule, for batching)
 
 
 def clear_scene():
@@ -435,6 +436,11 @@ def add_i_beam(col, name, center_x, center_y, z0, z1, depth=0.35, flange_w=0.30,
     add_box(col, f"{name}_Flange_Front", (center_x - flange_w/2, center_y - depth/2, z0), (center_x + flange_w/2, center_y - depth/2 + flange_t, z1), material, is_collider=is_collider, bevel=True)
     # Back flange
     add_box(col, f"{name}_Flange_Back", (center_x - flange_w/2, center_y + depth/2 - flange_t, z0), (center_x + flange_w/2, center_y + depth/2, z1), material, is_collider=is_collider, bevel=True)
+    if is_collider:
+        # The flanges are trim by the clients' rule (`Flange`, under a cube
+        # wide), so a steel column was walk-through; this invisible block is
+        # the column a body meets.
+        add_box(col, f"{name}_Bulk_ColOnly", (center_x - flange_w/2, center_y - depth/2, z0), (center_x + flange_w/2, center_y + depth/2, z1), material)
 
 
 def add_open_web_truss(col, mats, name, y_coord, x_start=8.2, x_end=45.8, z_bot=8.25, z_top=8.80, panel_w=2.0):
@@ -1620,6 +1626,10 @@ def batch_static_objects():
         # Preserve breakable windows and translucent glass
         if any(w in o.name for w in ['Window', 'Glass', 'Breakable']):
             return False
+        # Invisible colliders: joined into a drawn batch they lose the name
+        # that hides them, and render as solid blocks.
+        if 'ColOnly' in o.name or 'Invisible' in o.name:
+            return False
         # Preserve active lights / sirens
         if o.data.materials:
             m_name = o.data.materials[0].name
@@ -1627,6 +1637,17 @@ def batch_static_objects():
                 return False
         return True
 
+    # Whether each object collides is decided *before* it is joined, by the
+    # clients' own rule (`glb-colliders.json`, sizes in cubes) — the rule that
+    # applied to it unbatched. Joined into a map-wide batch, a small `Pipe` or
+    # `Stripe` would read as large and turn solid. The `is_collider` property is
+    # not the rule: the sprinkler risers and stair rails carry `False`, collided
+    # by name before batching, and keep eyes out of them by doing so. A batch
+    # that does not collide carries `NonCol` at the *front* of its name, because
+    # Blender cuts names at 63 characters and a suffix was cut off
+    # (`..._Sprinkler_Red_Pipe_NonC`), which made the floor stripes invisible
+    # walls on every client and the server.
+    scale = float(os.environ.get("HASSAULT_MAP_SCALE", maplib.MAP_SCALE))
     groups = {}
     for col in bpy.data.collections:
         for obj in list(col.objects):
@@ -1634,26 +1655,31 @@ def batch_static_objects():
                 continue
             mat = obj.data.materials[0] if obj.data.materials else None
             mat_name = mat.name if mat else 'NoMat'
-            is_col = bool(obj.get('is_collider', True))
-            has_noncol = 'NonCol' in obj.name or 'Detail' in obj.name or not is_col
-            key = (col.name, mat_name, is_col, has_noncol)
+            solid = bake_collision.collides(obj, scale)
+            key = (col.name, mat_name, solid)
             groups.setdefault(key, []).append(obj)
 
     merged_count = 0
-    for key, objs in groups.items():
+    for index, (key, objs) in enumerate(groups.items()):
         if len(objs) <= 1:
             continue
-        col_name, mat_name, is_col, has_noncol = key
-        col = bpy.data.collections[col_name]
+        col_name, mat_name, solid = key
         bpy.ops.object.select_all(action='DESELECT')
         for o in objs:
             o.select_set(True)
         primary = objs[0]
-        suffix = '_NonCol' if has_noncol else ''
-        primary.name = f'Batch_{col_name}_{mat_name}{suffix}'
+        # A collider batch's name must not carry a decoration keyword from its
+        # collection or material (`Lights`, `Detail`): the size exception would
+        # then be judged on it, and every member already passed on its own.
+        label = f'{col_name}_{mat_name}'
+        if any(k in label for k in bake_collision.TABLE["decorNameKeywords"]):
+            label = mat_name if not any(
+                k in mat_name for k in bake_collision.TABLE["decorNameKeywords"]
+            ) else 'Mixed'
+        primary.name = (f'Batch_{index:03d}_{label}' if solid else f'NonCol_Batch_{index:03d}_{col_name}_{mat_name}')[:60]
         bpy.context.view_layer.objects.active = primary
         bpy.ops.object.join()
-        primary['is_collider'] = is_col
+        primary['is_collider'] = solid
         merged_count += len(objs) - 1
 
     print(f"batch_static_objects: Merged {merged_count} static meshes across collections into high-performance batches.")

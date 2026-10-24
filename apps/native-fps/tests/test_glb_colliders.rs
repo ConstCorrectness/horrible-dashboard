@@ -22,6 +22,7 @@ const GLB_MAPS: &[&str] = &[
     "hd_inferno",
     "hd_mirage",
     "hd_nuke",
+    "hd_aim",
 ];
 
 #[test]

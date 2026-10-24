@@ -94,10 +94,13 @@ def clean_meshes() -> dict:
     the server's grid too. The bank's 460 gold ingots and Junk Flea's bridge
     ramps shipped that way.
 
-    `recalc_face_normals` runs only on **closed** meshes. On an open sheet
-    "outward" is a guess, and a guess that flips an authored sheet is worse
-    than leaving it. Vertices are never welded: `add_boxes` packs touching boxes
-    into one mesh, and welding them would make it non-manifold.
+    `recalc_face_normals` runs only on **closed** islands (faces joined by
+    shared vertices). On an open sheet "outward" is a guess, and a guess that
+    flips an authored sheet is worse than leaving it. Per island, not per mesh:
+    a joined batch (Assault's) holds hundreds of boxes, and one open sheet among
+    them used to exempt every box from the check. Vertices are never welded:
+    `add_boxes` packs touching boxes into one mesh, and welding them would make
+    it non-manifold.
 
     Sharp edges are marked by `mark_sharp_edges`, after `soften_edges` has
     added the geometry they are judged on.
@@ -111,12 +114,17 @@ def clean_meshes() -> dict:
         before = len(bm.faces)
         bmesh.ops.dissolve_degenerate(bm, dist=1e-6, edges=bm.edges[:])
         stats["degenerate"] += before - len(bm.faces)
-        if all(e.is_manifold for e in bm.edges):
-            normals = [f.normal.copy() for f in bm.faces]
-            bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-            if any(f.normal.dot(n) < 0 for f, n in zip(bm.faces, normals)):
-                stats["flipped"] += 1
-        else:
+        flipped = opened = False
+        for island in _islands(bm):
+            if all(e.is_manifold for f in island for e in f.edges):
+                normals = [f.normal.copy() for f in island]
+                bmesh.ops.recalc_face_normals(bm, faces=island)
+                if any(f.normal.dot(n) < 0 for f, n in zip(island, normals)):
+                    flipped = True
+            else:
+                opened = True
+        stats["flipped"] += flipped
+        if opened:
             stats["open"].append(mesh.name)
         bm.to_mesh(mesh)
         bm.free()
@@ -126,6 +134,104 @@ def clean_meshes() -> dict:
         + ", ".join(stats["open"][:12])
     )
     return stats
+
+
+def _islands(bm) -> list:
+    """`bm`'s faces grouped into islands joined by shared vertices."""
+    bm.faces.ensure_lookup_table()
+    seen, out = set(), []
+    for face in bm.faces:
+        if face.index in seen:
+            continue
+        seen.add(face.index)
+        stack, island = [face], []
+        while stack:
+            f = stack.pop()
+            island.append(f)
+            for v in f.verts:
+                for g in v.link_faces:
+                    if g.index not in seen:
+                        seen.add(g.index)
+                        stack.append(g)
+        out.append(island)
+    return out
+
+
+def _island_volume(island, matrix) -> float:
+    """Signed volume of a closed island in world space: negative = inside-out."""
+    total = 0.0
+    for f in island:
+        pts = [matrix @ v.co for v in f.verts]
+        for i in range(1, len(pts) - 1):
+            total += pts[0].dot(pts[i].cross(pts[i + 1])) / 6.0
+    return total
+
+
+#: Colliders that are single-sided on purpose (none yet). `audit_colliders`
+#: fails the export on any other open collider island: the server's bake counts
+#: solid by which way faces point, so an open collider is read as a guess.
+OPEN_COLLIDERS_ALLOWED: tuple[str, ...] = ()
+
+
+def audit_colliders(strict: bool | None = None) -> dict:
+    """Check every collider the bake will read, after the last shape pass.
+
+    The server's grid (`bake_collision.py`) decides solid and open by face
+    orientation, island by island. An island that is open (a hole, a missing
+    cap) or inside-out (negative volume) is read wrongly there: a slab where a
+    box was, a room filled in, a floor half a cube high. `clean_meshes` fixes
+    what it can; this reports what is left, by object name, and with `strict`
+    (the default unless `HASSAULT_MAP_STRICT=0`) refuses to export it.
+    """
+    import bake_collision  # sibling: the clients' collider rule, in Blender terms
+
+    if strict is None:
+        strict = os.environ.get("HASSAULT_MAP_STRICT", "1") != "0"
+    report = {"open": [], "inside_out": []}
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or not obj.data.polygons:
+            continue
+        if not bake_collision.collides(obj) or obj.name.startswith(BOUNDS_PREFIX):
+            continue
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        for island in _islands(bm):
+            if not all(e.is_manifold for f in island for e in f.edges):
+                # A flat sheet (a floor, a roof, a wall panel) is read right: a
+                # thin slab on its facing side. Anything bent and open is not.
+                first = island[0].normal
+                flat = all(f.normal.dot(first) > 0.9998 for f in island)
+                if not flat and not any(k in obj.name for k in OPEN_COLLIDERS_ALLOWED):
+                    report["open"].append(obj.name)
+            elif _island_volume(island, obj.matrix_world) < 0:
+                report["inside_out"].append(obj.name)
+        bm.free()
+    for kind, names in report.items():
+        names[:] = sorted(set(names))
+        if names:
+            print(f"audit_colliders: {len(names)} {kind}: " + ", ".join(names[:20]))
+    if strict and (report["open"] or report["inside_out"]):
+        raise RuntimeError(
+            "colliders the server's bake would misread (see audit_colliders above);"
+            " HASSAULT_MAP_STRICT=0 exports anyway"
+        )
+    return report
+
+
+#: Blender keeps 63 bytes of a name and drops the rest without a word. A name
+#: that long has probably lost its tail — and a tail is where `NonCol` goes.
+NAME_LIMIT = 63
+
+
+def check_names() -> None:
+    """Refuse a scene with a name at Blender's limit: it was likely truncated."""
+    long = [o.name for o in bpy.data.objects if len(o.name.encode("utf-8")) >= NAME_LIMIT]
+    if long:
+        raise RuntimeError(
+            f"{len(long)} object names at Blender's {NAME_LIMIT}-byte limit, so"
+            " probably cut short (a cut `_NonCol` turns decoration solid): "
+            + ", ".join(long[:8])
+        )
 
 
 def mark_sharp_edges() -> None:
@@ -670,11 +776,6 @@ def soften_edges(factor: float = 1.0, skip: set[str] | None = None) -> dict:
         radius, fraction = SOFTEN_BY_KIND.get(kind, SOFTEN_DEFAULT)
         if kind in ("none", "glass", "site_a", "site_b"):
             continue
-        dims = sorted(abs(d) for d in obj.dimensions)
-        thinnest = dims[0] / factor if dims else 0.0
-        if thinnest < SOFTEN_MIN_SIDE:
-            continue
-        width = min(radius, thinnest * fraction) * factor
         matrix = obj.matrix_world
         normal_matrix = matrix.to_3x3().inverted_safe().transposed()
         bm = bmesh.new()
@@ -683,32 +784,49 @@ def soften_edges(factor: float = 1.0, skip: set[str] | None = None) -> dict:
         if not all(e.is_manifold for e in bm.edges):
             bm.free()
             continue
-        edges = []
+        # The width follows each island's own thinnest side, not the object's:
+        # a joined mesh (Dust II's 252 crates and their 5 cm lids, one object)
+        # gave every lid a crate's rounding, which folded the lid inside out.
+        width_of = {}
+        for island in _islands(bm):
+            cos = [matrix @ v.co for f in island for v in f.verts]
+            side = min(max(c[i] for c in cos) - min(c[i] for c in cos) for i in range(3))
+            side /= factor
+            w = 0.0 if side < SOFTEN_MIN_SIDE else round(min(radius, side * fraction) * factor, 6)
+            for f in island:
+                for e in f.edges:
+                    width_of[e] = w
+        groups: dict = {}
         for e in bm.edges:
+            if not width_of.get(e):
+                continue
             if e.calc_face_angle(0.0) <= SOFTEN_ANGLE:
                 continue
             if _is_seam(bvh, e, matrix, normal_matrix, probe):
                 stats["seams"] += 1
                 continue
-            edges.append(e)
+            groups.setdefault(width_of[e], []).append(e)
+        edges = [e for group in groups.values() for e in group]
         if edges:
             before = len(bm.faces)
-            rounded = bmesh.ops.bevel(
-                bm,
-                geom=edges,
-                offset=width,
-                offset_type="OFFSET",
-                segments=2,
-                profile=0.5,
-                affect="EDGES",
-                clamp_overlap=True,
-                loop_slide=True,
-            )
             # The strip shades round; where it meets the face it was cut from is
             # a hard edge. Otherwise the face shares the strip's vertices, and a
             # recomputed normal (both clients recompute) leans its corners
             # toward the rounding: a flat wall shaded as a slow gradient.
-            strip = set(rounded["faces"])
+            strip = set()
+            for width, group in groups.items():
+                rounded = bmesh.ops.bevel(
+                    bm,
+                    geom=group,
+                    offset=width,
+                    offset_type="OFFSET",
+                    segments=2,
+                    profile=0.5,
+                    affect="EDGES",
+                    clamp_overlap=True,
+                    loop_slide=True,
+                )
+                strip |= set(rounded["faces"])
             for f in strip:
                 f.smooth = True
             for e in bm.edges:
@@ -716,10 +834,15 @@ def soften_edges(factor: float = 1.0, skip: set[str] | None = None) -> dict:
                 if 0 < inside < len(e.link_faces):
                     e.smooth = False
             bmesh.ops.dissolve_degenerate(bm, dist=1e-6 * factor, edges=bm.edges[:])
-            # A bevel that opened the mesh is thrown away: a hole is worse than a
-            # sharp edge, and the object keeps exactly the shape it was built with.
+            # A bevel that opened the mesh, or folded an island inside out, is
+            # thrown away: a hole or an inverted box is worse than a sharp edge
+            # (the server's bake reads both wrong), and the object keeps exactly
+            # the shape it was built with.
             if all(e.is_manifold for e in bm.edges):
                 bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+            if all(e.is_manifold for e in bm.edges) and all(
+                _island_volume(island, matrix) > 0 for island in _islands(bm)
+            ):
                 stats["objects"] += 1
                 stats["edges"] += len(edges)
                 stats["faces_before"] += before
@@ -786,10 +909,14 @@ def add_wedge(collection, name, center, size, material, rise):
         return z0 + (z1 - z0) * t
 
     bm = bmesh.new()
-    b = [bm.verts.new((x, y, z0)) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    corners = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    b = [bm.verts.new((x, y, z0)) for x, y in corners]
+    # Where the slope meets the floor the top corner *is* the bottom one. Built
+    # as a second vertex in the same place, `remove_doubles` never merged it, and
+    # every ramp shipped as an open mesh: drawn solid, baked as a thin sheet.
     t = [
-        bm.verts.new((x, y, top(x, y)))
-        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+        b[i] if abs(top(x, y) - z0) < 1e-9 else bm.verts.new((x, y, top(x, y)))
+        for i, (x, y) in enumerate(corners)
     ]
     bm.verts.ensure_lookup_table()
     bm.faces.new((t[0], t[1], t[2], t[3]))
@@ -800,7 +927,7 @@ def add_wedge(collection, name, center, size, material, rise):
         ring = [b[i], b[j], t[j], t[i]]
         unique = []
         for v in ring:
-            if all((v.co - u.co).length > 1e-6 for u in unique):
+            if all(v is not u for u in unique):
                 unique.append(v)
         if len(unique) >= 3:
             bm.faces.new(unique)
@@ -1626,6 +1753,7 @@ def export_map_glb(name: str) -> str:
     """
     factor = float(os.environ.get("HASSAULT_MAP_SCALE", MAP_SCALE))
     override = os.environ.get("HASSAULT_MAP_OUT")
+    check_names()
     add_safety_floor(bpy.context.scene.collection)
     add_boundary_walls(bpy.context.scene.collection)
     _linearize_base_colors()
@@ -1648,9 +1776,11 @@ def export_map_glb(name: str) -> str:
         clean_meshes()
     separate_coplanar(factor)
     mark_sharp_edges()
+    audit_colliders()
     collision_dir = os.path.join(override, "collision") if override else COLLISION_DIR
     os.makedirs(collision_dir, exist_ok=True)
-    _export_glb(os.path.join(collision_dir, f"{name}.glb"))
+    collision_glb = os.path.join(collision_dir, f"{name}.glb")
+    _export_glb(collision_glb)
     bake_vertex_ao(factor)
 
     backend_dir = override or os.path.join(
@@ -1666,4 +1796,23 @@ def export_map_glb(name: str) -> str:
         os.makedirs(web_dir, exist_ok=True)
         shutil.copyfile(backend_path, os.path.join(web_dir, f"{name}.glb"))
         _write_map_json(os.path.join(backend_dir, f"{name}.json"), factor)
+        _write_collision_source(os.path.join(backend_dir, f"{name}.json"), collision_glb)
     return backend_path
+
+
+def _write_collision_source(path: str, collision_glb: str) -> None:
+    """Record which mesh the server's grid must be baked from.
+
+    `bake_collision.py` writes the hash of what it actually baked as
+    `collisionBaked`; a test holds the two equal, so a map regenerated without
+    a re-bake (the grid still the old geometry) fails instead of shipping.
+    """
+    import bake_collision  # sibling; its hash, so both sides agree on the form
+
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        source = json.load(f)
+    source["collisionSource"] = bake_collision.sha256(collision_glb)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(dump_json(source) + "\n")
