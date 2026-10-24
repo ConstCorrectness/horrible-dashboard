@@ -918,6 +918,69 @@ def build_natural_dressing(col, mats):
     print("dressing:", tally, counts)
 
 
+def build_architectural_detail(col, mats):
+    """High-rise architectural detailing: suspended acoustic baffles over the
+    cubicle farm, overhead cable trays & CRAC cooling ducts in the Server Vault,
+    boardroom coffered ceiling chandelier & mahogany credenza, meeting-room AV
+    displays, and an exterior downtown skyscraper skyline beyond the North/South
+    curtain glass (`_NonCol`).
+    """
+    baffle_boxes = []
+    duct_boxes = []
+    tray_boxes = []
+    mahogany_boxes = [
+        # Boardroom chandelier coffer frame & West wall credenza
+        ((12.0, 48.0, 3.68), (6.8, 2.2, 0.16)),
+        ((3.65, 48.0, 0.45), (0.65, 5.6, 0.85)),
+    ]
+    screen_boxes = [
+        # Meeting room wall-mounted AV displays
+        ((26.22, 43.5, 1.95), (0.04, 2.2, 1.15)),
+        ((36.78, 22.0, 1.95), (0.04, 2.2, 1.15)),
+    ]
+    tray_boxes.extend(
+        [
+            ((26.15, 43.5, 1.95), (0.06, 2.36, 1.28)),
+            ((36.85, 22.0, 1.95), (0.06, 2.36, 1.28)),
+        ]
+    )
+
+    # 1. Suspended acoustic felt baffles above the open-plan cubicle farm
+    for rx in (42.0, 49.0, 56.0):
+        for py in (16.0, 24.0, 34.0, 42.0, 50.0):
+            for off_y in (-0.9, 0.0, 0.9):
+                baffle_boxes.append(((rx, py + off_y, 3.62), (4.2, 0.08, 0.42)))
+        duct_boxes.append(((rx, 33.0, 3.78), (0.55, 42.0, 0.28)))
+
+    # 2. Overhead data cable trays & CRAC chilled-water ducts in Server Vault (Site B)
+    for r in range(4):
+        rx = 7.0 + r * 3.5
+        tray_boxes.append(((rx, 15.0, 3.45), (0.75, 14.0, 0.12)))
+    duct_boxes.append(((12.5, 7.2, 3.55), (14.0, 0.65, 0.36)))
+    duct_boxes.append(((12.5, 24.6, 3.55), (14.0, 0.65, 0.36)))
+
+    # 3. Structural pillar stainless capitals & reveal bands
+    for px in (12.0, 27.0, 42.0, 56.0):
+        for py in (14.0, 32.0, 50.0):
+            duct_boxes.append(((px, py, 3.82), (1.36, 1.36, 0.18)))
+            duct_boxes.append(((px, py, 0.12), (1.34, 1.34, 0.22)))
+
+    add_boxes(col, "Office_Acoustic_Baffles_NonCol", baffle_boxes, mats["acoustic_felt"])
+    add_boxes(col, "Office_HVAC_Ducts_NonCol", duct_boxes, mats["stainless"])
+    add_boxes(col, "Office_Cable_Trays_NonCol", tray_boxes, mats["black_metal"])
+    add_boxes(col, "Office_Boardroom_Wood_NonCol", mahogany_boxes, mats["mahogany"])
+    add_boxes(col, "Office_Meeting_Screens_NonCol", screen_boxes, mats["screen_display"])
+
+    # 4. Exterior curtain-wall spandrel beams & surrounding skyscraper skyline
+    horizon_specs = [
+        {"center": (16.0, -7.5, -8.0), "size": (18.0, 10.0, 26.0), "wall": "wall_accent", "trim": "stainless", "pane": "screen_display", "roof": "black_metal", "stories": 7},
+        {"center": (46.0, -8.0, -8.0), "size": (20.0, 10.5, 28.0), "wall": "black_metal", "trim": "stainless", "pane": "screen_display", "roof": "wall_accent", "stories": 8},
+        {"center": (16.0, 71.5, -8.0), "size": (19.0, 10.0, 27.0), "wall": "black_metal", "trim": "stainless", "pane": "screen_display", "roof": "wall_accent", "stories": 7},
+        {"center": (46.0, 72.0, -8.0), "size": (18.0, 10.0, 25.0), "wall": "wall_accent", "trim": "stainless", "pane": "screen_display", "roof": "black_metal", "stories": 7},
+    ]
+    maplib.add_horizon_buildings(col, "Office_Skyline", horizon_specs, mats, boxes_fn=add_boxes)
+
+
 def build_office_scene():
     clear_scene()
     mats = setup_materials()
@@ -939,6 +1002,7 @@ def build_office_scene():
     build_flank_corridors(get_or_create_collection("Corridors"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
     build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
+    build_architectural_detail(get_or_create_collection("Arch_Detail"), mats)
     if os.environ.get("HASSAULT_OFFICE_SCAN"):
         W.dump_scan(os.environ["HASSAULT_OFFICE_SCAN"])
 

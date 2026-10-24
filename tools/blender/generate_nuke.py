@@ -978,6 +978,127 @@ def build_natural_dressing(col, mats):
     print("dressing:", tally, counts)
 
 
+def build_architectural_detail(col, mats):
+    """Nuclear facility architectural detailing: Site A & Site B overhead roof
+    trusses and HVAC ductwork, catwalk & reactor-pit telemetry control consoles,
+    containment building exterior buttresses & clerestory windows, Garage rooftop
+    chiller units, and nuclear plant auxiliary buildings on the horizon (`_NonCol`).
+    """
+    mep_mats = {
+        "steel": mats["steel_dark"],
+        "duct": mats["steel_industrial"],
+        "pipe": mats["coolant_blue"],
+    }
+    # 1. Site A Upper Reactor Hall roof trusses & HVAC (z = 7.95m)
+    maplib.add_ceiling_mep(
+        col,
+        "Nuke_SiteA_MEP",
+        (23.2, 29.2, 48.8, 50.8),
+        z_ceil=7.95,
+        mats=mep_mats,
+        axis="x",
+        spacing=5.5,
+        boxes_fn=add_boxes,
+    )
+    # 2. Site B Lower Silo ceiling trusses & coolant pipes (z = 4.95m)
+    maplib.add_ceiling_mep(
+        col,
+        "Nuke_SiteB_MEP",
+        (9.2, 21.2, 20.8, 38.8),
+        z_ceil=4.95,
+        mats=mep_mats,
+        axis="y",
+        spacing=4.5,
+        boxes_fn=add_boxes,
+    )
+
+    # 3. Telemetry Command Consoles on Site A North Rafters & in Site B Pit
+    console_mats = {
+        "cabinet": mats["steel_industrial"],
+        "bezel": mats["steel_dark"],
+        "screen": mats["reactor_glow_cyan"],
+    }
+    maplib.add_control_station(
+        col,
+        "SiteA_Rafter_Console",
+        (36.0, 50.5, 3.9),
+        yaw_deg=180.0,
+        length=3.6,
+        mats=console_mats,
+        boxes_fn=add_boxes,
+    )
+    maplib.add_control_station(
+        col,
+        "SiteB_Pit_Console",
+        (9.35, 34.8, -4.5),
+        yaw_deg=90.0,
+        length=2.8,
+        mats=console_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # 4. Containment Hall Clerestory Windows, Exterior Buttresses & Rooftop Chillers
+    win_mats = {
+        "trim": mats["steel_dark"],
+        "pane": mats["hazard_black"],
+    }
+    maplib.add_window_row(
+        col,
+        "SiteA_North_Clerestory",
+        (36.0, 52.0, 4.0),
+        (28.0, 1.2, 8.0),
+        "+y",
+        z_base=5.6,
+        count=5,
+        win_size=(1.6, 1.2),
+        mats=win_mats,
+        style="industrial",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "SiteA_East_Clerestory",
+        (50.0, 40.0, 4.0),
+        (1.2, 24.0, 8.0),
+        "+x",
+        z_base=5.6,
+        count=4,
+        win_size=(1.6, 1.2),
+        mats=win_mats,
+        style="industrial",
+        boxes_fn=add_boxes,
+    )
+
+    # Rooftop HVAC chillers on Garage, Lobby, and Site A Hall Roof
+    hvac_boxes = [
+        ((56.0, 44.0, 5.65), (3.2, 2.4, 1.2)),
+        ((56.0, 48.2, 5.55), (2.6, 2.0, 1.0)),
+        ((35.5, 24.5, 4.95), (3.8, 2.2, 1.0)),
+        ((32.0, 36.0, 9.05), (4.5, 3.2, 1.2)),
+        ((41.0, 44.0, 9.05), (4.5, 3.2, 1.2)),
+    ]
+    buttress_boxes = []
+    for bx in (25.0, 35.0, 45.0):
+        buttress_boxes.append(((bx, 52.75, 4.0), (0.65, 0.35, 7.8)))
+    for by in (30.5, 39.0, 47.5):
+        buttress_boxes.append(((50.75, by, 4.0), (0.35, 0.65, 7.8)))
+    add_boxes(col, "Nuke_Rooftop_HVAC_NonCol", hvac_boxes, mats["steel_industrial"])
+    add_boxes(col, "Nuke_Hall_Buttresses_NonCol", buttress_boxes, mats["concrete_dark"])
+
+    # 5. Nuclear Plant Horizon Buildings & Cooling Tower Silhouettes
+    horizon_specs = [
+        {"center": (20.0, -3.5, 0.0), "size": (18.0, 9.0, 16.5), "wall": "concrete_wall", "trim": "concrete_dark", "pane": "hazard_black", "roof": "steel_industrial", "stories": 4},
+        {"center": (50.0, -4.0, 0.0), "size": (18.0, 9.5, 18.0), "wall": "concrete_dark", "trim": "hazard_yellow", "pane": "hazard_black", "roof": "steel_dark", "stories": 5},
+        {"center": (20.0, 73.5, 0.0), "size": (18.0, 9.0, 17.5), "wall": "concrete_wall", "trim": "concrete_dark", "pane": "hazard_black", "roof": "steel_industrial", "stories": 5},
+        {"center": (50.0, 74.0, 0.0), "size": (16.0, 9.0, 16.5), "wall": "concrete_dark", "trim": "hazard_yellow", "pane": "hazard_black", "roof": "steel_dark", "stories": 4},
+        {"center": (-3.5, 22.0, 0.0), "size": (9.0, 16.0, 17.0), "wall": "concrete_wall", "trim": "concrete_dark", "pane": "hazard_black", "roof": "steel_industrial", "stories": 4},
+        {"center": (-4.0, 50.0, 0.0), "size": (11.0, 11.0, 24.0), "wall": "concrete_wall", "trim": "hazard_yellow", "pane": "hazard_black", "roof": "concrete_dark", "stories": 6},
+        {"center": (73.5, 24.0, 0.0), "size": (9.0, 18.0, 17.5), "wall": "concrete_dark", "trim": "steel_industrial", "pane": "hazard_black", "roof": "steel_dark", "stories": 5},
+        {"center": (74.0, 52.0, 0.0), "size": (11.0, 11.0, 24.0), "wall": "concrete_wall", "trim": "hazard_yellow", "pane": "hazard_black", "roof": "concrete_dark", "stories": 6},
+    ]
+    maplib.add_horizon_buildings(col, "Nuke_Horizon", horizon_specs, mats, boxes_fn=add_boxes)
+
+
 def build_nuke_scene():
     clear_scene()
     mats = setup_materials()
@@ -996,6 +1117,7 @@ def build_nuke_scene():
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
     build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
+    build_architectural_detail(get_or_create_collection("Arch_Detail"), mats)
     if os.environ.get("HASSAULT_NUKE_SCAN"):
         W.dump_scan(os.environ["HASSAULT_NUKE_SCAN"])
 

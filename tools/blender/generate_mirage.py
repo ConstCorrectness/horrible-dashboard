@@ -121,6 +121,7 @@ def setup_materials():
 
     # Breakable glass windows
     mats["glass_window"] = create_pbr_material("mat_glass_window", (0.82, 0.92, 0.98), metallic=0.05, roughness=0.06, alpha=0.35)
+    mats["window_dark"] = create_pbr_material("mat_mirage_window_dark", (0.09, 0.11, 0.14), metallic=0.25, roughness=0.18)
     return mats
 
 
@@ -550,6 +551,260 @@ def build_natural_dressing(col, mats):
             )
 
 
+def build_architectural_detail(col, mats):
+    """Rich Moorish architectural detailing, multi-story facades, Palace interior
+    coffered ceiling & cupolas, Market stall awnings, and medina horizon skyline.
+    All nodes are `_NonCol` and built after `build_natural_dressing` so ground
+    clutter placement and route collision remain 100% invariant.
+    """
+    win_mats = {
+        "trim": mats["sandstone_ochre"],
+        "pane": mats["window_dark"],
+        "shutter": mats["cedar_wood"],
+        "mosaic": mats["mosaic_tile_blue"],
+    }
+    balcony_mats = {
+        "deck": mats["cedar_wood"],
+        "rail": mats["wrought_iron"],
+    }
+
+    # --- 1. Site A Palace Colonnade Entablature, Coffered Ceiling & Cupolas ---
+    palace_stone = []
+    palace_wood = []
+    palace_mosaic = []
+    for col_y in (20.0, 24.0, 28.0, 32.0):
+        # Stepped column plinths & carved capitals
+        palace_stone.append(((48.0, col_y, 2.95), (1.18, 1.18, 0.28)))
+        palace_stone.append(((48.0, col_y, 5.48), (1.14, 1.14, 0.24)))
+        palace_stone.append(((48.0, col_y, 5.68), (1.36, 1.36, 0.16)))
+    # Colonnade architrave beam, mosaic frieze, and crenellated rooftop parapet
+    palace_stone.append(((48.0, 27.0, 6.02), (1.10, 17.6, 0.52)))
+    palace_mosaic.append(((47.38, 27.0, 6.02), (0.08, 17.2, 0.28)))
+    palace_stone.append(((48.0, 27.0, 6.56), (1.28, 18.0, 0.48)))
+    for merlon_y in range(19, 36, 2):
+        palace_stone.append(((48.0, float(merlon_y), 7.04), (0.92, 0.95, 0.44)))
+
+    # Palace interior coffered ceiling slab + cedar crossbeams
+    palace_stone.append(((55.0, 27.0, 6.38), (12.4, 17.4, 0.32)))
+    for by in range(19, 36, 2):
+        palace_wood.append(((55.0, float(by), 6.08), (12.2, 0.26, 0.24)))
+    for bx in (50.5, 53.5, 56.5, 59.5):
+        palace_wood.append(((bx, 27.0, 6.12), (0.24, 17.0, 0.18)))
+
+    # Twin rooftop Moorish cupolas above Palace
+    for cy in (22.5, 31.5):
+        palace_stone.append(((55.0, cy, 7.15), (3.6, 3.6, 1.2)))
+        palace_mosaic.append(((55.0, cy, 7.88), (3.8, 3.8, 0.22)))
+        palace_stone.append(((55.0, cy, 8.45), (2.6, 2.6, 0.90)))
+        palace_stone.append(((55.0, cy, 9.15), (1.4, 1.4, 0.48)))
+
+    add_boxes(col, "Palace_ArchDetail_Stone_NonCol", palace_stone, mats["sandstone_light"])
+    add_boxes(col, "Palace_ArchDetail_Wood_NonCol", palace_wood, mats["cedar_wood"])
+    add_boxes(col, "Palace_ArchDetail_Mosaic_NonCol", palace_mosaic, mats["mosaic_tile_blue"])
+
+    # Palace East interior facade windows (lower & clerestory tiers)
+    maplib.add_window_row(
+        col,
+        "Palace_East_Lower",
+        (62.0, 27.0, 6.0),
+        (1.2, 18.0, 6.4),
+        "-x",
+        z_base=3.6,
+        count=4,
+        win_size=(1.25, 1.65),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Palace_East_Upper",
+        (62.0, 27.0, 6.0),
+        (1.2, 18.0, 6.4),
+        "-x",
+        z_base=6.4,
+        count=4,
+        win_size=(1.15, 1.15),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+
+    # --- 2. Sniper's Nest (Window Room) Pergola, Embrasure & Catwalk Brackets ---
+    nest_wood = []
+    nest_stone = [
+        # Back wall enclosing the Sniper's Nest room
+        ((39.0, 53.8, 3.7), (9.8, 0.5, 2.6)),
+        # Carved sandstone pilasters framing the central sniper embrasure
+        ((37.5, 45.52, 3.6), (0.36, 0.16, 2.3)),
+        ((40.5, 45.52, 3.6), (0.36, 0.16, 2.3)),
+        ((39.0, 45.50, 4.88), (10.3, 0.24, 0.24)),
+    ]
+    # Overhead cedar pergola beams across the Sniper's Nest
+    for rx in range(35, 44, 1):
+        nest_wood.append(((float(rx), 50.0, 4.96), (0.18, 8.2, 0.20)))
+    # Catwalk support corbels & balustrade posts along Mid
+    for cy in range(31, 42, 2):
+        nest_wood.append(((26.6, float(cy), 1.32), (1.4, 0.18, 0.24)))
+    add_boxes(col, "Mid_Nest_Stone_NonCol", nest_stone, mats["sandstone_ochre"])
+    add_boxes(col, "Mid_Nest_Wood_NonCol", nest_wood, mats["cedar_wood"])
+
+    # --- 3. Mid_House & TopMid_House Multi-Story Windows & Balconies ---
+    # Mid_House: center (31.0, 24.5, 3.0), size (6.0, 5.0, 6.0)
+    for face_d, cnt in (("+y", 2), ("-y", 2), ("+x", 2), ("-x", 2)):
+        maplib.add_window_row(
+            col,
+            f"MidHouse_{face_d.replace('+', 'P').replace('-', 'N')}",
+            (31.0, 24.5, 3.0),
+            (6.0, 5.0, 6.0),
+            face_d,
+            z_base=3.35,
+            count=cnt,
+            win_size=(0.95, 1.35),
+            mats=win_mats,
+            style="moorish",
+            boxes_fn=add_boxes,
+        )
+    maplib.add_balcony(
+        col,
+        "MidHouse_Balcony_N",
+        (31.0, 27.0, 3.15),
+        (3.8, 0.85),
+        "+y",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # TopMid_House: center (39.0, 40.25, 2.5), size (6.0, 4.5, 5.0)
+    for face_d, cnt in (("+y", 2), ("-y", 2), ("+x", 1), ("-x", 1)):
+        maplib.add_window_row(
+            col,
+            f"TopMidHouse_{face_d.replace('+', 'P').replace('-', 'N')}",
+            (39.0, 40.25, 2.5),
+            (6.0, 4.5, 5.0),
+            face_d,
+            z_base=2.65,
+            count=cnt,
+            win_size=(0.95, 1.25),
+            mats=win_mats,
+            style="moorish",
+            boxes_fn=add_boxes,
+        )
+    maplib.add_balcony(
+        col,
+        "TopMidHouse_Balcony_S",
+        (39.0, 38.0, 2.48),
+        (3.6, 0.80),
+        "-y",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # --- 4. Site B Apartments, Central Pillar & Market Canopy ---
+    apts_wood = []
+    apts_stone = [
+        # B Apartments west wall & parapet cornice
+        ((12.0, 25.0, 4.2), (0.7, 14.0, 2.8)),
+        ((18.0, 25.0, 5.75), (12.6, 14.4, 0.28)),
+        # Site B Central Pillar stepped base, mosaic belt, and carved crown
+        ((22.0, 52.0, 0.22), (3.25, 3.25, 0.44)),
+        ((22.0, 52.0, 5.16), (3.30, 3.30, 0.32)),
+        ((22.0, 52.0, 5.48), (2.95, 2.95, 0.28)),
+    ]
+    for ry in range(19, 32, 2):
+        apts_wood.append(((18.0, float(ry), 5.48), (11.6, 0.22, 0.22)))
+    # Market counter overhead timber awning frame & produce shelves
+    apts_wood.append(((30.2, 54.0, 2.55), (4.0, 1.4, 0.14)))
+    apts_wood.append(((31.8, 57.0, 1.65), (0.6, 6.8, 0.10)))
+    apts_wood.append(((31.8, 57.0, 2.35), (0.6, 6.8, 0.10)))
+    add_boxes(col, "SiteB_Arch_Stone_NonCol", apts_stone, mats["sandstone_ochre"])
+    add_boxes(col, "SiteB_Arch_Wood_NonCol", apts_wood, mats["cedar_wood"])
+    add_boxes(
+        col,
+        "SiteB_Pillar_Mosaic_NonCol",
+        [((22.0, 52.0, 3.85), (2.92, 2.92, 0.34))],
+        mats["mosaic_tile_blue"],
+    )
+
+    # Market West wall upper windows
+    maplib.add_window_row(
+        col,
+        "Market_Wall_W_Upper",
+        (28.0, 57.0, 2.5),
+        (0.8, 10.0, 5.0),
+        "-x",
+        z_base=2.85,
+        count=3,
+        win_size=(1.05, 1.35),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_balcony(
+        col,
+        "BApts_East_Balcony",
+        (24.4, 21.2, 2.85),
+        (4.2, 0.90),
+        "+x",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # --- 5. Perimeter Facade Window Rows & Medina Horizon Buildings ---
+    maplib.add_window_row(
+        col,
+        "Perimeter_S_Upper",
+        (35.0, 4.0, 5.0),
+        (62.0, 1.2, 10.0),
+        "+y",
+        z_base=5.8,
+        count=8,
+        win_size=(1.2, 1.6),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Perimeter_N_Upper",
+        (35.0, 66.0, 5.0),
+        (62.0, 1.2, 10.0),
+        "-y",
+        z_base=5.8,
+        count=8,
+        win_size=(1.2, 1.6),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Perimeter_W_Upper",
+        (4.0, 35.0, 5.0),
+        (1.2, 62.0, 10.0),
+        "+x",
+        z_base=5.8,
+        count=7,
+        win_size=(1.2, 1.6),
+        mats=win_mats,
+        style="moorish",
+        boxes_fn=add_boxes,
+    )
+
+    horizon_specs = [
+        {"center": (16.0, -3.5, 0.0), "size": (14.0, 8.0, 14.5), "wall": "moorish_plaster_warm", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "mosaic_tile_blue", "stories": 4},
+        {"center": (46.0, -4.0, 0.0), "size": (16.0, 9.0, 16.0), "wall": "sandstone_light", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "sandstone_ochre", "stories": 4},
+        {"center": (20.0, 73.5, 0.0), "size": (15.0, 8.5, 15.0), "wall": "sandstone_light", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "mosaic_tile_blue", "stories": 4},
+        {"center": (50.0, 74.0, 0.0), "size": (14.0, 8.0, 14.0), "wall": "moorish_plaster_warm", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "sandstone_ochre", "stories": 4},
+        {"center": (-3.5, 22.0, 0.0), "size": (8.0, 14.0, 14.5), "wall": "moorish_plaster_warm", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "sandstone_ochre", "stories": 4},
+        {"center": (-4.0, 50.0, 0.0), "size": (8.5, 15.0, 15.5), "wall": "sandstone_light", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "mosaic_tile_blue", "stories": 4},
+        {"center": (73.5, 18.0, 0.0), "size": (8.0, 13.0, 15.0), "wall": "sandstone_ochre", "trim": "sandstone_light", "pane": "window_dark", "roof": "mosaic_tile_blue", "stories": 4},
+        # Tall Moroccan minaret tower on the eastern skyline
+        {"center": (74.0, 48.0, 0.0), "size": (6.5, 6.5, 22.0), "wall": "sandstone_light", "trim": "sandstone_ochre", "pane": "window_dark", "roof": "mosaic_tile_blue", "stories": 6},
+    ]
+    maplib.add_horizon_buildings(col, "Mirage_Horizon", horizon_specs, mats, boxes_fn=add_boxes)
+
+
 def build_mirage_scene():
     clear_scene()
     mats = setup_materials()
@@ -568,6 +823,7 @@ def build_mirage_scene():
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
     build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
+    build_architectural_detail(get_or_create_collection("Architecture"), mats)
 
     print("=== Desert Courtyard (hd_mirage) Built Successfully! ===")
     if os.environ.get("HASSAULT_MIRAGE_SCAN"):

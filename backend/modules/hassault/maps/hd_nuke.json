@@ -5151,54 +5151,54 @@
     {"type": "grenade", "x": 99, "y": 105, "z": 0},
     {
       "type": "light",
-      "x": 47,
+      "x": 45,
       "y": 36,
-      "z": 0,
+      "z": 20,
       "radius": 33,
       "color": [255, 200, 140],
       "intensity": 1.6
     },
     {
       "type": "light",
-      "x": 212,
+      "x": 210,
       "y": 36,
-      "z": 0,
+      "z": 20,
       "radius": 33,
       "color": [255, 200, 140],
       "intensity": 1.6
     },
     {
       "type": "light",
-      "x": 41,
+      "x": 39,
       "y": 222,
-      "z": 0,
+      "z": 20,
       "radius": 33,
       "color": [255, 200, 140],
       "intensity": 1.6
     },
     {
       "type": "light",
-      "x": 218,
-      "y": 218,
-      "z": 6,
-      "radius": 33,
-      "color": [255, 200, 140],
-      "intensity": 1.6
-    },
-    {
-      "type": "light",
-      "x": 95,
-      "y": 54,
-      "z": 0,
-      "radius": 33,
-      "color": [255, 200, 140],
-      "intensity": 1.6
-    },
-    {
-      "type": "light",
-      "x": 173,
+      "x": 216,
       "y": 216,
-      "z": 0,
+      "z": 20,
+      "radius": 33,
+      "color": [255, 200, 140],
+      "intensity": 1.6
+    },
+    {
+      "type": "light",
+      "x": 93,
+      "y": 54,
+      "z": 20,
+      "radius": 33,
+      "color": [255, 200, 140],
+      "intensity": 1.6
+    },
+    {
+      "type": "light",
+      "x": 171,
+      "y": 216,
+      "z": 20,
       "radius": 33,
       "color": [255, 200, 140],
       "intensity": 1.6
@@ -5304,9 +5304,9 @@
     },
     {
       "type": "light",
-      "x": 94,
+      "x": 93,
       "y": 144,
-      "z": 0,
+      "z": 21,
       "radius": 30,
       "color": [235, 242, 255],
       "intensity": 1.8
@@ -5340,9 +5340,9 @@
     },
     {
       "type": "light",
-      "x": 151,
+      "x": 150,
       "y": 144,
-      "z": 0,
+      "z": 21,
       "radius": 30,
       "color": [235, 242, 255],
       "intensity": 1.8
@@ -5358,9 +5358,9 @@
     },
     {
       "type": "light",
-      "x": 44,
+      "x": 43,
       "y": 100,
-      "z": -13,
+      "z": 12,
       "radius": 30,
       "color": [235, 242, 255],
       "intensity": 1.8
@@ -5394,9 +5394,9 @@
     },
     {
       "type": "light",
-      "x": 58,
+      "x": 50,
       "y": 116,
-      "z": -13,
+      "z": -2,
       "radius": 21,
       "color": [80, 220, 255],
       "intensity": 1.4
@@ -5409,6 +5409,6 @@
     ]
   },
   "collision": "baked",
-  "collisionSource": "c1b01dec993bac3e",
-  "collisionBaked": "c1b01dec993bac3e"
+  "collisionSource": "0da2d8454831901b",
+  "collisionBaked": "0da2d8454831901b"
 }

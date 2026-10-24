@@ -86,7 +86,7 @@ pub enum Incoming {
 /// simulable as eight messages of one. 33 ms is the browser client's
 /// `SEND_INTERVAL_MS`; the two clients having the same send rate is worth more
 /// than either number being optimal.
-pub const SEND_INTERVAL: Duration = Duration::from_millis(33);
+pub const SEND_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Commands one `input` message may carry, matching the server's
 /// `MAX_COMMANDS_PER_MESSAGE`. Anything past this is discarded on arrival, so
@@ -276,9 +276,15 @@ impl MatchSocket {
             return Ok(());
         }
         let now = Instant::now();
-        if let Some(last) = self.last_send {
-            if now.duration_since(last) < SEND_INTERVAL {
-                return Ok(());
+        let urgent = self
+            .pending
+            .iter()
+            .any(|c| c.fire || c.throw || c.reload || c.drop || c.buy >= 0 || c.sell >= 0);
+        if !urgent {
+            if let Some(last) = self.last_send {
+                if now.duration_since(last) < SEND_INTERVAL {
+                    return Ok(());
+                }
             }
         }
         self.last_send = Some(now);

@@ -32,7 +32,7 @@ use crate::protocol::PlayerRow;
 /// Two snapshot intervals at 20 Hz. Below one interval there is routinely no
 /// later snapshot to interpolate *towards*, which is exactly the moment a
 /// renderer starts extrapolating and walking people through walls.
-pub const INTERP_DELAY_MS: f64 = 100.0;
+pub const INTERP_DELAY_MS: f64 = 45.0;
 
 /// Snapshot history kept, in ms. Enough to ride out a stall, bounded so a long
 /// match does not accumulate one.
@@ -248,9 +248,9 @@ mod tests {
         // Offset is pinned by the first push: local 1000 for server 1000.
         buf.push(1000.0, vec![row("a", 0.0, 0.0)], 1000.0);
         buf.push(1100.0, vec![row("a", 10.0, 0.0)], 1100.0);
-        // Render time is local - offset(0) - 100, so local 1150 draws server
+        // Render time is local - offset(0) - INTERP_DELAY_MS, so local 1050 + INTERP_DELAY_MS draws server
         // 1050 — halfway between the two frames.
-        let out = buf.sample(1150.0, "me");
+        let out = buf.sample(1050.0 + INTERP_DELAY_MS, "me");
         assert_eq!(out.len(), 1);
         assert!((out[0].x - 5.0).abs() < 0.001, "{}", out[0].x);
     }
@@ -304,7 +304,7 @@ mod tests {
         buf.push(1100.0, vec![row("a", 0.0, 0.0)], 1100.0);
         // Offset settles on 0, not 200 — otherwise one slow packet would put the
         // render clock permanently behind and every body with it.
-        assert_eq!(buf.render_time(1300.0), Some(1200.0));
+        assert_eq!(buf.render_time(1300.0), Some(1300.0 - INTERP_DELAY_MS));
     }
 
     #[test]

@@ -419,6 +419,72 @@ def build_roof_structure(col, mats):
             n += 1
 
 
+def build_architectural_detail(col, mats):
+    """Add motorized overhead target carrier tracks down each lane, lead-fume
+    HVAC extraction ductwork, shooter booth digital scoring monitors, and an
+    upper Range Master observation gallery on the West wall (`_NonCol`).
+    """
+    x0, x1, y0, y1 = X0 * C, X1 * C, Y0 * C, Y1 * C
+    centres = [
+        (Y0 + DIVIDERS[0][0]) / 2,
+        (DIVIDERS[0][1] + DIVIDERS[1][0]) / 2,
+        (DIVIDERS[1][1] + Y1) / 2,
+    ]
+
+    rail_boxes = []
+    steel_boxes = []
+    baffle_boxes = []
+    ink_boxes = []
+    glow_boxes = []
+
+    # 1. Overhead target carrier monorails & truss hangers down each lane
+    for cy in centres:
+        ym = cy * C
+        rail_boxes.append((((x0 + x1) * 0.5 + 1.5, ym, 6.15), (34.0, 0.14, 0.16)))
+        for hx in range(8, 39, 5):
+            steel_boxes.append(((float(hx), ym, 6.62), (0.12, 0.12, 0.76)))
+
+    # 2. Lead-fume HVAC extraction ducts along North & South upper walls + backstop hood
+    steel_boxes.append((((x0 + x1) * 0.5, y0 + 0.65, 6.65), (37.0, 0.65, 0.55)))
+    steel_boxes.append((((x0 + x1) * 0.5, y1 - 0.65, 6.65), (37.0, 0.65, 0.55)))
+    steel_boxes.append(((x1 - 0.55, (y0 + y1) * 0.5, 5.05), (0.75, y1 - y0 - 0.8, 0.65)))
+
+    # 3. Shooter booth digital scoring terminals & acoustic canopy ribs
+    for bx, by, bw, bh in BOOTHS:
+        bx0, by0, bx1, by1 = bx * C, by * C, (bx + bw) * C, (by + bh) * C
+        bcx = (bx0 + bx1) * 0.5
+        # Digital lane monitor mounted on the North screen inner face (above waist)
+        ink_boxes.append(((bcx, by1 - 0.065, C + 1.42), (0.52, 0.04, 0.34)))
+        glow_boxes.append(((bcx, by1 - 0.095, C + 1.42), (0.44, 0.015, 0.26)))
+        # Acoustic wood ribs under booth canopy
+        for rx in (bx0 + 0.25, bcx, bx1 - 0.25):
+            baffle_boxes.append(((rx, (by0 + by1) * 0.5, 2.84), (0.12, (by1 - by0) - 0.1, 0.08)))
+
+    maplib.add_boxes(col, "Aim_Overhead_Rails_NonCol", rail_boxes, mats["rail"])
+    maplib.add_boxes(col, "Aim_HVAC_Ducts_NonCol", steel_boxes, mats["steel"])
+    maplib.add_boxes(col, "Aim_Booth_Ribs_NonCol", baffle_boxes, mats["baffle"])
+    maplib.add_boxes(col, "Aim_Booth_MonitorBezels_NonCol", ink_boxes, mats["ink"])
+    maplib.add_boxes(col, "Aim_Booth_MonitorScreens_NonCol", glow_boxes, mats["board"])
+
+    # 4. Elevated Range Master Observation Gallery along the West wall (z = 4.2..6.0m)
+    win_mats = {
+        "trim": mats["steel"],
+        "pane": mats["ink"],
+    }
+    maplib.add_window_row(
+        col,
+        "RangeMaster_Gallery",
+        (x0 - 0.2, (y0 + y1) * 0.5, HEIGHT * 0.5),
+        (0.4, y1 - y0, HEIGHT),
+        "+x",
+        z_base=4.2,
+        count=5,
+        win_size=(2.2, 1.35),
+        mats=win_mats,
+        style="industrial",
+    )
+
+
 def build():
     clear_scene()
     mats = materials()
@@ -429,6 +495,7 @@ def build():
     build_booths(collection("Booths"), mats)
     build_rails_and_markings(collection("Markings"), mats, drills)
     build_roof_structure(collection("Roof"), mats)
+    build_architectural_detail(collection("Arch_Detail"), mats)
     maplib.lights_from_emitters(
         "Mat_Aim_Highbay_Glow",
         color=(236, 242, 255),

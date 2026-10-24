@@ -35,7 +35,7 @@ import type { World } from './world';
  * no later snapshot to interpolate towards, which is exactly when a renderer
  * starts extrapolating and walking people through walls.
  */
-export const INTERP_DELAY_MS = 100;
+export const INTERP_DELAY_MS = 45;
 
 /** Snapshot history kept. Enough to ride out a stall without unbounded growth. */
 export const SNAPSHOT_BUFFER_MS = 2000;

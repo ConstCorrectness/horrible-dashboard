@@ -719,6 +719,60 @@ def build_layout_revision(mats):
         add_tire_stack(col, mats, f"Yard_Tires_{side}", (24.5, y + (-2.5 if side == "S" else 2.5), 0.0), count=3)
 
 
+def build_architectural_detail(mats):
+    """Add gantry crane runway girders, perimeter steel stanchions, corrugated
+    lean-to shed roofs over flank container bays, elevated pipe racks, and an
+    industrial warehouse/smokestack skyline outside the salvage yard (`_NonCol`).
+    """
+    col = get_or_create_collection("Arch_Detail")
+
+    steel_boxes = [
+        # West & East longitudinal crane runway girders (z = 11.2..11.58m)
+        ((5.5, 32.0, 11.38), (0.9, 52.0, 0.36)),
+        ((58.5, 32.0, 11.38), (0.9, 52.0, 0.36)),
+    ]
+    yellow_boxes = []
+    corrugated_boxes = [
+        # Corrugated lean-to shelter roofs over West & East container bays
+        ((10.5, 32.0, 7.6), (6.8, 16.5, 0.22)),
+        ((53.5, 32.0, 7.6), (6.8, 16.5, 0.22)),
+    ]
+
+    for sy in range(8, 58, 8):
+        # Upper perimeter crane stanchions & knee braces (z = 4.6..11.2m)
+        steel_boxes.append(((4.45, float(sy), 7.9), (0.55, 0.45, 6.6)))
+        steel_boxes.append(((59.55, float(sy), 7.9), (0.55, 0.45, 6.6)))
+        yellow_boxes.append(((4.95, float(sy), 10.6), (0.65, 0.32, 0.9)))
+        yellow_boxes.append(((59.05, float(sy), 10.6), (0.65, 0.32, 0.9)))
+
+    # Lean-to roof truss purlins over flank containers
+    for ty in (25.0, 29.5, 34.5, 39.0):
+        steel_boxes.append(((10.5, ty, 7.32), (6.6, 0.22, 0.28)))
+        steel_boxes.append(((53.5, ty, 7.32), (6.6, 0.22, 0.28)))
+
+    # South & North perimeter elevated hydraulic/steam pipe runs (z = 9.2m & 9.8m)
+    for z_p in (9.2, 9.8):
+        steel_boxes.append(((32.0, 4.35, z_p), (50.0, 0.24, 0.24)))
+        steel_boxes.append(((32.0, 59.65, z_p), (50.0, 0.24, 0.24)))
+
+    maplib.add_boxes(col, "Junkflea_CraneRunway_NonCol", steel_boxes, mats["Steel_Structural"])
+    maplib.add_boxes(col, "Junkflea_CraneBraces_NonCol", yellow_boxes, mats["Steel_IBeam_Yellow"])
+    maplib.add_boxes(col, "Junkflea_ShedRoofs_NonCol", corrugated_boxes, mats["Corrugated_Steel_Rusted"])
+
+    # Perimeter industrial warehouse & foundry skyline outside the 14m walls
+    horizon_specs = [
+        {"center": (18.0, -2.5, 0.0), "size": (18.0, 9.0, 17.5), "wall": "Corrugated_Steel_Rusted", "trim": "Steel_Structural", "pane": "Water_Slick", "roof": "Concrete_Stained", "stories": 4},
+        {"center": (46.0, -3.0, 0.0), "size": (20.0, 9.5, 19.0), "wall": "Concrete_Stained", "trim": "Steel_IBeam_Yellow", "pane": "Water_Slick", "roof": "Steel_Rusted", "stories": 5},
+        {"center": (18.0, 66.5, 0.0), "size": (19.0, 9.0, 18.5), "wall": "Concrete_Wall", "trim": "Steel_Structural", "pane": "Water_Slick", "roof": "Corrugated_Steel_Rusted", "stories": 5},
+        {"center": (46.0, 67.0, 0.0), "size": (18.0, 9.0, 17.0), "wall": "Corrugated_Steel_Rusted", "trim": "Steel_IBeam_Yellow", "pane": "Water_Slick", "roof": "Concrete_Stained", "stories": 4},
+        {"center": (-2.5, 20.0, 0.0), "size": (9.0, 18.0, 18.0), "wall": "Concrete_Stained", "trim": "Steel_Structural", "pane": "Water_Slick", "roof": "Corrugated_Steel_Rusted", "stories": 4},
+        {"center": (-3.0, 46.0, 0.0), "size": (9.5, 18.0, 19.5), "wall": "Corrugated_Steel_Rusted", "trim": "Steel_IBeam_Yellow", "pane": "Water_Slick", "roof": "Steel_Rusted", "stories": 5},
+        {"center": (66.5, 20.0, 0.0), "size": (9.0, 18.0, 18.5), "wall": "Concrete_Wall", "trim": "Steel_Structural", "pane": "Water_Slick", "roof": "Concrete_Stained", "stories": 5},
+        {"center": (67.0, 46.0, 0.0), "size": (9.0, 16.0, 21.0), "wall": "Concrete_Stained", "trim": "Steel_IBeam_Yellow", "pane": "Water_Slick", "roof": "Steel_Rusted", "stories": 5},
+    ]
+    maplib.add_horizon_buildings(col, "Junkflea_Horizon", horizon_specs, mats)
+
+
 def build_lights():
     """The floodlight towers and strobes as lights, under a dusk sky."""
     maplib.lights_from_emitters("Mat_Sodium_Floodlight_Glow", color=(255, 186, 110), radius=22.0, intensity=2.4, spacing=4.0, drop=0.5)
@@ -735,6 +789,7 @@ if __name__ == "__main__":
     print("=== Generating Ultra-Detailed Realistic 'Junk Flea' (hd_junkflea) Map in Blender ===")
     mats = build_junkflea_scene()
     build_layout_revision(mats)
+    build_architectural_detail(mats)
     build_lights()
     export_scene_glb()
     print("=== Junk Flea Generation & Export Complete! ===")

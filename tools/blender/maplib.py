@@ -1060,6 +1060,445 @@ def add_wall_with_door(
         _box(collection, f"{name}_Lintel", lintel_lo, lintel_hi, material)
 
 
+def _dir_axes(face_dir: str):
+    """Return `(normal_vec, tangent_vec, is_x_normal)` for `face_dir` in (`+x`,`-x`,`+y`,`-y`)."""
+    return {
+        "+x": ((1.0, 0.0), (0.0, 1.0), True),
+        "-x": ((-1.0, 0.0), (0.0, -1.0), True),
+        "+y": ((0.0, 1.0), (-1.0, 0.0), False),
+        "-y": ((0.0, -1.0), (1.0, 0.0), False),
+    }[face_dir]
+
+
+def _oriented_size(tangent_w: float, normal_d: float, height: float, is_x_normal: bool):
+    return (normal_d, tangent_w, height) if is_x_normal else (tangent_w, normal_d, height)
+
+
+def add_window_row(
+    collection,
+    prefix: str,
+    wall_center: tuple[float, float, float],
+    wall_size: tuple[float, float, float],
+    face_dir: str,
+    z_base: float,
+    count: int,
+    win_size: tuple[float, float] = (1.1, 1.5),
+    mats: dict | None = None,
+    style: str = "moorish",
+    boxes_fn=add_boxes,
+):
+    """Build a row of deeply framed architectural windows along a facade (`_NonCol`).
+
+    All pieces are offset proud of the wall face in distinct layers (pane 2.5 cm,
+    mosaic/inlay 4 cm, shutters 5.5 cm, mullions 6 cm, jambs 9 cm, sill/lintel 13 cm)
+    so no two materials ever share a plane.
+    """
+    if count <= 0 or not mats:
+        return
+    (nx, ny), (tx, ty), is_x_n = _dir_axes(face_dir)
+    cx, cy, _ = wall_center
+    sx, sy, _ = wall_size
+    span = sy if is_x_n else sx
+    half_thick = (sx if is_x_n else sy) * 0.5
+    fx = cx + nx * half_thick
+    fy = cy + ny * half_thick
+    win_w, win_h = win_size
+
+    trim_boxes = []
+    pane_boxes = []
+    shutter_boxes = []
+    mosaic_boxes = []
+    foliage_boxes = []
+
+    step = span / (count + 1)
+    for i in range(count):
+        along = -span * 0.5 + step * (i + 1)
+        wx = fx + tx * along
+        wy = fy + ty * along
+        wz = z_base + win_h * 0.5
+
+        # 1. Dark window glazing pane (2.5 cm proud)
+        pane_boxes.append(
+            (
+                (wx + nx * 0.0125, wy + ny * 0.0125, wz),
+                _oriented_size(win_w, 0.025, win_h, is_x_n),
+            )
+        )
+
+        # 2. Outer stone/wood jambs, sill, lintel & mullions
+        jamb_w = 0.11
+        for side in (-1.0, 1.0):
+            jx = wx + tx * (side * (win_w * 0.5 + jamb_w * 0.5)) + nx * 0.045
+            jy = wy + ty * (side * (win_w * 0.5 + jamb_w * 0.5)) + ny * 0.045
+            trim_boxes.append(
+                ((jx, jy, wz), _oriented_size(jamb_w, 0.09, win_h + 0.08, is_x_n))
+            )
+        # Projecting sill + corbel blocks
+        trim_boxes.append(
+            (
+                (wx + nx * 0.07, wy + ny * 0.07, z_base - 0.05),
+                _oriented_size(win_w + jamb_w * 2.4, 0.14, 0.10, is_x_n),
+            )
+        )
+        # Header lintel
+        trim_boxes.append(
+            (
+                (wx + nx * 0.06, wy + ny * 0.06, z_base + win_h + 0.07),
+                _oriented_size(win_w + jamb_w * 2.2, 0.12, 0.14, is_x_n),
+            )
+        )
+        # Cross mullions (6 cm proud, clear of 2.5 cm pane)
+        trim_boxes.append(
+            (
+                (wx + nx * 0.042, wy + ny * 0.042, wz),
+                _oriented_size(0.05, 0.03, win_h - 0.04, is_x_n),
+            )
+        )
+        trim_boxes.append(
+            (
+                (wx + nx * 0.042, wy + ny * 0.042, wz + win_h * 0.12),
+                _oriented_size(win_w - 0.04, 0.03, 0.05, is_x_n),
+            )
+        )
+
+        # 3. Flanking louvered shutters (when shutter material is supplied)
+        if "shutter" in mats:
+            sh_w = max(0.32, win_w * 0.42)
+            for side in (-1.0, 1.0):
+                offset_t = side * (win_w * 0.5 + jamb_w + sh_w * 0.5 + 0.02)
+                sx_p = wx + tx * offset_t + nx * 0.03
+                sy_p = wy + ty * offset_t + ny * 0.03
+                shutter_boxes.append(
+                    ((sx_p, sy_p, wz), _oriented_size(sh_w, 0.05, win_h, is_x_n))
+                )
+                for k in range(4):
+                    lz = z_base + win_h * (0.18 + 0.21 * k)
+                    shutter_boxes.append(
+                        (
+                            (sx_p + nx * 0.032, sy_p + ny * 0.032, lz),
+                            _oriented_size(sh_w * 0.86, 0.015, 0.045, is_x_n),
+                        )
+                    )
+
+        # 4. Style-specific crown & planter details
+        if style == "moorish":
+            # Stepped horseshoe arch crown + zellige spandrel inlay
+            trim_boxes.append(
+                (
+                    (wx + nx * 0.055, wy + ny * 0.055, z_base + win_h + 0.22),
+                    _oriented_size(win_w * 0.82, 0.10, 0.16, is_x_n),
+                )
+            )
+            if "mosaic" in mats:
+                mosaic_boxes.append(
+                    (
+                        (wx + nx * 0.02, wy + ny * 0.02, z_base + win_h + 0.22),
+                        _oriented_size(win_w * 0.58, 0.035, 0.12, is_x_n),
+                    )
+                )
+        elif style == "tuscan":
+            # Classical stone pediment + terracotta flower box with greenery
+            trim_boxes.append(
+                (
+                    (wx + nx * 0.065, wy + ny * 0.065, z_base + win_h + 0.19),
+                    _oriented_size(win_w * 0.76, 0.11, 0.10, is_x_n),
+                )
+            )
+            if "foliage" in mats:
+                shutter_boxes.append(
+                    (
+                        (wx + nx * 0.11, wy + ny * 0.11, z_base - 0.16),
+                        _oriented_size(win_w * 0.88, 0.18, 0.14, is_x_n),
+                    )
+                )
+                foliage_boxes.append(
+                    (
+                        (wx + nx * 0.12, wy + ny * 0.12, z_base - 0.04),
+                        _oriented_size(win_w * 0.82, 0.22, 0.16, is_x_n),
+                    )
+                )
+
+    if trim_boxes and "trim" in mats:
+        boxes_fn(collection, f"{prefix}_WinTrim_NonCol", trim_boxes, mats["trim"])
+    if pane_boxes and "pane" in mats:
+        boxes_fn(collection, f"{prefix}_WinPane_NonCol", pane_boxes, mats["pane"])
+    if shutter_boxes and "shutter" in mats:
+        boxes_fn(
+            collection, f"{prefix}_WinShutter_NonCol", shutter_boxes, mats["shutter"]
+        )
+    if mosaic_boxes and "mosaic" in mats:
+        boxes_fn(
+            collection, f"{prefix}_WinMosaic_NonCol", mosaic_boxes, mats["mosaic"]
+        )
+    if foliage_boxes and "foliage" in mats:
+        boxes_fn(
+            collection, f"{prefix}_WinFoliage_NonCol", foliage_boxes, mats["foliage"]
+        )
+
+
+def add_balcony(
+    collection,
+    prefix: str,
+    center: tuple[float, float, float],
+    size: tuple[float, float],
+    face_dir: str,
+    mats: dict,
+    boxes_fn=add_boxes,
+):
+    """Build a cantilevered upper-story balcony (`_NonCol`) with corbels and balustrade."""
+    (nx, ny), (tx, ty), is_x_n = _dir_axes(face_dir)
+    cx, cy, cz = center
+    width, depth = size
+    deck_boxes = []
+    rail_boxes = []
+
+    # Balcony floor slab
+    bx = cx + nx * (depth * 0.5)
+    by = cy + ny * (depth * 0.5)
+    deck_boxes.append(((bx, by, cz), _oriented_size(width, depth, 0.16, is_x_n)))
+
+    # Corbel support brackets underneath
+    corbel_count = max(2, int(width // 1.4) + 1)
+    for i in range(corbel_count):
+        t_off = -width * 0.42 + (width * 0.84) * (i / max(1, corbel_count - 1))
+        kx = cx + tx * t_off + nx * (depth * 0.38)
+        ky = cy + ty * t_off + ny * (depth * 0.38)
+        deck_boxes.append(
+            ((kx, ky, cz - 0.20), _oriented_size(0.14, depth * 0.72, 0.24, is_x_n))
+        )
+
+    # Front & side railings + vertical balusters
+    rail_h = 0.92
+    fx = cx + nx * (depth - 0.05)
+    fy = cy + ny * (depth - 0.05)
+    rail_boxes.append(
+        ((fx, fy, cz + 0.08 + rail_h), _oriented_size(width, 0.08, 0.07, is_x_n))
+    )
+    for side in (-1.0, 1.0):
+        sx_p = cx + tx * (side * (width * 0.5 - 0.04)) + nx * (depth * 0.5)
+        sy_p = cy + ty * (side * (width * 0.5 - 0.04)) + ny * (depth * 0.5)
+        rail_boxes.append(
+            (
+                (sx_p, sy_p, cz + 0.08 + rail_h),
+                _oriented_size(0.08, depth, 0.07, is_x_n),
+            )
+        )
+    balusters = max(4, int(width // 0.32))
+    for i in range(balusters + 1):
+        t_off = -width * 0.48 + (width * 0.96) * (i / balusters)
+        px = fx + tx * t_off
+        py = fy + ty * t_off
+        rail_boxes.append(
+            (
+                (px, py, cz + 0.08 + rail_h * 0.5),
+                _oriented_size(0.05, 0.05, rail_h - 0.07, is_x_n),
+            )
+        )
+
+    if deck_boxes and "deck" in mats:
+        boxes_fn(collection, f"{prefix}_Deck_NonCol", deck_boxes, mats["deck"])
+    if rail_boxes and "rail" in mats:
+        boxes_fn(collection, f"{prefix}_Rail_NonCol", rail_boxes, mats["rail"])
+
+
+def add_ceiling_mep(
+    collection,
+    prefix: str,
+    bounds: tuple[float, float, float, float],
+    z_ceil: float,
+    mats: dict,
+    axis: str = "x",
+    spacing: float = 4.0,
+    boxes_fn=add_boxes,
+):
+    """Populate a ceiling (`bounds = (x0, y0, x1, y1)`) with steel I-beam trusses,
+    HVAC ductwork, dual conduit pipes, and linear luminaire housings (`_NonCol`).
+    """
+    x0, y0, x1, y1 = bounds
+    cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+    sx, sy = x1 - x0, y1 - y0
+    if sx <= 1.0 or sy <= 1.0:
+        return
+
+    truss_boxes = []
+    duct_boxes = []
+    pipe_boxes = []
+    glow_boxes = []
+
+    along_x = axis == "x"
+    run_len = sx if along_x else sy
+    span_len = sy if along_x else sx
+    n_trusses = max(2, int(run_len // spacing))
+    step = run_len / (n_trusses + 1)
+
+    for i in range(n_trusses):
+        pos = (-run_len * 0.5) + step * (i + 1)
+        tx = cx + (pos if along_x else 0.0)
+        ty = cy + (0.0 if along_x else pos)
+        b_size = (0.18, span_len - 0.2, 0.28) if along_x else (span_len - 0.2, 0.18, 0.28)
+        truss_boxes.append(((tx, ty, z_ceil - 0.16), b_size))
+        flange_size = (
+            (0.32, span_len - 0.2, 0.05) if along_x else (span_len - 0.2, 0.32, 0.05)
+        )
+        truss_boxes.append(((tx, ty, z_ceil - 0.32), flange_size))
+
+        # Suspended linear luminaire between trusses
+        if "glow" in mats:
+            lx = tx + (step * 0.5 if along_x and i + 1 < n_trusses else 0.0)
+            ly = ty + (0.0 if along_x else (step * 0.5 if i + 1 < n_trusses else 0.0))
+            housing_size = (1.6, 0.26, 0.08) if not along_x else (0.26, 1.6, 0.08)
+            glow_size = (1.48, 0.16, 0.03) if not along_x else (0.16, 1.48, 0.03)
+            truss_boxes.append(((lx, ly, z_ceil - 0.38), housing_size))
+            glow_boxes.append(((lx, ly, z_ceil - 0.44), glow_size))
+
+    # Main HVAC trunk duct offset to one side of the room
+    duct_off = span_len * 0.26
+    dx = cx + (0.0 if along_x else duct_off)
+    dy = cy + (duct_off if along_x else 0.0)
+    duct_size = (run_len - 0.6, 0.65, 0.42) if along_x else (0.65, run_len - 0.6, 0.42)
+    duct_boxes.append(((dx, dy, z_ceil - 0.24), duct_size))
+    for i in range(n_trusses):
+        pos = (-run_len * 0.4) + (run_len * 0.8) * (i / max(1, n_trusses - 1))
+        fx = dx + (pos if along_x else 0.0)
+        fy = dy + (0.0 if along_x else pos)
+        collar = (0.08, 0.74, 0.48) if along_x else (0.74, 0.08, 0.48)
+        duct_boxes.append(((fx, fy, z_ceil - 0.24), collar))
+
+    # Dual fire/coolant pipe runs along opposite side
+    for idx, p_off in enumerate((-span_len * 0.32, -span_len * 0.38)):
+        px = cx + (0.0 if along_x else p_off)
+        py = cy + (p_off if along_x else 0.0)
+        p_size = (run_len - 0.4, 0.09, 0.09) if along_x else (0.09, run_len - 0.4, 0.09)
+        pipe_boxes.append(((px, py, z_ceil - 0.14 - idx * 0.11), p_size))
+
+    if truss_boxes and "steel" in mats:
+        boxes_fn(collection, f"{prefix}_Trusses_NonCol", truss_boxes, mats["steel"])
+    if duct_boxes and "duct" in mats:
+        boxes_fn(collection, f"{prefix}_HVAC_NonCol", duct_boxes, mats["duct"])
+    if pipe_boxes and "pipe" in mats:
+        boxes_fn(collection, f"{prefix}_Pipes_NonCol", pipe_boxes, mats["pipe"])
+    if glow_boxes and "glow" in mats:
+        boxes_fn(collection, f"{prefix}_Luminaires_NonCol", glow_boxes, mats["glow"])
+
+
+def add_horizon_buildings(
+    collection, prefix: str, specs: list[dict], mats: dict, boxes_fn=add_boxes
+):
+    """Build multi-story perimeter/skybox buildings (`_NonCol`) with cornice bands,
+    window grids, and rooftop silhouettes around a map's exterior.
+    """
+    by_mat: dict[str, list] = {}
+
+    def push(mat_key: str, center, size):
+        if mat_key and mat_key in mats:
+            by_mat.setdefault(mat_key, []).append((center, size))
+
+    for spec in specs:
+        cx, cy, z0 = spec["center"]
+        sx, sy, sz = spec["size"]
+        wall_k = spec.get("wall", "")
+        trim_k = spec.get("trim", wall_k)
+        pane_k = spec.get("pane", "")
+        roof_k = spec.get("roof", trim_k)
+        stories = max(1, int(spec.get("stories", max(1, round(sz / 3.4)))))
+
+        # Main building mass
+        push(wall_k, (cx, cy, z0 + sz * 0.5), (sx, sy, sz))
+        # Roof parapet / cornice crown
+        push(trim_k, (cx, cy, z0 + sz + 0.19), (sx + 0.36, sy + 0.36, 0.36))
+        push(roof_k, (cx, cy, z0 + sz + 0.44), (sx - 0.4, sy - 0.4, 0.12))
+
+        # Story belt courses and recessed-look window grids on all 4 facades
+        story_h = sz / stories
+        for s in range(stories):
+            fz = z0 + (s + 1) * story_h
+            if s + 1 < stories:
+                push(trim_k, (cx, cy, fz), (sx + 0.16, sy + 0.16, 0.14))
+            wz = z0 + (s + 0.52) * story_h
+            win_h = min(1.4, story_h * 0.46)
+            # X-facing facades
+            nx_count = max(1, int(sy // 3.2))
+            for i in range(nx_count):
+                wy = cy - sy * 0.5 + (sy / (nx_count + 1)) * (i + 1)
+                for side in (-1.0, 1.0):
+                    wx = cx + side * (sx * 0.5 + 0.035)
+                    push(pane_k, (wx, wy, wz), (0.05, 1.05, win_h))
+                    push(
+                        trim_k,
+                        (cx + side * (sx * 0.5 + 0.075), wy, wz - win_h * 0.5 - 0.07),
+                        (0.13, 1.25, 0.10),
+                    )
+            # Y-facing facades
+            ny_count = max(1, int(sx // 3.2))
+            for i in range(ny_count):
+                wx = cx - sx * 0.5 + (sx / (ny_count + 1)) * (i + 1)
+                for side in (-1.0, 1.0):
+                    wy = cy + side * (sy * 0.5 + 0.035)
+                    push(pane_k, (wx, wy, wz), (1.05, 0.05, win_h))
+                    push(
+                        trim_k,
+                        (wx, cy + side * (sy * 0.5 + 0.075), wz - win_h * 0.5 - 0.07),
+                        (1.25, 0.13, 0.10),
+                    )
+
+        # Rooftop silhouette furniture (HVAC / water tower / dome)
+        top_z = z0 + sz + 0.51
+        push(
+            trim_k,
+            (cx + sx * 0.18, cy - sy * 0.15, top_z + 0.65),
+            (min(2.4, sx * 0.32), min(2.4, sy * 0.32), 1.3),
+        )
+
+    for mat_key, boxes in by_mat.items():
+        boxes_fn(collection, f"{prefix}_{mat_key}_NonCol", boxes, mats[mat_key])
+
+
+def add_control_station(
+    collection,
+    prefix: str,
+    center: tuple[float, float, float],
+    yaw_deg: float,
+    length: float,
+    mats: dict,
+    boxes_fn=add_boxes,
+):
+    """Build a multi-monitor command/telemetry console (`_NonCol`) with zero coplanar overlap."""
+    cx, cy, z0 = center
+    axis_x = abs(yaw_deg % 180) < 45 or abs(yaw_deg % 180) > 135
+    sx, sy = (length, 0.9) if axis_x else (0.9, length)
+    sign = 1.0 if (yaw_deg % 360) < 180 else -1.0
+
+    cabinet_boxes = [
+        ((cx, cy, z0 + 0.38), (sx, sy, 0.76)),
+        ((cx, cy, z0 + 0.80), (sx + 0.08, sy + 0.08, 0.06)),
+    ]
+    bezel_boxes = []
+    screen_boxes = []
+    n_mons = max(1, int(length // 0.85))
+    step = length / (n_mons + 1)
+    for i in range(n_mons):
+        off = -length * 0.5 + step * (i + 1)
+        mx = cx + (off if axis_x else 0.0)
+        my = cy + (0.0 if axis_x else off)
+        # Stand + bezel
+        bezel_boxes.append(((mx, my, z0 + 0.93), (0.10, 0.10, 0.18)))
+        b_size = (0.68, 0.07, 0.42) if axis_x else (0.07, 0.68, 0.42)
+        bezel_boxes.append(((mx, my, z0 + 1.15), b_size))
+        # Glowing screen offset 2 cm proud of the bezel face
+        s_off = sign * 0.048
+        sx_p = mx + (0.0 if axis_x else s_off)
+        sy_p = my + (s_off if axis_x else 0.0)
+        s_size = (0.60, 0.02, 0.34) if axis_x else (0.02, 0.60, 0.34)
+        screen_boxes.append(((sx_p, sy_p, z0 + 1.15), s_size))
+
+    if "cabinet" in mats:
+        boxes_fn(collection, f"{prefix}_Desk_NonCol", cabinet_boxes, mats["cabinet"])
+    if bezel_boxes and "bezel" in mats:
+        boxes_fn(collection, f"{prefix}_Bezels_NonCol", bezel_boxes, mats["bezel"])
+    if screen_boxes and "screen" in mats:
+        boxes_fn(collection, f"{prefix}_Screens_NonCol", screen_boxes, mats["screen"])
+
+
 def add_safety_floor(collection, name="Safety_Floor_ColOnly", thickness=0.5):
     """An invisible floor under the whole map, at its lowest surface.
 

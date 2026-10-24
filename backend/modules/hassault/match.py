@@ -90,7 +90,7 @@ _YOU_HOLE = "\x00hassault:you\x00"
 # the classic Source-engine setting and holds up: remote players are rendered
 # from two snapshots that have both already arrived, so ordinary jitter never
 # shows. Raising this costs bandwidth linearly and buys very little.
-SNAPSHOT_HZ = 20
+SNAPSHOT_HZ = 60
 TICK_INTERVAL = 1.0 / SNAPSHOT_HZ
 
 # Simulated seconds a player may bank against real time. Roughly four frames:

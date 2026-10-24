@@ -2000,12 +2000,140 @@ function withPlanarUvs(
 interface StaticBatchEntry {
   nodeName: string;
   geom: THREE.BufferGeometry;
+  centerX: number;
+  centerZ: number;
 }
 
 interface StaticMaterialBatch {
   material: THREE.Material;
   castShadow: boolean;
   entries: StaticBatchEntry[];
+}
+
+/**
+ * Weld duplicate vertices sharing quantized (position, normal, uv, color) into an
+ * indexed BufferGeometry using a zero-string-allocation typed-array hash table.
+ * Cuts subdivided vertex-AO mesh vertex counts by ~50-65%.
+ */
+function buildIndexedBatchGeometry(
+  THREE: typeof import('three'),
+  posIn: Float32Array,
+  normIn: Float32Array,
+  uvIn: Float32Array,
+  colorIn: Float32Array | null,
+  totalVerts: number,
+): THREE.BufferGeometry {
+  const merged = new THREE.BufferGeometry();
+  if (totalVerts === 0) return merged;
+
+  let hashBits = 10;
+  const targetBuckets = totalVerts * 2;
+  while (1 << hashBits < targetBuckets && hashBits < 18) hashBits++;
+  const hashSize = 1 << hashBits;
+  const hashMask = hashSize - 1;
+
+  const head = new Int32Array(hashSize).fill(-1);
+  const next = new Int32Array(totalVerts).fill(-1);
+  const indices = new Uint32Array(totalVerts);
+
+  const posOut = new Float32Array(totalVerts * 3);
+  const normOut = new Float32Array(totalVerts * 3);
+  const uvOut = new Float32Array(totalVerts * 2);
+  const colorOut = colorIn ? new Float32Array(totalVerts * 3) : null;
+
+  let uniqueCount = 0;
+
+  for (let i = 0; i < totalVerts; i++) {
+    const i3 = i * 3;
+    const i2 = i * 2;
+    const px = posIn[i3]!;
+    const py = posIn[i3 + 1]!;
+    const pz = posIn[i3 + 2]!;
+    const nx = normIn[i3]!;
+    const ny = normIn[i3 + 1]!;
+    const nz = normIn[i3 + 2]!;
+    const u = uvIn[i2]!;
+    const v = uvIn[i2 + 1]!;
+    const cr = colorIn ? colorIn[i3]! : 1;
+    const cg = colorIn ? colorIn[i3 + 1]! : 1;
+    const cb = colorIn ? colorIn[i3 + 2]! : 1;
+
+    const qx = Math.round(px * 1000) | 0;
+    const qy = Math.round(py * 1000) | 0;
+    const qz = Math.round(pz * 1000) | 0;
+    const qnx = Math.round(nx * 256) | 0;
+    const qny = Math.round(ny * 256) | 0;
+    const qnz = Math.round(nz * 256) | 0;
+
+    const h =
+      (Math.imul(qx, 73856093) ^
+        Math.imul(qy, 19349663) ^
+        Math.imul(qz, 83492791) ^
+        Math.imul(qnx, 297121507) ^
+        Math.imul(qny, 486187739) ^
+        Math.imul(qnz, 1640531527)) &
+      hashMask;
+
+    let found = -1;
+    let cand = head[h]!;
+    while (cand !== -1) {
+      const c3 = cand * 3;
+      const c2 = cand * 2;
+      if (
+        Math.abs(posOut[c3]! - px) <= 1e-4 &&
+        Math.abs(posOut[c3 + 1]! - py) <= 1e-4 &&
+        Math.abs(posOut[c3 + 2]! - pz) <= 1e-4 &&
+        Math.abs(normOut[c3]! - nx) <= 1e-3 &&
+        Math.abs(normOut[c3 + 1]! - ny) <= 1e-3 &&
+        Math.abs(normOut[c3 + 2]! - nz) <= 1e-3 &&
+        Math.abs(uvOut[c2]! - u) <= 1e-4 &&
+        Math.abs(uvOut[c2 + 1]! - v) <= 1e-4 &&
+        (!colorOut ||
+          (Math.abs(colorOut[c3]! - cr) <= 2e-3 &&
+            Math.abs(colorOut[c3 + 1]! - cg) <= 2e-3 &&
+            Math.abs(colorOut[c3 + 2]! - cb) <= 2e-3))
+      ) {
+        found = cand;
+        break;
+      }
+      cand = next[cand]!;
+    }
+
+    if (found !== -1) {
+      indices[i] = found;
+    } else {
+      const idx = uniqueCount++;
+      const o3 = idx * 3;
+      const o2 = idx * 2;
+      posOut[o3] = px;
+      posOut[o3 + 1] = py;
+      posOut[o3 + 2] = pz;
+      normOut[o3] = nx;
+      normOut[o3 + 1] = ny;
+      normOut[o3 + 2] = nz;
+      uvOut[o2] = u;
+      uvOut[o2 + 1] = v;
+      if (colorOut) {
+        colorOut[o3] = cr;
+        colorOut[o3 + 1] = cg;
+        colorOut[o3 + 2] = cb;
+      }
+      next[idx] = head[h]!;
+      head[h] = idx;
+      indices[i] = idx;
+    }
+  }
+
+  merged.setAttribute('position', new THREE.BufferAttribute(posOut.slice(0, uniqueCount * 3), 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normOut.slice(0, uniqueCount * 3), 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uvOut.slice(0, uniqueCount * 2), 2));
+  if (colorOut) {
+    merged.setAttribute('color', new THREE.BufferAttribute(colorOut.slice(0, uniqueCount * 3), 3));
+  }
+  merged.setIndex(new THREE.BufferAttribute(indices, 1));
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+  return merged;
 }
 
 export function buildWorld3DFromGLTF(
@@ -2087,6 +2215,7 @@ export function buildWorld3DFromGLTF(
       worldMesh.name = nodeName;
       worldMesh.visible = !isInv;
       worldMesh.castShadow = !isWin && !isInv && castShadow;
+      worldMesh.userData.castShadow = worldMesh.castShadow;
       worldMesh.receiveShadow = true;
       root.add(worldMesh);
 
@@ -2175,7 +2304,9 @@ export function buildWorld3DFromGLTF(
         batch = { material: singleMat, castShadow, entries: [] };
         staticBatches.set(key, batch);
       }
-      batch.entries.push({ nodeName, geom });
+      const centerX = bb ? (bb.min.x + bb.max.x) * 0.5 : 0;
+      const centerZ = bb ? (bb.min.z + bb.max.z) * 0.5 : 0;
+      batch.entries.push({ nodeName, geom, centerX, centerZ });
     }
 
     if (!isWin && collides) {
@@ -2212,21 +2343,18 @@ export function buildWorld3DFromGLTF(
     }
   });
 
-  // Emit static batches: keep 1-mesh buckets with their original nodeName, merge multi-mesh buckets
-  for (const batch of staticBatches.values()) {
-    if (batch.entries.length === 1) {
-      const only = batch.entries[0]!;
-      geometries.push(only.geom);
-      const mesh = new THREE.Mesh(only.geom, batch.material);
-      mesh.name = only.nodeName;
-      mesh.castShadow = batch.castShadow;
-      mesh.receiveShadow = true;
-      root.add(mesh);
-      continue;
-    }
+  const cfg = MAP_CONFIGS[info.name] ?? MAP_CONFIGS.hd_facility;
+  const mapMidX = cfg.bounds.center[0];
+  const mapMidZ = cfg.bounds.center[1];
 
+  const emitMergedEntries = (
+    entries: StaticBatchEntry[],
+    material: THREE.Material,
+    castShadow: boolean,
+    suffix: string,
+  ) => {
     let totalVerts = 0;
-    for (const e of batch.entries) {
+    for (const e of entries) {
       const flat = e.geom.index ? e.geom.toNonIndexed() : e.geom;
       if (flat !== e.geom) {
         e.geom.dispose();
@@ -2242,12 +2370,12 @@ export function buildWorld3DFromGLTF(
     // GLTFLoader gives a primitive that has it a `vertexColors` material of its
     // own, so a batch is all-or-none. Read through getX: the GLB stores it as
     // normalised bytes, which `.array` would hand over unscaled.
-    const colorMerged = batch.material.vertexColors
+    const colorMerged = material.vertexColors
       ? new Float32Array(totalVerts * 3).fill(1)
       : null;
     let vOffset = 0;
 
-    for (const e of batch.entries) {
+    for (const e of entries) {
       const pos = e.geom.attributes.position;
       const norm = e.geom.attributes.normal;
       const uv = e.geom.attributes.uv;
@@ -2267,23 +2395,65 @@ export function buildWorld3DFromGLTF(
       e.geom.dispose();
     }
 
-    const merged = new THREE.BufferGeometry();
-    merged.setAttribute('position', new THREE.BufferAttribute(posMerged, 3));
-    merged.setAttribute('normal', new THREE.BufferAttribute(normMerged, 3));
-    merged.setAttribute('uv', new THREE.BufferAttribute(uvMerged, 2));
-    if (colorMerged) merged.setAttribute('color', new THREE.BufferAttribute(colorMerged, 3));
-    merged.computeBoundingBox();
-    merged.computeBoundingSphere();
+    const merged = buildIndexedBatchGeometry(
+      THREE,
+      posMerged,
+      normMerged,
+      uvMerged,
+      colorMerged,
+      totalVerts,
+    );
     geometries.push(merged);
 
-    const mesh = new THREE.Mesh(merged, batch.material);
-    mesh.name = `Batched_${batch.material.name || 'Mat'}_${batch.castShadow ? 'Col' : 'Dec'}`;
-    mesh.castShadow = batch.castShadow;
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.name = `Batched_${material.name || 'Mat'}_${castShadow ? 'Col' : 'Dec'}${suffix}`;
+    mesh.castShadow = castShadow;
+    mesh.userData.castShadow = castShadow;
     mesh.receiveShadow = true;
     root.add(mesh);
-  }
+  };
 
-  const cfg = MAP_CONFIGS[info.name] ?? MAP_CONFIGS.hd_facility;
+  // Emit static batches: keep 1-mesh buckets with their original nodeName, merge multi-mesh buckets
+  // (splitting large map-wide batches into 2x2 spatial quadrants for frustum & shadow culling).
+  for (const batch of staticBatches.values()) {
+    if (batch.entries.length === 1) {
+      const only = batch.entries[0]!;
+      geometries.push(only.geom);
+      const mesh = new THREE.Mesh(only.geom, batch.material);
+      mesh.name = only.nodeName;
+      mesh.castShadow = batch.castShadow;
+      mesh.userData.castShadow = batch.castShadow;
+      mesh.receiveShadow = true;
+      root.add(mesh);
+      continue;
+    }
+
+    if (batch.entries.length > 8) {
+      const quadrants: [StaticBatchEntry[], StaticBatchEntry[], StaticBatchEntry[], StaticBatchEntry[]] = [
+        [],
+        [],
+        [],
+        [],
+      ];
+      for (const e of batch.entries) {
+        const qx = e.centerX >= mapMidX ? 1 : 0;
+        const qz = e.centerZ >= mapMidZ ? 2 : 0;
+        quadrants[qx + qz]!.push(e);
+      }
+      const nonEmpty = quadrants.filter((q) => q.length > 0);
+      if (nonEmpty.length > 1) {
+        for (let qi = 0; qi < quadrants.length; qi++) {
+          const qEntries = quadrants[qi]!;
+          if (qEntries.length > 0) {
+            emitMergedEntries(qEntries, batch.material, batch.castShadow, `_Q${qi}`);
+          }
+        }
+        continue;
+      }
+    }
+
+    emitMergedEntries(batch.entries, batch.material, batch.castShadow, '');
+  }
 
   const collision: CollisionGeometry = {
     vertices: new Float32Array(colVertices),

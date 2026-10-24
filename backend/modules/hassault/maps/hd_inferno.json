@@ -4569,9 +4569,9 @@
     {"type": "grenade", "x": 69, "y": 96, "z": 0},
     {
       "type": "light",
-      "x": 123,
+      "x": 122,
       "y": 114,
-      "z": 0,
+      "z": 10,
       "radius": 21,
       "color": [255, 190, 120],
       "intensity": 2.0
@@ -4632,18 +4632,18 @@
     },
     {
       "type": "light",
-      "x": 83,
+      "x": 84,
       "y": 74,
-      "z": 0,
+      "z": 9,
       "radius": 18,
       "color": [255, 190, 120],
       "intensity": 1.8
     },
     {
       "type": "light",
-      "x": 83,
+      "x": 84,
       "y": 128,
-      "z": 0,
+      "z": 9,
       "radius": 18,
       "color": [255, 190, 120],
       "intensity": 1.8
@@ -4692,6 +4692,6 @@
     ]
   },
   "collision": "baked",
-  "collisionSource": "c90d218ab43d0b4c",
-  "collisionBaked": "c90d218ab43d0b4c"
+  "collisionSource": "8ddb56e80b35b2d7",
+  "collisionBaked": "8ddb56e80b35b2d7"
 }

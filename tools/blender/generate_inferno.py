@@ -126,6 +126,7 @@ def setup_materials():
 
     # Breakable windows
     mats["glass_window"] = create_pbr_material("mat_glass_window", (0.82, 0.92, 0.98), metallic=0.05, roughness=0.06, alpha=0.35)
+    mats["window_dark"] = create_pbr_material("mat_inferno_window_dark", (0.09, 0.11, 0.13), metallic=0.25, roughness=0.18)
 
     return mats
 
@@ -629,6 +630,306 @@ def build_natural_dressing(col, mats):
             )
 
 
+def build_architectural_detail(col, mats):
+    """Rich Tuscan architectural detailing: upper-story shuttered windows with
+    pediments & terracotta flower boxes, cantilevered wrought-iron balconies,
+    Banana roof eaves & rafters, Church Ruins rose window & nave trusses,
+    Graveyard mausoleum & iron fence, and hillside villa horizon skyline.
+    All nodes are `_NonCol` and run after `build_natural_dressing`.
+    """
+    win_mats = {
+        "trim": mats["limestone_carved"],
+        "pane": mats["window_dark"],
+        "shutter": mats["wood_chestnut_aged"],
+        "foliage": mats["italian_cypress_leaves"],
+    }
+    balcony_mats = {
+        "deck": mats["wood_chestnut_aged"],
+        "rail": mats["wrought_iron"],
+    }
+
+    # --- 1. Banana & Mid Lane Upper-Story Tuscan Windows, Rafters & Balconies ---
+    maplib.add_window_row(
+        col,
+        "Banana_West_Upper",
+        (12.0, 28.0, 4.5),
+        (1.2, 24.0, 9.0),
+        "+x",
+        z_base=6.1,
+        count=4,
+        win_size=(1.1, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Banana_East_Upper_W",
+        (26.0, 26.0, 4.5),
+        (1.2, 28.0, 9.0),
+        "-x",
+        z_base=6.1,
+        count=4,
+        win_size=(1.1, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Banana_East_Upper_E",
+        (26.0, 26.0, 4.5),
+        (1.2, 28.0, 9.0),
+        "+x",
+        z_base=6.1,
+        count=4,
+        win_size=(1.1, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Mid_East_Upper_W",
+        (42.0, 26.0, 4.5),
+        (1.2, 32.0, 9.0),
+        "-x",
+        z_base=6.1,
+        count=5,
+        win_size=(1.1, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_balcony(
+        col,
+        "Banana_West_Balcony",
+        (12.6, 22.5, 5.75),
+        (4.2, 0.85),
+        "+x",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+    maplib.add_balcony(
+        col,
+        "Mid_East_Balcony",
+        (41.4, 22.0, 5.75),
+        (4.4, 0.85),
+        "-x",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # Exposed chestnut roof rafters under Banana & Mid terracotta coping
+    rafters = []
+    for y in range(16, 40, 2):
+        rafters.append(((12.0, float(y), 8.82), (2.2, 0.16, 0.18)))
+        rafters.append(((26.0, float(y), 8.82), (2.2, 0.16, 0.18)))
+        rafters.append(((42.0, float(y), 8.82), (2.2, 0.16, 0.18)))
+    add_boxes(col, "Lane_Roof_Rafters_NonCol", rafters, mats["wood_chestnut_aged"])
+
+    # --- 2. East_House Full Two-Story Tuscan Villa Facade & Balconies ---
+    # East_House: center (56.0, 25.0, 3.5), size (8.0, 10.0, 7.0)
+    for z_tier, tier_tag, wh in ((2.4, "T1", 1.35), (4.85, "T2", 1.30)):
+        for face_d, cnt in (("-x", 3), ("+x", 3), ("-y", 2), ("+y", 2)):
+            maplib.add_window_row(
+                col,
+                f"EastHouse_{tier_tag}_{face_d.replace('+', 'P').replace('-', 'N')}",
+                (56.0, 25.0, 3.5),
+                (8.0, 10.0, 7.0),
+                face_d,
+                z_base=z_tier,
+                count=cnt,
+                win_size=(1.0, wh),
+                mats=win_mats,
+                style="tuscan",
+                boxes_fn=add_boxes,
+            )
+    maplib.add_balcony(
+        col,
+        "EastHouse_Balcony_W",
+        (52.0, 25.0, 4.45),
+        (4.0, 0.85),
+        "-x",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+    maplib.add_balcony(
+        col,
+        "EastHouse_Balcony_S",
+        (56.0, 20.0, 4.45),
+        (3.6, 0.85),
+        "-y",
+        balcony_mats,
+        boxes_fn=add_boxes,
+    )
+
+    # --- 3. Apartments Second-Story Windows, Roof Canopy & Chimney ---
+    maplib.add_window_row(
+        col,
+        "Apts_West_Upper",
+        (34.0, 38.0, 2.8),
+        (1.2, 14.0, 5.6),
+        "-x",
+        z_base=3.35,
+        count=3,
+        win_size=(1.1, 1.35),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Apts_North_Upper",
+        (40.0, 46.0, 2.8),
+        (12.0, 1.2, 5.6),
+        "+y",
+        z_base=3.35,
+        count=3,
+        win_size=(1.1, 1.35),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    apts_roof_wood = []
+    for ry in range(33, 46, 2):
+        apts_roof_wood.append(((40.0, float(ry), 5.68), (12.4, 0.18, 0.22)))
+    add_boxes(col, "Apts_Pergola_Beams_NonCol", apts_roof_wood, mats["wood_chestnut_aged"])
+    add_boxes(
+        col,
+        "Apts_Roof_Trim_NonCol",
+        [
+            ((34.0, 38.0, 5.76), (1.6, 14.4, 0.24)),
+            ((40.0, 46.0, 5.76), (12.4, 1.6, 0.24)),
+            # East_House chimney stack & terracotta cap
+            ((58.2, 27.5, 8.6), (0.9, 0.9, 1.8)),
+            ((58.2, 27.5, 9.62), (1.15, 1.15, 0.16)),
+        ],
+        mats["terracotta_roof"],
+    )
+
+    # --- 4. Site B Church Ruins Nave Trusses, Rose Window & Campanile Trim ---
+    church_stone = [
+        # Church gable wall & buttresses behind Ruins_Church_Arch
+        ((14.0, 61.1, 6.2), (8.4, 0.9, 3.2)),
+        ((9.6, 61.0, 3.8), (0.9, 1.4, 7.6)),
+        ((18.4, 61.0, 3.8), (0.9, 1.4, 7.6)),
+        # Carved rose window frame in upper church gable
+        ((14.0, 60.55, 6.4), (2.2, 0.18, 2.2)),
+        # Campanile limestone stringcourses
+        ((10.0, 58.0, 4.05), (4.65, 4.65, 0.22)),
+        ((10.0, 58.0, 8.05), (4.55, 4.55, 0.22)),
+        # Site A Porch loggia entablature & Graveyard chapel monument
+        ((48.0, 58.0, 4.65), (4.8, 1.8, 0.45)),
+        ((61.5, 57.5, 2.2), (3.2, 2.8, 4.4)),
+        ((61.5, 57.5, 4.58), (3.5, 3.1, 0.28)),
+        ((54.0, 56.0, 3.12), (1.05, 8.2, 0.20)),
+        ((58.0, 60.0, 3.12), (8.2, 1.05, 0.20)),
+    ]
+    church_wood = []
+    for ny in (57.2, 59.0, 60.6):
+        church_wood.append(((14.0, ny, 5.4), (7.6, 0.20, 0.24)))
+    add_boxes(col, "Church_Graveyard_Stone_NonCol", church_stone, mats["limestone_carved"])
+    add_boxes(col, "Church_Nave_Beams_NonCol", church_wood, mats["wood_chestnut_aged"])
+    add_boxes(
+        col,
+        "Church_Rose_Pane_NonCol",
+        [((14.0, 60.62, 6.4), (1.7, 0.06, 1.7))],
+        mats["window_dark"],
+    )
+
+    # Graveyard wrought-iron fence spikes along top of Graveyard walls
+    iron_bars = []
+    for gy in range(53, 60):
+        iron_bars.append(((54.0, float(gy), 3.55), (0.06, 0.06, 0.65)))
+    for gx in range(55, 62):
+        iron_bars.append(((float(gx), 60.0, 3.55), (0.06, 0.06, 0.65)))
+    iron_bars.append(((54.0, 56.0, 3.82), (0.08, 7.8, 0.06)))
+    iron_bars.append(((58.0, 60.0, 3.82), (7.8, 0.08, 0.06)))
+    add_boxes(col, "Graveyard_Iron_Fence_NonCol", iron_bars, mats["wrought_iron"])
+
+    # Site B North & West wall upper Tuscan windows
+    maplib.add_window_row(
+        col,
+        "SiteB_North_Upper",
+        (18.0, 62.0, 4.5),
+        (26.0, 1.2, 9.0),
+        "-y",
+        z_base=5.8,
+        count=4,
+        win_size=(1.15, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "SiteB_West_Upper",
+        (6.0, 50.0, 4.5),
+        (1.2, 24.0, 9.0),
+        "+x",
+        z_base=5.8,
+        count=4,
+        win_size=(1.15, 1.45),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+
+    # --- 5. Perimeter Villa Windows & Tuscan Hillside Skyline ---
+    maplib.add_window_row(
+        col,
+        "Perimeter_South_Upper",
+        (35.0, 4.0, 5.0),
+        (62.0, 1.2, 10.0),
+        "+y",
+        z_base=5.8,
+        count=7,
+        win_size=(1.2, 1.55),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Perimeter_North_Upper",
+        (35.0, 66.0, 5.0),
+        (62.0, 1.2, 10.0),
+        "-y",
+        z_base=5.8,
+        count=7,
+        win_size=(1.2, 1.55),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+    maplib.add_window_row(
+        col,
+        "Perimeter_East_Upper",
+        (66.0, 35.0, 5.0),
+        (1.2, 62.0, 10.0),
+        "-x",
+        z_base=5.8,
+        count=7,
+        win_size=(1.2, 1.55),
+        mats=win_mats,
+        style="tuscan",
+        boxes_fn=add_boxes,
+    )
+
+    horizon_specs = [
+        {"center": (18.0, -3.5, 0.0), "size": (15.0, 8.5, 14.5), "wall": "tuscan_stucco_warm", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (48.0, -4.0, 0.0), "size": (16.0, 9.0, 15.5), "wall": "tuscan_stucco_ochre", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (22.0, 73.5, 0.0), "size": (14.0, 8.0, 15.0), "wall": "tuscan_stucco_ochre", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (50.0, 74.0, 0.0), "size": (16.0, 8.5, 14.5), "wall": "tuscan_stucco_warm", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (-3.5, 22.0, 0.0), "size": (8.5, 15.0, 14.5), "wall": "tuscan_stucco_warm", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (-4.0, 50.0, 0.0), "size": (8.5, 14.0, 15.5), "wall": "tuscan_stucco_ochre", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (73.5, 20.0, 0.0), "size": (8.5, 15.0, 15.0), "wall": "tuscan_stucco_warm", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+        {"center": (74.0, 50.0, 0.0), "size": (8.5, 14.0, 16.0), "wall": "tuscan_stucco_ochre", "trim": "limestone_carved", "pane": "window_dark", "roof": "terracotta_roof", "stories": 4},
+    ]
+    maplib.add_horizon_buildings(col, "Inferno_Horizon", horizon_specs, mats, boxes_fn=add_boxes)
+
+
 def build_inferno_scene():
     clear_scene()
     mats = setup_materials()
@@ -651,6 +952,7 @@ def build_inferno_scene():
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
     build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
+    build_architectural_detail(get_or_create_collection("Architecture"), mats)
 
     print("=== Tuscan Citadel (hd_inferno) Built Successfully! ===")
     if os.environ.get("HASSAULT_INFERNO_SCAN"):

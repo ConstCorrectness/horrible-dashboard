@@ -368,7 +368,7 @@ const PING_INTERVAL_MS = 1000;
  * Input send rate. Half the frame rate at 60 fps, which halves the message count
  * for identical information — every command still reaches the server, batched.
  */
-const SEND_INTERVAL_MS = 33;
+const SEND_INTERVAL_MS = 16;
 
 export class MatchSession {
   readonly predictor = new Predictor();
@@ -715,10 +715,23 @@ export class MatchSession {
    */
   pump(now: number): void {
     if (this.state.status !== 'joined') return;
-    if (this.outbox.length > 0 && now - this.lastSend >= SEND_INTERVAL_MS) {
-      sendChannel('hassault', 'input', { commands: this.outbox, rtt: this.ping.rtt });
-      this.outbox = [];
-      this.lastSend = now;
+    if (this.outbox.length > 0) {
+      const urgent = this.outbox.some(
+        (c) =>
+          c.fire ||
+          c.altFire ||
+          c.throw ||
+          c.reload ||
+          c.drop ||
+          (c.buy !== undefined && c.buy >= 0) ||
+          (c.sell !== undefined && c.sell >= 0) ||
+          c.ping !== undefined,
+      );
+      if (urgent || now - this.lastSend >= SEND_INTERVAL_MS) {
+        sendChannel('hassault', 'input', { commands: this.outbox, rtt: this.ping.rtt });
+        this.outbox = [];
+        this.lastSend = now;
+      }
     }
     if (now - this.lastPing >= PING_INTERVAL_MS) {
       sendChannel('hassault', 'ping', { t: Math.round(now) });
@@ -892,7 +905,14 @@ export class MatchSession {
           roundKillsDied = true;
         }
         const feedChanged = this.pruneKillfeed();
-        if (feedChanged || roundKillsDied || this.peersChanged(peers) || this.youChanged(you)) {
+        const modeChanged = this.modeChanged(snapshot.mode);
+        if (
+          feedChanged ||
+          roundKillsDied ||
+          modeChanged ||
+          this.peersChanged(peers) ||
+          this.youChanged(you)
+        ) {
           this.state.peers = peers;
           this.state.you = you;
           if (Array.isArray(snapshot.scores)) this.state.scores = snapshot.scores;
@@ -905,9 +925,10 @@ export class MatchSession {
           if (snapshot.mode) this.state.modeState = snapshot.mode;
           this.emit();
         } else {
-          // Still adopt it — the render loop reads `you.alive` every frame even
+          // Still adopt it — the render loop reads `you.alive` and `modeState` every frame even
           // when nothing in it is worth re-rendering the HUD for.
           this.state.you = you;
+          if (snapshot.mode) this.state.modeState = snapshot.mode;
         }
         break;
       }
@@ -1145,6 +1166,23 @@ export class MatchSession {
    * forever. The countdown is compared at whole seconds, which is the only
    * resolution anything shows it at.
    */
+  private modeChanged(next: ModeShared | undefined): boolean {
+    if (!next) return false;
+    const prev = this.state.modeState;
+    if (!prev) return true;
+    return (
+      prev.phase !== next.phase ||
+      prev.round !== next.round ||
+      prev.over !== next.over ||
+      prev.swapped !== next.swapped ||
+      Math.ceil(prev.phaseIn ?? -1) !== Math.ceil(next.phaseIn ?? -1) ||
+      Math.ceil(prev.remain ?? -1) !== Math.ceil(next.remain ?? -1) ||
+      prev.bomb?.state !== next.bomb?.state ||
+      prev.bomb?.site !== next.bomb?.site ||
+      Math.ceil(prev.bomb?.fuseIn ?? -1) !== Math.ceil(next.bomb?.fuseIn ?? -1)
+    );
+  }
+
   private youChanged(next: SelfState | null): boolean {
     const prev = this.state.you;
     if (!prev || !next) return prev !== next;

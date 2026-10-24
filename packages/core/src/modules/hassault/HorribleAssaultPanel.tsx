@@ -1976,7 +1976,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           world3dGroup.traverse((child) => {
             const m = child as import('three').Mesh;
             if (m.isMesh) {
-              m.castShadow = m.name !== 'World3D_glass';
+              m.castShadow =
+                m.userData.castShadow !== undefined
+                  ? Boolean(m.userData.castShadow)
+                  : m.name !== 'World3D_glass';
               m.receiveShadow = true;
             }
           });
@@ -2362,10 +2365,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 }
               }
             }
+            const offlineInput = { ...input, knife: (shots?.slot ?? -1) === 0 };
             if (rapierRef.current && world3dRef.current) {
-              rapierRef.current.stepPlayer(player, input, dt);
+              rapierRef.current.stepPlayer(player, offlineInput, dt);
             } else {
-              step(world, player, input, dt);
+              step(world, player, offlineInput, dt);
             }
             // After the step, matching the order `Predictor.record` uses online
             // and the order the match server fires in. Applied before it, a
@@ -2919,22 +2923,50 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         fpsFrames += 1;
         hudAccum += dt;
         if (hudAccum >= 0.25) {
-          const fps = fpsFrames / Math.max(fpsAccum, 1e-6);
-          setHud((h) => ({
-            ...h,
-            fps: Math.round(fps),
-            x: player.x,
-            y: player.y,
-            z: player.z,
-            onGround: player.onGround,
-            speed: Math.hypot(player.velX, player.velY),
-            crouch: player.crouch,
-            yaw: player.yaw,
-            error: session ? session.predictor.lastError : 0,
-            stamina: player.stamina ?? 100,
-            isSprinting: player.isSprinting ?? false,
-            isSliding: player.isSliding ?? false,
-          }));
+          const nextFps = Math.round(fpsFrames / Math.max(fpsAccum, 1e-6));
+          const nextX = Math.round(player.x * 10) / 10;
+          const nextY = Math.round(player.y * 10) / 10;
+          const nextZ = Math.round(player.z * 10) / 10;
+          const nextSpeed = Math.round(Math.hypot(player.velX, player.velY) * 10) / 10;
+          const nextCrouch = Math.round(player.crouch * 10) / 10;
+          const nextYaw = Math.round(player.yaw * 100) / 100;
+          const nextErr = Math.round((session ? session.predictor.lastError : 0) * 100) / 100;
+          const nextStamina = Math.round(player.stamina ?? 100);
+          const nextSprinting = player.isSprinting ?? false;
+          const nextSliding = player.isSliding ?? false;
+          setHud((h) => {
+            if (
+              h.fps === nextFps &&
+              h.x === nextX &&
+              h.y === nextY &&
+              h.z === nextZ &&
+              h.onGround === player.onGround &&
+              h.speed === nextSpeed &&
+              h.crouch === nextCrouch &&
+              h.yaw === nextYaw &&
+              h.error === nextErr &&
+              h.stamina === nextStamina &&
+              h.isSprinting === nextSprinting &&
+              h.isSliding === nextSliding
+            ) {
+              return h;
+            }
+            return {
+              ...h,
+              fps: nextFps,
+              x: nextX,
+              y: nextY,
+              z: nextZ,
+              onGround: player.onGround,
+              speed: nextSpeed,
+              crouch: nextCrouch,
+              yaw: nextYaw,
+              error: nextErr,
+              stamina: nextStamina,
+              isSprinting: nextSprinting,
+              isSliding: nextSliding,
+            };
+          });
           fpsAccum = 0;
           fpsFrames = 0;
           hudAccum = 0;

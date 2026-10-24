@@ -2308,9 +2308,9 @@
     },
     {
       "type": "light",
-      "x": 22,
+      "x": 25,
       "y": 96,
-      "z": 0,
+      "z": 34,
       "radius": 15,
       "color": [255, 150, 40],
       "intensity": 1.2
@@ -2327,6 +2327,6 @@
     {"x": 96, "y": 162, "z": 0, "yaw": 180, "team": 1},
     {"x": 96, "y": 147, "z": 0, "yaw": 180, "team": 1}
   ],
-  "collisionSource": "01d1600bb8763309",
-  "collisionBaked": "01d1600bb8763309"
+  "collisionSource": "095902cbb9137e5c",
+  "collisionBaked": "095902cbb9137e5c"
 }

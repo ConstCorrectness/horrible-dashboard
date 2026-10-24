@@ -479,12 +479,12 @@ export class RapierPhysicsWorld {
 
     const hSpeed = Math.hypot(player.velX, player.velY);
 
-    // Crouch Power-Slide & Slide Cancel
+    // Crouch Power-Slide & Slide Cancel (triggered when sprinting or moving faster than normal run speed)
     if (
       input.crouch &&
       player.onGround &&
       !player.isSliding &&
-      (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)
+      (isSprinting || hSpeed > RapierPhysicsWorld.RUN_SPEED * 1.05)
     ) {
       player.isSliding = true;
       player.slideTime = 0;
@@ -548,7 +548,9 @@ export class RapierPhysicsWorld {
         }
       }
     }
-    player.crouch = this.isCrouched ? 1 : 0;
+    player.crouch = this.isCrouched
+      ? Math.min(1, player.crouch + 8.0 * dt)
+      : Math.max(0, player.crouch - 8.0 * dt);
     player.crouchHeld = wantCrouch;
 
     // Direction from yaw (yaw is in radians: cos is X, sin is Y)
@@ -565,8 +567,13 @@ export class RapierPhysicsWorld {
     let speed = RapierPhysicsWorld.RUN_SPEED;
     if (this.isCrouched) {
       speed = RapierPhysicsWorld.CROUCH_SPEED;
+    } else if (input.walk) {
+      speed = RapierPhysicsWorld.RUN_SPEED * 0.52;
     } else if (isSprinting) {
       speed = RapierPhysicsWorld.SPRINT_SPEED;
+    }
+    if (input.knife) {
+      speed *= input.knifeBoost ?? 1.15;
     }
 
     // Air-strafing or Ground Movement

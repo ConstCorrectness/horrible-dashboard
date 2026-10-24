@@ -588,6 +588,83 @@ def build_dressing_and_lights(collection, mats):
     )
 
 
+def build_architectural_detail(collection, mats):
+    """Deep subterranean bunker ceiling trusses, HVAC trunks, mezzanine telemetry
+    command consoles, lab corridor MEP runs, and pit wall reinforcement ribs (`_NonCol`).
+    """
+    mep_mats = {
+        "steel": mats["Steel_Structural_Dark"],
+        "duct": mats["Steel_Stainless_Brushed"],
+        "pipe": mats["Pipe_Industrial_Green"],
+    }
+    # 1. Main high-bay bunker ceiling trusses & HVAC (z = 13.8m)
+    maplib.add_ceiling_mep(
+        collection,
+        "Facility_MainRoof",
+        (2.0, 2.0, 62.0, 62.0),
+        z_ceil=13.8,
+        mats=mep_mats,
+        axis="x",
+        spacing=7.5,
+    )
+    # 2. West & East Lab Corridor lower ceiling MEP runs (z = 5.55m)
+    maplib.add_ceiling_mep(
+        collection,
+        "Facility_WestLab_MEP",
+        (1.5, 8.0, 17.2, 56.0),
+        z_ceil=5.55,
+        mats=mep_mats,
+        axis="y",
+        spacing=6.5,
+    )
+    maplib.add_ceiling_mep(
+        collection,
+        "Facility_EastLab_MEP",
+        (46.8, 8.0, 62.5, 56.0),
+        z_ceil=5.55,
+        mats=mep_mats,
+        axis="y",
+        spacing=6.5,
+    )
+
+    # 3. Mezzanine Reactor Telemetry Command Consoles on South & North Catwalks (z = 6.0m)
+    console_mats = {
+        "cabinet": mats["Server_Cabinet_Matte"],
+        "bezel": mats["Server_Faceplate_Dark"],
+        "screen": mats["CRT_Phosphor_Green"],
+    }
+    maplib.add_control_station(
+        collection, "Mezz_Console_South", (32.0, 1.8, 6.0), yaw_deg=0.0, length=4.4, mats=console_mats
+    )
+    maplib.add_control_station(
+        collection, "Mezz_Console_North", (32.0, 62.2, 6.0), yaw_deg=180.0, length=4.4, mats=console_mats
+    )
+    maplib.add_control_station(
+        collection, "Mezz_Console_West", (1.8, 32.0, 6.0), yaw_deg=90.0, length=3.8, mats=console_mats
+    )
+    maplib.add_control_station(
+        collection, "Mezz_Console_East", (62.2, 32.0, 6.0), yaw_deg=270.0, length=3.8, mats=console_mats
+    )
+
+    # 4. Subterranean Pit Wall Vertical Steel Ribs & Coolant Manifolds
+    pit_ribs = []
+    pit_pipes = []
+    for p_coord in (23.0, 26.5, 37.5, 41.0):
+        # South & North pit walls
+        pit_ribs.append(((p_coord, 20.12, -2.5), (0.28, 0.22, 4.8)))
+        pit_ribs.append(((p_coord, 43.88, -2.5), (0.28, 0.22, 4.8)))
+        # West & East pit walls
+        pit_ribs.append(((20.12, p_coord, -2.5), (0.22, 0.28, 4.8)))
+        pit_ribs.append(((43.88, p_coord, -2.5), (0.22, 0.28, 4.8)))
+    # Horizontal coolant manifold ring along pit walls
+    pit_pipes.append(((32.0, 20.28, -1.4), (23.2, 0.18, 0.18)))
+    pit_pipes.append(((32.0, 43.72, -1.4), (23.2, 0.18, 0.18)))
+    pit_pipes.append(((20.28, 32.0, -1.4), (0.18, 23.2, 0.18)))
+    pit_pipes.append(((43.72, 32.0, -1.4), (0.18, 23.2, 0.18)))
+    maplib.add_boxes(collection, "Pit_Wall_Ribs_NonCol", pit_ribs, mats["Steel_Structural_Dark"])
+    maplib.add_boxes(collection, "Pit_Coolant_Ring_NonCol", pit_pipes, mats["Pipe_Industrial_Green"])
+
+
 def build_facility_scene():
     """Constructs the complete Deadzone Facility scene graph."""
     clear_scene()
@@ -722,6 +799,7 @@ def build_facility_scene():
     build_decon_and_hazmat_props(c_props, mats)
     build_overhead_fluorescents(c_props, mats)
     build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_architectural_detail(get_or_create_collection("Arch_Detail"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
     print("=== Deadzone Facility Scene Built Successfully! ===")

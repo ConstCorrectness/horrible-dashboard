@@ -750,6 +750,10 @@
       "kind": "concrete"
     },
     {
+      "name": "Mat_Concrete_Stained",
+      "kind": "concrete"
+    },
+    {
       "name": "Mat_Concrete_Wall",
       "kind": "concrete"
     },
@@ -1038,6 +1042,10 @@
       "kind": "limewash"
     },
     {
+      "name": "mat_inferno_window_dark",
+      "kind": "glass"
+    },
+    {
       "name": "mat_inferno_wood_chestnut_aged",
       "kind": "cedar"
     },
@@ -1104,6 +1112,10 @@
     {
       "name": "mat_mirage_sandstone_paving",
       "kind": "paving"
+    },
+    {
+      "name": "mat_mirage_window_dark",
+      "kind": "glass"
     },
     {
       "name": "mat_mirage_wood_crate",

@@ -439,7 +439,7 @@ def test_tick_stats_report_nothing_before_the_first_tick():
     room = make_room()
     report = room.stats.report()
     assert report["simulateMs"] == {"mean": None, "max": None, "samples": 0}
-    assert report["budgetMs"] == pytest.approx(50.0)
+    assert report["budgetMs"] == pytest.approx(round(1000.0 / 60.0, 1))
 
     room.stats.record(2.0, 8.0)
     room.stats.record(4.0, 12.0)
