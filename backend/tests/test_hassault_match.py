@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from backend.modules.hassault import channel, grenades, match
+from backend.modules.hassault import cgz, channel, grenades, match, physics
 from backend.modules.hassault.match import (
     BUDGET_CEILING,
     EMPTY_GRACE,
@@ -275,6 +275,34 @@ def test_snapshot_rounds_positions():
     player.state.x = 1.23456789
     row = player.snapshot(0.0)
     assert row["x"] == pytest.approx(1.235)
+
+
+def test_the_owner_rebases_on_an_unrounded_position_and_the_rooms_knife_boost():
+    """The shared row's three decimals can cross a cell line, and the client's
+    replay then lifts the rebased body onto a column. The private move block
+    carries the exact position for the owner to rebase on — and the room's tuned
+    knife boost, which the client would otherwise predict with the default."""
+    room = make_room()
+    player = room.add("a", None)
+    player.state.x, player.state.y, player.state.z = 14.89961234, 9.00049876, 0.0
+    room.settings.knife_speed_boost = 1.3
+    move = room.private_view_for(player)["move"]
+    assert move["pos"] == [14.89961234, 9.00049876, 0.0]
+    assert move["knifeBoost"] == 1.3
+    assert player.snapshot(0.0)["x"] == 14.9
+
+
+def test_a_room_with_no_spawns_places_players_where_they_fit():
+    """The middle of the map is a guess, not a promise that a body fits there."""
+    world = flat_world(32)
+    # A pillar across the middle, so the centre itself is inside a wall.
+    types = bytearray(world.type)
+    for cy in range(15, 18):
+        for cx in range(15, 18):
+            types[cy * 32 + cx] = cgz.SOLID
+    world.type = bytes(types)
+    player = MatchRoom("r", "bare", world, []).add("a", None)
+    assert physics.can_stand(world, player.state.x, player.state.y, player.state.z)
 
 
 def test_a_silent_player_is_marked_stale_not_removed():
@@ -839,7 +867,16 @@ def test_a_loadout_applies_at_the_next_spawn_and_bounds_the_switch():
     assert p.held == {0, cannon, lancer} and p.weapon == lancer
 
     def switch(index):
-        cmd = Command(seq=1, forward=0, strafe=0, jump=False, yaw=0, pitch=0, dt=0.05, weapon=index)
+        cmd = Command(
+            seq=1,
+            forward=0,
+            strafe=0,
+            jump=False,
+            yaw=0,
+            pitch=0,
+            dt=0.05,
+            weapon=index,
+        )
         room._handle_combat(p, cmd, 0.0, 0.0)
 
     switch(2)  # the old rifle: not carried

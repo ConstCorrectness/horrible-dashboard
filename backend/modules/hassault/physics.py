@@ -216,6 +216,11 @@ LADDER_TOP_RELEASE = 0.05
 # single input packet can be worth.
 MAX_STEP_DT = 0.1
 
+#: Speed and acceleration multiplier while the knife (weapon slot 0) is in hand.
+#: The default only: a room tunes it (`gameplay.knife_speed_boost`) and sends the
+#: live value to its clients in `you.move.knifeBoost`, so their prediction agrees.
+KNIFE_SPEED_BOOST = 1.10
+
 
 def _signed(plane: bytes, i: int) -> int:
     """One byte of a signed plane. `floor` and `ceil` can both go below zero."""
@@ -424,8 +429,10 @@ class MoveInput:
     pitch: float = 0.0
     dt: float = 0.0
     seq: int = 0
+    #: Knife in hand: the match derives it as `player.weapon == 0`, read before
+    #: this command's own weapon switch, which `_handle_combat` applies after.
     knife: bool = False
-    knife_boost: float = 1.10
+    knife_boost: float = KNIFE_SPEED_BOOST
     subtick: float = 0.0
 
 
@@ -699,7 +706,11 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
         response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
         # Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
         # apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
-        if player.on_ground and ladder is None and (wx * player.vel_x + wy * player.vel_y) < -0.1:
+        if (
+            player.on_ground
+            and ladder is None
+            and (wx * player.vel_x + wy * player.vel_y) < -0.1
+        ):
             response = GROUND_RESPONSE * 3.2
     if move.knife:
         response *= move.knife_boost
@@ -900,6 +911,57 @@ def fall_damage(impact: float) -> float:
     return (impact - FALL_SAFE_SPEED) * FALL_DAMAGE_PER_SPEED
 
 
+#: How far `place_body` will move a body looking for somewhere it fits, in cubes.
+PLACE_REACH = 4.0
+#: Spacing of `place_body`'s search, both between rings and along each one.
+PLACE_STEP = 0.25
+
+
+def _place_offsets() -> tuple[tuple[float, float], ...]:
+    """Offsets for `place_body`, nearest first: rings of `PLACE_STEP` out to
+    `PLACE_REACH`, each walked from +x round towards +y. Built once — the order is
+    the search, so it must be the same on every call."""
+    out: list[tuple[float, float]] = [(0.0, 0.0)]
+    rings = round(PLACE_REACH / PLACE_STEP)
+    for ring in range(1, rings + 1):
+        r = ring * PLACE_STEP
+        count = max(8, math.ceil(2.0 * math.pi * r / PLACE_STEP))
+        for k in range(count):
+            a = 2.0 * math.pi * k / count
+            out.append((r * math.cos(a), r * math.sin(a)))
+    return tuple(out)
+
+
+_PLACE_OFFSETS = _place_offsets()
+
+
+def place_body(world: World, x: float, y: float) -> tuple[float, float, float]:
+    """Somewhere near `(x, y)` a standing body actually fits: `(x, y, floor)`.
+
+    For anything that puts a body down directly rather than walking it there —
+    a retake's attackers, a console teleport, a spawn that landed in a wall.
+    Walking is guarded by `can_stand`; a direct placement is not, and the
+    vertical resolve in `step` then lifts the body onto the **highest** floor
+    under its 2.2-cube footprint. Placed by a ledge, that is the roof next door;
+    placed under a low ceiling beside one, it is wedged between the two and
+    cannot move at all.
+
+    So the floor is `_support`'s — the one `step` will resolve to anyway — and a
+    spot only counts if `can_stand` holds on it. Searched outward in rings to
+    `PLACE_REACH`, nearest first; if nothing in reach fits, the request comes back
+    unchanged on its best-guess floor, since a body somewhere is better than none.
+    """
+    for dx, dy in _PLACE_OFFSETS:
+        px, py = x + dx, y + dy
+        floor, _ceil, enclosed = _support(world, px, py)
+        if not enclosed and can_stand(world, px, py, floor):
+            return px, py, floor
+    floor, _ceil, enclosed = _support(world, x, y)
+    if enclosed:
+        floor = world.floor_at(int(x), int(y))
+    return x, y, floor
+
+
 def spawn_at(world: World, spawn) -> PlayerState:
     """Place a player on a spawn entity, standing on the ground beneath it.
 
@@ -927,8 +989,9 @@ def spawn_at(world: World, spawn) -> PlayerState:
     floor, _ceil, enclosed = _support(world, x, y)
     if enclosed:
         # Every cell under the body is solid, which no official map manages but a
-        # community one might. The centre cell's floor is the best guess left.
-        floor = world.floor_at(int(spawn.x), int(spawn.y))
+        # community one might. Search for open ground nearby rather than standing
+        # the body inside the wall.
+        x, y, floor = place_body(world, x, y)
     # Entity yaw is degrees from +x towards +y (0 = east, 90 = north); the
     # simulation uses radians about +x.
     yaw = math.radians(spawn.yaw or 0.0)

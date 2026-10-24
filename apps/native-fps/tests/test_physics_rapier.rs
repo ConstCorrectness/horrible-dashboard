@@ -95,6 +95,7 @@ fn test_rapier_step_player() {
         walk: false,
         sprint: false,
         knife: false,
+        knife_boost: hassault_native::physics::KNIFE_SPEED_BOOST,
     };
 
     for _ in 0..15 {

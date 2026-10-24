@@ -49,6 +49,7 @@ from backend.modules.hassault.physics import (
     FALL_SAFE_SPEED,
     JUMP_CHAIN_BOOST,
     JUMP_SPEED,
+    KNIFE_SPEED_BOOST,
     MOVE_SPEED,
     PLAYER_ABOVE_EYE,
     PLAYER_EYE_HEIGHT,
@@ -606,6 +607,8 @@ def test_conformance_vector(index: int):
                 jump=raw.get("jump", False),
                 crouch=raw.get("crouch", False),
                 walk=raw.get("walk", False),
+                knife=raw.get("knife", False),
+                knife_boost=raw.get("knife_boost", KNIFE_SPEED_BOOST),
             ),
             raw["dt"],
         )

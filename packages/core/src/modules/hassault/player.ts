@@ -59,6 +59,12 @@ export const CROUCH_HEIGHT = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 export const CROUCH_SPEED_SCALE = 0.4;
 /** Holding walk: slower and silent. `WALK_SPEED_SCALE` in `physics.py`. */
 export const WALK_SPEED_SCALE = 0.52;
+/**
+ * Speed and acceleration multiplier with the knife in hand. The default only: a
+ * room can tune it, and sends the live value as `you.move.knifeBoost`.
+ * `KNIFE_SPEED_BOOST` in `physics.py`.
+ */
+export const KNIFE_SPEED_BOOST = 1.1;
 /** Seconds for a full stand↔crouch transition. */
 export const CROUCH_TRANSITION = 0.15;
 
@@ -145,6 +151,14 @@ export interface MoveInput {
   /** Hold to walk: slower and silent. */
   walk?: boolean;
   sprint?: boolean;
+  /**
+   * Knife in hand. The server derives it as "holds weapon 0", read *before* the
+   * command's own weapon switch — `Predictor` derives it the same way, so a
+   * caller outside a match leaves it unset.
+   */
+  knife?: boolean;
+  /** The room's tuned boost; `KNIFE_SPEED_BOOST` when unset. */
+  knifeBoost?: number;
   /** Ignore gravity and walls — useful for looking around a map. */
   noclip: boolean;
 }
@@ -491,6 +505,8 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   else if (input.walk) scale = WALK_SPEED_SCALE;
   // Damped, not stopped: strafing off is one of the two ways to leave a ladder.
   if (ladder) scale *= LADDER_HORIZONTAL_SCALE;
+  const knifeBoost = input.knife ? (input.knifeBoost ?? KNIFE_SPEED_BOOST) : 1;
+  scale *= knifeBoost;
   const speedCap = MOVE_SPEED * scale;
 
   let [wx, wy] = wishDirection(player, input);
@@ -507,6 +523,7 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   if (player.onGround && !under && !ladder && wx * player.velX + wy * player.velY < -0.1) {
     response = GROUND_RESPONSE * 3.2;
   }
+  response *= knifeBoost;
   const blend = 1 - Math.exp(-response * dt);
   player.velX += (wx * speedCap - player.velX) * blend;
   player.velY += (wy * speedCap - player.velY) * blend;

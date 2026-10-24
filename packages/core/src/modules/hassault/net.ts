@@ -19,7 +19,13 @@
  *
  * Kept free of three and of React so all of it is unit-testable headless.
  */
-import { applyImpulse, step, type MoveInput, type PlayerState } from './player';
+import {
+  applyImpulse,
+  KNIFE_SPEED_BOOST,
+  step,
+  type MoveInput,
+  type PlayerState,
+} from './player';
 import type { World } from './world';
 
 /**
@@ -203,6 +209,15 @@ export interface PlayerRow {
  * so the only transferable form of "when did this body last land" is how long ago.
  */
 export interface MoveState {
+  /**
+   * Our position at full precision. The shared row rounds to three decimals,
+   * which can put a rebased body over a cell line from where the server has it —
+   * and the replay then lifts it onto whatever column stands there. Absent from
+   * a server older than the field, which then rebases on the row.
+   */
+  pos?: [number, number, number];
+  /** The room's live knife boost (`gameplay.knife_speed_boost`). */
+  knifeBoost?: number;
   vel: [number, number, number];
   /** Seconds airborne, which is what the gravity ramp reads. */
   air: number;
@@ -826,6 +841,19 @@ export class Predictor {
    * us — so it is remembered here and dropped on the same ack.
    */
   private kicks = new Map<number, Vec3>();
+  /**
+   * The weapon the server will be holding when it steps our *next* command:
+   * its row's `weapon` as of the last ack, advanced by every switch we have sent
+   * since. `-1` until the first snapshot says.
+   *
+   * The server's knife boost is `player.weapon == 0` read *before* the
+   * command's own switch (`simulate` steps, then `_handle_combat` switches), so
+   * this is the only number that predicts it. The HUD's weapon — or a guess off
+   * the switch key — is one command early, and rubber-bands every draw.
+   */
+  private weapon = -1;
+  /** The room's tuned boost, from `you.move.knifeBoost`. */
+  private knifeBoost = KNIFE_SPEED_BOOST;
   /** Visual-only offset, decayed to zero, so corrections do not jolt the camera. */
   correction: Vec3 = { x: 0, y: 0, z: 0 };
   /** Last correction magnitude, for the HUD. */
@@ -912,7 +940,8 @@ export class Predictor {
     if (sell !== undefined && sell >= 0) command.sell = sell;
     if (drop) command.drop = true;
     this.pending.push(command);
-    step(world, player, input, clamped);
+    step(world, player, this.withKnife(input), clamped);
+    if (command.weapon !== undefined && command.weapon >= 0) this.weapon = command.weapon;
     if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {
       this.kicks.set(command.seq, { ...kick });
       applyImpulse(player, kick.x, kick.y, kick.z);
@@ -941,10 +970,18 @@ export class Predictor {
     const predictedY = player.y;
     const predictedZ = player.z;
 
-    player.x = authoritative.x;
-    player.y = authoritative.y;
-    player.z = authoritative.z;
+    // The private, unrounded position when the server sends one: the row's is
+    // rounded for the wire, and three decimals is enough to cross a cell line.
+    const pos = move?.pos;
+    player.x = pos ? pos[0] : authoritative.x;
+    player.y = pos ? pos[1] : authoritative.y;
+    player.z = pos ? pos[2] : authoritative.z;
     player.onGround = authoritative.ground;
+    if (move?.knifeBoost !== undefined) this.knifeBoost = move.knifeBoost;
+    // Re-anchored on the server's word, so a switch it refused (or a death, or
+    // a pickup) does not leave the knife prediction wrong for the rest of the
+    // life. The replay below advances it again through our own switches.
+    if (typeof authoritative.weapon === 'number') this.weapon = authoritative.weapon;
     // Momentum has to be rebased too. Replaying on top of the client's own
     // velocity would run the replay on the very number the correction exists to
     // fix, and the error would then compound rather than settle. A server too old
@@ -970,16 +1007,17 @@ export class Predictor {
       step(
         world,
         player,
-        {
+        this.withKnife({
           forward: command.forward,
           strafe: command.strafe,
           jump: command.jump,
           crouch: command.crouch,
           walk: command.walk ?? false,
           noclip: false,
-        },
+        }),
         command.dt,
       );
+      if (command.weapon !== undefined && command.weapon >= 0) this.weapon = command.weapon;
       // Recoil is part of what moved us, so a replay that skips it lands short
       // of where we already drew ourselves.
       const kick = this.kicks.get(command.seq);
@@ -1010,6 +1048,11 @@ export class Predictor {
     }
   }
 
+  /** `input` with the knife flag the server will apply to it. See `weapon`. */
+  private withKnife(input: MoveInput): MoveInput {
+    return { ...input, knife: this.weapon === 0, knifeBoost: this.knifeBoost };
+  }
+
   /** Decay the visual correction. Call once per rendered frame. */
   decay(dt: number): void {
     const k = Math.pow(CORRECTION_DECAY, dt);
@@ -1026,6 +1069,7 @@ export class Predictor {
   reset(): void {
     this.pending = [];
     this.kicks.clear();
+    this.weapon = -1;
     this.correction = { x: 0, y: 0, z: 0 };
     this.lastError = 0;
   }

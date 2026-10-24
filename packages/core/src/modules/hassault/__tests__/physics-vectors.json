@@ -8631,6 +8631,1463 @@
       }
     },
     {
+      "name": "the knife runs ten per cent faster",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 27.756788886931876,
+        "y": 8.0,
+        "z": 0.0,
+        "velX": 24.197471967719277,
+        "velY": 0.0,
+        "velZ": 0.0,
+        "crouch": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a tuned knife boost is the one the step uses",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "knife": true,
+          "knife_boost": 1.3,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 32.19121268733566,
+        "y": 8.0,
+        "z": 0.0,
+        "velX": 28.599435701175164,
+        "velY": 0.0,
+        "velZ": 0.0,
+        "crouch": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "the knife boost scales a walk and a crouch too",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "walk": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "crouch": true,
+          "knife": true,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 20.829896349306203,
+        "y": 8.0,
+        "z": 0.0,
+        "velX": 9.713512735008226,
+        "velY": 0.0,
+        "velZ": 0.0,
+        "crouch": 1.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "drawing the knife mid-air sharpens the air steer",
+      "world": "field",
+      "start": {
+        "x": 6.0,
+        "y": 8.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "on_ground": true
+      },
+      "steps": [
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "dt": 0.016666666666666666
+        },
+        {
+          "forward": 1.0,
+          "jump": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        },
+        {
+          "strafe": 1.0,
+          "knife": true,
+          "dt": 0.016666666666666666
+        }
+      ],
+      "expect": {
+        "x": 20.269677799487077,
+        "y": 10.12267641548071,
+        "z": 2.6698842592592604,
+        "velX": 11.77932754428005,
+        "velY": 11.065510955825822,
+        "velZ": -3.7791666666666615,
+        "crouch": 0.0,
+        "onGround": false
+      }
+    },
+    {
       "name": "crouching on the ground moves at 40 per cent",
       "world": "field",
       "start": {

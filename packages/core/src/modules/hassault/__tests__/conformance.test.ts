@@ -48,6 +48,8 @@ interface Vectors {
       jump?: boolean;
       crouch?: boolean;
       walk?: boolean;
+      knife?: boolean;
+      knife_boost?: number;
       yaw?: number;
       dt: number;
       /** An external kick, applied after the step — where the match server
@@ -177,6 +179,8 @@ describe('cross-language physics conformance', () => {
             jump: raw.jump ?? false,
             crouch: raw.crouch ?? false,
             walk: raw.walk ?? false,
+            knife: raw.knife ?? false,
+            knifeBoost: raw.knife_boost,
             noclip: false,
           },
           raw.dt,

@@ -32,6 +32,7 @@ from backend.modules.hassault import (
     bots,
     drafts,
     hitbox,
+    physics,
     pickups,
     textures,
     weapons,
@@ -837,12 +838,15 @@ class ConsoleRegistry:
             "player.teleport",
             "player",
             self._cmd_player_teleport,
-            description="Teleport player to target map coordinates (x, y, z)",
+            description=(
+                "Teleport player to target map coordinates (x, y), set down on the"
+                " nearest floor a body fits on; z is a hint the server overrides"
+            ),
             signature="player.teleport(x: float, y: float, z: float)",
             params=[
                 ConCommandParameter(name="x", type="number", required=True),
                 ConCommandParameter(name="y", type="number", required=True),
-                ConCommandParameter(name="z", type="number", required=True),
+                ConCommandParameter(name="z", type="number", required=False),
             ],
             flags=["cheat"],
             example="player.teleport(16, 24, 5)",
@@ -1434,10 +1438,17 @@ class ConsoleRegistry:
         y = float(args.get("y", 0.0))
         z = float(args.get("z", 0.0))
         player = ctx.resolve_player()
-        if player:
+        room = ctx.resolve_room()
+        if player and room:
+            # Set down where a body fits, never at the typed `z`: a placement
+            # `can_stand` never saw is how bodies end up on a roof or wedged
+            # under one. The client's own `z` is only ever a hint.
+            x, y, z = physics.place_body(room.world, x, y)
             player.state.x = x
             player.state.y = y
             player.state.z = z
+            player.state.on_ground = True
+            player.queue.clear()
             player.state.vel_x = 0.0
             player.state.vel_y = 0.0
             player.state.vel_z = 0.0

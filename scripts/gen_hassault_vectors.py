@@ -21,6 +21,7 @@ import math
 from pathlib import Path
 
 from backend.modules.hassault.physics import (
+    KNIFE_SPEED_BOOST,
     LADDER_ENTITY,
     NO_WATER,
     MoveInput,
@@ -461,6 +462,34 @@ CASES = [
         "world": "field",
         "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
         "steps": repeat(60, forward=1.0, walk=True, crouch=True, dt=1 / 60),
+    },
+    # -- knife in hand -----------------------------------------------------
+    {
+        "name": "the knife runs ten per cent faster",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(60, forward=1.0, knife=True, dt=1 / 60),
+    },
+    {
+        "name": "a tuned knife boost is the one the step uses",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(60, forward=1.0, knife=True, knife_boost=1.3, dt=1 / 60),
+    },
+    {
+        "name": "the knife boost scales a walk and a crouch too",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(40, forward=1.0, walk=True, knife=True, dt=1 / 60)
+        + repeat(40, forward=1.0, crouch=True, knife=True, dt=1 / 60),
+    },
+    {
+        "name": "drawing the knife mid-air sharpens the air steer",
+        "world": "field",
+        "start": {"x": 6.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(30, forward=1.0, dt=1 / 60)
+        + [{"forward": 1.0, "jump": True, "dt": 1 / 60}]
+        + repeat(20, strafe=1.0, knife=True, dt=1 / 60),
     },
     # -- crouching --------------------------------------------------------
     {
@@ -968,9 +997,9 @@ def _face_is_ambiguous(world, case) -> bool:
     for ndx in (math.nextafter(dx, -math.inf), dx, math.nextafter(dx, math.inf)):
         for ndy in (math.nextafter(dy, -math.inf), dy, math.nextafter(dy, math.inf)):
             faces.add(
-                raycast_world_face(
-                    world, origin, (ndx, ndy, dz), case["max_distance"]
-                )[1]
+                raycast_world_face(world, origin, (ndx, ndy, dz), case["max_distance"])[
+                    1
+                ]
             )
     return len(faces) > 1
 
@@ -1001,6 +1030,8 @@ def main() -> None:
                 jump=raw.get("jump", False),
                 crouch=raw.get("crouch", False),
                 walk=raw.get("walk", False),
+                knife=raw.get("knife", False),
+                knife_boost=raw.get("knife_boost", KNIFE_SPEED_BOOST),
             )
             step(world, player, move, raw["dt"])
             # Applied *after* the step, which is where the match server applies

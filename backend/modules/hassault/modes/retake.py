@@ -13,7 +13,7 @@ import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from .. import weapons
+from .. import physics, weapons
 from .defuse import FUSE_TIME, LIVE, Defuse
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -54,21 +54,36 @@ class Retake(Defuse):
 
     def _place_attackers(self, room: MatchRoom, site: Any) -> None:
         """The attackers start on the site they are holding, spread round its
-        middle on the same floor; the bomb is no one's to carry."""
+        middle on the same floor; the bomb is no one's to carry.
+
+        Every position goes through `physics.place_body`. This used to take the
+        floor of the centre *cell*, which is not what a 2.2-cube body rests on:
+        on hd_assault's B the fifth attacker's footprint reached the warehouse
+        roof at 27 under a 24 ceiling, and the first step lifted it there and
+        wedged it for the round.
+        """
+        world = room.world
         attackers = [
             p
             for p in room.players.values()
             if p.team == self.state.attackers and p.alive
         ]
-        floor = room.world.floor_at(int(site.x), int(site.y))
+        centre = physics.place_body(world, site.x, site.y)
         for i, player in enumerate(attackers):
             angle = 2.0 * math.pi * i / max(1, len(attackers))
             reach = min(site.radius * 0.5, 2.0) if len(attackers) > 1 else 0.0
-            x = site.x + math.cos(angle) * reach
-            y = site.y + math.sin(angle) * reach
-            if room.world.floor_at(int(x), int(y)) != floor:
-                x, y = site.x, site.y
-            player.state.x, player.state.y, player.state.z = x, y, float(floor)
+            x, y, z = physics.place_body(
+                world,
+                site.x + math.cos(angle) * reach,
+                site.y + math.sin(angle) * reach,
+            )
+            if abs(z - centre[2]) > physics.STEP_HEIGHT:
+                # Spread onto a ledge or into a pit: back to the middle, so the
+                # whole side starts on the floor it is holding.
+                x, y, z = centre
+            player.state.x, player.state.y, player.state.z = x, y, z
+            player.state.vel_x = player.state.vel_y = player.state.vel_z = 0.0
+            player.state.on_ground = True
         self.state = replace(
             self.state, bomb=replace(self.state.bomb, state="carried", carrier="")
         )

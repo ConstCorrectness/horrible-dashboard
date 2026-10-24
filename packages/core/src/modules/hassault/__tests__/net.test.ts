@@ -19,13 +19,24 @@ import {
   type PlayerRow,
   type Snapshot,
 } from '../net';
-import { createPlayer, step, type PlayerState } from '../player';
+import {
+  createPlayer,
+  KNIFE_SPEED_BOOST,
+  MOVE_SPEED,
+  step,
+  type MoveInput,
+  type PlayerState,
+} from '../player';
 import { SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
 
-/** An open room with a solid border, big enough for the 2.2-cube body. */
-function room(ssize = 32): World {
+/**
+ * An open room with a solid border, big enough for the 2.2-cube body.
+ *
+ * `column` raises the floor of the cells `[x, y0..y1]` to `height`.
+ */
+function room(ssize = 32, column?: { x: number; y0: number; y1: number; height: number }): World {
   const n = ssize * ssize;
   const buf = new ArrayBuffer(n * PLANES.length);
   const at = (name: string) => {
@@ -40,6 +51,10 @@ function room(ssize = 32): World {
   ceil.fill(16);
   for (let y = 2; y < ssize - 2; y++) {
     for (let x = 2; x < ssize - 2; x++) type[y * ssize + x] = SPACE;
+  }
+  if (column) {
+    const floor = at('floor');
+    for (let y = column.y0; y <= column.y1; y++) floor[y * ssize + column.x] = column.height;
   }
   const info: MapInfo = {
     name: 'room',
@@ -284,6 +299,132 @@ describe('Predictor', () => {
     // for the whole ease — possibly through a wall.
     expect(predictor.correction).toEqual({ x: 0, y: 0, z: 0 });
     expect(player.x).toBeCloseTo(server.x, 9);
+  });
+
+  it('rebases on the private full-precision position, not the rounded row', () => {
+    // A body 0.0004 short of the line where its footprint first reaches a raised
+    // column. The row's three decimals round it *onto* the line, and the replay
+    // then lifts the rebased body onto the column: a three-cube correction, past
+    // the snap distance, made of nothing but rounding.
+    const world = room(32, { x: 16, y0: 14, y1: 18, height: 3 });
+    const idle: MoveInput = { forward: 0, strafe: 0, jump: false, crouch: false, noclip: false };
+    const settle = (p: PlayerState) => {
+      p.onGround = true;
+      for (let i = 0; i < 5; i++) step(world, p, idle, 1 / 60);
+    };
+    const exact = 14.8996;
+    const rounded = Math.round(exact * 1000) / 1000;
+    expect(Math.floor(rounded + 1.1)).toBe(16);
+    expect(Math.floor(exact + 1.1)).toBe(15);
+
+    const reconcile = (move: MoveState) => {
+      const predictor = new Predictor();
+      const player = createPlayer(exact, 16, 0);
+      settle(player);
+      predictor.record(world, player, idle, 1 / 60);
+      const server = createPlayer(exact, 16, 0);
+      settle(server);
+      const row = rowFrom('me', server, { x: rounded });
+      predictor.reconcile(world, player, row, move, 0);
+      return { predictor, player };
+    };
+
+    const server = createPlayer(exact, 16, 0);
+    settle(server);
+    // An old server: the row is all there is, and the rounding bites.
+    const old = reconcile(moveFrom(server));
+    expect(old.player.z).toBe(3);
+    expect(old.predictor.lastError).toBeGreaterThan(SNAP_DISTANCE);
+    // With `pos`, the rebase is the server's own number and nothing moves.
+    const fresh = reconcile({ ...moveFrom(server), pos: [server.x, server.y, server.z] });
+    expect(fresh.player.z).toBe(0);
+    expect(fresh.player.x).toBe(exact);
+    expect(fresh.predictor.lastError).toBeLessThan(1e-9);
+  });
+
+  describe('knife boost', () => {
+    const forward: MoveInput = { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false };
+
+    /** The server's loop for one command: step with `weapon == 0` as it stood,
+     * then apply the command's switch — `simulate`, then `_handle_combat`. */
+    function serverRun(
+      world: World,
+      body: PlayerState,
+      weapon: number,
+      commands: { forward: number; dt: number; yaw: number; weapon?: number }[],
+      boost = KNIFE_SPEED_BOOST,
+    ): number {
+      for (const c of commands) {
+        body.yaw = c.yaw;
+        step(world, body, { ...forward, forward: c.forward, knife: weapon === 0, knifeBoost: boost }, c.dt);
+        if (c.weapon !== undefined && c.weapon >= 0) weapon = c.weapon;
+      }
+      return weapon;
+    }
+
+    function anchored(world: World, weapon: number, boost?: number) {
+      const predictor = new Predictor();
+      const player = createPlayer(8, 16, 0);
+      player.onGround = true;
+      const row = rowFrom('me', player, { weapon });
+      predictor.reconcile(world, player, row, { ...moveFrom(player), knifeBoost: boost }, 0);
+      return { predictor, player };
+    }
+
+    it('runs faster with the knife the server says is in hand', () => {
+      // Roomy: a second at a knife sprint covers 25 cubes.
+      const world = room(64);
+      const { predictor, player } = anchored(world, 0);
+      for (let i = 0; i < 60; i++) predictor.record(world, player, forward, 1 / 60);
+      expect(player.velX).toBeGreaterThan(MOVE_SPEED * 1.05);
+      const server = createPlayer(8, 16, 0);
+      server.onGround = true;
+      serverRun(world, server, 0, predictor.unacked());
+      expect(player.x).toBe(server.x);
+    });
+
+    it('uses the room’s tuned boost from the move block', () => {
+      // Roomy: a second at a knife sprint covers 25 cubes.
+      const world = room(64);
+      const { predictor, player } = anchored(world, 0, 1.3);
+      for (let i = 0; i < 60; i++) predictor.record(world, player, forward, 1 / 60);
+      const server = createPlayer(8, 16, 0);
+      server.onGround = true;
+      serverRun(world, server, 0, predictor.unacked(), 1.3);
+      expect(player.x).toBe(server.x);
+      expect(player.velX).toBeGreaterThan(MOVE_SPEED * 1.25);
+    });
+
+    it('changes on the command after the switch, as the server’s does', () => {
+      // Roomy: a second at a knife sprint covers 25 cubes.
+      const world = room(64);
+      const { predictor, player } = anchored(world, 2);
+      const draw = { fire: false, reload: false, weapon: 0, viewT: 0, scoped: 0 };
+      for (let i = 0; i < 30; i++) predictor.record(world, player, forward, 1 / 60, i === 10 ? draw : undefined);
+      const commands = predictor.unacked();
+      const server = createPlayer(8, 16, 0);
+      server.onGround = true;
+      serverRun(world, server, 2, commands);
+      expect(player.x).toBe(server.x);
+
+      // And a replay after a snapshot that acked the switch agrees with itself:
+      // the anchor is the row's weapon as of the ack, the rest is replayed.
+      const ackAt = commands[15].seq;
+      const atAck = createPlayer(8, 16, 0);
+      atAck.onGround = true;
+      const weaponAtAck = serverRun(world, atAck, 2, commands.slice(0, 16));
+      expect(weaponAtAck).toBe(0);
+      const before = player.x;
+      predictor.reconcile(
+        world,
+        player,
+        rowFrom('me', atAck, { weapon: weaponAtAck }),
+        { ...moveFrom(atAck), pos: [atAck.x, atAck.y, atAck.z] },
+        ackAt,
+      );
+      expect(player.x).toBeCloseTo(before, 9);
+      expect(predictor.lastError).toBeLessThan(1e-9);
+    });
   });
 
   it('decays the visual correction towards zero', () => {

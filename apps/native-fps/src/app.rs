@@ -1825,11 +1825,11 @@ impl App {
         // Copied out before the call: `reconcile` borrows `self.world` mutably
         // through `self.prediction`, and holding a reference into `self.players`
         // across it would borrow `self` twice.
-        let Some((x, y, z, ground)) = self
+        let Some((x, y, z, ground, weapon)) = self
             .players
             .iter()
             .find(|p| p.id == self.self_id)
-            .map(|p| (p.x, p.y, p.z, p.ground))
+            .map(|p| (p.x, p.y, p.z, p.ground, p.weapon))
         else {
             return;
         };
@@ -1839,7 +1839,7 @@ impl App {
         // `Prediction::reconcile` for what inventing the momentum cost.
         let movement = self.you.as_ref().and_then(|y| y.movement.clone());
         self.prediction
-            .reconcile(&self.world, ack, x, y, z, ground, movement.as_ref());
+            .reconcile(&self.world, ack, x, y, z, ground, weapon, movement.as_ref());
         self.follow_prediction();
     }
 
@@ -2361,8 +2361,12 @@ impl App {
         // next second of honest movement paying it back.
         let dt = self.input_accum.min(MAX_DT);
         self.input_accum = 0.0;
-        let is_knife =
-            self.held().map(|w| w.visual()) == Some("knife") && !self.utility.equipped();
+        // The server's rule, weapon slot 0 in hand — not "the knife model is
+        // drawn and no grenade is out": the server has no idea a grenade is out,
+        // so that test rubber-banded every grenade taken out while knifing. Only
+        // Train reads this; in a match `Prediction::predict` derives the flag
+        // from the weapon the server will be holding, and the room's tuned boost
+        // with it.
         let input = MoveInput {
             forward: axis(self.keys.forward, self.keys.back),
             strafe: axis(self.keys.right, self.keys.left),
@@ -2370,7 +2374,8 @@ impl App {
             crouch: self.keys.crouch,
             walk: self.keys.walk,
             sprint: self.keys.sprint,
-            knife: is_knife,
+            knife: self.you.as_ref().is_some_and(|you| you.weapon == 0),
+            ..MoveInput::default()
         };
         if self.socket.is_none() {
             self.local_seq += 1;
@@ -2505,10 +2510,11 @@ impl App {
         let Some(socket) = &mut self.socket else {
             return;
         };
+        let switch = cmd.weapon;
         let seq = socket.push_command(cmd);
         // The same angles the command carries — literally, not equivalently.
         self.prediction
-            .predict(&self.world, seq, input, dt, yaw, pitch);
+            .predict(&self.world, seq, input, dt, yaw, pitch, switch);
         self.prediction.ease(dt);
         self.update_freecam(dt);
         self.follow_prediction();

@@ -545,7 +545,7 @@ impl RapierPhysicsWorld {
             RUN_SPEED
         };
         if input.knife {
-            speed *= 1.10;
+            speed *= input.knife_boost;
         }
 
         // Horizontal acceleration / friction / air strafe
@@ -565,7 +565,11 @@ impl RapierPhysicsWorld {
                 player.vel_y += (wish_y * speed - player.vel_y) * (2.5 * dt).min(1.0);
             }
         } else if !self.player_sliding {
-            let accel_rate = if input.knife { 12.0 * 1.10 } else { 12.0 };
+            let accel_rate = if input.knife {
+                12.0 * input.knife_boost
+            } else {
+                12.0
+            };
             player.vel_x += (wish_x * speed - player.vel_x) * (accel_rate * dt).min(1.0);
             player.vel_y += (wish_y * speed - player.vel_y) * (accel_rate * dt).min(1.0);
         } else {

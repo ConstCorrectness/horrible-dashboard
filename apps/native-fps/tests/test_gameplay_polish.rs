@@ -42,6 +42,7 @@ fn test_knife_speed_and_acceleration_boost() {
         walk: false,
         sprint: false,
         knife: false,
+        knife_boost: hassault_native::physics::KNIFE_SPEED_BOOST,
     };
     let input_knife = MoveInput {
         forward: 1.0,
@@ -51,6 +52,7 @@ fn test_knife_speed_and_acceleration_boost() {
         walk: false,
         sprint: false,
         knife: true,
+        knife_boost: hassault_native::physics::KNIFE_SPEED_BOOST,
     };
 
     // Step both for 15 ticks

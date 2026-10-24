@@ -456,6 +456,15 @@ pub struct SelfState {
 /// and would be sixteen more numbers per packet.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct MoveState {
+    /// Our position at full precision. The shared row rounds to three decimals,
+    /// which can put a rebased body over a cell line from where the server has
+    /// it — and the replay then lifts it onto whatever column stands there.
+    /// `None` from a server older than the field, which then rebases on the row.
+    #[serde(default)]
+    pub pos: Option<[f32; 3]>,
+    /// The room's live knife boost (`gameplay.knife_speed_boost`).
+    #[serde(rename = "knifeBoost", default)]
+    pub knife_boost: Option<f32>,
     /// `[x, y, z]` cubes per second.
     #[serde(default)]
     pub vel: [f32; 3],

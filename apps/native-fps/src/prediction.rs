@@ -31,7 +31,7 @@
 //! eliminating the difference, it is about converging on it without the player
 //! seeing the correction.
 
-use crate::physics::{step, MoveInput, PlayerState};
+use crate::physics::{step, MoveInput, PlayerState, KNIFE_SPEED_BOOST};
 use crate::protocol::MoveState;
 use crate::world::World;
 
@@ -40,6 +40,10 @@ use crate::world::World;
 struct Unacked {
     seq: u64,
     input: MoveInput,
+    /// The weapon this command asks to switch to, `-1` for none. Applied by the
+    /// server *after* the command's step, so it decides the knife flag of the
+    /// next one — see `Prediction::weapon`.
+    switch: i32,
     dt: f32,
     yaw: f32,
     pitch: f32,
@@ -80,6 +84,18 @@ pub struct Prediction {
     /// Whether a `welcome`/snapshot has ever arrived. Before that there is
     /// nothing to predict *from*, and simulating would invent a position.
     pub live: bool,
+    /// The weapon the server will be holding when it steps our *next* command:
+    /// its row's `weapon` as of the last ack, advanced by every switch sent since.
+    /// `-1` until a snapshot says.
+    ///
+    /// The server's knife boost is `player.weapon == 0` read before the command's
+    /// own switch (`simulate` steps, then `_handle_combat` switches), so this is
+    /// the only number that predicts it. The HUD's weapon is a round trip late,
+    /// and the old "a knife is drawn and no grenade is out" test was a different
+    /// rule — the server has no idea a grenade is out.
+    weapon: i32,
+    /// The room's tuned boost, from `you.move.knifeBoost`.
+    knife_boost: f32,
 }
 
 impl Default for Prediction {
@@ -90,6 +106,8 @@ impl Default for Prediction {
             error: [0.0; 3],
             unacked: Vec::new(),
             live: false,
+            weapon: -1,
+            knife_boost: KNIFE_SPEED_BOOST,
         }
     }
 }
@@ -109,10 +127,15 @@ impl Prediction {
         self.settled = self.state;
         self.error = [0.0; 3];
         self.unacked.clear();
+        self.weapon = -1;
         self.live = true;
     }
 
     /// Simulate one command locally and remember it for replay.
+    ///
+    /// `switch` is the weapon the command asks for (`-1` for none), so the knife
+    /// flag of every later command is the server's. See `weapon`.
+    #[allow(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         world: &World,
@@ -121,13 +144,18 @@ impl Prediction {
         dt: f32,
         yaw: f32,
         pitch: f32,
+        switch: i32,
     ) {
         if !self.live {
             return;
         }
         self.settled.yaw = yaw;
         self.settled.pitch = pitch;
+        let input = with_knife(input, self.weapon, self.knife_boost);
         step(world, &mut self.settled, &input, dt);
+        if switch >= 0 {
+            self.weapon = switch;
+        }
         if self.unacked.len() >= MAX_UNACKED {
             // Oldest first: it is the one the server is most likely to have
             // acknowledged already, and dropping the newest would replay a past
@@ -137,6 +165,7 @@ impl Prediction {
         self.unacked.push(Unacked {
             seq,
             input,
+            switch,
             dt,
             yaw,
             pitch,
@@ -159,6 +188,9 @@ impl Prediction {
     // position components, the support state and the momentum block. Bundling
     // them into a struct would only move the list somewhere the compiler checks
     // less — the same call this crate already makes for `App::new`.
+    ///
+    /// `weapon` is the row's: what the server held as of `ack`. It re-anchors the
+    /// knife prediction, so a switch the server refused does not stay wrong.
     #[allow(clippy::too_many_arguments)]
     pub fn reconcile(
         &mut self,
@@ -168,10 +200,22 @@ impl Prediction {
         y: f32,
         z: f32,
         on_ground: bool,
+        weapon: i32,
         movement: Option<&MoveState>,
     ) {
+        // The private, unrounded position when the server sends one: the row's is
+        // rounded for the wire, and three decimals is enough to cross a cell line
+        // and have the replay lift the body onto the column beyond it.
+        let (x, y, z) = match movement.and_then(|m| m.pos) {
+            Some([px, py, pz]) => (px, py, pz),
+            None => (x, y, z),
+        };
+        if let Some(boost) = movement.and_then(|m| m.knife_boost) {
+            self.knife_boost = boost;
+        }
         if !self.live {
             self.reset(x, y, z, self.state.yaw, self.state.pitch);
+            self.weapon = weapon;
             return;
         }
 
@@ -218,11 +262,21 @@ impl Prediction {
         }
 
         self.unacked.retain(|c| c.seq > ack);
+        let mut held = weapon;
         for c in &self.unacked {
             replayed.yaw = c.yaw;
             replayed.pitch = c.pitch;
-            step(world, &mut replayed, &c.input, c.dt);
+            step(
+                world,
+                &mut replayed,
+                &with_knife(c.input, held, self.knife_boost),
+                c.dt,
+            );
+            if c.switch >= 0 {
+                held = c.switch;
+            }
         }
+        self.weapon = held;
         self.settled = replayed;
 
         // The correction, as an offset the visible position keeps for now.
@@ -270,11 +324,21 @@ impl Prediction {
     }
 }
 
+/// `input` with the knife flag the server will apply to it: weapon 0 in hand.
+fn with_knife(input: MoveInput, weapon: i32, knife_boost: f32) -> MoveInput {
+    MoveInput {
+        knife: weapon == 0,
+        knife_boost,
+        ..input
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::MapInfo;
-    use crate::world::{SOLID, SPACE};
+    use crate::physics::MOVE_SPEED;
+    use crate::world::{PLAYER_RADIUS, SOLID, SPACE};
 
     const PLANES: [&str; 9] = [
         "type", "floor", "ceil", "wtex", "ftex", "ctex", "vdelta", "utex", "tag",
@@ -282,6 +346,12 @@ mod tests {
 
     /// An open room with a floor at 0 and a ceiling at 16.
     fn room(ssize: i32) -> World {
+        room_with_column(ssize, (0, 0, -1, 0))
+    }
+
+    /// `room`, with the floor of cells `x, y0..=y1` raised to `height`:
+    /// `(x, y0, y1, height)`.
+    fn room_with_column(ssize: i32, column: (i32, i32, i32, u8)) -> World {
         let n = (ssize * ssize) as usize;
         let mut types = vec![SOLID; n];
         for y in 2..ssize - 2 {
@@ -291,7 +361,12 @@ mod tests {
         }
         let mut bytes = Vec::with_capacity(n * 9);
         bytes.extend_from_slice(&types);
-        bytes.extend(std::iter::repeat_n(0u8, n)); // floor
+        let mut floor = vec![0u8; n];
+        let (cx, y0, y1, height) = column;
+        for y in y0..=y1 {
+            floor[(y * ssize + cx) as usize] = height;
+        }
+        bytes.extend_from_slice(&floor);
         bytes.extend(std::iter::repeat_n(16u8, n)); // ceil
         bytes.extend(std::iter::repeat_n(0u8, n * 6)); // the rest
         let info = MapInfo {
@@ -316,7 +391,7 @@ mod tests {
         // border — and the first snapshot yanks the camera across the whole map.
         let world = room(16);
         let mut p = Prediction::default();
-        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0);
+        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
         assert!(!p.live);
         assert_eq!(p.pending(), 0);
         assert_eq!(p.state.x, 0.0);
@@ -328,7 +403,7 @@ mod tests {
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
         let before = p.state.x;
-        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0);
+        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
         assert!(p.state.x > before, "the whole point of predicting");
         assert_eq!(p.pending(), 1);
     }
@@ -339,7 +414,7 @@ mod tests {
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
         for seq in 1..=10 {
-            p.predict(&world, seq, forward(), 1.0 / 60.0, 0.0, 0.0);
+            p.predict(&world, seq, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
         }
         assert_eq!(p.pending(), 10);
         let predicted = p.state.x;
@@ -361,6 +436,7 @@ mod tests {
             server.y,
             server.z,
             server.on_ground,
+            2,
             None,
         );
 
@@ -380,11 +456,11 @@ mod tests {
         let world = room(16);
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
-        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0);
+        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
         let predicted = p.state.x;
 
         // The server puts us slightly behind where we thought.
-        p.reconcile(&world, 1, predicted - 0.3, 8.0, 0.0, true, None);
+        p.reconcile(&world, 1, predicted - 0.3, 8.0, 0.0, true, 2, None);
         // Visibly, we have barely moved: the error is carried, not shown.
         assert!(
             (p.state.x - predicted).abs() < 0.01,
@@ -407,8 +483,8 @@ mod tests {
         let world = room(16);
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
-        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0);
-        p.reconcile(&world, 1, 4.0, 4.0, 0.0, true, None);
+        p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
+        p.reconcile(&world, 1, 4.0, 4.0, 0.0, true, 2, None);
         assert!((p.state.x - 4.0).abs() < 1e-5, "{}", p.state.x);
         assert!((p.state.y - 4.0).abs() < 1e-5);
     }
@@ -431,13 +507,13 @@ mod tests {
             ..Default::default()
         };
         for seq in 1..=30 {
-            p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+            p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0, -1);
         }
         assert!(p.settled.vel_x > 15.0, "not moving: {}", p.settled.vel_x);
 
         // The server acknowledges everything and reports a body at rest.
         let stopped = MoveState::default();
-        p.reconcile(&world, 30, p.settled.x, 8.0, 0.0, true, Some(&stopped));
+        p.reconcile(&world, 30, p.settled.x, 8.0, 0.0, true, 2, Some(&stopped));
         assert!(
             p.settled.vel_x.abs() < 1e-6,
             "kept {} of its own velocity",
@@ -460,15 +536,15 @@ mod tests {
                 ..Default::default()
             };
             for seq in 1..=30 {
-                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0, -1);
             }
             let acked_at = p.settled.x;
             // Ten unacknowledged commands: the replay tail a round trip leaves.
             for seq in 31..=40 {
-                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0, -1);
             }
             // The server's word: you are where command 30 left you, at rest.
-            p.reconcile(&world, 30, acked_at, 8.0, 0.0, true, movement);
+            p.reconcile(&world, 30, acked_at, 8.0, 0.0, true, 2, movement);
             p.settled.x - acked_at
         };
 
@@ -491,7 +567,7 @@ mod tests {
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
         for seq in 1..=(MAX_UNACKED as u64 + 50) {
-            p.predict(&world, seq, MoveInput::default(), 1.0 / 240.0, 0.0, 0.0);
+            p.predict(&world, seq, MoveInput::default(), 1.0 / 240.0, 0.0, 0.0, -1);
         }
         assert_eq!(p.pending(), MAX_UNACKED);
     }
@@ -503,8 +579,179 @@ mod tests {
         // the origin.
         let world = room(16);
         let mut p = Prediction::default();
-        p.reconcile(&world, 0, 5.0, 6.0, 1.0, true, None);
+        p.reconcile(&world, 0, 5.0, 6.0, 1.0, true, 2, None);
         assert!(p.live);
         assert_eq!((p.state.x, p.state.y, p.state.z), (5.0, 6.0, 1.0));
+    }
+
+    #[test]
+    fn rebases_on_the_full_precision_position_not_the_rounded_row() {
+        // A body 0.0004 short of the line where its footprint first reaches a
+        // raised column. The row's three decimals round it *onto* the line, and
+        // the replay lifts the rebased body onto the column: a three-cube
+        // correction, past the snap distance, made of nothing but rounding.
+        let world = room_with_column(32, (16, 14, 18, 3));
+        let exact: f32 = 14.8996;
+        let rounded: f32 = 14.9;
+        assert_eq!((exact + PLAYER_RADIUS).floor(), 15.0);
+        assert_eq!((rounded + PLAYER_RADIUS).floor(), 16.0);
+
+        let run = |movement: MoveState| {
+            let mut p = Prediction::default();
+            p.reset(exact, 16.0, 0.0, 0.0, 0.0);
+            p.predict(&world, 1, MoveInput::default(), 1.0 / 60.0, 0.0, 0.0, -1);
+            p.reconcile(&world, 0, rounded, 16.0, 0.0, true, 2, Some(&movement));
+            p
+        };
+        // An old server: the row is all there is, and the rounding bites.
+        let old = run(MoveState::default());
+        assert_eq!(old.settled.z, 3.0);
+        assert_eq!(old.error, [0.0; 3], "three cubes is a snap, not an ease");
+        // With `pos` the rebase is the server's own number and nothing moves.
+        let fresh = run(MoveState {
+            pos: Some([exact, 16.0, 0.0]),
+            ..Default::default()
+        });
+        assert_eq!(fresh.settled.z, 0.0);
+        assert_eq!(fresh.settled.x, exact);
+        assert!(
+            fresh.error.iter().all(|e| e.abs() < 1e-6),
+            "{:?}",
+            fresh.error
+        );
+    }
+
+    /// The server's loop for a run of commands: step with `weapon == 0` as it
+    /// stood, then apply the command's switch — `simulate`, then `_handle_combat`.
+    fn server_run(
+        world: &World,
+        body: &mut PlayerState,
+        mut weapon: i32,
+        switches: &[i32],
+        boost: f32,
+    ) -> i32 {
+        for &switch in switches {
+            let input = MoveInput {
+                forward: 1.0,
+                knife: weapon == 0,
+                knife_boost: boost,
+                ..Default::default()
+            };
+            step(world, body, &input, 1.0 / 60.0);
+            if switch >= 0 {
+                weapon = switch;
+            }
+        }
+        weapon
+    }
+
+    fn anchored(world: &World, weapon: i32, boost: Option<f32>) -> Prediction {
+        let mut p = Prediction::default();
+        p.reset(8.0, 16.0, 0.0, 0.0, 0.0);
+        let movement = MoveState {
+            knife_boost: boost,
+            ..Default::default()
+        };
+        p.reconcile(world, 0, 8.0, 16.0, 0.0, true, weapon, Some(&movement));
+        p
+    }
+
+    fn standing() -> PlayerState {
+        PlayerState {
+            x: 8.0,
+            y: 16.0,
+            on_ground: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_knife_the_server_says_is_in_hand_runs_faster() {
+        // Roomy: half a second at a knife sprint covers a dozen cubes.
+        let world = room(64);
+        let mut p = anchored(&world, 0, None);
+        for seq in 1..=30 {
+            p.predict(&world, seq, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
+        }
+        assert!(p.settled.vel_x > MOVE_SPEED * 1.05, "{}", p.settled.vel_x);
+        let mut server = standing();
+        server_run(&world, &mut server, 0, &[-1; 30], KNIFE_SPEED_BOOST);
+        assert!((p.settled.x - server.x).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_rooms_tuned_boost_comes_from_the_move_block() {
+        let world = room(64);
+        let mut p = anchored(&world, 0, Some(1.3));
+        for seq in 1..=30 {
+            p.predict(&world, seq, forward(), 1.0 / 60.0, 0.0, 0.0, -1);
+        }
+        assert!(p.settled.vel_x > MOVE_SPEED * 1.25, "{}", p.settled.vel_x);
+        let mut server = standing();
+        server_run(&world, &mut server, 0, &[-1; 30], 1.3);
+        assert!((p.settled.x - server.x).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_grenade_or_a_drawn_model_does_not_decide_the_knife_the_weapon_does() {
+        // Whatever the caller says, a match's prediction uses the server's rule.
+        let world = room(64);
+        let mut p = anchored(&world, 2, None);
+        let claims_knife = MoveInput {
+            knife: true,
+            ..forward()
+        };
+        for seq in 1..=30 {
+            p.predict(&world, seq, claims_knife, 1.0 / 60.0, 0.0, 0.0, -1);
+        }
+        assert!(p.settled.vel_x < MOVE_SPEED + 1e-3, "{}", p.settled.vel_x);
+    }
+
+    #[test]
+    fn the_knife_changes_on_the_command_after_the_switch() {
+        let world = room(64);
+        let mut p = anchored(&world, 2, None);
+        let switches: Vec<i32> = (0..30).map(|i| if i == 10 { 0 } else { -1 }).collect();
+        for (i, &switch) in switches.iter().enumerate() {
+            p.predict(
+                &world,
+                i as u64 + 1,
+                forward(),
+                1.0 / 60.0,
+                0.0,
+                0.0,
+                switch,
+            );
+        }
+        let mut server = standing();
+        server_run(&world, &mut server, 2, &switches, KNIFE_SPEED_BOOST);
+        assert!((p.settled.x - server.x).abs() < 1e-5);
+
+        // A snapshot acking command 16: the anchor is the row's weapon as of the
+        // ack, and the replay of the rest lands where we already are.
+        let mut at_ack = standing();
+        let weapon = server_run(&world, &mut at_ack, 2, &switches[..16], KNIFE_SPEED_BOOST);
+        assert_eq!(weapon, 0);
+        let before = p.settled.x;
+        let movement = MoveState {
+            pos: Some([at_ack.x, at_ack.y, at_ack.z]),
+            vel: [at_ack.vel_x, at_ack.vel_y, at_ack.vel_z],
+            ..Default::default()
+        };
+        p.reconcile(
+            &world,
+            16,
+            at_ack.x,
+            at_ack.y,
+            at_ack.z,
+            true,
+            weapon,
+            Some(&movement),
+        );
+        assert!(
+            (p.settled.x - before).abs() < 1e-4,
+            "{} vs {before}",
+            p.settled.x
+        );
     }
 }

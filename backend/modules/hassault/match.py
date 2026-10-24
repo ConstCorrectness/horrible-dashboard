@@ -733,6 +733,12 @@ class MatchPlayer:
             # `sinceLanded` is a duration, not a timestamp: the two simulated
             # clocks are unrelated, so only "how long ago" transfers.
             "move": {
+                # Unrounded, unlike the shared row. The row's three decimals can
+                # put a rebased body on the far side of a cell line from where
+                # the server has it, and the replay then lifts it onto whatever
+                # column is there — a correction past the snap distance, out of
+                # nothing but rounding. The owner rebases on this one.
+                "pos": [self.state.x, self.state.y, self.state.z],
                 "vel": [
                     round(self.state.vel_x, 3),
                     round(self.state.vel_y, 3),
@@ -810,7 +816,7 @@ class RoomSettings:
     player_max_health: float = 100.0
     damage_scale: float = 1.0
     nade_damage_scale: float = 1.0
-    knife_speed_boost: float = 1.10
+    knife_speed_boost: float = physics.KNIFE_SPEED_BOOST
     recoil_scale: float = 1.0
     recoil_push: float = 0.0
 
@@ -982,7 +988,8 @@ class MatchRoom:
         )
         if not options:
             mid = self.world.ssize / 2
-            return PlayerState(x=mid, y=mid, z=self.world.floor_at(int(mid), int(mid)))
+            x, y, z = physics.place_body(self.world, mid, mid)
+            return PlayerState(x=x, y=y, z=z, on_ground=True)
         return physics.spawn_at(self.world, self.rng.choice(options))
 
     def add(
@@ -2588,6 +2595,10 @@ class MatchRoom:
         computing each team's answer once per member of that team.
         """
         you = player.private_view(time.monotonic())
+        # The room's live knife boost, beside the momentum it scales: a tuned
+        # value the clients predicted with the default would rubber-band every
+        # knife-out run.
+        you["move"]["knifeBoost"] = self.settings.knife_speed_boost
         # What is in hand, by the mode's rule, and the chosen loadout by slot,
         # so the number keys select a slot and the HUD lists what you carry.
         you["held"] = [

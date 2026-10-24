@@ -1896,6 +1896,32 @@ clock local to each side, started whenever that side started, so the two have no
 relation to each other and only "how long ago" transfers. The client converts it
 against its own clock on arrival.
 
+`pos` is the owner's position **unrounded**. The shared row rounds to three
+decimals, and that is enough to put a rebased body across a cell line from where the
+server has it. The replay then lifts it onto whatever column stands beyond that line,
+and the error passes the 2.0 snap distance because of rounding alone. Both clients
+rebase on `pos` when the server sends it and fall back to the row when it does not.
+
+`knifeBoost` is the room's live `gameplay.knife_speed_boost`. The server applies it
+when `player.weapon == 0`, and it reads the weapon **before** the command's own switch,
+because `simulate` steps first and `_handle_combat` switches afterwards. So neither
+client trusts its HUD weapon for the knife flag. Each anchors on the row's `weapon` as
+of the ack and advances it through the switches of its pending commands, which is
+exactly the server's order. A grenade in hand does not count: the server does not
+know about it.
+
+### Placing a body directly
+
+Walking is guarded by `can_stand`, but anything that sets a position directly is not.
+That covers retake's attackers, `player.teleport`, a spawn inside a wall, and the
+no-spawn fallback. The vertical step then lifts the body onto the **highest** floor
+under its 2.2-cube footprint. Next to a ledge, that means the roof next door. Under a
+low ceiling beside one, the body is wedged and cannot move. These callers go through
+`physics.place_body(world, x, y)` instead. It searches outward in rings, at most
+`PLACE_REACH` (4) cubes, for the nearest spot where `can_stand` holds on the
+`_support` floor, so the body starts where its first step would leave it.
+`test_hassault_retake.py` checks every bundled bomb site with 1–5 attackers.
+
 ### Mouse look
 
 `applyLook` in `player.ts` turns the view from raw `movementX`/`movementY`
@@ -9173,7 +9199,7 @@ Every CVar and ConCommand is strictly structured into modular namespaces:
 | `player.infinite_ammo` | `bool` CVar | Infinite magazine and reserve ammunition |
 | `player.speed_scale` | `float` CVar | Movement speed modifier (0.1 to 10.0) |
 | `player.give(weapon)` | Command | Equips a weapon with full ammo, by id (`knife`, `pistol`, `assault`, `shotgun`, `sniper`), by display name (`Sniper Rifle`), or by slot number. The offered list is **derived from the weapon table**, not written out here or in the command — see below |
-| `player.teleport(x, y, z)` | Command | Warps player to specified world coordinates |
+| `player.teleport(x, y, z)` | Command | Warps player to the nearest spot near `(x, y)` where a body fits (`physics.place_body`); `z` is optional and ignored, since the floor decides it |
 | `player.respawn()` | Command | Forces immediate respawn at a team spawn point |
 | `player.get_pos()` | Command | Returns player coordinate tuple `(x, y, z)` |
 

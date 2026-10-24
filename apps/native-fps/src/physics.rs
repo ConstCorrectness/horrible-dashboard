@@ -57,6 +57,10 @@ pub const CROUCH_HEIGHT: f32 = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 pub const CROUCH_SPEED_SCALE: f32 = 0.4;
 /// Holding walk: slower and silent. `WALK_SPEED_SCALE` in `physics.py`.
 pub const WALK_SPEED_SCALE: f32 = 0.52;
+/// Speed and acceleration multiplier with the knife in hand. The default only: a
+/// room tunes it and sends the live value as `you.move.knifeBoost`, which
+/// `Prediction` adopts. `KNIFE_SPEED_BOOST` in `physics.py`.
+pub const KNIFE_SPEED_BOOST: f32 = 1.10;
 /// Seconds for a full stand↔crouch transition.
 pub const CROUCH_TRANSITION: f32 = 0.15;
 
@@ -176,7 +180,7 @@ impl Default for PlayerState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct MoveInput {
     /// -1..1
     pub forward: f32,
@@ -187,7 +191,28 @@ pub struct MoveInput {
     /// Hold to walk: slower and silent.
     pub walk: bool,
     pub sprint: bool,
+    /// Knife in hand. The server's rule is "holds weapon 0", read *before* the
+    /// command's own switch; in a match `Prediction` derives it that way and
+    /// overwrites whatever the caller put here.
     pub knife: bool,
+    /// The room's tuned boost. Not derived `Default`: a zero here would stop a
+    /// knife-holder dead.
+    pub knife_boost: f32,
+}
+
+impl Default for MoveInput {
+    fn default() -> MoveInput {
+        MoveInput {
+            forward: 0.0,
+            strafe: 0.0,
+            jump: false,
+            crouch: false,
+            walk: false,
+            sprint: false,
+            knife: false,
+            knife_boost: KNIFE_SPEED_BOOST,
+        }
+    }
 }
 
 pub fn create_player(x: f32, y: f32, z: f32, yaw: f32) -> PlayerState {
@@ -485,7 +510,7 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
         scale *= LADDER_HORIZONTAL_SCALE;
     }
     if input.knife {
-        scale *= 1.10;
+        scale *= input.knife_boost;
     }
     let speed_cap = MOVE_SPEED * scale;
 
@@ -514,7 +539,7 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
         AIR_RESPONSE
     };
     if input.knife {
-        response *= 1.10;
+        response *= input.knife_boost;
     }
     let blend = 1.0 - (-response * dt).exp();
     player.vel_x += (wx * speed_cap - player.vel_x) * blend;

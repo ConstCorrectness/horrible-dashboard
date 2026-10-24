@@ -29,7 +29,9 @@ use std::path::PathBuf;
 use hassault_native::api::{apply_spray, Entity, MapInfo, ThrowPhysics, WeaponSpec};
 use hassault_native::arc;
 use hassault_native::summary::{MatchTally, Summary};
-use hassault_native::physics::{apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn};
+use hassault_native::physics::{
+    apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn, KNIFE_SPEED_BOOST,
+};
 use hassault_native::trace::{
     aim_vector, damage_at, falloff_start, ray_hits_body_sized, raycast_world_face, BODY_HEIGHT,
 };
@@ -168,7 +170,8 @@ fn movement_matches_the_server_and_the_browser_client() {
                     crouch: b(raw, "crouch", false),
                     walk: b(raw, "walk", false),
                     sprint: false,
-                    knife: false,
+                    knife: b(raw, "knife", false),
+                    knife_boost: f(raw, "knife_boost", KNIFE_SPEED_BOOST),
                 },
                 f(raw, "dt", 0.0),
             );
