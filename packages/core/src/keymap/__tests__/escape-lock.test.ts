@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { layoutStore } from '../../layout/store';
 import { windowsFrame } from '../../layout/__tests__/fixtures';
 import { releaseCapture, requestCapture } from '../capture';
-import { followCaptureWithEscapeLock, hostTakesEscape } from '../keyboard-lock';
+import { followCaptureWithEscapeLock, hostTakesEscape, lockEscape, unlockEscape } from '../keyboard-lock';
 
 // Core vitest runs without a DOM, so the two globals the lock reads are stubbed:
 // `document` (fullscreen / pointer-lock state) and `navigator.keyboard`.
@@ -93,5 +93,24 @@ describe('followCaptureWithEscapeLock', () => {
     (onChange![1] as () => void)();
     expect(keyboard.lock).toHaveBeenCalledWith(['Escape']);
     stop();
+  });
+});
+
+describe('lockEscape and unlockEscape directly', () => {
+  it('calls keyboard.lock(["Escape"]) when document is fullscreen', async () => {
+    doc.fullscreenElement = {};
+    await lockEscape();
+    expect(keyboard.lock).toHaveBeenCalledWith(['Escape']);
+  });
+
+  it('does nothing if keyboard is not supported or document not fullscreen', async () => {
+    doc.fullscreenElement = null;
+    await lockEscape();
+    expect(keyboard.lock).not.toHaveBeenCalled();
+  });
+
+  it('unlockEscape calls keyboard.unlock', () => {
+    unlockEscape();
+    expect(keyboard.unlock).toHaveBeenCalledTimes(1);
   });
 });

@@ -3207,7 +3207,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     instanceId: useContext(PaneInstanceContext),
     viewId: 'hassault.play',
     onRelease: () => {
-      unlockEscape();
+      if (!document.fullscreenElement) unlockEscape();
       if (document.pointerLockElement) document.exitPointerLock?.();
       setLocked(false);
       lockedRef.current = false;
@@ -3491,10 +3491,28 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         return;
       }
 
-      // Escape is the pause menu, and it is the one key handled while *not*
-      // locked — because by the time it reaches us the shell's ladder may already
-      // have released the lock (see `openMenu`), or pointer lock was not held.
-      if (e.code === 'Escape') {
+      // Escape (or KeyP as an alternative pause/menu shortcut) is the pause menu,
+      // and it is handled while *not* pointer-locked as well as while locked.
+      const isInput =
+        e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+      if (isInput) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          (e.target as HTMLElement).blur();
+        }
+        return;
+      }
+
+      const isMenuKey =
+        e.code === 'Escape' ||
+        (e.code === 'KeyP' &&
+          !codesRef.current.has('KeyP') &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.metaKey);
+
+      if (isMenuKey) {
+        e.preventDefault();
         if (menuOpenRef.current) resumeGame();
         else if (phaseRef.current === 'playing') openMenu();
         return;
@@ -3683,6 +3701,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
+      unlockEscape();
     };
   }, [releaseCapture, openMenu, resumeGame]);
 
@@ -4142,6 +4161,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     setDeployed(false);
     if (document.pointerLockElement) document.exitPointerLock();
     releaseCapture();
+    unlockEscape();
     props.onExit?.();
   }, [releaseCapture, props.onExit]);
 
@@ -4742,7 +4762,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 {/* The player's own keys, not the shipped ones: this line is a
                     lie the moment anything is rebound. */}
                 <span style={{ color: 'var(--text-dim)' }}>
-                  {describeControls(controls)} · Esc menu · ` console
+                  {describeControls(controls)} · Esc / P menu · ` console
                 </span>
                 <span style={{ color: 'var(--text-dim)' }}>
                   Left fire · right scope · wheel or {keyLabel(controls.weapon1[0] ?? '1')}–

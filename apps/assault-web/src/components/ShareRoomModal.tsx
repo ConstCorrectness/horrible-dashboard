@@ -13,7 +13,12 @@ export function ShareRoomModal({ room, map, onClose }: ShareRoomModalProps) {
   const shareUrl = `${window.location.origin}/#room=${encodeURIComponent(room)}&map=${encodeURIComponent(map)}`;
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);

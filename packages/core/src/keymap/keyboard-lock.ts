@@ -51,6 +51,7 @@ export function hostTakesEscape(): boolean {
 
 /** Ask the host to route Escape to the page. No-op where unsupported. */
 export async function lockEscape(): Promise<void> {
+  if (!canHoldEscape()) return;
   const keyboard = (
     navigator as Navigator & { keyboard?: { lock?: (keys: string[]) => Promise<void> } }
   ).keyboard;

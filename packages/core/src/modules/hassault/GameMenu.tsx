@@ -152,7 +152,7 @@ export function GameMenu(props: GameMenuProps) {
             type="button"
             onClick={props.onResume}
             style={styles.resume}
-            title="Resume game (Esc or click outside)"
+            title="Resume game (Esc, P, or click outside)"
           >
             ▶ Resume
           </button>

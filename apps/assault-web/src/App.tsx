@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lockEscape, unlockEscape } from '@horrible/core';
 import { chooseGuest, guestChosen, useGuestSession } from './hooks/useGuestSession';
 import { OnboardingGate } from './components/OnboardingGate';
 import { accountName, applySocketIdentity, useAuth } from './auth';
@@ -101,19 +102,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
+    const syncKeyboardLock = () => {
+      const isFs = Boolean(document.fullscreenElement);
+      setIsFullscreen(isFs);
+      if (isFs && view === 'playing') {
+        void lockEscape();
+      } else if (!isFs || view !== 'playing') {
+        unlockEscape();
+      }
+    };
+
+    document.addEventListener('fullscreenchange', syncKeyboardLock);
+    syncKeyboardLock();
+    return () => {
+      document.removeEventListener('fullscreenchange', syncKeyboardLock);
+      unlockEscape();
+    };
+  }, [view]);
 
   const toggleFullscreen = useCallback(async () => {
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        unlockEscape();
+      } else {
+        await document.documentElement.requestFullscreen();
+        if (view === 'playing') void lockEscape();
+      }
     } catch {
       // Fullscreen refused (permissions policy, iframe) — the button just does nothing.
     }
-  }, []);
+  }, [view]);
 
   /**
    * Deploy is the one click that may ask for fullscreen — browsers only grant it
@@ -124,10 +143,15 @@ export default function App() {
    */
   const enterFullscreen = () => {
     if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
-      // Refused (an iframe without allowfullscreen, a permissions policy): the
-      // game plays windowed, and the pause menu's Fullscreen can try again.
-    });
+    document.documentElement
+      .requestFullscreen({ navigationUI: 'hide' })
+      .then(() => {
+        void lockEscape();
+      })
+      .catch(() => {
+        // Refused (an iframe without allowfullscreen, a permissions policy): the
+        // game plays windowed, and the pause menu's Fullscreen can try again.
+      });
   };
 
   const join = (room: string, map: string) => {
@@ -146,6 +170,7 @@ export default function App() {
   };
 
   const backToBrowser = () => {
+    unlockEscape();
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     window.location.hash = '';
     setTarget((t) => ({ ...t, room: null }));
