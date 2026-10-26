@@ -1,5 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { lockEscape, unlockEscape } from '@horrible/core';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { chooseGuest, guestChosen, useGuestSession } from './hooks/useGuestSession';
 import { OnboardingGate } from './components/OnboardingGate';
 import { accountName, applySocketIdentity, useAuth } from './auth';
@@ -101,58 +100,45 @@ export default function App() {
     }
   }, []);
 
+  const wantsFullscreenRef = useRef(false);
+
   useEffect(() => {
-    const syncKeyboardLock = () => {
+    const onFullscreenChange = () => {
       const isFs = Boolean(document.fullscreenElement);
       setIsFullscreen(isFs);
-      if (isFs && view === 'playing') {
-        void lockEscape();
-      } else if (!isFs) {
-        unlockEscape();
-      }
     };
-
-    document.addEventListener('fullscreenchange', syncKeyboardLock);
-    syncKeyboardLock();
-    return () => {
-      document.removeEventListener('fullscreenchange', syncKeyboardLock);
-      unlockEscape();
-    };
-  }, [view]);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
 
   const toggleFullscreen = useCallback(async () => {
     try {
       if (document.fullscreenElement) {
+        wantsFullscreenRef.current = false;
         await document.exitFullscreen();
-        unlockEscape();
       } else {
+        wantsFullscreenRef.current = true;
         await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-        if (view === 'playing') void lockEscape();
       }
     } catch {
       // Fullscreen refused (permissions policy, iframe) — the button just does nothing.
     }
-  }, [view]);
+  }, []);
 
-  /**
-   * Deploy is the one click that may ask for fullscreen — browsers only grant it
-   * inside a user gesture — so it is asked for here, synchronously. Pointer lock
-   * follows on the game's own click-to-play, and the keyboard lock (so a tap of
-   * Escape opens the pause menu instead of leaving fullscreen) is taken by the
-   * game when it grabs input; holding Escape still leaves, by browser rule.
-   */
   const enterFullscreen = () => {
+    wantsFullscreenRef.current = true;
     if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-    document.documentElement
-      .requestFullscreen({ navigationUI: 'hide' })
-      .then(() => {
-        void lockEscape();
-      })
-      .catch(() => {
-        // Refused (an iframe without allowfullscreen, a permissions policy): the
-        // game plays windowed, and the pause menu's Fullscreen can try again.
-      });
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
+      // Refused (an iframe without allowfullscreen, a permissions policy): the
+      // game plays windowed, and the pause menu's Fullscreen can try again.
+    });
   };
+
+  const reEnterFullscreen = useCallback(() => {
+    if (wantsFullscreenRef.current && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    }
+  }, []);
 
   const onShareRoom = useCallback((room: string, map: string) => {
     setDialog({ kind: 'share', room, map });
@@ -178,7 +164,7 @@ export default function App() {
   };
 
   const backToBrowser = () => {
-    unlockEscape();
+    wantsFullscreenRef.current = false;
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     window.location.hash = '';
     setTarget((t) => ({ ...t, room: null }));
@@ -242,6 +228,7 @@ export default function App() {
               onShareRoom={onShareRoom}
               onToggleFullscreen={onToggleFullscreen}
               isFullscreen={isFullscreen}
+              onResume={reEnterFullscreen}
               onExit={backToBrowser}
             />
           </Suspense>

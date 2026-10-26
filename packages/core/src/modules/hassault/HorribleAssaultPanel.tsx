@@ -432,6 +432,8 @@ export interface HorribleAssaultPanelProps {
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
   /** Callback when user exits to main menu or external browser lobby */
+  /** Callback when user resumes play from the pause menu or clicks the canvas */
+  onResume?: () => void;
   onExit?: () => void;
 }
 
@@ -3207,7 +3209,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     instanceId: useContext(PaneInstanceContext),
     viewId: 'hassault.play',
     onRelease: () => {
-      if (!document.fullscreenElement) unlockEscape();
+      if (!standalone) unlockEscape();
       if (document.pointerLockElement) document.exitPointerLock?.();
       setLocked(false);
       lockedRef.current = false;
@@ -3253,15 +3255,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       } catch {}
     }
     requestCapture();
+    // In standalone assault-web, do not invoke keyboard.lock() which introduces
+    // Chromium raw input pipeline latency on Windows in fullscreen mode.
+    if (!standalone) {
+      void lockSystemKeys();
+    }
     // Take as much of the keyboard as this host allows. Degrades to the
     // Escape-only lock — which the hold-to-release gesture needs — whenever the
     // system-key gates aren't all open. See lockSystemKeys.
-    void lockSystemKeys();
-  }, [requestCapture]);
+  }, [requestCapture, standalone]);
 
   const resumeGame = useCallback(() => {
     setMenuOpen(false);
     menuOpenRef.current = false;
+    onResumeRef.current?.();
     grabInput();
   }, [grabInput]);
 
@@ -3270,6 +3277,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       resumeGame();
       return;
     }
+    onResumeRef.current?.();
     grabInput();
   }, [grabInput, resumeGame]);
 
@@ -3305,6 +3313,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   resumeGameRef.current = resumeGame;
   const grabInputRef = useRef(grabInput);
   grabInputRef.current = grabInput;
+  const onResumeRef = useRef(props.onResume);
+  onResumeRef.current = props.onResume;
 
   useEffect(() => {
     const el = mountRef.current;
@@ -3713,9 +3723,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   useEffect(() => {
     return () => {
-      unlockEscape();
+      if (!standalone) unlockEscape();
     };
-  }, []);
+  }, [standalone]);
 
   useEffect(() => {
     const canvas = mountRef.current?.querySelector('canvas');
