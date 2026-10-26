@@ -107,7 +107,7 @@ export default function App() {
       setIsFullscreen(isFs);
       if (isFs && view === 'playing') {
         void lockEscape();
-      } else if (!isFs || view !== 'playing') {
+      } else if (!isFs) {
         unlockEscape();
       }
     };
@@ -126,15 +126,7 @@ export default function App() {
         await document.exitFullscreen();
         unlockEscape();
       } else {
-        const fsOptions = {
-          navigationUI: 'hide',
-          keyboardLock: 'browser',
-        } as unknown as FullscreenOptions;
-        try {
-          await document.documentElement.requestFullscreen(fsOptions);
-        } catch {
-          await document.documentElement.requestFullscreen();
-        }
+        await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
         if (view === 'playing') void lockEscape();
       }
     } catch {
@@ -151,17 +143,8 @@ export default function App() {
    */
   const enterFullscreen = () => {
     if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-    const fsOptions = {
-      navigationUI: 'hide',
-      keyboardLock: 'browser',
-    } as unknown as FullscreenOptions;
-
     document.documentElement
-      .requestFullscreen(fsOptions)
-      .catch(() => {
-        // Fallback without keyboardLock option if rejected by older browser
-        return document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-      })
+      .requestFullscreen({ navigationUI: 'hide' })
       .then(() => {
         void lockEscape();
       })
@@ -170,6 +153,14 @@ export default function App() {
         // game plays windowed, and the pause menu's Fullscreen can try again.
       });
   };
+
+  const onShareRoom = useCallback((room: string, map: string) => {
+    setDialog({ kind: 'share', room, map });
+  }, []);
+
+  const onToggleFullscreen = useCallback(() => {
+    void toggleFullscreen();
+  }, [toggleFullscreen]);
 
   const join = (room: string, map: string) => {
     setTarget({ room, map });
@@ -248,8 +239,8 @@ export default function App() {
               initialMode={target.mode}
               forceWebGl={true}
               standalone={true}
-              onShareRoom={(room, map) => setDialog({ kind: 'share', room, map })}
-              onToggleFullscreen={() => void toggleFullscreen()}
+              onShareRoom={onShareRoom}
+              onToggleFullscreen={onToggleFullscreen}
               isFullscreen={isFullscreen}
               onExit={backToBrowser}
             />

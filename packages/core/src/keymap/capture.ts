@@ -16,7 +16,7 @@
  *
  * See docs/architecture/keybindings.mdx.
  */
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
 import { layoutStore } from '../layout/store';
 import type { CaptureMode } from './context';
@@ -169,9 +169,8 @@ export function useCapture(options: {
     return () => releaseCapture(instanceId);
   }, [instanceId]);
 
-  return {
-    active,
-    request: () =>
+  const request = useCallback(
+    () =>
       !!instanceId &&
       requestCapture({
         mode,
@@ -181,6 +180,20 @@ export function useCapture(options: {
         viewId,
         onRelease: () => onReleaseRef.current?.(),
       }),
-    release: () => instanceId && releaseCapture(instanceId),
-  };
+    [mode, escape, systemKeys, instanceId, viewId],
+  );
+
+  const release = useCallback(
+    () => (instanceId ? releaseCapture(instanceId) : undefined),
+    [instanceId],
+  );
+
+  return useMemo(
+    () => ({
+      active,
+      request,
+      release,
+    }),
+    [active, request, release],
+  );
 }

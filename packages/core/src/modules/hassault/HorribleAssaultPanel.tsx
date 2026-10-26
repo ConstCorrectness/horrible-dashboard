@@ -3299,6 +3299,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     releaseCapture();
   }, [releaseCapture]);
 
+  const openMenuRef = useRef(openMenu);
+  openMenuRef.current = openMenu;
+  const resumeGameRef = useRef(resumeGame);
+  resumeGameRef.current = resumeGame;
+  const grabInputRef = useRef(grabInput);
+  grabInputRef.current = grabInput;
+
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
@@ -3323,7 +3330,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           !consoleOpenRef.current
         ) {
           hadPointerLockRef.current = false;
-          openMenu();
+          openMenuRef.current();
         }
       }
     };
@@ -3376,7 +3383,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         ) {
           return;
         }
-        grabInput();
+        grabInputRef.current();
         return;
       }
       // **With a grenade in hand the mouse means throw and toss.** Left is the
@@ -3452,7 +3459,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         e.preventDefault();
         if (consoleOpenRef.current) {
           setConsoleOpen(false);
-          if (!menuOpenRef.current) grabInput();
+          if (!menuOpenRef.current) grabInputRef.current();
         } else {
           // Mark it open *before* letting go of the pointer: the
           // pointerlockchange that follows reads the ref, and would otherwise
@@ -3471,7 +3478,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (e.key === 'Escape') {
           e.preventDefault();
           setConsoleOpen(false);
-          if (!menuOpenRef.current) grabInput();
+          if (!menuOpenRef.current) grabInputRef.current();
         }
         return;
       }
@@ -3513,8 +3520,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
       if (isMenuKey) {
         e.preventDefault();
-        if (menuOpenRef.current) resumeGame();
-        else if (phaseRef.current === 'playing') openMenu();
+        if (menuOpenRef.current) resumeGameRef.current();
+        else if (phaseRef.current === 'playing') openMenuRef.current();
         return;
       }
       if (!isLocked()) return;
@@ -3701,9 +3708,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
       unlockEscape();
     };
-  }, [releaseCapture, openMenu, resumeGame]);
+  }, []);
 
   useEffect(() => {
     const canvas = mountRef.current?.querySelector('canvas');
