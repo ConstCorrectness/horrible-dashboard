@@ -3255,14 +3255,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       } catch {}
     }
     requestCapture();
-    // In standalone assault-web, do not invoke keyboard.lock() which introduces
-    // Chromium raw input pipeline latency on Windows in fullscreen mode.
-    if (!standalone) {
-      void lockSystemKeys();
-    }
     // Take as much of the keyboard as this host allows. Degrades to the
     // Escape-only lock — which the hold-to-release gesture needs — whenever the
-    // system-key gates aren't all open. See lockSystemKeys.
+    // system-key gates aren't all open. See lockSystemKeys. Standalone, the page
+    // owns the lock (it follows fullscreen in assault-web's App), so a menu
+    // round-trip never drops it.
+    if (!standalone) void lockSystemKeys();
   }, [requestCapture, standalone]);
 
   const resumeGame = useCallback(() => {
@@ -4183,9 +4181,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     setDeployed(false);
     if (document.pointerLockElement) document.exitPointerLock();
     releaseCapture();
-    unlockEscape();
+    if (!standalone) unlockEscape();
     props.onExit?.();
-  }, [releaseCapture, props.onExit]);
+  }, [releaseCapture, props.onExit, standalone]);
 
   // If launched with an initial room (e.g. from an invite link in assault-web),
   // join it automatically once the map geometry has loaded.

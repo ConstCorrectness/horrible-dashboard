@@ -8900,6 +8900,15 @@ Escape (Chromium, in document fullscreen). Elsewhere a single press releases and
 the on-screen badge says so, rather than promising a gesture that silently does
 nothing. See [the Escape ladder](../architecture/keybindings.mdx#the-escape-ladder).
 
+The standalone web client (`apps/assault-web`) has no pane, so no capture and no
+ladder: its `App` is the **one owner** of the Escape lock, taking it on every
+`fullscreenchange` into fullscreen and dropping it on the way out, and the panel
+leaves the lock alone when `standalone`. A tap of Escape therefore opens the pause
+menu and fullscreen stays; holding it leaves fullscreen by the browser's own rule,
+and Resume (a click, so a valid gesture) puts fullscreen back. Two owners is how it
+used to break — the panel's cleanup unlocked on re-render and nothing re-locked
+until the next `fullscreenchange`, so Escape quietly went back to the browser.
+
 The toolbar carries the match controls: your username (shown, not typed — the
 backend refuses any name the client supplies), Join/Leave, bot add/remove with a
 skill selector, and — once in — the team scores, the head count and your

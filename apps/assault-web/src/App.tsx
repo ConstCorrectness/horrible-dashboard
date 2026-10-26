@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lockEscape, unlockEscape } from '@horrible/core';
 import { chooseGuest, guestChosen, useGuestSession } from './hooks/useGuestSession';
 import { OnboardingGate } from './components/OnboardingGate';
 import { accountName, applySocketIdentity, useAuth } from './auth';
@@ -102,13 +103,28 @@ export default function App() {
 
   const wantsFullscreenRef = useRef(false);
 
+  /**
+   * **The Escape lock follows fullscreen, and nothing else.** Without Keyboard
+   * Lock the browser takes Escape first and leaves fullscreen with it; with it a
+   * tap reaches the game (its pause menu) and only a press-and-hold leaves.
+   * Chromium honours the lock only in script-initiated document fullscreen, so
+   * this is the one place that knows when it can hold, and the one owner — the
+   * panel does not touch the lock in standalone. Two owners is how it used to be
+   * dropped: the panel's cleanup unlocked it on re-render while this re-took it
+   * only on the next `fullscreenchange`.
+   */
   useEffect(() => {
     const onFullscreenChange = () => {
       const isFs = Boolean(document.fullscreenElement);
       setIsFullscreen(isFs);
+      if (isFs) void lockEscape();
+      else unlockEscape();
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      unlockEscape();
+    };
   }, []);
 
   const toggleFullscreen = useCallback(async () => {
@@ -134,8 +150,14 @@ export default function App() {
     });
   };
 
+  /** Holding Escape still leaves fullscreen (the browser's rule, not ours), so
+   * Resume puts it back — Resume is a click, which is the gesture it needs. */
   const reEnterFullscreen = useCallback(() => {
-    if (wantsFullscreenRef.current && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+    if (
+      wantsFullscreenRef.current &&
+      !document.fullscreenElement &&
+      document.documentElement.requestFullscreen
+    ) {
       document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     }
   }, []);
