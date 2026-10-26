@@ -126,7 +126,15 @@ export default function App() {
         await document.exitFullscreen();
         unlockEscape();
       } else {
-        await document.documentElement.requestFullscreen();
+        const fsOptions = {
+          navigationUI: 'hide',
+          keyboardLock: 'browser',
+        } as unknown as FullscreenOptions;
+        try {
+          await document.documentElement.requestFullscreen(fsOptions);
+        } catch {
+          await document.documentElement.requestFullscreen();
+        }
         if (view === 'playing') void lockEscape();
       }
     } catch {
@@ -143,8 +151,17 @@ export default function App() {
    */
   const enterFullscreen = () => {
     if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+    const fsOptions = {
+      navigationUI: 'hide',
+      keyboardLock: 'browser',
+    } as unknown as FullscreenOptions;
+
     document.documentElement
-      .requestFullscreen({ navigationUI: 'hide' })
+      .requestFullscreen(fsOptions)
+      .catch(() => {
+        // Fallback without keyboardLock option if rejected by older browser
+        return document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      })
       .then(() => {
         void lockEscape();
       })

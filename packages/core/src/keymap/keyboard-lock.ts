@@ -57,8 +57,13 @@ export async function lockEscape(): Promise<void> {
   ).keyboard;
   try {
     await keyboard?.lock?.(['Escape']);
-  } catch {
-    /* unsupported or not fullscreen — the ladder degrades to 'release' */
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn(
+        '[KeyboardLock] Failed to lock Escape. If using Chrome, check site permissions for Keyboard (tune icon in address bar):',
+        err,
+      );
+    }
   }
 }
 

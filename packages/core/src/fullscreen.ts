@@ -62,7 +62,17 @@ async function setDocumentFullscreen(value: boolean): Promise<void> {
   if (!domFullscreenAvailable()) return;
   try {
     if (value) {
-      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      if (!document.fullscreenElement) {
+        const options = {
+          navigationUI: 'hide',
+          keyboardLock: 'browser',
+        } as unknown as FullscreenOptions;
+        try {
+          await document.documentElement.requestFullscreen(options);
+        } catch {
+          await document.documentElement.requestFullscreen();
+        }
+      }
     } else if (document.fullscreenElement) {
       await document.exitFullscreen();
     }
@@ -86,7 +96,17 @@ export async function setAppFullscreen(value: boolean): Promise<boolean> {
   // refuses outside a user gesture, and the browser's own permission UI has
   // already told the user. Report the state we actually ended in.
   try {
-    if (value) await document.documentElement.requestFullscreen();
+    if (value) {
+      const options = {
+        navigationUI: 'hide',
+        keyboardLock: 'browser',
+      } as unknown as FullscreenOptions;
+      try {
+        await document.documentElement.requestFullscreen(options);
+      } catch {
+        await document.documentElement.requestFullscreen();
+      }
+    }
     else if (document.fullscreenElement) await document.exitFullscreen();
   } catch {
     /* fall through to the real state below */
