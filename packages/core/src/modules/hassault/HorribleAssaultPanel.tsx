@@ -113,6 +113,8 @@ import { buildWorldMesh } from './geometry';
 import { MainMenu } from './MainMenu';
 import type { LobbyControls } from './LobbyPanel';
 import { lobbyVoice, type VoiceView } from './lobby-voice';
+import { radioSpeakers } from './radio';
+import { RadioIndicator } from './RadioIndicator';
 import { ChatBox, type ChatChannel } from './ChatBox';
 import {
   BRIGHTNESS_KEY,
@@ -367,6 +369,7 @@ const EMPTY_SESSION: SessionState = {
   lobbyError: '',
   chat: [],
   chatNotice: '',
+  radio: {},
   cosmetics: {},
   duelQueue: null,
   ratingUpdate: null,
@@ -4566,6 +4569,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               </div>
             ))}
           </div>
+        )}
+
+        {net.status === 'joined' && !cleanView && (
+          <RadioIndicator speakers={radioSpeakers(voice, net.radio, net.lobby)} />
         )}
 
         {net.status === 'joined' && !cleanView && (

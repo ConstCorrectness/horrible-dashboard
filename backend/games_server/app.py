@@ -911,6 +911,24 @@ async def hassault_ws(websocket: WebSocket) -> None:
                             "data": {"reason": refused},
                         }
                     )
+            elif event == "voice":
+                # The radio indicator, as the node's channel relays it: team
+                # comms, so only teammates learn who is keying the mic.
+                entry = referee.server.player_for(conn)
+                if entry is not None:
+                    room, player = entry
+                    await referee.server.broadcast_event(
+                        room,
+                        "voice",
+                        {
+                            "playerId": player.id,
+                            "playerName": player.name,
+                            "team": player.team,
+                            "transmitting": bool(data.get("transmitting", False)),
+                        },
+                        exclude=player.id,
+                        team=player.team,
+                    )
             elif event in ("lobby_voice", "lobby_signal"):
                 entry = referee.server.player_for(conn)
                 if entry is not None:

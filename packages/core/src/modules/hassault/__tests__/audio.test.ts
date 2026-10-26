@@ -11,7 +11,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WeaponSpec } from '../api';
-import { WAV_SOUNDS, footstepKindForMap, weaponVoice } from '../audio';
+import {
+  OWN_STEP_GAIN,
+  STEP_VARIANTS,
+  WAV_SOUNDS,
+  footstepKindForMap,
+  limiterMakeupDb,
+  weaponVoice,
+} from '../audio';
 
 function weapon(overrides: Partial<WeaponSpec>): WeaponSpec {
   return {
@@ -75,8 +82,12 @@ describe('weaponVoice', () => {
   });
 
   it('maps footsteps, reloads, and callouts to .wav assets and resolves map surfaces', () => {
-    expect(WAV_SOUNDS).toHaveLength(26);
-    expect(WAV_SOUNDS).toContain('step_concrete_1');
+    expect(WAV_SOUNDS).toHaveLength(36);
+    for (const surface of ['concrete', 'metal', 'wood', 'sand', 'tile']) {
+      for (let take = 1; take <= STEP_VARIANTS; take++) {
+        expect(WAV_SOUNDS).toContain(`step_${surface}_${take}`);
+      }
+    }
     expect(WAV_SOUNDS).toContain('reload_magout');
     expect(WAV_SOUNDS).toContain('callout_fire_in_the_hole');
     expect(footstepKindForMap('hd_dust2', 0, 0, 1)).toBe('step_sand');
@@ -102,5 +113,65 @@ describe('weaponVoice', () => {
     expect(cooldownFor('callout_reloading')).toEqual(['callout', 900]);
     expect(cooldownFor('ping_spotted')).toEqual(['callout', 900]);
     expect(lastPlayed).toBeInstanceOf(Map);
+  });
+
+  it('never plays the same footstep take twice in a row', async () => {
+    // Two takes alternating is a pattern the ear locks onto within a few
+    // strides; a repeat of the *same* take is worse still.
+    const { GameAudio } = await import('../audio');
+    const audio = new GameAudio();
+    const internals = audio as unknown as {
+      wavBuffers: Map<string, unknown>;
+      stepBuffer: (surface: string) => unknown;
+    };
+    for (let take = 1; take <= STEP_VARIANTS; take++) {
+      internals.wavBuffers.set(`step_sand_${take}`, { take });
+    }
+    const seen = new Set<unknown>();
+    let previous: unknown = null;
+    for (let i = 0; i < 200; i++) {
+      const buffer = internals.stepBuffer('sand');
+      expect(buffer).not.toBe(previous);
+      seen.add(buffer);
+      previous = buffer;
+    }
+    expect(seen.size).toBe(STEP_VARIANTS);
+  });
+
+  it('still steps when only some takes have loaded', async () => {
+    const { GameAudio } = await import('../audio');
+    const audio = new GameAudio();
+    const internals = audio as unknown as {
+      wavBuffers: Map<string, unknown>;
+      stepBuffer: (surface: string) => unknown;
+    };
+    const only = { take: 3 };
+    internals.wavBuffers.set('step_metal_3', only);
+    for (let i = 0; i < 10; i++) expect(internals.stepBuffer('metal')).toBe(only);
+    expect(internals.stepBuffer('wood')).toBeUndefined();
+  });
+
+  it('plays our own footsteps quieter than somebody else’s', () => {
+    expect(OWN_STEP_GAIN).toBeGreaterThan(0);
+    expect(OWN_STEP_GAIN).toBeLessThan(1);
+  });
+
+  it('cancels the compressor makeup gain so the limiter is unity below threshold', () => {
+    // threshold -6, ratio 20, hard knee: curve(0 dBFS) = -5.7 dB, makeup 0.6x that.
+    // Measured in Chrome: a footstep left the bus within 0.1 dB of how it entered.
+    expect(limiterMakeupDb()).toBeCloseTo(3.42, 2);
+  });
+
+  it('does not repeat "Reloading!" on every magazine', async () => {
+    const { GameAudio } = await import('../audio');
+    const audio = new GameAudio();
+    const played: string[] = [];
+    (audio as unknown as { own: (kind: string) => void }).own = (kind) => played.push(kind);
+    const lastAt = audio as unknown as { lastCalloutAt: number };
+    audio.callout('reloading');
+    lastAt.lastCalloutAt = -Infinity; // past the global 900 ms gap, not the 8 s one
+    audio.callout('reloading');
+    audio.callout('spotted');
+    expect(played).toEqual(['callout_reloading', 'callout_spotted']);
   });
 });

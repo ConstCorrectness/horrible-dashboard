@@ -159,6 +159,12 @@ export interface SessionState {
   /** Why the last message was refused ("slow down"), cleared by the next accepted one. */
   chatNotice: string;
   /**
+   * Teammates holding their radio key right now, player id → name, from the
+   * server's `voice` relay. The indicator, not the audio: it is what lets a team
+   * see who is talking when two voices arrive at once.
+   */
+  radio: Record<string, string>;
+  /**
    * How each player looks, by player id (`cosmetics.ts`): the welcome's copy,
    * then each `joined` and `cosmetics` event. A player missing here is drawn
    * as the team default, which is also what an older server means.
@@ -402,6 +408,7 @@ export class MatchSession {
     lobbyError: '',
     chat: [],
     chatNotice: '',
+    radio: {},
     cosmetics: {},
     duelQueue: null,
     ratingUpdate: null,
@@ -855,6 +862,18 @@ export class MatchSession {
         this.emit();
         break;
       }
+      case 'voice': {
+        const id = String(data.playerId ?? '');
+        if (!id || id === this.state.playerId) return;
+        const on = data.transmitting === true;
+        if (on === id in this.state.radio) return;
+        const radio = { ...this.state.radio };
+        if (on) radio[id] = String(data.playerName ?? '') || 'teammate';
+        else delete radio[id];
+        this.state.radio = radio;
+        this.emit();
+        break;
+      }
       case 'lobby_signal': {
         const from = String(data.from ?? '');
         const signal = data.signal;
@@ -945,6 +964,12 @@ export class MatchSession {
         if (msg.event === 'left') {
           const gone = String(data.playerId ?? '');
           this.state.peers = this.state.peers.filter((p) => p.id !== gone);
+          // A teammate who drops mid-sentence never sends the key-up.
+          if (gone in this.state.radio) {
+            const radio = { ...this.state.radio };
+            delete radio[gone];
+            this.state.radio = radio;
+          }
           if (this.state.cosmetics[gone]) {
             const rest = { ...this.state.cosmetics };
             delete rest[gone];
@@ -1235,6 +1260,7 @@ export class MatchSession {
       // A match's chat belongs to that match; the lobby has its own.
       chat: [],
       chatNotice: '',
+      radio: {},
       cosmetics: {},
       duelQueue: null,
       // The last duel's result outlives the room it was played in.

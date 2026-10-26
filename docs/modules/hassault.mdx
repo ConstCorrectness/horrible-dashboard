@@ -1885,12 +1885,32 @@ The rest of the design follows from making that trade meaningful:
   reload is a large piece of information — so it is left as one, not smuggled in
   with the audio.
 
-Audio is **synthesized, never sampled** (`audio.ts` in the browser,
-`apps/native-fps/src/audio.rs` natively) — the same licensing rule that keeps AC's
-maps and textures out of this repo. A footstep is a band-passed noise burst with an
-envelope and a sine thump under it; a shot is a brighter, louder one. Nothing is
-downloaded, so the first sound of a match is as instant as the last, and none of it
-is anybody else's copyright.
+Audio is **generated, never sampled from anybody else's game** (`audio.ts` in the
+browser, `apps/native-fps/src/audio.rs` natively) — the same licensing rule that
+keeps AC's maps and textures out of this repo. Shots, impacts and grenades are
+synthesized live from a timbre table. Footsteps, reloads and radio callouts are
+`.wav` files in `apps/web/public/sounds/hassault/`, made by
+`tools/hassault_generate_sounds.py`, with the live synth as their fallback until
+they decode:
+
+- **Footsteps** are four takes per surface, picked at random and never the same take
+  twice in a row. Each is a filtered-noise heel strike and a lighter toe roll, high-passed
+  at 70 Hz. The first version put 80% of a step's energy below 150 Hz with a pitched
+  sine "thump", which is what made walking sound like stomping, and its sand step
+  buzzed from a periodic 160 Hz modulation.
+- **Callouts** are neural TTS (`edge-tts`, voice `VOICE` in the generator) under a
+  light radio band. They replaced a formant synthesizer, which is why the old ones
+  sounded like a robot. "Reloading!" repeats at most every 8 s.
+- **Levels** are mastered by A-weighted short-term loudness per category, because
+  unweighted RMS counts inaudible bass. Your own steps play at `OWN_STEP_GAIN` of
+  somebody else's: theirs are information, yours are not.
+- **A limiter** ends the game bus. A rifle shot alone peaks near 0 dBFS, and a
+  firefight measured +6 to +8 dBFS into a bus with no headroom control, which
+  clipped. The trim after it cancels the compressor's automatic makeup gain, so
+  anything under the threshold leaves at the level it arrived.
+
+The files stay at 24 kHz because the native client embeds them and plays them at
+`WAV_SAMPLE_RATE`; the browser resamples on decode.
 
 #### A weapon's voice is derived, not tabulated
 
@@ -2061,7 +2081,10 @@ and a test fails if any action's group is missing from that list. The
   (the `voice` indicator event). In lobby voice with the
   `hassault.voice.pushToTalk` setting on, it also opens your mic, which is
   otherwise closed. The native client has the radio indicator only, since lobby
-  voice lives in the pane.
+  voice lives in the pane. In the pane, `RadioIndicator` lists everyone talking at
+  the left edge, you included: your own key, teammates' `voice` events, and anyone
+  the lobby mesh measures as speaking (`radio.ts`). The hosted games server relays
+  `voice` to the sender's team, as the node's channel does.
 - **Chat, everyone (`chatAll`, Y) and team (`chatTeam`, U).** Noclip moved from V
   to N to make room.
 

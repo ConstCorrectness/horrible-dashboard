@@ -160,9 +160,7 @@ def test_a_new_join_opens_its_own_room(referee: HassaultReferee):
     asyncio.run(go())
 
 
-def test_a_new_room_still_counts_against_the_cap(
-    referee: HassaultReferee, monkeypatch
-):
+def test_a_new_room_still_counts_against_the_cap(referee: HassaultReferee, monkeypatch):
     monkeypatch.setenv("HASSAULT_MAX_ROOMS", "1")
 
     async def go():
@@ -240,7 +238,14 @@ def test_a_shot_is_resolved_by_the_server(referee: HassaultReferee):
                 floor = world.floor_at(int(vx), int(vy))
                 eye = floor + 4.5
                 for dx, dy in (
-                    (-12, 0), (12, 0), (0, -12), (0, 12), (-8, 0), (8, 0), (0, -8), (0, 8)
+                    (-12, 0),
+                    (12, 0),
+                    (0, -12),
+                    (0, 12),
+                    (-8, 0),
+                    (8, 0),
+                    (0, -8),
+                    (0, 8),
                 ):
                     sx, sy = vx + dx, vy + dy
                     if world.floor_at(int(sx), int(sy)) != floor:
@@ -592,7 +597,10 @@ def test_voice_signaling_routed_between_room_peers(server):
                     {
                         "channel": "hassault",
                         "event": "lobby_signal",
-                        "data": {"to": bob_id, "signal": {"type": "offer", "sdp": "fake"}},
+                        "data": {
+                            "to": bob_id,
+                            "signal": {"type": "offer", "sdp": "fake"},
+                        },
                     }
                 )
             )
@@ -606,6 +614,57 @@ def test_voice_signaling_routed_between_room_peers(server):
                 pytest.fail("Bob never received lobby_signal")
 
 
+def test_the_radio_indicator_reaches_a_teammate(server):
+    """`voice` is relayed to the sender's team, so the HUD can show who is talking.
+
+    Three seats, so whatever the balancer does, two of them share a team.
+    """
+
+    def join(ws, room=None):
+        data = {"map": "hd_pit", **({"room": room} if room else {})}
+        ws.send_text(json.dumps({"channel": "hassault", "event": "join", "data": data}))
+        welcome = json.loads(ws.receive_text())
+        assert welcome["event"] == "welcome"
+        return welcome["data"]
+
+    with (
+        server.websocket_connect("/hassault-ws?guest=1&name=Alice") as ws1,
+        server.websocket_connect("/hassault-ws?guest=1&name=Bob") as ws2,
+        server.websocket_connect("/hassault-ws?guest=1&name=Cara") as ws3,
+    ):
+        first = join(ws1)
+        seats = [
+            (ws1, first),
+            (ws2, join(ws2, first["room"])),
+            (ws3, join(ws3, first["room"])),
+        ]
+        # The welcome does not carry a team; the room does.
+        room = hassault_rooms.referee.server.rooms[first["room"]]
+        team = {p.id: p.team for p in room.players.values()}
+        pair = next(
+            (a, b)
+            for i, a in enumerate(seats)
+            for b in seats[i + 1 :]
+            if team[a[1]["playerId"]] == team[b[1]["playerId"]]
+        )
+        (talker, talker_seat), (listener, _) = pair
+        talker.send_text(
+            json.dumps(
+                {
+                    "channel": "hassault",
+                    "event": "voice",
+                    "data": {"transmitting": True},
+                }
+            )
+        )
+        for _ in range(200):
+            msg = json.loads(listener.receive_text())
+            if msg["event"] == "voice":
+                assert msg["data"]["playerId"] == talker_seat["playerId"]
+                assert msg["data"]["transmitting"] is True
+                break
+        else:
+            pytest.fail("the teammate never saw the radio indicator")
 
 
 # ---------------------------------------------------------------------------
@@ -634,12 +693,17 @@ def test_only_the_host_can_change_a_room_setting(referee: HassaultReferee):
         a, b = seat("alice"), seat("bob")
         await referee.join(a, "hd_pit")
         await referee.join(b, "hd_pit")
-        refused = await referee.set_room_setting(b, {"key": "show_hitboxes", "value": True})
+        refused = await referee.set_room_setting(
+            b, {"key": "show_hitboxes", "value": True}
+        )
         assert refused and "host" in refused
         room = referee.server.player_for(a)[0]
         assert referee.settings_for(room.id)["show_hitboxes"] is False
 
-        assert await referee.set_room_setting(a, {"key": "show_hitboxes", "value": True}) is None
+        assert (
+            await referee.set_room_setting(a, {"key": "show_hitboxes", "value": True})
+            is None
+        )
         assert referee.settings_for(room.id)["show_hitboxes"] is True
         # Everyone in the room hears it, the host included.
         for conn in (a, b):
@@ -652,7 +716,9 @@ def test_an_unknown_or_non_boolean_setting_is_refused(referee: HassaultReferee):
     async def go():
         a = seat("alice")
         await referee.join(a, "hd_pit")
-        assert await referee.set_room_setting(a, {"key": "server.cheats", "value": True})
+        assert await referee.set_room_setting(
+            a, {"key": "server.cheats", "value": True}
+        )
         assert await referee.set_room_setting(a, {"key": "show_hitboxes", "value": "1"})
 
     asyncio.run(go())
@@ -665,7 +731,12 @@ def test_the_next_seat_becomes_host_when_the_host_leaves(referee: HassaultRefere
         second = await referee.join(b, "hd_pit")
         await referee.leave(a)
         assert _settings_events(b)[-1]["hostId"] == second["playerId"]
-        assert await referee.set_room_setting(b, {"key": "grenade_trajectory", "value": True}) is None
+        assert (
+            await referee.set_room_setting(
+                b, {"key": "grenade_trajectory", "value": True}
+            )
+            is None
+        )
 
     asyncio.run(go())
 
@@ -673,11 +744,19 @@ def test_the_next_seat_becomes_host_when_the_host_leaves(referee: HassaultRefere
 def test_a_refused_setting_over_the_wire_does_not_end_the_match(server):
     """A refusal is its own event: `error` would tell the client the match failed."""
     with server.websocket_connect("/hassault-ws?guest=1&name=Host") as ws:
-        ws.send_text(json.dumps({"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}))
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}
+            )
+        )
         assert json.loads(ws.receive_text())["event"] == "welcome"
         ws.send_text(
             json.dumps(
-                {"channel": "hassault", "event": "room_set", "data": {"key": "nope", "value": True}}
+                {
+                    "channel": "hassault",
+                    "event": "room_set",
+                    "data": {"key": "nope", "value": True},
+                }
             )
         )
         for _ in range(200):
