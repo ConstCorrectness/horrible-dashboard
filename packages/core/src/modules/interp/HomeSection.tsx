@@ -21,15 +21,7 @@ import { S } from './styles';
 import { locusLabel } from './SuiteFrame';
 import { SUITE_TOOLS } from './tools';
 
-function Tile({
-  label,
-  children,
-  index,
-}: {
-  label: string;
-  children: ReactNode;
-  index: number;
-}) {
+function Tile({ label, children, index }: { label: string; children: ReactNode; index: number }) {
   return (
     <div style={{ ...S.tile, ...S.stagger(index) }}>
       <div style={S.heading}>{label}</div>

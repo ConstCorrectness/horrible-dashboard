@@ -1,0 +1,14 @@
+{
+  "_doc": "llama.cpp set_swa_pattern(period): of every `period` layers, all but the last are windowed; period 0 windows every layer. Read by backend/tests/test_attention_layout.py and packages/webml/src/gguf/__tests__/arch.test.ts so the Python layout and the WebGPU engine cannot drift apart.",
+  "cases": [
+    {
+      "period": 6,
+      "layers": 13,
+      "windowed": [true, true, true, true, true, false, true, true, true, true, true, false, true]
+    },
+    { "period": 2, "layers": 5, "windowed": [true, false, true, false, true] },
+    { "period": 4, "layers": 8, "windowed": [true, true, true, false, true, true, true, false] },
+    { "period": 1, "layers": 3, "windowed": [false, false, false] },
+    { "period": 0, "layers": 3, "windowed": [true, true, true] }
+  ]
+}

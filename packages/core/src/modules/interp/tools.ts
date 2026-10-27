@@ -52,6 +52,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     when: 'Head counts and KV sharing, where the bytes sit, blocks that differ.',
   },
   {
+    section: SUITE_SECTIONS.attention,
+    label: 'Attention',
+    glyph: 'attention',
+    group: 'Weights',
+    question: 'Which layers are local, global, chunked or recurrent — and what does it cost?',
+    when: 'Sliding windows, KV sharing, K=V, gated output, and the KV cache the pattern buys.',
+  },
+  {
     section: SUITE_SECTIONS.design,
     label: 'Design',
     glyph: 'pencil',

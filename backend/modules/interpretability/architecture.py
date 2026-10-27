@@ -183,6 +183,7 @@ def _build(
     heads_per_layer: list[int] | None = None,
     kv_heads_per_layer: list[int] | None = None,
     ffn_dim: int | None,
+    ffn_per_layer: list[int] | None = None,
     activation: str | None,
     vocab: int | None,
     context: int | None,
@@ -229,6 +230,7 @@ def _build(
     ffn = (
         FfnSpec(
             intermediateSize=ffn_dim,
+            intermediateSizePerLayer=ffn_per_layer,
             activation=activation,
             expansionRatio=(round(ffn_dim / hidden, 2) if ffn_dim and hidden else None),
             gated=gated,
@@ -279,12 +281,53 @@ def from_ollama_show(
     so this is the highest-confidence source available."""
     info: dict[str, Any] = data.get("model_info") or {}
     details: dict[str, Any] = data.get("details") or {}
-    family = (
-        str(info.get("general.architecture") or details.get("family") or "") or None
+    return from_gguf_metadata(
+        model,
+        info,
+        source="ollama",
+        source_detail=endpoint,
+        family_hint=details.get("family"),
+        quant=details.get("quantization_level"),
     )
 
+
+def from_gguf_header(
+    model: str, path: str, metadata: dict[str, Any]
+) -> ModelArchitecture:
+    """Normalize a GGUF file's own header — the same keys Ollama's `model_info`
+    carries, read straight from the file.
+
+    This is what an LM Studio or llama.cpp model gets now. Those servers expose no
+    architecture endpoint, so the description used to come from the repo's
+    `config.json` even when the weights file was sitting on disk and readable:
+    a description of the repo, standing in for the weights it was converted from.
+    """
+    vocab = _int(_first_suffix(metadata, "vocab_size"))
+    if vocab is None and isinstance(metadata.get("tokenizer.ggml.tokens"), list):
+        vocab = len(metadata["tokenizer.ggml.tokens"])
+    return from_gguf_metadata(
+        model,
+        metadata,
+        source="gguf",
+        source_detail=path,
+        vocab=vocab,
+    )
+
+
+def from_gguf_metadata(
+    model: str,
+    info: dict[str, Any],
+    *,
+    source: str,
+    source_detail: str,
+    family_hint: str | None = None,
+    quant: str | None = None,
+    vocab: int | None = None,
+) -> ModelArchitecture:
+    """GGUF metadata → `ModelArchitecture`, whichever way the metadata arrived."""
+    family = str(info.get("general.architecture") or family_hint or "") or None
+
     notes: list[str] = []
-    quant = details.get("quantization_level")
     if quant:
         # Worth stating plainly: quantization changes the numerics, not the shape,
         # so the diagram is still accurate but the weights are not full precision.
@@ -299,10 +342,16 @@ def from_ollama_show(
             "Head counts vary by block (the GGUF stores them per layer); the headline "
             "figure is the maximum — select a block to see its own."
         )
+    ffn_dim, ffn_per_layer = _scalar_or_max(_first_suffix(info, "feed_forward_length"))
+    if ffn_per_layer:
+        notes.append(
+            "The FFN width varies by block (stored per layer); the headline figure is "
+            "the maximum."
+        )
 
     return _build(
-        source="ollama",
-        source_detail=endpoint,
+        source=source,
+        source_detail=source_detail,
         model=model,
         family=family,
         layers=_int(_first_suffix(info, "block_count")),
@@ -312,9 +361,10 @@ def from_ollama_show(
         heads_per_layer=heads_per_layer,
         kv_heads_per_layer=kv_heads_per_layer,
         head_dim=_int(_first_suffix(info, "attention.key_length")),
-        ffn_dim=_int(_first_suffix(info, "feed_forward_length")),
+        ffn_dim=ffn_dim,
+        ffn_per_layer=ffn_per_layer,
         activation=None,  # GGUF doesn't record the activation function.
-        vocab=_int(_first_suffix(info, "vocab_size")),
+        vocab=vocab if vocab is not None else _int(_first_suffix(info, "vocab_size")),
         context=_int(_first_suffix(info, "context_length")),
         rope_theta=_float(_first_suffix(info, "rope.freq_base")),
         sliding_window=_int(_first_suffix(info, "attention.sliding_window")),

@@ -166,14 +166,20 @@ function kvCacheBytes(arch: ModelArchitecture, ctx: number): number | null {
 export function ModelInspector() {
   const arch = useArchitecture();
   const tensors = useTensors();
+  const attention = useSyncExternalStore(
+    interpretabilityStore.subscribe,
+    interpretabilityStore.getAttention,
+  );
   const [selection, setSelection] = useState<Selection>({ stage: 'model', layer: null });
   const [layerOpen, setLayerOpen] = useState(false);
 
   // The inventory is per-model and large, so it is pulled on mount rather than
-  // riding the per-turn refresh. Re-runs when the model changes.
+  // riding the per-turn refresh. Re-runs when the model changes. The attention
+  // layout comes from the same header and rides along.
   const modelName = arch?.model ?? '';
   useEffect(() => {
     void interpretabilityStore.ensureTensors();
+    void interpretabilityStore.ensureAttention();
   }, [modelName]);
 
   const inventory = tensors?.source === 'gguf' ? tensors : null;
@@ -286,11 +292,11 @@ export function ModelInspector() {
    * every time, so identity-keyed memos would rebuild every node on every poll —
    * and React Flow, handed new node objects, drops the viewport mid-pan.
    */
-  const graphKey = inspectGraphKey(arch, inventory, selection, layerOpen);
+  const graphKey = inspectGraphKey(arch, inventory, selection, layerOpen, attention);
   const graph = useMemo(
     () =>
       arch
-        ? buildInspectGraph(arch, inventory, selection, layerOpen)
+        ? buildInspectGraph(arch, inventory, selection, layerOpen, attention)
         : { nodes: [], edges: [], focusId: null },
     // `graphKey` is the ONLY dependency, by design. `useMemo` runs during render,
     // so the values read here are always current — the deliberate choice is not to
@@ -377,7 +383,7 @@ export function ModelInspector() {
   const attn = arch.attention;
 
   const sourceChip =
-    arch.source === 'ollama' ? (
+    arch.source === 'ollama' || arch.source === 'gguf' ? (
       <span
         className="mx-src mx-src-strong"
         title={`Read from the loaded weights via ${arch.sourceDetail}`}

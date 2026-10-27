@@ -84,8 +84,13 @@ function Stack({ data }: NodeProps) {
               type="button"
               className={`ix-tick${rail.selected === tick.index ? ' ix-tick-on' : ''}`}
               data-band={tick.band}
+              data-mixer={tick.mixer}
               style={{ height: `${tick.weight * 100}%` }}
-              title={`Block ${tick.index}${rail.bands > 1 ? ` · shape group ${tick.band + 1}` : ''}`}
+              title={
+                `Block ${tick.index}` +
+                (tick.mixer ? ` · ${tick.mixer}${tick.window ? ` ${tick.window}` : ''}` : '') +
+                (rail.bands > 1 ? ` · shape group ${tick.band + 1}` : '')
+              }
               onClick={(event) => {
                 event.stopPropagation();
                 onPickLayer(tick.index);

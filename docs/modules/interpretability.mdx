@@ -293,12 +293,20 @@ Two things in it are load-bearing:
 
 | Source | Available for | What it gives |
 | --- | --- | --- |
-| The model's own **GGUF header** | the node's own llama.cpp server, Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size |
+| The model's own **GGUF header** | the node's own llama.cpp server, Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size — and, read the same way, the **description** and the per-layer **attention layout** |
 | GGUF `model_info` via `/api/show` | Ollama | The **description**, written from the weights the server loaded |
-| `config.json` from a HF repo | any (the only option for LM Studio / vLLM) | The description, but strictly of the *repo* |
+| `config.json` from a HF repo | any server whose weights file cannot be found | The description, but strictly of the *repo* |
 
 The pane labels which it used (`weights` / `repo`, plus a `gguf` chip when the
 inventory is present) rather than presenting them interchangeably.
+
+`/architecture` reads the header itself (`architecture.from_gguf_header`) whenever the
+weights file can be located — which is what an LM Studio model gets now. It used to
+fall straight through to the repo's `config.json` for any server without a metadata
+endpoint, describing the repo while the file it was converted into sat readable on
+disk. Gaps are still filled from the repo the GGUF names as its base model, never
+overriding a stated value. All three header readers share `gguf.read_header_cached`,
+keyed on path, size and mtime so a re-downloaded file under the same name is re-read.
 
 The split is load-bearing. A description can be approximated from a repo when the
 weights are unreachable; an **inventory cannot** — a `config.json` lists no tensors —
@@ -322,6 +330,14 @@ attention at all. `_scalar_or_max` keeps the array as `headsPerLayer` /
 `kvHeadsPerLayer`, reports the maximum as the headline with a note saying so, and
 the attention node's subtitle uses the **selected block's** own count ("no attention
 in this block" where it is zero). A uniform array collapses to its scalar.
+
+With the per-layer [attention layout](./interp-suite.mdx#attention) loaded, the rail
+also carries each block's **mixer**: an accent cap on the global layers, a dashed cap
+on blocks with no attention at all (state-space, linear, convolution), none on the
+windowed majority. The open block's attention node is labelled by its own mixer —
+"Sliding-window attention · window 512 · KV from L13" — rather than by the model's
+one head count. Shape bands cannot do this alone: Gemma 3's windowed and global
+layers have identical tensor shapes.
 
 ### Following the layer stepper
 
@@ -804,6 +820,7 @@ not tiles you glance at.
 | GET | `/api/interpretability/model` | Model metadata + true context length |
 | GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
 | GET | `/api/interpretability/tensors` | The GGUF tensor inventory; no fallback source |
+| GET | `/api/interpretability/attention` | The per-layer attention layout from the GGUF header; no fallback source |
 | GET | `/api/interpretability/graph/specs` | The designer's node catalog and templates |
 | POST | `/api/interpretability/graph/code` | A design graph → a PyTorch module (stateless) |
 | POST | `/api/interpretability/graph/validate` | Shape inference and parameter counts (stateless) |

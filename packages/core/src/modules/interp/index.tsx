@@ -27,6 +27,7 @@ const ContextBody = lazyPane(() => import('./bodies/prompt'), 'ContextBody');
 const RunsBody = lazyPane(() => import('./bodies/prompt'), 'RunsBody');
 const ModelBody = lazyPane(() => import('./bodies/weights'), 'ModelBody');
 const DesignBody = lazyPane(() => import('./bodies/weights'), 'DesignBody');
+const AttentionBody = lazyPane(() => import('./attention/AttentionSection'), 'AttentionBody');
 const TracesBody = lazyPane(() => import('./bodies/activations'), 'TracesBody');
 const StepperBody = lazyPane(() => import('./bodies/activations'), 'StepperBody');
 const LensBody = lazyPane(() => import('./bodies/activations'), 'LensBody');
@@ -40,6 +41,7 @@ const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['compon
   context: { title: 'Context window', component: ContextBody },
   runs: { title: 'Agent runs', component: RunsBody },
   model: { title: 'Model explorer', component: ModelBody },
+  attention: { title: 'Attention layout', component: AttentionBody },
   design: { title: 'Model designer', component: DesignBody },
   traces: { title: 'Activation traces', component: TracesBody },
   stepper: { title: 'Layer stepper', component: StepperBody },

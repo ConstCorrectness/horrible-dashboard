@@ -110,7 +110,9 @@ const GEMMA3_SWA_PATTERN = 6;
  */
 export function layerWindow(config: ModelConfig, l: number): number {
   if (!config.slidingWindow) return 0;
-  return l % config.swaPattern < config.swaPattern - 1 ? config.slidingWindow : 0;
+  // A period of 0 windows every layer — llama.cpp's `n_pattern == 0 ||` clause.
+  const p = config.swaPattern;
+  return p === 0 || l % p < p - 1 ? config.slidingWindow : 0;
 }
 
 /**

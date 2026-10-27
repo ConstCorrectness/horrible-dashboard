@@ -167,11 +167,88 @@ class AttentionSpec(BaseModel):
     kvHeadsPerLayer: list[int] | None = None
 
 
+class LayerAttention(BaseModel):
+    """What one block's token mixer is, read per layer rather than per model.
+
+    `kind` is the block's mixer: `global` (full causal attention), `sliding` (a
+    window of `window` keys), `chunked` (attention only within fixed chunks —
+    Llama 4), `linear` (linear attention / Gated DeltaNet, a recurrent state),
+    `ssm` (a Mamba-style state space block), `conv` (a short convolution — LFM2),
+    `mla` (DeepSeek's compressed-KV attention) or `none`.
+
+    `basis` says how it was known: `metadata` when the GGUF states it per layer,
+    `rule` when it follows from the family's llama.cpp loader (Gemma 3 is "five
+    windowed, one global" without saying so per layer), `tensors` when only the
+    tensor directory shows it. A rule is an inference and is labelled as one.
+    """
+
+    layer: int
+    kind: str
+    basis: str
+    window: int | None = None
+    heads: int | None = None
+    kvHeads: int | None = None
+    headDimK: int | None = None
+    headDimV: int | None = None
+    ropeBase: float | None = None
+    ropeDims: int | None = None
+    #: This layer applies no rotary embedding (Llama 4's global layers).
+    nope: bool = False
+    #: This layer computes no K/V of its own and attends over this layer's cache
+    #: (Gemma 3n / Gemma 4 "shared KV" layers).
+    kvSourceLayer: int | None = None
+    #: The value is the key: the layer has no V projection (Gemma 4 global layers).
+    kEqV: bool = False
+    #: A sigmoid gate on the attention output (Qwen3-Next / Qwen3.5 full layers).
+    outputGate: bool = False
+    #: Learned attention sinks (`attn_sinks`, gpt-oss).
+    sinks: bool = False
+    #: A multi-token-prediction layer appended after the main stack.
+    mtp: bool = False
+    #: fp16 bytes this layer adds to the KV cache per token; 0 when it reuses
+    #: another layer's cache or keeps a fixed-size state instead.
+    kvBytesPerToken: int = 0
+    #: Upper bound on how far back (in tokens) information can have travelled to a
+    #: position by the end of this layer. None means the whole context.
+    reach: int | None = None
+
+
+class KvCachePoint(BaseModel):
+    """The KV cache at one context length: as the model is built, and as it would
+    be if every attention layer were global with its own cache."""
+
+    context: int
+    bytes: int
+    bytesIfGlobal: int
+
+
+class AttentionLayout(BaseModel):
+    """The per-layer attention picture of one model."""
+
+    source: str = "none"  # gguf | none
+    path: str = ""
+    family: str | None = None
+    layers: list[LayerAttention] = Field(default_factory=list)
+    #: kind → how many blocks have it.
+    counts: dict[str, int] = Field(default_factory=dict)
+    #: A one-line reading of the repeat, e.g. "5 sliding : 1 global, ×8".
+    pattern: str = ""
+    kvCache: list[KvCachePoint] = Field(default_factory=list)
+    #: Places where the metadata, the family rule and the tensors disagree. Shown,
+    #: never silently resolved.
+    conflicts: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
 class FfnSpec(BaseModel):
     """The per-block feed-forward network. `gated` changes the drawing: a gated
     FFN (SwiGLU/GeGLU) has two up-projections multiplied together, not one."""
 
     intermediateSize: int | None = None
+    #: Per-block sizes when the GGUF stores an array (Gemma 4 E2B doubles its FFN
+    #: halfway down). `intermediateSize` is then the maximum.
+    intermediateSizePerLayer: list[int] | None = None
     activation: str | None = None
     expansionRatio: float | None = None
     gated: bool | None = None

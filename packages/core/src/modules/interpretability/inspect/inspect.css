@@ -161,6 +161,22 @@
   background: color-mix(in srgb, var(--warn) 55%, transparent);
 }
 
+/* The block's mixer, from the per-layer attention layout, as a cap on the tick:
+   the accent marks the global layers among windowed ones, a dashed cap the blocks
+   with no attention at all. Windowed blocks carry no cap — they are the common case
+   in the models where this matters, and the exceptions are what the eye should
+   find. Drawn as a border so it composes with the shape band's fill. */
+.ix-tick[data-mixer='global'],
+.ix-tick[data-mixer='mla'] {
+  border-top: 2px solid var(--accent);
+}
+
+.ix-tick[data-mixer='linear'],
+.ix-tick[data-mixer='ssm'],
+.ix-tick[data-mixer='conv'] {
+  border-top: 2px dashed var(--text-dim);
+}
+
 .ix-tick-on {
   background: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-contrast);

@@ -27,6 +27,7 @@ Format reference: the GGUF spec (ggml-org/ggml, docs/gguf.md). Structure is
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -341,6 +342,24 @@ def read_header(path: str | os.PathLike[str]) -> GgufFile:
         metadata=metadata,
         tensors=tensors,
     )
+
+
+@functools.lru_cache(maxsize=4)
+def _read_header_keyed(path: str, size: int, mtime_ns: int) -> GgufFile:
+    return read_header(path)
+
+
+def read_header_cached(path: str | os.PathLike[str]) -> GgufFile:
+    """`read_header`, remembered per file *version*.
+
+    Three routes read the same header (the inventory, the description and the
+    attention layout), and a 256k-entry tokenizer array makes each read a few
+    hundred milliseconds. The key includes size and mtime: a cache keyed on the
+    path alone would keep serving a file that was re-downloaded or re-quantized
+    under the same name. Callers must not mutate the result — it is shared.
+    """
+    stat = Path(path).stat()
+    return _read_header_keyed(str(path), stat.st_size, stat.st_mtime_ns)
 
 
 # ── locating the file Ollama loaded ──────────────────────────────────────────

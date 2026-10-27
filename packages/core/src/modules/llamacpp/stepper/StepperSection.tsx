@@ -507,6 +507,7 @@ export function StepperSection() {
           </div>
           <StageView
             traceId={traceId}
+            modelPath={detail.trace.modelPath}
             step={step}
             tokens={tokens}
             position={position}

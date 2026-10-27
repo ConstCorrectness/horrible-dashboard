@@ -22,6 +22,7 @@ so they are one pane now.
 | Prompt | **Context** | [interpretability](./interpretability.mdx) context window |
 | Prompt | **Runs** | [agentpedia](./agentpedia.mdx), with Runs / Harness / Forks / Duels as sub-tabs |
 | Weights | **Model** | the model explorer's Inspect view |
+| Weights | **Attention** | what every block's token mixer is — see below |
 | Weights | **Design** | the model designer |
 | Activations | **Traces** | [llama.cpp](./llamacpp.mdx) traces |
 | Activations | **Stepper** | the layer stepper |
@@ -31,6 +32,60 @@ Sections and Home's cards both come from `tools.ts`, so the rail and the map can
 disagree. Each body is registered as an `embedded` view (`interp.<section>`), so
 `show("Stepper")` and `openPane` still reach it by name. Every section sits under a
 shared strip naming the model, the model locus and the trace.
+
+## Attention
+
+One scalar head count does not describe the models worth looking at. Gemma 4 windows
+five of every six layers (four of five on E2B), gives the sixth twice the head width
+and a quarter of the KV heads and drops its V projection; Gemma 4 E2B's last twenty
+layers keep no KV cache of their own; Qwen3.5 replaces three of every four layers
+with Gated DeltaNet; granite-h and LFM2 attend only every few blocks. The Attention
+section draws all of that per layer, from `GET /api/interpretability/attention`
+(`backend/modules/interpretability/attention_layout.py`).
+
+### How each layer is known
+
+Every layer carries a `basis`, and the card shows it:
+
+| Basis | Meaning | Example |
+| --- | --- | --- |
+| `metadata` | the GGUF states it per layer | `gemma4.attention.sliding_window_pattern` (an array, `true` = windowed), a per-layer `head_count_kv` with zeros, `full_attention_interval`, `shared_kv_layers` |
+| `rule` | the family's llama.cpp loader implies it | Gemma 3 stores no pattern; `set_swa_pattern(6)` windows all but the last of every six. Llama 4's 8192 chunk is a loader constant |
+| `tensors` | only the tensor directory shows it | `ssm_*` (Mamba), `shortconv` (LFM2), `attn_qkv` + `ssm_*` (DeltaNet), a missing `attn_v` (K=V), `attn_sinks` |
+
+Where the metadata or rule and the tensors disagree, the layout reports a
+**conflict** and draws what the tensors show — the file is the physical fact. The
+K projection's width is cross-checked against KV heads × head width on every
+attention layer. A family with a stated window but no known rule is drawn global with
+a note, never guessed into a pattern.
+
+`set_swa_pattern`'s convention — of every *n* layers all but the last are windowed,
+*n* = 0 windowing all — is shared with the WebGPU engine's `layerWindow`, and both
+test suites read one table (`backend/tests/fixtures/swa_patterns.json`) so the two
+cannot drift apart.
+
+### What it draws
+
+- **The ribbon**: one column per block, coloured by mixer, height by head width (so
+  Gemma 4's 512-wide global layers stand out from its 256-wide local ones), faded
+  where the block reads another block's KV with an arc from that source, dashed
+  where only the family rule says so, and marks for K=V, gated output, sinks and
+  NoPE. A click publishes the model locus, so **Model** opens that block and
+  **Stepper** can step it.
+- **The KV cache** at 1k–max context, fp16, as built against what the same layers
+  would cost all-global with their own caches. Each pair is on its own scale — the
+  ratio is the point; the size is printed beneath. On Gemma 4 E2B it is 774 MB
+  against 5.4 GB at 128k. An estimate: K and V at fp16, K=V counted once.
+- **How far back by each depth**: an upper bound on the distance information can
+  have travelled by the end of each layer — a windowed layer extends it by its
+  window, a global or recurrent one reaches the whole context.
+- **The block card**: the layer's facts, its basis, and a small causal mask of its
+  kind.
+
+In the **Stepper**, a sliding layer's attention map gets its window edge drawn over
+it — but only when the trace was recorded from the very file the layout was read
+from. The layout follows the agent's loaded model and a trace can be of any GGUF;
+one model's window over another's pass would be a confident wrong answer.
 
 ## Two layout-shell features it introduced
 

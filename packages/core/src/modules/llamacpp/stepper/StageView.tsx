@@ -16,9 +16,10 @@
  * Every read goes through the server's stride-aware slice. A `summary` record has
  * no values by construction and says so instead of drawing anything.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { HeatCanvas } from '../../../viz/HeatCanvas';
+import { interpretabilityStore } from '../../interpretability/store';
 import {
   getExperts,
   getLensGrid,
@@ -143,8 +144,34 @@ function PlaneView({ traceId, step, tokens, position, onPosition }: ViewProps) {
 
 // ── attention ───────────────────────────────────────────────────────────────
 
-function AttentionView({ traceId, step, tokens, position, onPosition }: ViewProps) {
+/** Two spellings of one file path: separators and drive-letter case differ. */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+  return Boolean(a && b) && norm(a) === norm(b);
+}
+
+/**
+ * The window of the traced block, when the attention layout describes *this*
+ * trace's weights file. The layout follows the agent's loaded model and a trace
+ * can be of any GGUF; drawing one model's window over another's pass would be a
+ * confident wrong answer, so a mismatch draws nothing.
+ */
+function useTracedWindow(modelPath: string | undefined, layer: number | null): number | null {
+  const layout = useSyncExternalStore(
+    interpretabilityStore.subscribe,
+    interpretabilityStore.getAttention,
+  );
+  useEffect(() => {
+    void interpretabilityStore.ensureAttention();
+  }, []);
+  if (!layout || layer === null || !modelPath || !samePath(layout.path, modelPath)) return null;
+  const entry = layout.layers[layer];
+  return entry && (entry.kind === 'sliding' || entry.kind === 'chunked') ? entry.window : null;
+}
+
+function AttentionView({ traceId, modelPath, step, tokens, position, onPosition }: ViewProps) {
   const [head, setHead] = useState(0);
+  const swaWindow = useTracedWindow(modelPath, step.layer ?? null);
   const [hover, setHover] = useState<{ row: number; col: number; value: number | null } | null>(
     null,
   );
@@ -207,7 +234,15 @@ function AttentionView({ traceId, step, tokens, position, onPosition }: ViewProp
                 style={{ top: `${(queryRow / m.rows) * 100}%`, height: `${100 / m.rows}%` }}
               />
             )}
+            {swaWindow !== null && <WindowEdge m={m} span={swaWindow} />}
           </div>
+          {swaWindow !== null && (
+            <p className="stp-caption">
+              {m.rowOffset + m.rows > swaWindow
+                ? `A ${swaWindow}-token sliding-window layer: keys left of the line are outside each query's window.`
+                : `A ${swaWindow}-token sliding-window layer — but the whole prompt fits inside the window, so here it attends like a global layer.`}
+            </p>
+          )}
           <p className="stp-caption">
             {hover && hover.value !== null
               ? `${tokenText(tokens, m.rowOffset + hover.row)} → ${tokenText(tokens, hover.col)} · ${hover.value.toFixed(3)}`
@@ -241,6 +276,31 @@ function AttentionView({ traceId, step, tokens, position, onPosition }: ViewProp
         </>
       )}
     </div>
+  );
+}
+
+/** The left edge of each query's window, over the heatmap, in its own units. */
+function WindowEdge({ m, span }: { m: RecordMatrix; span: number }) {
+  const points: string[] = [];
+  for (let r = 0; r < m.rows; r++) {
+    const edge = Math.max(0, m.rowOffset + r - span + 1);
+    points.push(`${edge},${r}`, `${edge},${r + 1}`);
+  }
+  return (
+    <svg
+      className="stp-attn-window"
+      viewBox={`0 0 ${m.cols} ${m.rows}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <polyline
+        points={points.join(' ')}
+        fill="none"
+        stroke="var(--warn)"
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }
 
@@ -393,6 +453,8 @@ function ExpertView({ traceId, step, tokens, position }: ViewProps) {
 
 export interface ViewProps {
   traceId: string;
+  /** The traced weights file — what the attention layout must match to apply. */
+  modelPath?: string;
   step: Step;
   tokens: readonly TraceToken[];
   position: number;

@@ -86,6 +86,8 @@ export interface AttentionSpec {
 
 export interface FfnSpec {
   intermediateSize: number | null;
+  /** Per-block sizes when the GGUF stores an array; `intermediateSize` is the max. */
+  intermediateSizePerLayer?: number[] | null;
   activation: string | null;
   expansionRatio: number | null;
   /** Gated (SwiGLU/GeGLU) FFNs have two up-projections, not one. */
@@ -162,6 +164,58 @@ export interface ModelTensors {
 }
 
 /**
+ * What one block's token mixer is. Mirrors backend `LayerAttention`.
+ *
+ * `basis` is how it was known: `metadata` (the GGUF says so per layer), `rule`
+ * (the family's llama.cpp loader implies it) or `tensors` (only the tensor
+ * directory shows it). A rule is an inference, and the pane labels it as one.
+ */
+export interface LayerAttention {
+  layer: number;
+  /** global | sliding | chunked | linear | ssm | conv | mla | none */
+  kind: string;
+  basis: 'metadata' | 'rule' | 'tensors' | string;
+  window: number | null;
+  heads: number | null;
+  kvHeads: number | null;
+  headDimK: number | null;
+  headDimV: number | null;
+  ropeBase: number | null;
+  ropeDims: number | null;
+  nope: boolean;
+  /** This layer attends over that layer's KV cache instead of its own. */
+  kvSourceLayer: number | null;
+  kEqV: boolean;
+  outputGate: boolean;
+  sinks: boolean;
+  mtp: boolean;
+  /** fp16 KV bytes this layer adds per token; 0 for shared or recurrent layers. */
+  kvBytesPerToken: number;
+  /** Upper bound on how far back information can have come from; null = all of it. */
+  reach: number | null;
+}
+
+export interface KvCachePoint {
+  context: number;
+  bytes: number;
+  bytesIfGlobal: number;
+}
+
+/** The per-layer attention layout. Mirrors backend `AttentionLayout`. */
+export interface AttentionLayout {
+  source: string;
+  path: string;
+  family: string | null;
+  layers: LayerAttention[];
+  counts: Record<string, number>;
+  pattern: string;
+  kvCache: KvCachePoint[];
+  conflicts: string[];
+  notes: string[];
+  error: string | null;
+}
+
+/**
  * Captured turns, newest first, fed by the `interpretability` `/ws` channel and
  * back-filled from the API on open.
  *
@@ -182,6 +236,10 @@ class InterpretabilityStore {
   private tensors: ModelTensors | null = null;
   private tensorsFor: string | null = null;
   private tensorsInFlight: Promise<void> | null = null;
+  // The attention layout, fetched once per model for the same reason.
+  private attention: AttentionLayout | null = null;
+  private attentionFor: string | null = null;
+  private attentionInFlight: Promise<void> | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -198,6 +256,32 @@ class InterpretabilityStore {
   getArchitecture = (): ModelArchitecture | null => this.architecture;
 
   getTensors = (): ModelTensors | null => this.tensors;
+
+  getAttention = (): AttentionLayout | null => this.attention;
+
+  /**
+   * Load the per-layer attention layout for the loaded model, once — the same
+   * contract as `ensureTensors`, and from the same header on the backend.
+   */
+  ensureAttention = (): Promise<void> => {
+    const model = this.modelInfo?.model ?? this.architecture?.model ?? '';
+    if (this.attentionFor === model && this.attention !== null) return Promise.resolve();
+    if (this.attentionInFlight) return this.attentionInFlight;
+    const request = apiGet<AttentionLayout>('/interpretability/attention')
+      .then((res) => {
+        this.attention = res;
+        this.attentionFor = model;
+        this.emit();
+      })
+      .catch(() => {
+        // Backend down or restarting: keep what we had, let the next mount retry.
+      })
+      .finally(() => {
+        this.attentionInFlight = null;
+      });
+    this.attentionInFlight = request;
+    return request;
+  };
 
   /**
    * Load the tensor inventory for the currently loaded model, once.

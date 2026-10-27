@@ -27,7 +27,14 @@
  * selection rather than a second copy of it. That is what lets the model-locus
  * effect (lens -> explorer) keep working with no change at all.
  */
-import type { AttentionSpec, ModelArchitecture, ModelTensors, TensorEntry } from '../store';
+import type {
+  AttentionLayout,
+  AttentionSpec,
+  LayerAttention,
+  ModelArchitecture,
+  ModelTensors,
+  TensorEntry,
+} from '../store';
 
 export interface Selection {
   stage: string;
@@ -64,7 +71,7 @@ export interface InspectEdge {
 export interface LayerRail {
   count: number;
   /** Per block: relative size 0..1, and which shape-signature band it belongs to. */
-  ticks: { index: number; weight: number; band: number }[];
+  ticks: { index: number; weight: number; band: number; mixer?: string; window?: number | null }[];
   bands: number;
   selected: number | null;
 }
@@ -209,13 +216,43 @@ const ATTENTION_LABEL: Record<string, string> = {
   unknown: 'Attention',
 };
 
+/** The block's own mixer, when the per-layer layout names it. */
+const MIXER_LABEL: Record<string, string> = {
+  global: 'Global attention',
+  sliding: 'Sliding-window attention',
+  chunked: 'Chunked attention',
+  mla: 'Latent attention (MLA)',
+  linear: 'Linear attention (recurrent)',
+  ssm: 'State-space block',
+  conv: 'Short convolution',
+  none: 'No token mixer',
+};
+
+/** Facts the per-layer layout adds to the attention node of the open block. */
+function mixerFacts(layer: LayerAttention): string[] {
+  return [
+    layer.window ? `window ${layer.window}` : '',
+    layer.headDimK ? `dim ${layer.headDimK}` : '',
+    layer.kvSourceLayer !== null ? `KV from L${layer.kvSourceLayer}` : '',
+    layer.kEqV ? 'K=V' : '',
+    layer.outputGate ? 'gated' : '',
+    layer.nope ? 'no RoPE' : '',
+    layer.basis === 'rule' ? 'by family rule' : '',
+  ].filter(Boolean);
+}
+
 export function buildInspectGraph(
   arch: ModelArchitecture,
   inventory: ModelTensors | null,
   selection: Selection,
   stackOpen: boolean,
+  attention: AttentionLayout | null = null,
 ): InspectGraph {
   const nodes: InspectNode[] = [];
+  // Per-layer mixers, when the header-derived layout is in. Kind beats the shape
+  // band where both exist: two blocks can share every tensor shape and still be
+  // one windowed and one global (Gemma 3), which only the layout knows.
+  const mixers = attention && !attention.error ? attention.layers : [];
   const edges: InspectEdge[] = [];
   const count = arch.layers ?? inventory?.layerCount ?? 0;
   const tensors = inventory?.tensors ?? [];
@@ -251,7 +288,10 @@ export function buildInspectGraph(
     kind: 'stack',
     label: 'Decoder block',
     sub: `× ${count || '?'}`,
-    facts: bands > 1 ? [`${bands} distinct block shapes`] : [],
+    facts: [
+      mixers.length && attention?.pattern ? attention.pattern : '',
+      bands > 1 ? `${bands} distinct block shapes` : '',
+    ].filter(Boolean),
     selection: { stage: 'block', layer: selection.layer },
     rail: {
       count,
@@ -262,6 +302,8 @@ export function buildInspectGraph(
         // would shift every label after it.
         weight: bytes[i] ? Math.max(0.08, bytes[i] / heaviest) : 0.35,
         band: bandOf[i] ?? 0,
+        mixer: mixers[i]?.kind,
+        window: mixers[i]?.window ?? null,
       })),
       bands,
       selected: selection.layer,
@@ -306,12 +348,15 @@ export function buildInspectGraph(
         selection: { stage: 'norm', layer: selection.layer },
       });
     }
+    const mixer = selection.layer !== null ? mixers[selection.layer] : undefined;
     if (arch.attention) {
       const attn = arch.attention;
       push({
         id: 'attention',
         kind: 'attn',
-        label: ATTENTION_LABEL[attn.kind] ?? 'Attention',
+        label: mixer
+          ? (MIXER_LABEL[mixer.kind] ?? 'Attention')
+          : (ATTENTION_LABEL[attn.kind] ?? 'Attention'),
         sub: (() => {
           // A model that stores head counts per block is described by the selected
           // block's own numbers, not by the headline maximum.
@@ -324,11 +369,13 @@ export function buildInspectGraph(
           if (heads === 0) return 'no attention in this block';
           return `${heads ?? '—'} heads` + (kv != null && kv !== heads ? ` / ${kv} KV` : '');
         })(),
-        facts: [
-          attn.headDim ? `dim ${attn.headDimDerived ? '~' : ''}${attn.headDim}` : '',
-          attn.slidingWindow ? `window ${attn.slidingWindow}` : '',
-          ...factsFor('attention'),
-        ].filter(Boolean),
+        facts: mixer
+          ? [...mixerFacts(mixer), ...factsFor('attention')]
+          : [
+              attn.headDim ? `dim ${attn.headDimDerived ? '~' : ''}${attn.headDim}` : '',
+              attn.slidingWindow ? `window ${attn.slidingWindow}` : '',
+              ...factsFor('attention'),
+            ].filter(Boolean),
         selection: { stage: 'attention', layer: selection.layer },
         attention: attn,
       });
@@ -395,8 +442,11 @@ export function inspectGraphKey(
   inventory: ModelTensors | null,
   selection: Selection,
   stackOpen: boolean,
+  attention: AttentionLayout | null = null,
 ): string {
   return [
+    attention?.pattern ?? '',
+    attention?.layers.length ?? '',
     arch?.model ?? '',
     arch?.layers ?? '',
     arch?.hiddenSize ?? '',

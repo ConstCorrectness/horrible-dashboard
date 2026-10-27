@@ -176,6 +176,22 @@ describe('layerWindow', () => {
   it('windows no layer when the model has no window', () => {
     expect(layerWindow(config(0, 6), 0)).toBe(0);
   });
+
+  // The same table the backend's attention layout is tested against, so the
+  // model explorer and the engine cannot disagree about which layers are local.
+  const shared = JSON.parse(
+    readFileSync(
+      new URL('../../../../../backend/tests/fixtures/swa_patterns.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { cases: { period: number; layers: number; windowed: boolean[] }[] };
+
+  it.each(shared.cases)('agrees with the shared fixture for period $period', (c) => {
+    const windows = Array.from({ length: c.layers }, (_, l) =>
+      layerWindow(config(512, c.period), l),
+    );
+    expect(windows.map((w) => w > 0)).toEqual(c.windowed);
+  });
 });
 
 describe('layerRoped', () => {

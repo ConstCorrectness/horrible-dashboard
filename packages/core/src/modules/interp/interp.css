@@ -33,3 +33,14 @@
 .interp-card-button:hover {
   border-color: var(--accent);
 }
+
+/* Ribbon columns and chart bars: classed, so controls.css leaves their height to
+   the chart they sit in. */
+.interp-col:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.interp-col:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}

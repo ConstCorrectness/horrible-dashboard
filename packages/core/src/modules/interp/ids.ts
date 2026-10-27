@@ -16,6 +16,7 @@ export const SUITE_SECTIONS = {
   context: 'context',
   runs: 'runs',
   model: 'model',
+  attention: 'attention',
   design: 'design',
   traces: 'traces',
   stepper: 'stepper',

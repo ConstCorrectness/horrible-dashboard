@@ -9,7 +9,13 @@ import {
   selectionFor,
   type Selection,
 } from '../inspect/graph';
-import type { AttentionSpec, ModelArchitecture, ModelTensors, TensorEntry } from '../store';
+import type {
+  AttentionLayout,
+  AttentionSpec,
+  ModelArchitecture,
+  ModelTensors,
+  TensorEntry,
+} from '../store';
 
 function arch(over: Partial<ModelArchitecture> = {}): ModelArchitecture {
   return {
@@ -282,6 +288,89 @@ describe('inspectGraphKey', () => {
   it('changes when the model does', () => {
     expect(inspectGraphKey(arch(), null, AT_MODEL, false)).not.toBe(
       inspectGraphKey(arch({ model: 'other' }), null, AT_MODEL, false),
+    );
+  });
+});
+
+describe('the per-layer attention layout on the explorer', () => {
+  // Built the way the backend reports Gemma 3: same tensor shapes on every block,
+  // so the shape bands cannot see the 5:1 pattern — only the layout can.
+  const layout = (n: number): AttentionLayout => ({
+    source: 'gguf',
+    path: 'x.gguf',
+    family: 'gemma3',
+    pattern: '5 sliding : 1 global',
+    counts: {},
+    kvCache: [],
+    conflicts: [],
+    notes: [],
+    error: null,
+    layers: Array.from({ length: n }, (_, layer) => ({
+      layer,
+      kind: (layer + 1) % 6 === 0 ? 'global' : 'sliding',
+      basis: 'rule',
+      window: (layer + 1) % 6 === 0 ? null : 1024,
+      heads: 24,
+      kvHeads: 8,
+      headDimK: 128,
+      headDimV: 128,
+      ropeBase: 10000,
+      ropeDims: 128,
+      nope: false,
+      kvSourceLayer: null,
+      kEqV: false,
+      outputGate: false,
+      sinks: false,
+      mtp: false,
+      kvBytesPerToken: 4096,
+      reach: null,
+    })),
+  });
+
+  it('marks each rail tick with its mixer, which shape bands alone cannot', () => {
+    const g = buildInspectGraph(
+      arch({ layers: 12 }),
+      uniformInventory(12),
+      AT_MODEL,
+      false,
+      layout(12),
+    );
+    const rail = g.nodes.find((n) => n.rail)!.rail!;
+    expect(rail.bands).toBe(1);
+    expect(rail.ticks.map((t) => t.mixer)).toEqual([
+      ...Array(5).fill('sliding'),
+      'global',
+      ...Array(5).fill('sliding'),
+      'global',
+    ]);
+    expect(g.nodes.find((n) => n.rail)!.facts).toContain('5 sliding : 1 global');
+  });
+
+  it("describes the open block's attention by its own mixer", () => {
+    const g = buildInspectGraph(
+      arch({ layers: 12 }),
+      null,
+      { stage: 'block', layer: 3 },
+      true,
+      layout(12),
+    );
+    const attn = g.nodes.find((n) => n.id === 'attention')!;
+    expect(attn.label).toBe('Sliding-window attention');
+    expect(attn.facts).toContain('window 1024');
+    expect(attn.facts).toContain('by family rule');
+    const global = buildInspectGraph(
+      arch({ layers: 12 }),
+      null,
+      { stage: 'block', layer: 5 },
+      true,
+      layout(12),
+    );
+    expect(global.nodes.find((n) => n.id === 'attention')!.label).toBe('Global attention');
+  });
+
+  it('rebuilds when the layout arrives', () => {
+    expect(inspectGraphKey(arch(), null, AT_MODEL, false)).not.toBe(
+      inspectGraphKey(arch(), null, AT_MODEL, false, layout(32)),
     );
   });
 });
