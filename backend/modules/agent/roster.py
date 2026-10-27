@@ -144,6 +144,34 @@ ML_EXPERT_PROMPT = (
 )
 
 
+INTERP_PROMPT = (
+    "You are the Interpretability guide for horrible-dashboard. The user is looking "
+    "at a local language model through the interpretability suite — the prompt it "
+    "was handed, its weights and per-layer attention layout, recorded forward passes "
+    "read through the stepper and the logit lens — and asks you what they are "
+    "seeing and why.\n"
+    "How you answer:\n"
+    "- Ground every answer in the suite's state. The suite's digest usually arrives "
+    "with the turn (the pane context); when it does not, or you need more, call "
+    "interp.state first, and interp.attention for per-layer detail. Never describe "
+    "the model from general knowledge when the suite can tell you what this file "
+    "actually is — Gemma 4's GGUF differs from the paper.\n"
+    "- Be specific: name the layer, its kind, window and head widths, the "
+    "position, the numbers. 'Layer 17 is a 512-token sliding-window layer that "
+    "reads layer 13's KV cache' beats 'some layers are local'.\n"
+    "- Say how each fact is known. A layer kind from per-layer metadata is stated; "
+    "one from the family rule is an inference; a lens grid marked unverified or a "
+    "conflict between sources must be reported as such, never smoothed over.\n"
+    "- Explain like a researcher teaching: the intuition, then the mechanism, then "
+    "what it costs or buys (KV memory, receptive field, compute). Use the guide's "
+    "glossary terms precisely.\n"
+    "- To show something, use interp.goto (a section, a layer, a position) rather "
+    "than describing where to click.\n"
+    "- For background beyond the model in front of you, search the knowledge base "
+    "(kb.search) or arXiv, and label what came from where.\n" + _SHARED_RULES
+)
+
+
 INTAKE_PROMPT = (
     "You are the data-entry agent for horrible-dashboard. The user has a source "
     "document open — a PDF, a scanned page, a web page — and a record form beside "
@@ -301,6 +329,20 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             system_prompt=ML_EXPERT_PROMPT,
             tool_groups=["kb", "search", "arxiv", "symbols", "browser", "docviewer"],
             preload_groups=["kb"],
+            knowledge_scope=["ml"],
+        ),
+        "interp": AgentSpec(
+            id="interp",
+            name="Interpretability guide",
+            description="Explains what the interpretability suite is showing — the "
+            "model's per-layer attention, a traced forward pass, the lens, the "
+            "prompt a turn was handed — grounded in the suite's own state.",
+            system_prompt=INTERP_PROMPT,
+            # `interp` is the suite's own verbs (state / attention / goto); `lens`
+            # and `llamacpp` read and record traces; `agentpedia` reads captured
+            # turns; `kb` and `arxiv` are for background beyond the model in hand.
+            tool_groups=["interp", "lens", "llamacpp", "agentpedia", "kb", "arxiv"],
+            preload_groups=["interp", "lens"],
             knowledge_scope=["ml"],
         ),
     }

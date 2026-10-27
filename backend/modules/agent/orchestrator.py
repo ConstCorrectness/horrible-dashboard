@@ -726,6 +726,13 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "token's rank climbs through the layers, and what changing a prompt token "
         "does to all of it. Needs a trace — `llamacpp.trace` records one."
     ),
+    "interp": (
+        "The interpretability suite's own state: what model it is looking at, that "
+        "model's per-layer attention layout (which layers are local, global, chunked "
+        "or recurrent, their windows, head widths and KV sharing, and the KV cache "
+        "the pattern costs), the layer and position the user has selected, and a "
+        "verb to show any of it. Read interp.state before explaining the screen."
+    ),
     "agentpedia": (
         "Read this node's own recorded agent turns: what a turn was shown round by "
         "round, which tools it was offered and what they cost, and which harness it "

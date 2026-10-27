@@ -9,16 +9,23 @@
  */
 import { useSyncExternalStore, type ReactNode } from 'react';
 
-import { useModelLocus, type ModelLocus } from '../../model-locus';
+import { useAgentContext } from '../../agent-context';
+import { IconComment } from '../../glyphs';
+import { useModelLocus } from '../../model-locus';
+import { askInterp } from './ask';
+import { locusLabel } from './locus-label';
 import { interpretabilityStore } from '../interpretability/store';
 import { S } from './styles';
+import { suiteDigest } from './suite-state';
 
-export function locusLabel(locus: ModelLocus): string | null {
-  const parts: string[] = [];
-  if (typeof locus.layer === 'number') parts.push(locus.layer === -1 ? 'EMB' : `L${locus.layer}`);
-  if (typeof locus.position === 'number') parts.push(`P${locus.position}`);
-  if (locus.stage) parts.push(locus.stage);
-  return parts.length ? parts.join(' · ') : null;
+/**
+ * Publish the suite digest as this section's agent context. Every section does,
+ * so whichever one is on screen answers "what am I looking at?" with the same
+ * facts plus its own name — and the chat attaches it to every turn while the
+ * suite is visible.
+ */
+export function useSuiteAgentContext(view: string): void {
+  useAgentContext(() => ({ view, ...suiteDigest() }));
 }
 
 export function SuiteFrame({ title, children }: { title: string; children: ReactNode }) {
@@ -28,6 +35,7 @@ export function SuiteFrame({ title, children }: { title: string; children: React
   );
   const locus = useModelLocus();
   const where = locusLabel(locus);
+  useSuiteAgentContext(title);
   return (
     // The section's name is on the rail beside it; repeating it here read as
     // "MODEL  MODEL gemma…" on the Model section. It labels the region instead.
@@ -49,6 +57,16 @@ export function SuiteFrame({ title, children }: { title: string; children: React
             {locus.traceId.slice(0, 10)}
           </span>
         ) : null}
+        <button
+          type="button"
+          className="interp-ask"
+          style={S.askButton}
+          title="Ask the interpretability agent about this, in the Ask strip"
+          onClick={() => askInterp(title)}
+        >
+          <IconComment />
+          Ask about this
+        </button>
       </div>
       <div style={S.body}>{children}</div>
     </div>

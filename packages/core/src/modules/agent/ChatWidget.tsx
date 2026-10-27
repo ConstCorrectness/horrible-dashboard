@@ -221,13 +221,25 @@ function ReasoningBlock({ reasoning, hasText }: ReasoningBlockProps) {
   );
 }
 
-export function ChatWidget() {
+export function ChatWidget({
+  agentId: pinnedAgent,
+  compact = false,
+}: {
+  /**
+   * Talk to this roster agent only. A chat embedded in a feature pane (the
+   * interpretability suite's Ask strip) is *that* pane's agent: no picker, no
+   * following the workspace's choice, and it takes only sends addressed to it.
+   */
+  agentId?: string;
+  /** Leave out the avatar: a strip beside a tool has no room for it. */
+  compact?: boolean;
+} = {}) {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
   // The roster agent this pane is talking to; each agent keeps its own sessions.
   // `main` unless the user picked another, which is remembered per workspace row.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
   const { activeId: workspaceId } = useWorkspaces();
-  const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
+  const [agentId, setAgentId] = useState(() => pinnedAgent ?? agentForWorkspace(workspaceId));
   // Which agent the async handlers below are for. They outlive the render that
   // created them (a streaming turn, a session create), so they must never read
   // `agentId` from the closure.
@@ -280,15 +292,20 @@ export function ChatWidget() {
    *  so a user who just started their model server can recover without a reload. */
   const refreshStatus = () => {
     setStatus('loading');
-    getAgentStatus()
+    getAgentStatus({ agentId })
       .then(setStatus)
       .catch(() => setStatus('backend-down'));
   };
 
+  // Readiness is the *selected agent's* provider: an agent overridden onto a hosted
+  // provider is ready while the saved config's local server is down.
   useEffect(() => {
-    getAgentStatus()
+    getAgentStatus({ agentId })
       .then(setStatus)
       .catch(() => setStatus('backend-down'));
+  }, [agentId]);
+
+  useEffect(() => {
     getAgentRoster()
       .then(setRoster)
       .catch(() => {
@@ -299,12 +316,13 @@ export function ChatWidget() {
   // Follow the workspace row once the desktop has hydrated (it is null before),
   // which then reloads that agent's own sessions through the effect below.
   useEffect(() => {
-    setAgentId(agentForWorkspace(workspaceId));
-  }, [workspaceId]);
+    setAgentId(pinnedAgent ?? agentForWorkspace(workspaceId));
+  }, [workspaceId, pinnedAgent]);
 
   /** Picking an agent by hand overrides `main`, and the override sticks across
-   * reloads. */
+   * reloads. A pinned chat has no picker, and `/agent` cannot move it either. */
   const pickAgent = (id: string) => {
+    if (pinnedAgent) return;
     setWorkspaceAgent(workspaceId, id);
     setAgentId(id);
   };
@@ -719,11 +737,12 @@ export function ChatWidget() {
   const [sendTick, setSendTick] = useState(0);
   useEffect(() => onSendInChat(() => setSendTick((n) => n + 1)), []);
   useEffect(() => {
-    if (!ready || busy || !hasChatSend()) return;
-    const text = claimChatSend();
+    const pinned = Boolean(pinnedAgent);
+    if (!ready || busy || !hasChatSend(agentId, pinned)) return;
+    const text = claimChatSend(agentId, pinned);
     if (text) void sendText(text, false);
     // sendText reads live refs; these are the conditions that gate a send.
-  }, [ready, busy, sendTick]);
+  }, [ready, busy, sendTick, agentId, pinnedAgent]);
 
   const canSend = !busy && prompt.trim().length > 0 && (ready || prompt.startsWith('/'));
 
@@ -731,7 +750,7 @@ export function ChatWidget() {
     <div className="agent-chat-shell" data-trace={drawer.open || undefined}>
       <div className="agent-chat" onPointerDownCapture={() => setFollowTarget(agentId)}>
         <div className="agent-session-bar">
-          {roster.length > 1 && (
+          {roster.length > 1 && !pinnedAgent && (
             <select
               value={agentId}
               onChange={(e) => pickAgent(e.target.value)}
@@ -812,7 +831,7 @@ export function ChatWidget() {
             </button>
           </div>
         )}
-        {animateAvatar && (
+        {animateAvatar && !compact && (
           <div className="agent-chat-avatar">
             <Avatar3D size={120} mood={mood} />
           </div>

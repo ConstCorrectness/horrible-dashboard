@@ -62,7 +62,8 @@ export const DEFAULT_AGENT_MODEL = 'gemma4:e2b';
 /** A small Gemma served well by vLLM; a sensible default for the spawn flow. */
 export const DEFAULT_VLLM_MODEL = 'google/gemma-2-2b-it';
 
-let statusInFlight: Promise<AgentStatus> | null = null;
+/** In-flight status requests, by URL (one per agent asked about). */
+const statusInFlight = new Map<string, Promise<AgentStatus>>();
 
 /**
  * `refresh` drops the backend's cached *remote* model listings (NVIDIA NIM's
@@ -72,16 +73,33 @@ let statusInFlight: Promise<AgentStatus> | null = null;
  * making a poll re-download a few hundred KB is what the cache exists to prevent.
  * Local providers are unaffected: their lists were never cached.
  */
-export function getAgentStatus(opts?: { refresh?: boolean }): Promise<AgentStatus> {
-  if (opts?.refresh) return apiGet<AgentStatus>('/agent/status?refresh=true');
+export function getAgentStatus(opts?: {
+  refresh?: boolean;
+  /**
+   * Report the provider *this roster agent's* turns resolve to (its own or the
+   * orchestrator's override) rather than the saved config's — what a chat pane
+   * must judge readiness by, or it refuses to send to an agent that would answer.
+   */
+  agentId?: string;
+}): Promise<AgentStatus> {
+  const query = new URLSearchParams();
+  if (opts?.refresh) query.set('refresh', 'true');
+  if (opts?.agentId) query.set('agent_id', opts.agentId);
+  const url = `/agent/status${query.size ? `?${query}` : ''}`;
+  if (opts?.refresh) return apiGet<AgentStatus>(url);
   // Callers that ask at the same moment share one request. Each call probes every
   // provider, and at boot four components mount and ask within a few ms of each
   // other. Only the in-flight promise is shared — nothing is cached past it, so
-  // a later poll still sees a server that just came up.
-  statusInFlight ??= apiGet<AgentStatus>('/agent/status').finally(() => {
-    statusInFlight = null;
-  });
-  return statusInFlight;
+  // a later poll still sees a server that just came up. Shared per question:
+  // two agents' readiness are different answers.
+  let inFlight = statusInFlight.get(url);
+  if (!inFlight) {
+    inFlight = apiGet<AgentStatus>(url).finally(() => {
+      statusInFlight.delete(url);
+    });
+    statusInFlight.set(url, inFlight);
+  }
+  return inFlight;
 }
 
 /** One roster agent (a fully separate loop: own prompt, tool scope, settings,

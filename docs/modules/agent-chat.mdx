@@ -460,6 +460,9 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `researcher` | browser, search, library, github, google, research, arxiv, records | research, library, arxiv | session mode  |
 | `intake`     | records, browser, research, library                                | records, research        | session mode  |
 | `trainer`    | training, recipe, cells, evals, localtrack, datasets, llamacpp, wandb, editor, files | training                 | session mode  |
+| `interp`     | interp, lens, llamacpp, agentpedia, kb, arxiv                      | interp, lens             | session mode  |
+
+`interp` is the [interpretability suite](interp-suite.mdx#the-agent)'s guide: it is the agent the suite's **Ask** strip talks to, and its `interp` group is declared by the suite pane in the frontend (`interp.state`, `interp.attention`, `interp.goto`).
 
 Two of `researcher`'s groups are load-bearing for the panes it works beside, and
 both were **dead buttons** before: the Review pane (`records` — it could display a
@@ -863,6 +866,8 @@ Those remote listings are **warmed at startup**: the app lifespan calls
 the background so the first model dropdown opens filled instead of waiting on a round
 trip. It is never awaited and every failure is swallowed — a warm is not worth a
 second of boot, and an unwarmed provider is simply fetched on demand as before.
+`GET /agent/status?agent_id=<id>` reports the provider and model **that roster agent's turns resolve to** (`roster.resolve_provider`, so `agent.<id>.provider` and `agent.orchestrator.provider` count), not the saved config's. The chat judges readiness by it: judged by the config, an agent overridden onto a hosted provider showed "can't reach LM Studio" and refused to send whenever the local server was down, though its turns would have run.
+
 `GET /agent/status?refresh=true` drops both caches first, and the **refresh button**
 in the model picker's panel — beside the filter field — is its only caller. It is a
 button rather than a fetch-on-open because a refresh on open would put that download

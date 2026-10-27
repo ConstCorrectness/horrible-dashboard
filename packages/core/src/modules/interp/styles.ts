@@ -63,6 +63,27 @@ export const S = {
 
   stripLabel: { ...heading, fontSize: 9.5, marginRight: 6 } satisfies CSSProperties,
 
+  /** The strip's one action, pushed to the right edge. Classed: not a 30px control. */
+  askButton: {
+    marginLeft: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 22,
+    padding: '0 8px',
+    border: 'none',
+    borderLeft: '2px solid var(--accent)',
+    borderRadius: 0,
+    background: 'var(--bg-secondary)',
+    color: 'var(--text-primary)',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+    flex: 'none',
+  } satisfies CSSProperties,
+
   body: {
     display: 'flex',
     flexDirection: 'column',

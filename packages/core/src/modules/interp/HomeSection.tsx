@@ -18,7 +18,8 @@ import { RESEARCH_PANE_GUIDE } from '../interpretability/ResearchGuide';
 import { interpretabilityStore } from '../interpretability/store';
 import { SUITE_VIEW } from './ids';
 import { S } from './styles';
-import { locusLabel } from './SuiteFrame';
+import { locusLabel } from './locus-label';
+import { useSuiteAgentContext } from './SuiteFrame';
 import { SUITE_TOOLS } from './tools';
 
 function Tile({ label, children, index }: { label: string; children: ReactNode; index: number }) {
@@ -31,6 +32,7 @@ function Tile({ label, children, index }: { label: string; children: ReactNode; 
 }
 
 export function HomeSection() {
+  useSuiteAgentContext('Home');
   const arch = useSyncExternalStore(
     interpretabilityStore.subscribe,
     interpretabilityStore.getArchitecture,

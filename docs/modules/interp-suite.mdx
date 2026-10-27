@@ -87,6 +87,34 @@ it — but only when the trace was recorded from the very file the layout was re
 from. The layout follows the agent's loaded model and a trace can be of any GGUF;
 one model's window over another's pass would be a confident wrong answer.
 
+## The agent
+
+The suite can be asked about. Every section publishes one **digest** of what the suite
+is looking at as its agent context (`interp/suite-state.ts`): the model and where its
+description came from, the attention pattern and its KV cost, the locus and what that
+layer is, the latest captured agent turn, the in-window lens run, and caveats — a kind
+known only by family rule, a conflict between sources, estimated token counts. It is
+built from the module-level stores the tools already share, so it reads the same
+whether the asked-about section is mounted, kept alive behind another, or not open.
+The compact form (~600 characters) rides along with every chat turn while the suite is
+visible; it is pinned under the per-pane workspace-context budget by a test.
+
+| Piece | Where |
+| --- | --- |
+| **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
+| **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
+| **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
+
+`test_interp_agent.py` keeps the two halves honest: the guide must name exactly the
+tools the frontend declares, so the model is never taught a tool that does not exist
+or handed one nobody explained.
+
+The primer is a group guide rather than a user skill on purpose: it ships with the
+code, versions with the tools it documents, and is delivered exactly when the group is
+loaded.
+
 ## Two layout-shell features it introduced
 
 Both are general; any pane can opt in.

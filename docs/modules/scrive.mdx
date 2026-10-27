@@ -681,7 +681,10 @@ the sibling of `draftInChat`, which only fills the box, and is used **only** for
 click whose label already says the agent will act ("Approve and write", "ask",
 "write with agent") on words the person typed or approved. A send waits until a chat
 pane is mounted, its agent is ready and no turn is running, and never touches what
-the person is typing in the box. The wording lives in `prompts.ts`, tested to never
+the person is typing in the box. A send can be **addressed** (`sendInChat(prompt, { agentId })`):
+then only a chat talking to that agent takes it, and a chat *pinned* to one agent (the
+interpretability suite's Ask strip) takes only sends addressed to it — so Scrive's
+unaddressed prompts never land in that strip. The wording lives in `prompts.ts`, tested to never
 ask for anything to be published.
 
 ### Reviewing what the agent changed

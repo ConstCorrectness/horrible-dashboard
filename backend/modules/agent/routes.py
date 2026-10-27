@@ -106,7 +106,7 @@ async def _probe(
 
 
 @router.get("/status", response_model=AgentStatus)
-async def status(refresh: bool = False) -> AgentStatus:
+async def status(refresh: bool = False, agent_id: str | None = None) -> AgentStatus:
     # `refresh=true` drops the cached remote listings first, so a model enabled on
     # the vendor's dashboard a minute ago shows up without waiting out the TTL or
     # restarting the node. Off by default: the settings page and the home page both
@@ -144,11 +144,22 @@ async def status(refresh: bool = False) -> AgentStatus:
             *(_probe(client, info, _endpoint_for(info, config)) for info in infos)
         )
     active_kind = config.provider if config else P.DEFAULT_PROVIDER
+    model = config.model if config else None
+    if agent_id and config is not None:
+        # Where *this agent's* turns go, not where the saved config points. They
+        # differ whenever `agent.<id>.provider` or `agent.orchestrator.provider` is
+        # set, and a chat that judged readiness by the config refused to send —
+        # "can't reach LM Studio" — to an agent whose turns run on OpenRouter.
+        from backend.modules.agent import roster
+
+        info, _endpoint = roster.resolve_provider(config, agent_id)
+        active_kind = info.kind
+        model = roster.agent_setting(agent_id, "model", None) or model
     active = next((d for d in detected if d.kind == active_kind), detected[0])
     return AgentStatus(
         configured=config is not None,
-        provider=config.provider if config else None,
-        model=config.model if config else None,
+        provider=active_kind if config else None,
+        model=model,
         endpoint=active.endpoint,
         reachable=active.reachable,
         available_models=active.models,

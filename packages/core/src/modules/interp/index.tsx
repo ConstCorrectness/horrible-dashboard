@@ -19,6 +19,8 @@
 import { lazyPane } from '../../lazy-pane';
 import { revealSection } from '../../layout/controller';
 import type { ModuleManifest, PanelDecl } from '../../registry';
+import { interpAgentTools } from './agent-tools';
+import { ASK_VIEW, askInterp } from './ask';
 import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
 import { SUITE_TOOLS } from './tools';
 
@@ -31,6 +33,8 @@ const AttentionBody = lazyPane(() => import('./attention/AttentionSection'), 'At
 const TracesBody = lazyPane(() => import('./bodies/activations'), 'TracesBody');
 const StepperBody = lazyPane(() => import('./bodies/activations'), 'StepperBody');
 const LensBody = lazyPane(() => import('./bodies/activations'), 'LensBody');
+// The chat (and its 3D avatar) loads when the Ask strip first opens, not with the suite.
+const AskPanel = lazyPane(() => import('./AskPanel'), 'AskPanel');
 
 /**
  * Each section's body, as an embedded view. The titles are what `show("…")`
@@ -70,6 +74,12 @@ export const interpSuiteModule: ModuleManifest = {
       singleton: true,
       sectionsLayout: 'rail',
       sectionsKeepAlive: true,
+      // Ask: the interpretability agent beside whatever tool is open. A region, not a
+      // section — a section would replace the thing being asked about.
+      regions: [
+        { id: ASK_VIEW, label: 'Ask', icon: '?', key: 'a', position: 'right', defaultSize: 380 },
+      ],
+      agentTools: interpAgentTools,
       sections: SUITE_TOOLS.map((tool) => ({
         id: tool.section,
         label: tool.label,
@@ -88,12 +98,24 @@ export const interpSuiteModule: ModuleManifest = {
         embedded: true,
       }),
     ),
+    {
+      id: 'interp.ask',
+      title: 'Ask the interpretability agent',
+      component: AskPanel,
+      role: 'tool',
+      embedded: true,
+    },
   ],
   commands: [
     {
       id: 'interp.open',
       title: 'Interpretability: Open the suite',
       run: () => void revealSection(SUITE_SECTIONS.home, SUITE_VIEW),
+    },
+    {
+      id: 'interp.askAboutThis',
+      title: 'Interpretability: Ask the agent about what is on screen',
+      run: () => askInterp('interpretability suite'),
     },
   ],
 };

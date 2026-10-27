@@ -537,3 +537,29 @@ def test_nim_key_cannot_be_written_through_the_provider_route(
     assert res.status_code == 400
     assert "nvidia" in res.json()["detail"]
     assert P.api_key_for(P.PROVIDERS["nim"]) is None
+
+
+def test_status_reports_the_provider_an_agent_actually_resolves_to(
+    client: TestClient,
+) -> None:
+    # The saved config points at a local LM Studio that is not running, but this
+    # agent's turns are overridden onto OpenRouter. A chat judging readiness by the
+    # config refused to send to an agent that would have answered.
+    client.put(
+        "/api/agent/config", json={"model": "local-model", "provider": "lmstudio"}
+    )
+    client.put("/api/settings/agent.interp.provider", json={"value": "openrouter"})
+    client.put(
+        "/api/settings/agent.interp.model", json={"value": "minimax/minimax-m3:free"}
+    )
+
+    plain = client.get("/api/agent/status").json()
+    assert plain["provider"] == "lmstudio"
+
+    scoped = client.get("/api/agent/status", params={"agent_id": "interp"}).json()
+    assert scoped["provider"] == "openrouter"
+    assert scoped["model"] == "minimax/minimax-m3:free"
+    # The other agents still answer from the config.
+    assert client.get("/api/agent/status", params={"agent_id": "coder"}).json()[
+        "provider"
+    ] == ("lmstudio")

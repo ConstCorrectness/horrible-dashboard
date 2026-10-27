@@ -24,6 +24,7 @@ import {
   type AttentionLayout,
   type LayerAttention,
 } from '../../interpretability/store';
+import { askInterp } from '../ask';
 import { SUITE_SECTIONS, SUITE_VIEW } from '../ids';
 import { S } from '../styles';
 import { SuiteFrame } from '../SuiteFrame';
@@ -324,6 +325,11 @@ function LayerCard({ layer, traceId }: { layer: LayerAttention | null; traceId?:
       <div style={A.actions}>
         <button type="button" onClick={() => revealSection(SUITE_SECTIONS.model, SUITE_VIEW)}>
           Open in Model
+        </button>
+        {/* The locus is this block, and `askInterp` names it — repeating it in the
+            subject read "block L5, at L5". */}
+        <button type="button" onClick={() => askInterp('attention layout')}>
+          Ask why
         </button>
         <button
           type="button"

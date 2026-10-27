@@ -64,6 +64,27 @@ describe('interpretability suite manifest', () => {
     }
   });
 
+  it('carries the interp agent tools and the Ask strip', () => {
+    expect((suite().agentTools ?? []).map((t) => t.name).sort()).toEqual([
+      'interp.attention',
+      'interp.goto',
+      'interp.state',
+    ]);
+    // Read-only, so the permission engine never stops the agent explaining the screen.
+    expect((suite().agentTools ?? []).every((t) => !t.sideEffect)).toBe(true);
+    const ask = suite().regions?.find((r) => r.id === 'interp.ask');
+    expect(ask?.position).toBe('right');
+    const view = interpSuiteModule.panels?.find((p) => p.id === 'interp.ask');
+    expect(view?.embedded).toBe(true);
+  });
+
+  it('refuses a goto to a section that does not exist, naming the real ones', async () => {
+    const goto = suite().agentTools!.find((t) => t.name === 'interp.goto')!;
+    const result = (await goto.handler({ section: 'nowhere' })) as { ok: boolean; error: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('attention');
+  });
+
   it('names a glyph that exists for every rail entry', () => {
     for (const section of suite().sections ?? []) {
       expect(NAMED_GLYPHS[section.glyph ?? ''], section.id).toBeDefined();
