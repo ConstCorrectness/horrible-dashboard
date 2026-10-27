@@ -8,6 +8,7 @@ function ctx(over: Partial<KeyContext> = {}): KeyContext {
   return {
     paneFocus: null,
     paneInstance: null,
+    paneSection: null,
     capture: null,
     captureView: null,
     textInput: false,

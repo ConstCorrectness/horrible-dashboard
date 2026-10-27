@@ -762,10 +762,12 @@ to prevent.
 
 | Kind | ID | Notes |
 | --- | --- | --- |
-| Panel | `interpretability.context` | Singleton; role `document` |
-| Panel | `interpretability.architecture` | Model explorer **and designer** — two modes, one pane; sits beside the context view |
-| Command | `interpretability.open` | Inspect context window |
-| Command | `interpretability.openDiagram` | Explore model structure |
+| Section | `interpretability.suite` → `context` | The context window — a section of the [interpretability suite](./interp-suite.mdx) |
+| Section | `interpretability.suite` → `model` / `design` | Model explorer and designer, two sections where they were two modes of one pane |
+| Command | `interpretability.open` | Inspect context window (opens the suite's Context section) |
+| Command | `interpretability.openDiagram` | Explore model structure (opens the suite's Model section) |
+| Command | `interpretability.guide` | Opens the suite's Home, which replaced the Compass modal |
+| Keybinding | designer verbs | Scoped `paneFocus == 'interpretability.suite' && paneSection == 'design' && !textInput` |
 | Keybinding | `mod+shift+x` | → `interpretability.open` |
 | Setting | `interpretability.modelRepo` | HF repo for exact tokens **and** the description |
 | Setting | `interpretability.ggufPath` | Explicit weights file for the tensor inventory |
@@ -773,16 +775,19 @@ to prevent.
 :::note Layouts saved before the budget widget was merged
 `interpretability.budget` was a compact `role: 'tool'` widget duplicating the
 context panel's header. It is gone; the budget bar (and its "tools dropped" chip)
-lives in `interpretability.context`, which was always one region-strip click away.
-`RENAMED_VIEWS` in `layout/serialize.ts` maps the retired id onto the panel, so a
+lives in the context view, which was always one region-strip click away.
+`RENAMED_VIEWS` in `layout/serialize.ts` maps the retired id onto the suite's Context section, so a
 workspace saved before the merge opens without a hole. `interpretability.openDiagram`
 keeps its id through the rename — a command id is an API even when its title isn't.
 :::
 
-The chat is load-bearing rather than decorative — the context pane has nothing to
-show until a turn has run. Keep the two in **separate windows** rather than tabs of
-one: panes in inactive tabs unmount, which would drop the pane's live `/ws`
-subscription mid-turn.
+:::note Now sections of one window
+The context window and the model explorer (and designer) are sections of the
+[interpretability suite](./interp-suite.mdx). The panel ids above are retired and
+resolve there through `RENAMED_VIEWS` and `VIEW_ALIASES`; the commands keep their
+ids. The suite keeps visited sections mounted, so the context view's live `/ws`
+subscription survives switching tabs.
+:::
 
 Both panes are `role: 'document'`: by the test in
 [windowing.mdx](../architecture/windowing.mdx) they are surfaces you read and work in,

@@ -158,6 +158,15 @@ describe('retired panes stay reachable (VIEW_ALIASES)', () => {
     ['Notebooks', 'explorer.home', 'notebooks'],
     ['training.projects', 'explorer.home', 'projects'],
     ['Training Projects', 'explorer.home', 'projects'],
+    ['interpretability.context', 'interpretability.suite', 'context'],
+    ['interpretability.budget', 'interpretability.suite', 'context'],
+    ['interpretability.architecture', 'interpretability.suite', 'model'],
+    ['agentpedia.hub', 'interpretability.suite', 'runs'],
+    ['Agentpedia', 'interpretability.suite', 'runs'],
+    ['webml.lens', 'interpretability.suite', 'lens'],
+    ['Logit Lens', 'interpretability.suite', 'lens'],
+    ['Traces', 'interpretability.suite', 'traces'],
+    ['Stepper', 'interpretability.suite', 'stepper'],
   ];
 
   /**
@@ -202,6 +211,19 @@ describe('retired panes stay reachable (VIEW_ALIASES)', () => {
           { id: 'files', label: 'Files' },
           { id: 'notebooks', label: 'Notebooks' },
           { id: 'projects', label: 'Projects' },
+        ],
+      },
+      {
+        id: 'interpretability.suite',
+        title: 'Interpretability',
+        sections: [
+          { id: 'home', label: 'Home' },
+          { id: 'context', label: 'Context' },
+          { id: 'runs', label: 'Runs' },
+          { id: 'model', label: 'Model' },
+          { id: 'traces', label: 'Traces' },
+          { id: 'stepper', label: 'Stepper' },
+          { id: 'lens', label: 'Lens' },
         ],
       },
     ],

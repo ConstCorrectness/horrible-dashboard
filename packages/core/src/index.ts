@@ -36,6 +36,7 @@ export {
   IconSkipPrev,
   IconTrash,
   IconVolume,
+  NAMED_GLYPHS,
 } from './glyphs';
 /** The shared list-row design system. See DataList.tsx — modules compose rows
  * from these rather than styling their own, so "a record with a verdict and
@@ -292,7 +293,12 @@ export {
   setPaneExitAnimator,
   type PaneExitAnimator,
 } from './layout/pane-exit';
-export { usePaneSection, sectionOfInstance, type PaneSections } from './layout/use-sections';
+export {
+  usePaneSection,
+  sectionOfInstance,
+  SectionScopeContext,
+  type PaneSections,
+} from './layout/use-sections';
 export { lastPlacement, rememberPlacement, WINDOW_PLACEMENT_KEY } from './layout/window-placement';
 export type { WindowPlacement } from './layout/window-placement';
 export * as framePersistence from './layout/persistence';
@@ -494,6 +500,7 @@ export {
 } from './modules/updates';
 export { hostedModule } from './modules/hosted';
 export { interpretabilityModule } from './modules/interpretability';
+export { interpSuiteModule } from './modules/interp';
 export { evalsModule } from './modules/evals';
 export { trajectoriesModule } from './modules/trajectories';
 export { agentpediaModule } from './modules/agentpedia';

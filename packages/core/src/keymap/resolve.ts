@@ -98,6 +98,9 @@ function specificity(binding: ResolvedBinding): number {
   const used = keysUsed(binding.when);
   if (used.has('paneInstance')) score += 4;
   if (used.has('paneFocus') || used.has('captureView')) score += 2;
+  // A section is a narrower place than its pane: `paneFocus == 'x' && paneSection
+  // == 'y'` must beat a binding on the same key that names only the pane.
+  if (used.has('paneSection')) score += 1;
   if (used.has('capture')) score += 1;
   return score;
 }

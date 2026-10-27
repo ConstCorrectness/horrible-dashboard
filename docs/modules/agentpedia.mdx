@@ -44,19 +44,20 @@ running at once into a transcript that reads as one agent behaving erratically.
 
 ## Contributions to the layout shell
 
-- **Panels:** `agentpedia.hub` (role `document`, singleton) with four sections —
-  **Runs** (`r`), **Harness** (`h`), **Forks** (`f`), **Duels** (`d`). One pane
-  rather than four, per the pane-consolidation rule: these are views of one object.
+- **Panels:** none of its own. The hub is the **Runs** section of the
+  [interpretability suite](./interp-suite.mdx), with **Runs**, **Harness**, **Forks**
+  and **Duels** as sub-tabs (`tabs.ts`) — one object, four views. The retired
+  `agentpedia.hub` id and the title "Agentpedia" still resolve there, and
+  `openAgentpediaTurn(turnId)` is the deep link other modules (evals) use.
 - **Commands:** `agentpedia.open`, `agentpedia.prevRound`, `agentpedia.nextRound`.
 - **Agent tools** (grouped under `agentpedia`, so they cost nothing until loaded):
   `agentpedia.step`, `agentpedia.harness`, `agentpedia.fork` (gated),
   `agentpedia.diff`. The agent reading — and re-running — its own last turn is the
   exploratory payoff of the whole module.
-- **Keybindings:** `←` / `→` scrub rounds, scoped to the pane **and** guarded with
-  `!textInput` — unguarded, an arrow key pressed in a filter box moves the round out
-  from under the cursor. The section keys are declared on the sections themselves;
-  the host's tab strip owns them, and a second binding would be a second authority
-  over one value.
+- **Keybindings:** `←` / `→` scrub rounds, scoped to the suite's Runs section
+  (`paneSection == 'runs'`) **and** guarded with `!textInput` — unguarded, an arrow
+  key pressed in a filter box moves the round out from under the cursor, and the
+  suite keeps this section mounted while another one is on screen.
 - **Settings:** none. It reads other modules' data and has no policy of its own.
 
 The scrubbing commands reach the pane through a published handle (`actions.ts`), the

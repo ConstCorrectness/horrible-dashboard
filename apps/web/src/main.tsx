@@ -75,6 +75,7 @@ import {
   storageModule,
   updatesModule,
   interpretabilityModule,
+  interpSuiteModule,
   evalsModule,
   agentpediaModule,
   trajectoriesModule,
@@ -261,6 +262,9 @@ async function boot(): Promise<void> {
     registry.register(notebookModule);
     registry.register(scriveModule);
     registry.register(webmlModule);
+    // After every module whose pane folded into it (interpretability, agentpedia,
+    // llama.cpp, webml): the suite hosts their bodies as its rail sections.
+    registry.register(interpSuiteModule);
     registry.register(visualizerModule);
     registry.register(flowModule);
     registry.register(gamesModule);

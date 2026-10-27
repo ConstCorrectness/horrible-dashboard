@@ -289,9 +289,11 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
     // buttons in the games module were inert for exactly this reason.
     const alias = VIEW_ALIASES[viewId];
     if (alias?.kind === 'view') {
-      return alias.section
-        ? revealSection(alias.section, alias.viewId)
-        : openPane(alias.viewId, opts);
+      if (!alias.section) return openPane(alias.viewId, opts);
+      // Params first, through the real open: a deep link (`{turnId}`) into a pane
+      // that was merged into a section must still reach the pane that now reads it.
+      if (opts?.params) openPane(alias.viewId, opts);
+      return revealSection(alias.section, alias.viewId);
     }
     // Nothing resolved: say so. `openPanel` returning null in silence is why the
     // three dead buttons above survived a pane consolidation and two releases —
@@ -706,6 +708,28 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
 
   // Research: one hub, two sections. The console was titled "Deep Research".
   'Deep Research': { kind: 'view', viewId: 'research.console', section: 'deep' },
+
+  // Interpretability: six panes became one window with a rail. The section bodies
+  // are embedded views, so their own titles resolve through `hostOfEmbedded`;
+  // these keep the retired ids and the names the old panes and tabs carried.
+  'interpretability.context': {
+    kind: 'view',
+    viewId: 'interpretability.suite',
+    section: 'context',
+  },
+  'interpretability.budget': { kind: 'view', viewId: 'interpretability.suite', section: 'context' },
+  'interpretability.architecture': {
+    kind: 'view',
+    viewId: 'interpretability.suite',
+    section: 'model',
+  },
+  'agentpedia.hub': { kind: 'view', viewId: 'interpretability.suite', section: 'runs' },
+  Agentpedia: { kind: 'view', viewId: 'interpretability.suite', section: 'runs' },
+  'webml.lens': { kind: 'view', viewId: 'interpretability.suite', section: 'lens' },
+  'Logit Lens': { kind: 'view', viewId: 'interpretability.suite', section: 'lens' },
+  Traces: { kind: 'view', viewId: 'interpretability.suite', section: 'traces' },
+  Stepper: { kind: 'view', viewId: 'interpretability.suite', section: 'stepper' },
+  Lens: { kind: 'view', viewId: 'interpretability.suite', section: 'lens' },
 };
 
 /** The candidate set `show` matches against, gathered from the live registry. */

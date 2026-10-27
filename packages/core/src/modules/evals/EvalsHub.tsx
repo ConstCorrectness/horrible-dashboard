@@ -4,12 +4,12 @@ import { DataList, DataRow, PickRow, RollingNumber } from '../../DataList';
 import { dialogs } from '../../dialogs';
 import { usePaneSection } from '../../layout/use-sections';
 import { usePaneParams } from '../../panes';
-import { registry } from '../../registry';
 
 // This module styles itself inline (`S` below); the stylesheet exists for the one
 // thing an inline style cannot express — a :hover/:focus-visible state.
 import './evals.css';
 import { subscribeChannel } from '../../ws';
+import { openAgentpediaTurn } from '../agentpedia';
 import { getNetworkState, initNetwork, requestPeers, subscribeNetwork } from '../network/ws';
 import {
   benchmarkPresets,
@@ -1700,8 +1700,8 @@ function Results({ selected }: { selected: string }) {
                   {/* The recorder's turn id — the handle on the exact prompt and
                       tool schemas that went out for this case.
 
-                      It used to be printed as inert text, beside a pane
-                      (`agentpedia.hub`) that is a turn stepper keyed on precisely
+                      It used to be printed as inert text, beside a turn stepper
+                      (agentpedia, now the suite's Runs section) keyed on precisely
                       this id. So "why did this case fail?" was answered by reading
                       a hex string off the screen and hunting for it in a list. It
                       is a button now; a turn the store never kept 404s and the
@@ -1711,12 +1711,7 @@ function Results({ selected }: { selected: string }) {
                     <button
                       className="evals-turn-link"
                       title="Open this turn in Agentpedia — what the model was actually given"
-                      onClick={() => {
-                        registry.openPanel('agentpedia.hub', {
-                          params: { turnId: r.turn_id },
-                        });
-                        void registry.runCommand('section.show:agentpedia.hub:runs');
-                      }}
+                      onClick={() => openAgentpediaTurn(r.turn_id!)}
                     >
                       turn {r.turn_id}
                     </button>

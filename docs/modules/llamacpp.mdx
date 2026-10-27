@@ -565,16 +565,17 @@ model than the one its settings show.
 
 | Kind | ID | Notes |
 | --- | --- | --- |
-| Panel | `llamacpp.server` | "llama.cpp" 🦙; singleton, role `document` — a three-section console is worked in, not glanced at, and the `lab` preset tabs it with three other panes |
+| Panel | `llamacpp.server` | "llama.cpp" 🦙; singleton, role `document` — running a model, not reading one |
 | Section | `llamacpp.server` → `server` | Default, key <kbd>s</kbd> — build + process + log |
 | Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
-| Section | `llamacpp.server` → `traces` | Key <kbd>t</kbd> — the activation scrubber |
-| Section | `llamacpp.server` → `lens` | Key <kbd>l</kbd> — a trace read as words |
-| Section | `llamacpp.server` → `stepper` | Key <kbd>d</kbd> — the layer debugger: a trace in execution order (see "The stepper" below) |
+| Section | `interpretability.suite` → `traces` | The activation scrubber — a section of the [interpretability suite](./interp-suite.mdx) |
+| Section | `interpretability.suite` → `lens` | A trace read as words (the Trace lens tab) |
+| Section | `interpretability.suite` → `stepper` | The layer debugger: a trace in execution order (see "The stepper" below) |
+| Command | `section.show:llamacpp.server:{traces,lens,stepper}` | Kept as shims for those sections' old ids; they open the suite section |
 | Command | `llamacpp.open` | llama.cpp: Server and models |
 | Command | `llamacpp.openStepper` | llama.cpp: Step through a trace (`/stepper`) |
 | Command | `llamacpp.stepper.*` | Step into/back/over/out, continue (both ways), toggle breakpoint, play, restart — no-ops unless the Stepper section is mounted |
-| Keybinding | stepper verbs | <kbd>→</kbd>/<kbd>←</kbd> step, <kbd>↓</kbd>/<kbd>F10</kbd> over, <kbd>↑</kbd>/<kbd>Shift+F10</kbd> back over, <kbd>Shift+→</kbd> out, <kbd>C</kbd>/<kbd>Shift+C</kbd> continue, <kbd>B</kbd> breakpoint, <kbd>Space</kbd> play, <kbd>Home</kbd> restart — scoped `paneFocus == 'llamacpp.server' && !textInput` |
+| Keybinding | stepper verbs | <kbd>→</kbd>/<kbd>←</kbd> step, <kbd>↓</kbd>/<kbd>F10</kbd> over, <kbd>↑</kbd>/<kbd>Shift+F10</kbd> back over, <kbd>Shift+→</kbd> out, <kbd>C</kbd>/<kbd>Shift+C</kbd> continue, <kbd>B</kbd> breakpoint, <kbd>Space</kbd> play, <kbd>Home</kbd> restart — scoped `paneFocus == 'interpretability.suite' && paneSection == 'stepper' && !textInput`, because the suite keeps the stepper mounted behind its other sections |
 | Command | `llamacpp.traceSelection` | llama.cpp: Trace editor selection (`/trace-selection`) |
 | Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
 | Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |

@@ -190,6 +190,20 @@ export interface PanelDecl {
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
   sections?: SectionDecl[];
   /**
+   * How the section switcher is drawn: a strip of tabs across the top (the
+   * default), or a vertical rail down the left edge, VS Code's activity bar. A
+   * rail suits a pane with many sections grouped by `SectionDecl.group`, where a
+   * top strip would scroll sideways.
+   */
+  sectionsLayout?: 'tabs' | 'rail';
+  /**
+   * Keep a section mounted after it is first shown, hiding it instead of
+   * unmounting it when another section is picked. For sections holding work a
+   * remount would lose (unsaved edits, a live subscription, an expensive canvas).
+   * Each kept body keeps its own section-scoped agent context.
+   */
+  sectionsKeepAlive?: boolean;
+  /**
    * This view accepts `explorerSources` contributed by other modules, appended
    * after its own `sections`. Exactly one view should set it (Explorer); the flag
    * exists so the registry resolves the host by declaration rather than by
@@ -269,6 +283,20 @@ export interface WidgetDecl {
   regions?: RegionViewDecl[];
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
   sections?: SectionDecl[];
+  /**
+   * How the section switcher is drawn: a strip of tabs across the top (the
+   * default), or a vertical rail down the left edge, VS Code's activity bar. A
+   * rail suits a pane with many sections grouped by `SectionDecl.group`, where a
+   * top strip would scroll sideways.
+   */
+  sectionsLayout?: 'tabs' | 'rail';
+  /**
+   * Keep a section mounted after it is first shown, hiding it instead of
+   * unmounting it when another section is picked. For sections holding work a
+   * remount would lose (unsaved edits, a live subscription, an expensive canvas).
+   * Each kept body keeps its own section-scoped agent context.
+   */
+  sectionsKeepAlive?: boolean;
   /**
    * This view accepts `explorerSources` contributed by other modules, appended
    * after its own `sections`. Exactly one view should set it (Explorer); the flag
@@ -542,6 +570,16 @@ export interface SectionDecl {
   label: string;
   /** Glyph for the tab; falls back to `label`'s first character. */
   icon?: string;
+  /**
+   * Name of a vector stroke icon from core's icon set (`StrokeIcon`), drawn by the
+   * rail layout in place of `icon`. Unknown names fall back to `icon`.
+   */
+  glyph?: string;
+  /**
+   * Heading this section is listed under in the rail layout. Consecutive sections
+   * sharing a group sit together under one divider; the tab strip ignores it.
+   */
+  group?: string;
   /**
    * Section body, given either inline as a component or as the id of a
    * registered (usually `embedded`) view. Exactly one of the two.

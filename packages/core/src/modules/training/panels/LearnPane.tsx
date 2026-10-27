@@ -177,7 +177,10 @@ function LearnBody({
           <button type="button" onClick={() => revealRegionView('training.modelgraph')}>
             Architecture
           </button>
-          <button type="button" onClick={() => registry.openPanel('interpretability.architecture')}>
+          <button
+            type="button"
+            onClick={() => void registry.runCommand('interpretability.openDiagram')}
+          >
             Model explorer
           </button>
           <button

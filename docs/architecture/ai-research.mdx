@@ -143,10 +143,10 @@ things you look up before writing a cell — then the notebook, then a column th
 answers the three questions a run leaves you with:
 
 - **did it help?** — `localtrack.workspace` and `evals.hub`;
-- **what did the model do inside?** — `llamacpp.server` (whose **Stepper** walks a
-  traced forward pass node by node, like a debugger) and
-  `interpretability.architecture` (the model explorer, which follows the stepper's
-  cursor);
+- **what did the model do inside?** — the
+  [interpretability suite](../modules/interp-suite.mdx) (`interpretability.suite`),
+  whose **Stepper** walks a traced forward pass node by node, like a debugger, and
+  whose **Model** section follows the stepper's cursor;
 - **what did the agent do?** — `trajectories.hub`.
 
 Preset seeding skips a view whose module is disabled, so the column degrades rather

@@ -4,13 +4,13 @@ import { SplitPane } from '../../SplitPane';
 import { revealSection } from '../../layout/controller';
 import { setModelLocus, useModelLocus } from '../../model-locus';
 import { registry } from '../../registry';
-import { ModelDesigner } from './designer/ModelDesigner';
 import { buildInspectGraph, inspectGraphKey } from './inspect/graph';
 import { HeadGrouping } from './inspect/HeadGrouping';
 import { InspectCanvas } from './inspect/InspectCanvas';
 import { WindowLens } from './inspect/WindowLens';
 import { explorerStage, stepperStage } from './inspect/stepper-stage';
-import { GlossaryBadge, ResearchWorkflowHeader } from './ResearchGuide';
+import { SUITE_SECTIONS, SUITE_VIEW } from '../interp/ids';
+import { GlossaryBadge } from './ResearchGuide';
 
 import {
   interpretabilityStore,
@@ -159,10 +159,11 @@ function kvCacheBytes(arch: ModelArchitecture, ctx: number): number | null {
 }
 
 /**
- * Inspect mode: the loaded model's weights, unchanged. See the wrapper below for
- * why it is now one of two modes rather than the whole pane.
+ * The loaded model's weights: the interpretability suite's Model section. Its
+ * sibling, the designer, is the Design section — they were two modes of one pane,
+ * toggled by state that a remount lost.
  */
-function ModelInspector() {
+export function ModelInspector() {
   const arch = useArchitecture();
   const tensors = useTensors();
   const [selection, setSelection] = useState<Selection>({ stage: 'model', layer: null });
@@ -295,7 +296,7 @@ function ModelInspector() {
     // so the values read here are always current — the deliberate choice is not to
     // recompute when they change identity without changing what is drawn. If a
     // newly-drawn field is ever added above, it has to be added to the key too.
-    [graphKey]
+    [graphKey],
   );
 
   const selectedBytes = useMemo(
@@ -313,9 +314,10 @@ function ModelInspector() {
         <div className="interp-empty-hero">
           <h3>🧬 Model Architecture &amp; Weights Explorer</h3>
           <p>
-            The weights and architecture form the second layer of AI interpretability. This pane renders the
-            concrete neural network structure (layers, attention heads, GQA ratios, FFN activations, and MoE routing)
-            and inventories real GGUF tensors down to quantization formats and memory footprint.
+            The weights and architecture form the second layer of AI interpretability. This pane
+            renders the concrete neural network structure (layers, attention heads, GQA ratios, FFN
+            activations, and MoE routing) and inventories real GGUF tensors down to quantization
+            formats and memory footprint.
           </p>
         </div>
 
@@ -326,8 +328,8 @@ function ModelInspector() {
               <span>Hugging Face Repos</span>
             </div>
             <p>
-              Pin any model from the Hugging Face hub (in the Lab workspace) to inspect its config.json and
-              architecture graph without downloading multi-gigabyte weights.
+              Pin any model from the Hugging Face hub (in the Lab workspace) to inspect its
+              config.json and architecture graph without downloading multi-gigabyte weights.
             </p>
           </div>
 
@@ -337,8 +339,8 @@ function ModelInspector() {
               <span>Local GGUF Weights</span>
             </div>
             <p>
-              Load a local model in llama.cpp or Ollama to inspect full tensor directories—real shapes, parameter
-              counts, and exact VRAM footprints at any context length.
+              Load a local model in llama.cpp or Ollama to inspect full tensor directories—real
+              shapes, parameter counts, and exact VRAM footprints at any context length.
             </p>
           </div>
 
@@ -348,8 +350,8 @@ function ModelInspector() {
               <span>Model Designer</span>
             </div>
             <p>
-              Switch to the <b>Design</b> tab above to experiment with node modifications, layer ablations, and
-              structural variants.
+              Open <b>Design</b> in the rail to experiment with node modifications, layer ablations,
+              and structural variants.
             </p>
           </div>
         </div>
@@ -361,7 +363,7 @@ function ModelInspector() {
           <button type="button" onClick={() => registry.openPanel('llamacpp.server')}>
             🦙 Manage Local Models in llama.cpp
           </button>
-          <button type="button" onClick={() => registry.openPanel('interpretability.context')}>
+          <button type="button" onClick={() => revealSection(SUITE_SECTIONS.context, SUITE_VIEW)}>
             🔍 Inspect Prompt Context
           </button>
         </div>
@@ -397,11 +399,15 @@ function ModelInspector() {
         <div className="mx-pc" role="status">
           <span className="mx-pc-dot" aria-hidden="true" />
           <span>
-            Following the stepper · {stepping.layer === -1 ? 'embedding' : `block ${stepping.layer ?? '—'}`}
+            Following the stepper ·{' '}
+            {stepping.layer === -1 ? 'embedding' : `block ${stepping.layer ?? '—'}`}
             {stepping.stage ? ` · ${stepping.stage}` : ''}
             {typeof stepping.step === 'number' ? ` · step ${stepping.step + 1}` : ''}
           </span>
-          <button className="btn-mini" onClick={() => revealSection('stepper', 'llamacpp.server')}>
+          <button
+            className="btn-mini"
+            onClick={() => revealSection(SUITE_SECTIONS.stepper, SUITE_VIEW)}
+          >
             Open stepper
           </button>
         </div>
@@ -426,276 +432,242 @@ function ModelInspector() {
           narrowBelow={720}
           label="Diagram width"
         >
-        {/* ── The architecture ────────────────────────────────────────
+          {/* ── The architecture ────────────────────────────────────────
             Was a vertical stack of buttons in a 260px CSS grid column: it could
             not be resized, could not be zoomed, and drew the residual as a text
             row that connected nothing. `Selection` is unchanged and still the
             source of truth — the canvas is a projection of it, which is why the
             model-locus effect above needed no edit. */}
-        <InspectCanvas
-          graph={graph}
-          selection={selection}
-          onSelect={(next) => {
-            setSelection(next);
-            if (stepping && next.layer !== null && next.stage !== 'model') {
-              setModelLocus(
-                {
-                  layer: next.layer,
-                  stage: stepperStage(next.stage),
-                  step: undefined,
-                },
-                'explorer',
-              );
-            }
-            // Clicking the stack means "show me inside this block". The old UI had
-            // a separate disclosure triangle for that; the canvas has the node
-            // itself, and a click that selected the stack without opening it would
-            // leave the internals unreachable.
-            if (next.stage === 'block') setLayerOpen((open) => !open || selection.stage !== 'block');
-          }}
-          onPickLayer={(layer) => {
-            setSelection({ stage: 'block', layer });
-            setLayerOpen(true);
-            // While a trace is being stepped, picking a block on the map moves the
-            // stepper there — the other half of the two-way link.
-            if (stepping) setModelLocus({ layer, stage: undefined, step: undefined }, 'explorer');
-          }}
-          focusNonce={focusNonce}
-        />
+          <InspectCanvas
+            graph={graph}
+            selection={selection}
+            onSelect={(next) => {
+              setSelection(next);
+              if (stepping && next.layer !== null && next.stage !== 'model') {
+                setModelLocus(
+                  {
+                    layer: next.layer,
+                    stage: stepperStage(next.stage),
+                    step: undefined,
+                  },
+                  'explorer',
+                );
+              }
+              // Clicking the stack means "show me inside this block". The old UI had
+              // a separate disclosure triangle for that; the canvas has the node
+              // itself, and a click that selected the stack without opening it would
+              // leave the internals unreachable.
+              if (next.stage === 'block')
+                setLayerOpen((open) => !open || selection.stage !== 'block');
+            }}
+            onPickLayer={(layer) => {
+              setSelection({ stage: 'block', layer });
+              setLayerOpen(true);
+              // While a trace is being stepped, picking a block on the map moves the
+              // stepper there — the other half of the two-way link.
+              if (stepping) setModelLocus({ layer, stage: undefined, step: undefined }, 'explorer');
+            }}
+            focusNonce={focusNonce}
+          />
 
-        {/* ── Detail for the selection ────────────────────────────────── */}
-        <div className="mx-detail">
-          <div className="mx-detail-head">
-            <b>
-              {selection.stage === 'model'
-                ? 'Whole model'
-                : selection.stage === 'block'
-                  ? `Block ${selection.layer}`
-                  : selection.stage}
-            </b>
-            {selection.layer !== null && selection.stage !== 'model' && (
-              <span className="interp-dim">block {selection.layer}</span>
-            )}
-          </div>
+          {/* ── Detail for the selection ────────────────────────────────── */}
+          <div className="mx-detail">
+            <div className="mx-detail-head">
+              <b>
+                {selection.stage === 'model'
+                  ? 'Whole model'
+                  : selection.stage === 'block'
+                    ? `Block ${selection.layer}`
+                    : selection.stage}
+              </b>
+              {selection.layer !== null && selection.stage !== 'model' && (
+                <span className="interp-dim">block {selection.layer}</span>
+              )}
+            </div>
 
-          {selection.stage === 'model' && (
-            <Facts
-              rows={[
-                ['Layers', arch.layers],
-                ['Hidden size', arch.hiddenSize],
-                ['Vocab', fmtCount(arch.vocabSize)],
-                ['Context length', arch.contextLength?.toLocaleString()],
-                ['Norm', arch.normType],
-                [
-                  // Named with the actual window rather than "@ ctx": at 262k the
-                  // figure runs to tens of gigabytes, and a number that size with
-                  // no denominator beside it reads as a bug.
-                  `KV cache @ ${arch.contextLength?.toLocaleString() ?? '—'}`,
-                  arch.contextLength && kvCacheBytes(arch, arch.contextLength) ? (
-                    <span>
-                      {fmtBytes(kvCacheBytes(arch, arch.contextLength))} at F16{' '}
-                      <GlossaryBadge topic="kv_cache" />
-                    </span>
-                  ) : null,
-                ],
-                ['File size', inventory ? fmtBytes(inventory.fileSize) : null],
-              ]}
-            />
-          )}
-
-          {selection.stage === 'attention' && attn && (
-            <>
+            {selection.stage === 'model' && (
               <Facts
                 rows={[
+                  ['Layers', arch.layers],
+                  ['Hidden size', arch.hiddenSize],
+                  ['Vocab', fmtCount(arch.vocabSize)],
+                  ['Context length', arch.contextLength?.toLocaleString()],
+                  ['Norm', arch.normType],
                   [
-                    'Kind',
-                    <span>
-                      {ATTENTION_LABEL[attn.kind] ?? attn.kind}{' '}
-                      <GlossaryBadge topic={attn.kind === 'mha' ? 'mha' : attn.kind === 'mqa' ? 'mqa' : 'gqa'} />
-                    </span>,
+                    // Named with the actual window rather than "@ ctx": at 262k the
+                    // figure runs to tens of gigabytes, and a number that size with
+                    // no denominator beside it reads as a bug.
+                    `KV cache @ ${arch.contextLength?.toLocaleString() ?? '—'}`,
+                    arch.contextLength && kvCacheBytes(arch, arch.contextLength) ? (
+                      <span>
+                        {fmtBytes(kvCacheBytes(arch, arch.contextLength))} at F16{' '}
+                        <GlossaryBadge topic="kv_cache" />
+                      </span>
+                    ) : null,
                   ],
-                  ['Query heads', attn.heads],
-                  ['KV heads', attn.kvHeads],
+                  ['File size', inventory ? fmtBytes(inventory.fileSize) : null],
+                ]}
+              />
+            )}
+
+            {selection.stage === 'attention' && attn && (
+              <>
+                <Facts
+                  rows={[
+                    [
+                      'Kind',
+                      <span>
+                        {ATTENTION_LABEL[attn.kind] ?? attn.kind}{' '}
+                        <GlossaryBadge
+                          topic={attn.kind === 'mha' ? 'mha' : attn.kind === 'mqa' ? 'mqa' : 'gqa'}
+                        />
+                      </span>,
+                    ],
+                    ['Query heads', attn.heads],
+                    ['KV heads', attn.kvHeads],
+                    [
+                      'Head dim',
+                      attn.headDim != null
+                        ? `${attn.headDim}${attn.headDimDerived ? ' (derived)' : ''}`
+                        : null,
+                    ],
+                    ['Group ratio', attn.groupRatio ? `${attn.groupRatio}:1` : null],
+                    ['Sliding window', attn.slidingWindow],
+                    [
+                      'RoPE θ',
+                      <span>
+                        {attn.ropeTheta?.toLocaleString()} <GlossaryBadge topic="rope" />
+                      </span>,
+                    ],
+                  ]}
+                />
+                <HeadGrouping attention={attn} />
+              </>
+            )}
+
+            {selection.stage === 'ffn' && arch.ffn && (
+              <Facts
+                rows={[
+                  ['Intermediate', arch.ffn.intermediateSize],
+                  ['Expansion', arch.ffn.expansionRatio ? `${arch.ffn.expansionRatio}×` : null],
+                  ['Activation', arch.ffn.activation],
                   [
-                    'Head dim',
-                    attn.headDim != null
-                      ? `${attn.headDim}${attn.headDimDerived ? ' (derived)' : ''}`
-                      : null,
-                  ],
-                  ['Group ratio', attn.groupRatio ? `${attn.groupRatio}:1` : null],
-                  ['Sliding window', attn.slidingWindow],
-                  [
-                    'RoPE θ',
-                    <span>
-                      {attn.ropeTheta?.toLocaleString()} <GlossaryBadge topic="rope" />
-                    </span>,
+                    'Gating',
+                    arch.ffn.gated === null ? (
+                      'unknown'
+                    ) : (
+                      <span>
+                        {arch.ffn.gated
+                          ? 'gated (two up-projections)'
+                          : 'dense (one up-projection)'}{' '}
+                        <GlossaryBadge topic="swiglu" />
+                      </span>
+                    ),
                   ],
                 ]}
               />
-              <HeadGrouping attention={attn} />
-            </>
-          )}
+            )}
 
-          {selection.stage === 'ffn' && arch.ffn && (
-            <Facts
-              rows={[
-                ['Intermediate', arch.ffn.intermediateSize],
-                ['Expansion', arch.ffn.expansionRatio ? `${arch.ffn.expansionRatio}×` : null],
-                ['Activation', arch.ffn.activation],
-                [
-                  'Gating',
-                  arch.ffn.gated === null ? (
-                    'unknown'
-                  ) : (
-                    <span>
-                      {arch.ffn.gated ? 'gated (two up-projections)' : 'dense (one up-projection)'}{' '}
-                      <GlossaryBadge topic="swiglu" />
-                    </span>
-                  ),
-                ],
-              ]}
-            />
-          )}
+            {selection.stage === 'moe' && arch.moe && (
+              <Facts
+                rows={[
+                  ['Experts', arch.moe.experts],
+                  ['Active per token', arch.moe.expertsPerToken],
+                  ['Shared experts', arch.moe.sharedExperts],
+                  ['Expert intermediate', arch.moe.expertIntermediateSize],
+                  [
+                    'Active fraction',
+                    arch.moe.activeFraction != null ? (
+                      <span>
+                        {(arch.moe.activeFraction * 100).toFixed(1)}% <GlossaryBadge topic="moe" />
+                      </span>
+                    ) : null,
+                  ],
+                ]}
+              />
+            )}
 
-          {selection.stage === 'moe' && arch.moe && (
-            <Facts
-              rows={[
-                ['Experts', arch.moe.experts],
-                ['Active per token', arch.moe.expertsPerToken],
-                ['Shared experts', arch.moe.sharedExperts],
-                ['Expert intermediate', arch.moe.expertIntermediateSize],
-                [
-                  'Active fraction',
-                  arch.moe.activeFraction != null ? (
-                    <span>
-                      {(arch.moe.activeFraction * 100).toFixed(1)}% <GlossaryBadge topic="moe" />
-                    </span>
-                  ) : null,
-                ],
-              ]}
-            />
-          )}
+            {(selection.stage === 'model' || selection.stage === 'block') && (
+              <WindowLens
+                blocks={arch.layers}
+                selectedLayer={selection.stage === 'block' ? selection.layer : null}
+                onPickLayer={(layer) => {
+                  setSelection({ stage: 'block', layer });
+                  setLayerOpen(true);
+                }}
+              />
+            )}
 
-          {(selection.stage === 'model' || selection.stage === 'block') && (
-            <WindowLens
-              blocks={arch.layers}
-              selectedLayer={selection.stage === 'block' ? selection.layer : null}
-              onPickLayer={(layer) => {
-                setSelection({ stage: 'block', layer });
-                setLayerOpen(true);
-              }}
-            />
-          )}
-
-          {inventory ? (
-            <>
-              <div className="mx-detail-sum">
-                <span>
-                  <b>{selected.length}</b> tensors
-                </span>
-                <span>
-                  <b>{fmtCount(selectedParams)}</b> params
-                </span>
-                <span>
-                  <b>{fmtBytes(selectedBytes)}</b>
-                  {inventory.totalBytes > 0 && (
-                    <span className="interp-dim">
-                      {' '}
-                      · {((selectedBytes / inventory.totalBytes) * 100).toFixed(1)}% of file
-                    </span>
-                  )}
-                </span>
+            {inventory ? (
+              <>
+                <div className="mx-detail-sum">
+                  <span>
+                    <b>{selected.length}</b> tensors
+                  </span>
+                  <span>
+                    <b>{fmtCount(selectedParams)}</b> params
+                  </span>
+                  <span>
+                    <b>{fmtBytes(selectedBytes)}</b>
+                    {inventory.totalBytes > 0 && (
+                      <span className="interp-dim">
+                        {' '}
+                        · {((selectedBytes / inventory.totalBytes) * 100).toFixed(1)}% of file
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {selection.stage === 'model' && (
+                  <div className="mx-quants">
+                    <GlossaryBadge topic="quants" label="Formats:" />
+                    {Object.entries(inventory.quantTypes).map(([type, count]) => (
+                      <span key={type} className="mx-dtype" title={`${count} tensors`}>
+                        {type} <b>{count}</b>
+                      </span>
+                    ))}
+                    {!inventory.bytesComplete && (
+                      <span
+                        className="interp-warn-chip"
+                        title="At least one tensor uses a quantization we have no block size for, so the total is a floor rather than the true size."
+                      >
+                        size is a floor
+                      </span>
+                    )}
+                  </div>
+                )}
+                <TensorTable tensors={selected} />
+              </>
+            ) : (
+              <div className="mx-noinv interp-dim">
+                {tensors?.error ??
+                  'No GGUF inventory — the structure above comes from metadata alone.'}
               </div>
-              {selection.stage === 'model' && (
-                <div className="mx-quants">
-                  <GlossaryBadge topic="quants" label="Formats:" />
-                  {Object.entries(inventory.quantTypes).map(([type, count]) => (
-                    <span key={type} className="mx-dtype" title={`${count} tensors`}>
-                      {type} <b>{count}</b>
-                    </span>
-                  ))}
-                  {!inventory.bytesComplete && (
-                    <span
-                      className="interp-warn-chip"
-                      title="At least one tensor uses a quantization we have no block size for, so the total is a floor rather than the true size."
-                    >
-                      size is a floor
-                    </span>
-                  )}
-                </div>
-              )}
-              <TensorTable tensors={selected} />
-            </>
-          ) : (
-            <div className="mx-noinv interp-dim">
-              {tensors?.error ??
-                'No GGUF inventory — the structure above comes from metadata alone.'}
-            </div>
-          )}
+            )}
 
-          {(arch.notes.length > 0 || (selection.stage === 'model' && nonUniform.length > 0)) && (
-            <div className="mx-notes">
-              {selection.stage === 'model' && nonUniform.length > 0 && (
-                <div className="md-note">
-                  <b>Blocks are not identical.</b> {nonUniform.length} tensor role
-                  {nonUniform.length === 1 ? '' : 's'} change shape between layers, so the single
-                  head count above describes some blocks and not others:{' '}
-                  {nonUniform
-                    .slice(0, 4)
-                    .map((v) => `${v.role} (${v.shapes.join(', ')})`)
-                    .join('; ')}
-                  {nonUniform.length > 4 ? '; …' : ''}
-                </div>
-              )}
-              {arch.notes.map((note) => (
-                <div key={note} className="md-note">
-                  {note}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+            {(arch.notes.length > 0 || (selection.stage === 'model' && nonUniform.length > 0)) && (
+              <div className="mx-notes">
+                {selection.stage === 'model' && nonUniform.length > 0 && (
+                  <div className="md-note">
+                    <b>Blocks are not identical.</b> {nonUniform.length} tensor role
+                    {nonUniform.length === 1 ? '' : 's'} change shape between layers, so the single
+                    head count above describes some blocks and not others:{' '}
+                    {nonUniform
+                      .slice(0, 4)
+                      .map((v) => `${v.role} (${v.shapes.join(', ')})`)
+                      .join('; ')}
+                    {nonUniform.length > 4 ? '; …' : ''}
+                  </div>
+                )}
+                {arch.notes.map((note) => (
+                  <div key={note} className="md-note">
+                    {note}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </SplitPane>
       </div>
-    </div>
-  );
-}
-
-/**
- * The pane's two modes: the model that exists, and the one you are drawing.
- *
- * They share a pane rather than getting one each because of the bridge between
- * them. Inspect answers "what is this model"; Design answers "what if it were
- * different" — and the obvious way to start a design is from the thing you are
- * currently reading. Splitting them into two panes would put a workspace switch
- * between a question and its follow-up.
- */
-export function ModelExplorer() {
-  const [mode, setMode] = useState<'inspect' | 'design'>('inspect');
-  return (
-    <div className="mx-pane">
-      <ResearchWorkflowHeader current="architecture" />
-      <div className="mx-modes" role="tablist" aria-label="Model explorer mode">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'inspect'}
-          className={`mx-mode${mode === 'inspect' ? ' mx-mode-on' : ''}`}
-          onClick={() => setMode('inspect')}
-        >
-          Inspect
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'design'}
-          className={`mx-mode${mode === 'design' ? ' mx-mode-on' : ''}`}
-          onClick={() => setMode('design')}
-        >
-          Design
-        </button>
-      </div>
-      <div className="mx-mode-body">{mode === 'inspect' ? <ModelInspector /> : <ModelDesigner />}</div>
     </div>
   );
 }

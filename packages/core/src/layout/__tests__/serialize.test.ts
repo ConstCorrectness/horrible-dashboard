@@ -378,4 +378,39 @@ describe('deserialize view renames', () => {
     expect(pane.regions?.right?.views).toEqual(['games.log']);
     expect(pane.regions?.right?.activeView).toBe('games.log');
   });
+
+  describe('into a section (the interpretability suite)', () => {
+    const SUITE = new Set(['interpretability.suite', 'llamacpp.server']);
+    const panes = (f: FrameState) => listPanes(f).map((p) => p.pane);
+
+    it('lands a retired pane on the section that replaced it', () => {
+      const back = deserialize(blobWith(['interpretability.architecture']), SUITE)!;
+      const [pane] = panes(back);
+      expect(pane.viewId).toBe('interpretability.suite');
+      expect(pane.activeSection).toBe('model');
+    });
+
+    it('drops the old pane own section, which named a tab of the old view', () => {
+      const f = windowsFrame(['agentpedia.hub']);
+      f.windows[0].area.tabs[0].activeSection = 'forks';
+      const [pane] = panes(deserialize(serialize(f), SUITE)!);
+      expect(pane.activeSection).toBe('runs');
+    });
+
+    it('collapses four retired panes into one suite pane, with no holes', () => {
+      const back = deserialize(
+        blobWith([
+          'interpretability.context',
+          'interpretability.architecture',
+          'agentpedia.hub',
+          'webml.lens',
+          'llamacpp.server',
+        ]),
+        SUITE,
+      )!;
+      expect(viewIds(back)).toEqual(['interpretability.suite', 'llamacpp.server']);
+      // The first one the layout named wins, and keeps its own landing section.
+      expect(panes(back)[0].activeSection).toBe('context');
+    });
+  });
 });

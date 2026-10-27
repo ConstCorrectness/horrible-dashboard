@@ -29,10 +29,7 @@ import {
   type RepoFile,
   type VariantAvailability,
 } from './api';
-import { LensSection } from './lens/LensSection';
 import { OffloadPreview } from './OffloadPreview';
-import { StepperSection } from './stepper/StepperSection';
-import { TracesSection } from './TracesSection';
 
 /**
  * The llama.cpp pane: the binary, the weights, and the running server.
@@ -838,13 +835,7 @@ export function LlamaCppPane() {
 
   return (
     <div className="llama-pane">
-      {section === 'stepper' ? (
-        <StepperSection />
-      ) : section === 'lens' ? (
-        <LensSection />
-      ) : section === 'traces' ? (
-        <TracesSection models={models?.models ?? []} />
-      ) : section === 'models' ? (
+      {section === 'models' ? (
         <ModelsSection data={models} refresh={refresh} />
       ) : (
         <ServerSection

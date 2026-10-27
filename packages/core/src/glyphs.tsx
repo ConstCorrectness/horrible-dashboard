@@ -14,7 +14,7 @@
  * weight beside each other, take their size from `--icon-size` (default 13px, the
  * size that lines up with `title` type), and take their colour from the caller.
  */
-import type { SVGProps } from 'react';
+import type { ReactElement, SVGProps } from 'react';
 
 import './glyphs.css';
 
@@ -443,3 +443,203 @@ export function IconPerson(props: SVGProps<SVGSVGElement>) {
     </Glyph>
   );
 }
+
+// ── Research surfaces ────────────────────────────────────────────────────────
+// Drawn for the interpretability suite's rail, but named for what they depict so
+// any pane can use them.
+
+/** A home / overview. */
+export function IconHome(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M2.75 7.25 8 2.75l5.25 4.5" />
+      <path d="M4.25 6v7.25h7.5V6" />
+    </Glyph>
+  );
+}
+
+/** A stack of prompt blocks — the context window. */
+export function IconLayers(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M8 2.5 13.5 5.25 8 8 2.5 5.25Z" />
+      <path d="M2.5 8 8 10.75 13.5 8" />
+      <path d="M2.5 10.75 8 13.5l5.5-2.75" />
+    </Glyph>
+  );
+}
+
+/** Steps of a run — an agent turn, a recorded trace. */
+export function IconTimeline(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 2.5v11" />
+      <circle cx="3.5" cy="4.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none" />
+      <circle cx="3.5" cy="11.5" r="1" fill="currentColor" stroke="none" />
+      <path d="M6.5 4.5h7M6.5 8h5M6.5 11.5h6" />
+    </Glyph>
+  );
+}
+
+/** A model's block structure — the architecture. */
+export function IconCube(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M8 2.25 13.25 5v6L8 13.75 2.75 11V5Z" />
+      <path d="M2.75 5 8 7.75 13.25 5M8 7.75v6" />
+    </Glyph>
+  );
+}
+
+/** Attention: a query reaching back to several keys. */
+export function IconAttention(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12.5" cy="12.5" r="1.25" />
+      <circle cx="3.5" cy="3.5" r="1" />
+      <circle cx="3.5" cy="8" r="1" />
+      <circle cx="3.5" cy="12.5" r="1" />
+      <path d="M11.4 11.7 4.4 4.3M11.25 12.1 4.5 8.4M11.25 12.5H4.5" />
+    </Glyph>
+  );
+}
+
+/** Draw / design. */
+export function IconPencil(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M10.5 2.75 13.25 5.5 5.5 13.25H2.75V10.5Z" />
+      <path d="M9 4.25 11.75 7" />
+    </Glyph>
+  );
+}
+
+/** A recorded forward pass: a waveform through layers. */
+export function IconWave(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M1.75 8h2l1.5-4.5 2.5 9 2.5-6.5 1.25 2h2.75" />
+    </Glyph>
+  );
+}
+
+/** Step through, debugger-style. */
+export function IconStep(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 4.5h6.5a3 3 0 0 1 0 6H5" />
+      <path d="M6.75 8.5 4.75 10.5l2 2" />
+      <path d="M12.75 3v2.5" />
+    </Glyph>
+  );
+}
+
+/** A lens reading the stream. */
+export function IconLens(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <ellipse cx="8" cy="8" rx="3" ry="5.5" />
+      <path d="M1.75 8h3.25M11 8h3.25" />
+    </Glyph>
+  );
+}
+
+/** Attention heads: a grid of cells. */
+export function IconHeads(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.75" />
+      <rect x="9" y="2.5" width="4.5" height="4.5" rx="0.75" />
+      <rect x="2.5" y="9" width="4.5" height="4.5" rx="0.75" />
+      <rect x="9" y="9" width="4.5" height="4.5" rx="0.75" fill="currentColor" />
+    </Glyph>
+  );
+}
+
+/** A sparse feature: one bar lit among many. */
+export function IconFeature(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 13.25v-1.5M5.5 13.25v-1M8 13.25v-9M10.5 13.25v-2M13 13.25v-1" />
+    </Glyph>
+  );
+}
+
+/** Steer: push a direction. */
+export function IconSteer(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 8 11 5M11 5H8.75M11 5v2.25" />
+    </Glyph>
+  );
+}
+
+/** An axis with a marker on it. */
+export function IconAxis(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M2.5 13.5 13.5 2.5" />
+      <path d="M2.5 13.5h3M2.5 13.5v-3" />
+      <circle cx="9.5" cy="6.5" r="1.25" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** A graph of nodes and edges — a circuit. */
+export function IconGraph(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="4" cy="12" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="8" cy="4" r="1.5" />
+      <path d="M7.2 5.3 4.8 10.7M8.8 5.3l2.4 5.4M5.5 12h5" />
+    </Glyph>
+  );
+}
+
+/** Words out of a vector — natural-language readout. */
+export function IconSpeech(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M2.75 3.25h10.5v7H7.5l-3 2.5v-2.5H2.75Z" />
+      <path d="M5 6h6M5 8h4" />
+    </Glyph>
+  );
+}
+
+/** A shelf of stored artifacts. */
+export function IconLibrary(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 2.75v10.5M6 2.75v10.5" />
+      <path d="M8.75 3.4 11 2.9l2.25 10.25-2.25.5Z" />
+      <path d="M2 13.25h12" />
+    </Glyph>
+  );
+}
+
+/** Icons addressable by name, for declarations that can only carry a string
+ *  (a `SectionDecl.glyph`). */
+export const NAMED_GLYPHS: Readonly<Record<string, (props: SVGProps<SVGSVGElement>) => ReactElement>> =
+  {
+  home: IconHome,
+  layers: IconLayers,
+  timeline: IconTimeline,
+  cube: IconCube,
+  attention: IconAttention,
+  pencil: IconPencil,
+  wave: IconWave,
+  step: IconStep,
+  lens: IconLens,
+  heads: IconHeads,
+  feature: IconFeature,
+  steer: IconSteer,
+  axis: IconAxis,
+  graph: IconGraph,
+  speech: IconSpeech,
+  library: IconLibrary,
+  search: IconSearch,
+  list: IconList,
+};

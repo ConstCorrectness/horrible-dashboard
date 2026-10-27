@@ -4,6 +4,7 @@ import { minibuffer } from '../../minibuffer';
 import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu';
 import { registry, type ModuleManifest } from '../../registry';
 import type { EditorService } from '../editor/service';
+import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection } from '../interp/ids';
 import { layerStepperAction } from './stepper/actions';
 import { sendTracePrompt } from './trace-prompt';
 
@@ -59,7 +60,7 @@ function traceSelection(): void {
   }
   const scope = selection.text ? 'selection' : 'whole file';
   sendTracePrompt({ prompt: text, label: `${bufferLabel(uri)} (${scope})` });
-  revealSection('traces', 'llamacpp.server');
+  revealSection(SUITE_SECTIONS.traces, SUITE_VIEW);
 }
 
 /**
@@ -86,7 +87,7 @@ function traceTextItems(target: ContextTarget): ContextMenuItem[] {
       detail: 'Record a forward pass over this text and read it in the lens.',
       run: () => {
         sendTracePrompt({ prompt: text, label: label ? bufferLabel(label) : 'selection' });
-        revealSection('traces', 'llamacpp.server');
+        revealSection(SUITE_SECTIONS.traces, SUITE_VIEW);
       },
     },
   ];
@@ -114,20 +115,15 @@ export const llamacppModule: ModuleManifest = {
       id: 'llamacpp.server',
       title: 'llama.cpp',
       component: LlamaCppPane,
-      // A three-section management console — pick a build, browse GGUFs, read a
-      // trace — is a surface you work in, not a tile you glance at. It was a
-      // `widget`, which reserves a whole centre area for one pane; the `lab`
-      // preset tabs it with three others, which is a document's behaviour.
+      // Running a model: pick a build, browse GGUFs. Reading one — traces, the
+      // stepper and the lens — moved to the interpretability suite, which is where
+      // the rest of reading a model lives.
       role: 'document',
       icon: '🦙',
       singleton: true,
       sections: [
         { id: 'server', label: 'Server', icon: '⚙️', key: 's', default: true },
         { id: 'models', label: 'Models', icon: '🧠', key: 'm' },
-        { id: 'traces', label: 'Traces', icon: '🔬', key: 't' },
-        { id: 'lens', label: 'Lens', icon: '🔭', key: 'l' },
-        // The layer debugger: a trace in execution order, stepped like source.
-        { id: 'stepper', label: 'Stepper', icon: '⏯️', key: 'd' },
       ],
     },
   ],
@@ -140,9 +136,17 @@ export const llamacppModule: ModuleManifest = {
     {
       id: 'llamacpp.openStepper',
       title: 'llama.cpp: Step through a trace (layer debugger)',
-      run: () => revealSection('stepper', 'llamacpp.server'),
+      run: () => revealSection(SUITE_SECTIONS.stepper, SUITE_VIEW),
       slash: 'stepper',
     },
+    // The traces / lens / stepper sections were part of this pane. Their
+    // synthesized `section.show:` ids are an API a keybinding may still name, so
+    // they are kept, pointing where the sections went.
+    ...(['traces', 'lens', 'stepper'] as const).map((section) => ({
+      id: `section.show:llamacpp.server:${section}`,
+      title: `llama.cpp: ${section[0].toUpperCase()}${section.slice(1)} (in Interpretability)`,
+      run: () => void revealSection(SUITE_SECTIONS[section], SUITE_VIEW),
+    })),
     // The stepper's verbs. Commands so the palette lists them and the keymap can
     // bind them; each is a no-op unless the Stepper section is mounted (the
     // `bindLayerStepper` handle), which is correct — nothing else has a cursor.
@@ -171,8 +175,10 @@ export const llamacppModule: ModuleManifest = {
       slash: 'trace-selection',
     },
   ],
-  // Pane-scoped and `!textInput`-guarded, agentpedia's precedent: arrows typed in
-  // the trace picker or a threshold box must not scrub the cursor. `f5`/`f11` are
+  // Section-scoped and `!textInput`-guarded, agentpedia's precedent: arrows typed
+  // in the trace picker or a threshold box must not scrub the cursor, and arrows
+  // pressed in another suite section must not step the stepper kept mounted
+  // behind it. `f5`/`f11` are
   // browser-reserved (keymap/reserved.ts), so VS Code's debugger keys only partly
   // carry over — `f10` does, and the arrows are the primary spelling.
   keybindings: (
@@ -193,7 +199,7 @@ export const llamacppModule: ModuleManifest = {
   ).map(([key, verb]) => ({
     key,
     command: `llamacpp.stepper.${verb}`,
-    when: "paneFocus == 'llamacpp.server' && !textInput",
+    when: `${whenSuiteSection(SUITE_SECTIONS.stepper)} && !textInput`,
   })),
   contextMenu: [
     {

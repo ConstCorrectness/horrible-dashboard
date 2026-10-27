@@ -54,7 +54,7 @@ layouts from that era are turned into windows on load — see
   the role.
 
 - **A narrow companion is a region strip.** Most of the obvious candidates
-  (`editor.recentNotes`, `observability.logs`, `interpretability.context`,
+  (`editor.recentNotes`, `observability.logs`,
   `training.metrics`) already are regions of their host pane. A view that has become
   _purely_ a companion says so with **`embedded: true`**. See
   [Embedded views and sections](#embedded-views-and-sections).
@@ -157,6 +157,23 @@ A module picks its style: a section with its own `component`/`view` is rendered 
 the host, and one with neither falls through to the host's own component, which
 switches internally via `usePaneSection()`. Both exist because a pane being merged
 usually already switches internally, and a new one usually doesn't want to.
+
+Three options extend this, all introduced by the
+[interpretability suite](../modules/interp-suite.mdx):
+
+- **`sectionsLayout: 'rail'`** draws the sections as a vertical rail down the left
+  edge (`SectionRail`), grouped under `SectionDecl.group` headings with vector icons
+  named by `SectionDecl.glyph` — for a pane with more sections than a top strip
+  holds.
+- **`sectionsKeepAlive: true`** keeps a section mounted after its first visit,
+  hiding it rather than unmounting it. Because a hidden section's verbs stay bound,
+  the keymap has a **`paneSection`** context key; a single-key binding into such a
+  pane names its section as well as the pane.
+- **`SectionScopeContext`** lets a host answer `usePaneSection()` for a body one
+  level down, so a pane that switched its own sections can become a section of
+  another pane unchanged, its own tabs now a sub-strip. A rename in `RENAMED_VIEWS`
+  may name a section (`{ to, section }`), so a merged pane's saved layout reopens on
+  the right tab.
 
 **The agent-context rule.** Unlike a region strip — which gets a synthetic instance
 id (`${host}:${position}:${viewId}`) that neither `listPanes` nor `visiblePanes`

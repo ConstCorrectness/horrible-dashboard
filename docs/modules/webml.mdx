@@ -26,10 +26,12 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 
 ## Contributions to the layout shell
 
-- **Panels:** `webml.playground` (WebML Playground, document, singleton) and
-  `webml.lens` (Logit Lens, document, singleton; sections **Reply** `r`, **Guess**
-  `g`, **Compare** `c`).
-- **Commands:** `webml.openPlayground`, `webml.openLens`, `webml.unload`.
+- **Panels:** `webml.playground` (WebML Playground, document, singleton). The lens
+  lab is the **Lens** section of the [interpretability suite](./interp-suite.mdx),
+  its **Reply**, **Guess** and **Compare** views tabs there beside the trace lens;
+  the retired `webml.lens` pane id resolves to it.
+- **Commands:** `webml.openPlayground`, `webml.openLens` (opens the suite's Lens at
+  Reply), `webml.unload`.
 - **Boot:** `initWebmlRelay()` (beside `initAgentRelay`) answers relayed generations and
   keeps the backend told what this window can run.
 - **Settings:** `webml.defaultModel`, `webml.temperature`, `webml.topk`,
@@ -106,7 +108,7 @@ there, its probability, and the stream's norm. It roughly halves decode speed (s
 
 ## The Logit Lens
 
-`webml.lens` looks at the lens properly. The window's engine keeps the latest reply
+The suite's Lens section looks at the lens properly. The window's engine keeps the latest reply
 that ran with the lens on, whichever surface asked (`lens-run.ts`), so this pane, and
 the model explorer's grid, fill in while the reply is written. Code is in
 `modules/webml/lens-lab/`, the arithmetic in `model.ts` (unit-tested).

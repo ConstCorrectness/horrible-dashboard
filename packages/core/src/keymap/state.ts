@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { dialogsStore } from '../dialogs';
+import { activeSectionOf } from '../layout/controller';
 import { layoutStore } from '../layout/store';
 import { findPaneAnywhere } from '../layout/model';
 import { registry, type KeybindingDecl } from '../registry';
@@ -88,6 +89,7 @@ export function readKeyContext(): KeyContext {
   return {
     paneFocus: focused?.pane.viewId ?? null,
     paneInstance: focused?.pane.instanceId ?? null,
+    paneSection: focused ? (activeSectionOf(focused.pane) ?? null) : null,
     capture: capture?.mode ?? null,
     captureView: capture?.viewId ?? null,
     textInput: typeof document !== 'undefined' && isEditableTarget(document.activeElement),

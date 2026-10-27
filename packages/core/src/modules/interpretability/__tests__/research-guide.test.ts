@@ -29,15 +29,18 @@ describe('RESEARCH_PANE_GUIDE', () => {
     }
   });
 
-  it('maps the three core interpretability stages accurately', () => {
+  it('maps the three core interpretability stages onto the suite', () => {
     const contextStage = RESEARCH_PANE_GUIDE.find((s) => s.id === 'context');
     const archStage = RESEARCH_PANE_GUIDE.find((s) => s.id === 'architecture');
     const actStage = RESEARCH_PANE_GUIDE.find((s) => s.id === 'activations');
 
-    expect(contextStage?.paneId).toBe('interpretability.context');
-    expect(archStage?.paneId).toBe('interpretability.architecture');
-    expect(actStage?.paneId).toBe('llamacpp.server');
+    for (const stage of [contextStage, archStage, actStage]) {
+      expect(stage?.paneId).toBe('interpretability.suite');
+    }
+    expect(contextStage?.sectionId).toBe('context');
+    expect(archStage?.sectionId).toBe('model');
     expect(actStage?.sectionId).toBe('lens');
+    expect(actStage?.altSectionId).toBe('stepper');
   });
 });
 

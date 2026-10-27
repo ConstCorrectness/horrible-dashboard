@@ -1,10 +1,7 @@
-import { lazyPane } from '../../lazy-pane';
-import { registry, type ModuleManifest } from '../../registry';
+import { revealSection } from '../../layout/controller';
+import type { ModuleManifest } from '../../registry';
+import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection } from '../interp/ids';
 import { designerAction } from './designer/actions';
-
-// Loaded when the pane first renders, not at boot — see `lazyPane`.
-const ModelExplorer = lazyPane(() => import('./ModelExplorer'), 'ModelExplorer');
-const InterpretabilityPanel = lazyPane(() => import('./view'), 'InterpretabilityPanel');
 
 /**
  * See what the model is actually being handed.
@@ -18,53 +15,31 @@ export const interpretabilityModule: ModuleManifest = {
   id: 'interpretability',
   title: 'Interpretability',
   category: 'research',
-  panels: [
-    {
-      // `widget` rather than `tool`: this is the subject of its workspace, so it
-      // `document`: a surface you read and work in, and one that tabs. It was a
-      // `widget` to make it centre-placeable, but widget means centre-placeable
-      // *alone* — and the `lab` preset tabs this with the model explorer, the
-      // Hugging Face hub and llama.cpp in a single area, which only documents do.
-      id: 'interpretability.context',
-      title: 'Context window',
-      component: InterpretabilityPanel,
-      role: 'document',
-      icon: '🔍',
-      singleton: true,
-    },
-    {
-      // Sits beside the context view: what the model *is*, next to what it was
-      // given. A document for the same reason.
-      id: 'interpretability.architecture',
-      title: 'Model explorer',
-      component: ModelExplorer,
-      role: 'document',
-      icon: '🧬',
-      singleton: true,
-    },
-  ],
+  // No panes of its own any more: the context window and the model explorer are
+  // sections of the interpretability suite (`modules/interp`). The commands stay
+  // here and keep their ids — a command id is an API even when its target moves.
   commands: [
     {
       id: 'interpretability.guide',
       title: 'AI Research: Which pane to use when & why (Workflow Guide)',
-      run: () => registry.openPanel('interpretability.context'),
+      run: () => void revealSection(SUITE_SECTIONS.home, SUITE_VIEW),
     },
     {
       id: 'interpretability.open',
       title: 'Interpretability: Inspect context window',
-      run: () => registry.openPanel('interpretability.context'),
+      run: () => void revealSection(SUITE_SECTIONS.context, SUITE_VIEW),
     },
     {
       // Command id kept as-is: a keybinding or plugin naming it predates the
       // rename, and a command id is an API even when its title isn't.
       id: 'interpretability.openDiagram',
       title: 'Interpretability: Explore model structure',
-      run: () => registry.openPanel('interpretability.architecture'),
+      run: () => void revealSection(SUITE_SECTIONS.model, SUITE_VIEW),
     },
     // The designer's verbs, borrowed from Blender's node editor. Each one calls
-    // through `designer/actions.ts`, which the Design tab publishes while it is
-    // mounted — so in Inspect mode, where none of these mean anything, they are
-    // no-ops without a mode flag to keep in step.
+    // through `designer/actions.ts`, which the Design section publishes while it
+    // is mounted. The suite keeps sections mounted once opened, so the bindings
+    // below are what confine these to the Design section being on screen.
     {
       id: 'interpretability.design.addNode',
       title: 'Model designer: Add node',
@@ -109,12 +84,11 @@ export const interpretabilityModule: ModuleManifest = {
   // `mod+` so one binding covers Ctrl and Cmd, matching the other modules. Not
   // ctrl+shift+i — that's DevTools in every browser, and the browser wins.
   //
-  // The designer's are single keys, so every one of them is scoped to the pane
-  // *and* guarded with `!textInput`: unguarded, typing a `d_model` value in the
-  // inspector or a class name in the code pane would delete the selected node.
-  // A binding naming `paneFocus` already beats an unscoped global, so the pane
-  // does not need to take capture — which matters, because the same pane hosts
-  // Inspect mode, where swallowing the keyboard would be wrong.
+  // The designer's are single keys, so every one of them is scoped to the Design
+  // section *and* guarded with `!textInput`: unguarded, typing a `d_model` value in
+  // the inspector or a class name in the code pane would delete the selected node.
+  // The section matters as much as the guard: the suite keeps the designer mounted
+  // behind its other tools, and `x` pressed in the lens must not delete a node.
   keybindings: [
     { key: 'mod+shift+x', command: 'interpretability.open' },
     ...(
@@ -131,7 +105,7 @@ export const interpretabilityModule: ModuleManifest = {
     ).map(([key, verb]) => ({
       key,
       command: `interpretability.design.${verb}`,
-      when: "paneFocus == 'interpretability.architecture' && !textInput",
+      when: `${whenSuiteSection(SUITE_SECTIONS.design)} && !textInput`,
     })),
   ],
   settings: [

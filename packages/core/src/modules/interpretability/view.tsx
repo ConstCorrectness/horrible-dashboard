@@ -7,8 +7,10 @@ import {
   TokenizerBadge,
   ToolList,
 } from '../../ContextBlocks';
+import { revealSection } from '../../layout/controller';
 import { registry } from '../../registry';
-import { GlossaryBadge, ResearchWorkflowHeader } from './ResearchGuide';
+import { SUITE_SECTIONS, SUITE_VIEW } from '../interp/ids';
+import { GlossaryBadge } from './ResearchGuide';
 import {
   agentsIn,
   buildTurnTree,
@@ -184,7 +186,6 @@ export function InterpretabilityPanel() {
   if (!turn) {
     return (
       <div className="interp-panel">
-        <ResearchWorkflowHeader current="context" />
         <div className="interp-empty-rich">
           <div className="interp-empty-hero">
             <h3>🔍 Prompt Context Window Inspector</h3>
@@ -240,7 +241,7 @@ export function InterpretabilityPanel() {
           </div>
 
           <div className="interp-empty-actions">
-            <button type="button" onClick={() => registry.openPanel('interpretability.architecture')}>
+            <button type="button" onClick={() => revealSection(SUITE_SECTIONS.model, SUITE_VIEW)}>
               🧬 Open Model Explorer (Weights)
             </button>
             <button type="button" onClick={() => registry.openPanel('lab.hub')}>
@@ -254,7 +255,6 @@ export function InterpretabilityPanel() {
 
   return (
     <div className="interp-panel">
-      <ResearchWorkflowHeader current="context" />
       <div className="interp-turnbar">
         <select
           value={turn.turnId}

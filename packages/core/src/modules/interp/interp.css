@@ -1,0 +1,35 @@
+/* The interpretability suite's two pieces of CSS that inline styles cannot carry:
+   a keyframe for the staggered entrance, and the hover state of its classed tabs.
+   Everything else is inline style objects over theme tokens (styles.ts). */
+
+@keyframes interp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes interp-rise {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+/* Classed, so controls.css's 30px action-button rule leaves them alone: these are
+   tabs, sized by the strip they sit in. */
+.interp-subtab:hover {
+  color: var(--text-primary);
+}
+
+.interp-card-button:hover {
+  border-color: var(--accent);
+}

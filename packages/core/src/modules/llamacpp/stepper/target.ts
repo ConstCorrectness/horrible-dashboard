@@ -10,6 +10,7 @@
  * visit to the section jump back to someone's old cursor.
  */
 import { revealSection } from '../../../layout/controller';
+import { SUITE_SECTIONS, SUITE_VIEW } from '../../interp/ids';
 
 export interface StepperTarget {
   traceId: string;
@@ -44,5 +45,5 @@ export function subscribeStepperTarget(listener: (next: StepperTarget) => void):
 /** Open `traceId` in the stepper — the verb behind every "Step through" button. */
 export function openInStepper(target: StepperTarget): void {
   sendStepperTarget(target);
-  revealSection('stepper', 'llamacpp.server');
+  revealSection(SUITE_SECTIONS.stepper, SUITE_VIEW);
 }

@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
-import { registry } from '../../registry';
-import { revealSection } from '../../layout/controller';
+import { useState } from 'react';
+
+import { SUITE_SECTIONS, SUITE_VIEW } from '../interp/ids';
 
 export interface ResearchStage {
   id: string;
@@ -17,6 +17,10 @@ export interface ResearchStage {
   tip: string;
 }
 
+/**
+ * The research lifecycle, stage by stage. The three interpretability stages live
+ * in the suite; the suite's Home draws the others as "beyond this window".
+ */
 export const RESEARCH_PANE_GUIDE: ResearchStage[] = [
   {
     id: 'papers',
@@ -47,7 +51,8 @@ export const RESEARCH_PANE_GUIDE: ResearchStage[] = [
     title: 'Prompt & Context Window',
     icon: '🔍',
     category: 'Interpretability (Prompt)',
-    paneId: 'interpretability.context',
+    paneId: SUITE_VIEW,
+    sectionId: SUITE_SECTIONS.context,
     question: 'What was the model actually fed before generating an answer?',
     when: 'When debugging prompt bloat, unexplained tool failures, or missing instructions.',
     tip: 'Tool schemas often consume 60%+ of the context budget. Look out for the red "tools dropped" warning.',
@@ -57,7 +62,8 @@ export const RESEARCH_PANE_GUIDE: ResearchStage[] = [
     title: 'Weights & Architecture',
     icon: '🧬',
     category: 'Interpretability (Weights)',
-    paneId: 'interpretability.architecture',
+    paneId: SUITE_VIEW,
+    sectionId: SUITE_SECTIONS.model,
     question: 'How is the neural network structured, sized, and quantized?',
     when: 'When inspecting attention heads (MHA/GQA), calculating KV cache VRAM footprint, or ablating layers.',
     tip: 'GQA (Grouped-Query Attention) shares KV heads across query heads, drastically lowering VRAM needs during generation.',
@@ -67,9 +73,9 @@ export const RESEARCH_PANE_GUIDE: ResearchStage[] = [
     title: 'Activations & Logit Lens',
     icon: '🔭',
     category: 'Interpretability (Activations)',
-    paneId: 'llamacpp.server',
-    sectionId: 'lens',
-    altSectionId: 'stepper',
+    paneId: SUITE_VIEW,
+    sectionId: SUITE_SECTIONS.lens,
+    altSectionId: SUITE_SECTIONS.stepper,
     altLabel: 'Layer Stepper',
     question: 'What representations form across layers during a forward pass?',
     when: 'When analyzing at which layer a model figures out the answer, or stepping through layer execution.',
@@ -151,7 +157,7 @@ export const GLOSSARY_ENTRIES: Record<
   tool_budget: {
     title: 'Agent Tool Budget & Truncation',
     explanation:
-      'The agent orchestrator selects tools relevant to the active context up to a safety budget (TOOL_BUDGET = 44). Excess tools are dropped to avoid overwhelming the model context window.',
+      'The agent orchestrator selects tools relevant to the active context up to a safety budget (TOOL_BUDGET = 38). Excess tools are dropped to avoid overwhelming the model context window.',
     tip: 'If the agent "forgets" a tool, inspect the Context Window pane to see if it was dropped due to tool budget.',
   },
   context_window: {
@@ -197,178 +203,5 @@ export function GlossaryBadge({
         </span>
       )}
     </span>
-  );
-}
-
-/**
- * Modal dialog explaining the AI research lifecycle and which pane to use when.
- */
-export function ResearchCompassModal({ onClose }: { onClose: () => void }) {
-  const openPane = useCallback((paneId: string, sectionId?: string) => {
-    if (sectionId) {
-      revealSection(sectionId, paneId);
-    } else {
-      registry.openPanel(paneId);
-    }
-  }, []);
-
-  return (
-    <div className="interp-guide-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="interp-guide-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="interp-guide-header">
-          <div className="interp-guide-header-title">
-            <span className="interp-guide-icon">🧭</span>
-            <div>
-              <h3>AI Research Compass: Which Pane When & Why</h3>
-              <p className="interp-dim">
-                A roadmap of the research lifecycle and dashboard panes for beginners and practitioners.
-              </p>
-            </div>
-          </div>
-          <button type="button" className="btn-mini interp-guide-close" onClick={onClose}>
-            ✕ Close
-          </button>
-        </div>
-
-        <div className="interp-guide-grid">
-          {RESEARCH_PANE_GUIDE.map((stage) => (
-            <div key={stage.id} className="interp-guide-card">
-              <div className="interp-guide-card-head">
-                <span className="interp-guide-card-icon">{stage.icon}</span>
-                <div className="interp-guide-card-titles">
-                  <h4>{stage.title}</h4>
-                  <span className="interp-chip interp-kind-agent">{stage.category}</span>
-                </div>
-              </div>
-
-              <div className="interp-guide-qa">
-                <div className="interp-guide-question">
-                  <span className="interp-guide-q-label">Answers:</span> {stage.question}
-                </div>
-                <div className="interp-guide-when">
-                  <span className="interp-guide-w-label">When to use:</span> {stage.when}
-                </div>
-                <div className="interp-guide-tip">
-                  <span className="interp-guide-t-label">Tip:</span> {stage.tip}
-                </div>
-              </div>
-
-              <div className="interp-guide-actions">
-                <button
-                  type="button"
-                  className="interp-guide-open-btn"
-                  onClick={() => {
-                    openPane(stage.paneId, stage.sectionId);
-                    onClose();
-                  }}
-                >
-                  Open {stage.paneId.split('.').pop()}
-                </button>
-                {stage.altPaneId && (
-                  <button
-                    type="button"
-                    className="btn-mini"
-                    onClick={() => {
-                      openPane(stage.altPaneId!, stage.altSectionId);
-                      onClose();
-                    }}
-                  >
-                    {stage.altLabel ?? stage.altPaneId.split('.').pop()}
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Top header strip for interpretability panes providing quick links across the 3 surfaces:
- * 1. Prompt Context Window (Prompt)
- * 2. Model Explorer (Weights)
- * 3. Logit Lens & Stepper (Activations)
- * Plus the Research Compass trigger.
- */
-export function ResearchWorkflowHeader({
-  current,
-}: {
-  current: 'context' | 'architecture' | 'lens' | 'stepper';
-}) {
-  const [guideOpen, setGuideOpen] = useState(false);
-
-  const navigateTo = useCallback((surface: 'context' | 'architecture' | 'lens' | 'stepper') => {
-    switch (surface) {
-      case 'context':
-        registry.openPanel('interpretability.context');
-        break;
-      case 'architecture':
-        registry.openPanel('interpretability.architecture');
-        break;
-      case 'lens':
-        revealSection('lens', 'llamacpp.server');
-        break;
-      case 'stepper':
-        revealSection('stepper', 'llamacpp.server');
-        break;
-    }
-  }, []);
-
-  return (
-    <>
-      <div className="interp-workflow-bar" role="navigation" aria-label="Interpretability layers">
-        <span className="interp-workflow-label">
-          <span className="interp-workflow-icon">🔬</span> Interpretability:
-        </span>
-
-        <div className="interp-workflow-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={current === 'context'}
-            className={`interp-workflow-tab${current === 'context' ? ' interp-workflow-active' : ''}`}
-            onClick={() => navigateTo('context')}
-            title="Inspect prompts, tokens, tool schemas, and history fed to the model"
-          >
-            1. Context Window <span className="interp-workflow-sub">(Prompt)</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={current === 'architecture'}
-            className={`interp-workflow-tab${current === 'architecture' ? ' interp-workflow-active' : ''}`}
-            onClick={() => navigateTo('architecture')}
-            title="Inspect static weights, layer structures, attention heads, and GGUF tensors"
-          >
-            2. Model Explorer <span className="interp-workflow-sub">(Weights)</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={current === 'lens' || current === 'stepper'}
-            className={`interp-workflow-tab${current === 'lens' || current === 'stepper' ? ' interp-workflow-active' : ''}`}
-            onClick={() => navigateTo('lens')}
-            title="Inspect dynamic hidden activations and logit lens projections across layers"
-          >
-            3. Lens & Stepper <span className="interp-workflow-sub">(Activations)</span>
-          </button>
-        </div>
-
-        <button
-          type="button"
-          className="interp-guide-btn"
-          onClick={() => setGuideOpen(true)}
-          title="Open AI Research Compass: Which pane to use when & why"
-        >
-          🧭 Compass
-        </button>
-      </div>
-
-      {guideOpen && <ResearchCompassModal onClose={() => setGuideOpen(false)} />}
-    </>
   );
 }

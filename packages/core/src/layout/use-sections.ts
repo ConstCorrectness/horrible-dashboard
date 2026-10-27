@@ -7,7 +7,7 @@
  * Lives in core alongside `usePaneParams` and `useAgentContext`, for the same
  * reason: feature modules live in core and must not import ui.
  */
-import { useCallback, useContext, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useSyncExternalStore } from 'react';
 
 import { PaneInstanceContext } from '../agent-context';
 import { activeSectionOf, setPaneSection } from './controller';
@@ -37,6 +37,7 @@ export interface PaneSections {
  * (games' `hub-section`) drifted from the strip and forgot on reload.
  */
 export function usePaneSection(): PaneSections {
+  const scoped = useContext(SectionScopeContext);
   const instanceId = useContext(PaneInstanceContext);
   const section = useSyncExternalStore(
     layoutStore.subscribe,
@@ -49,5 +50,14 @@ export function usePaneSection(): PaneSections {
     },
     [instanceId],
   );
-  return { section, setSection };
+  return scoped ?? { section, setSection };
 }
+
+/**
+ * Sections one level down. A pane that switched its own sections internally
+ * (`usePaneSection()`) can become a *section of another pane* without being
+ * rewritten: the new host provides this context, and the component's sub-tabs
+ * then read and move the host's sub-section value instead of the pane's own —
+ * which is now the host's, and names the outer tab.
+ */
+export const SectionScopeContext = createContext<PaneSections | null>(null);

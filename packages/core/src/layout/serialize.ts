@@ -61,11 +61,18 @@ const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
  * in that panel. Duplicates that result from two old views collapsing onto one
  * are dropped by `readPane`.
  */
-const RENAMED_VIEWS: Readonly<Record<string, string>> = {
+const RENAMED_VIEWS: Readonly<Record<string, string | { to: string; section: string }>> = {
   'games.board': 'games.lobby',
   'games.loadout': 'games.lobby',
   'games.thoughts': 'games.log',
-  'interpretability.budget': 'interpretability.context',
+  // Interpretability: six panes became one window with a rail of sections. A
+  // rename that names a section lands the pane on it, so a workspace that had the
+  // context window open reopens on the context window, not on the suite's Home.
+  'interpretability.budget': { to: 'interpretability.suite', section: 'context' },
+  'interpretability.context': { to: 'interpretability.suite', section: 'context' },
+  'interpretability.architecture': { to: 'interpretability.suite', section: 'model' },
+  'agentpedia.hub': { to: 'interpretability.suite', section: 'runs' },
+  'webml.lens': { to: 'interpretability.suite', section: 'lens' },
   // hAssault's ten windows became three. The studio's per-tab openers were the
   // studio; the armory pane was the main menu's armory section, so it lands on
   // the game. (Console, companion, radar and voice still exist — as `embedded`
@@ -81,6 +88,18 @@ const RENAMED_VIEWS: Readonly<Record<string, string>> = {
   'games.replay': 'games.lobby',
   'games.town': 'games.lobby',
 };
+
+/** The view a retired id was renamed to, if any. */
+function renamedTo(viewId: string): string | undefined {
+  const rename = RENAMED_VIEWS[viewId];
+  return typeof rename === 'string' ? rename : rename?.to;
+}
+
+/** The section a rename lands on, when it names one. */
+function renamedSection(viewId: string): string | undefined {
+  const rename = RENAMED_VIEWS[viewId];
+  return typeof rename === 'string' ? undefined : rename?.section;
+}
 
 export function serialize(frame: FrameState): SerializedLayout {
   // `presentedInstanceId` is dropped rather than written and ignored on the way
@@ -127,7 +146,7 @@ export function deserialize(
       if (!value || typeof value !== 'object') return null;
       const p = value as Record<string, unknown>;
       if (typeof p.instanceId !== 'string' || typeof p.viewId !== 'string') return null;
-      const renamed = RENAMED_VIEWS[p.viewId];
+      const renamed = renamedTo(p.viewId);
       const viewId = renamed ?? p.viewId;
       if (!knownViews.has(viewId)) return null;
       if (renamed !== undefined) {
@@ -149,6 +168,10 @@ export function deserialize(
       // removed is resolved away by `activeSectionOf`, which has to handle that
       // case regardless (sections can disappear while a pane is open).
       if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
+      // A pane renamed into a section of another view lands on that section. Its
+      // stored section named a tab of the *old* view and means nothing here.
+      const landing = renamedSection(p.viewId);
+      if (landing) pane.activeSection = landing;
       return pane;
     };
 
@@ -164,14 +187,14 @@ export function deserialize(
           ...new Set(
             region.views
               .filter((v): v is string => typeof v === 'string')
-              .map((v) => RENAMED_VIEWS[v] ?? v)
+              .map((v) => renamedTo(v) ?? v)
               .filter((v) => knownViews.has(v)),
           ),
         ];
         if (views.length === 0) continue;
         const rawActive =
           typeof region.activeView === 'string'
-            ? (RENAMED_VIEWS[region.activeView] ?? region.activeView)
+            ? (renamedTo(region.activeView) ?? region.activeView)
             : null;
         const activeView = rawActive && views.includes(rawActive) ? rawActive : views[0];
         const state: RegionState = {

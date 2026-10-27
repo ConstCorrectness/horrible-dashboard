@@ -1,0 +1,72 @@
+---
+sidebar_position: 19
+sidebar_label: Interpretability suite
+---
+
+# Module: interp (the interpretability suite)
+
+One window, a rail of tools down its left edge. The context window, the model
+explorer and designer, the llama.cpp traces / stepper / lens, agentpedia and the
+window's lens lab used to be six panes that did not know about each other. They are
+one subject — the same model read at the prompt, the weights and the activations —
+so they are one pane now.
+
+**Status: Phase 1 of the suite plan** — frontend in
+`packages/core/src/modules/interp/`.
+
+## The rail
+
+| Group | Section | Body |
+| --- | --- | --- |
+| — | **Home** | state tiles, a card per tool, research stages outside this window |
+| Prompt | **Context** | [interpretability](./interpretability.mdx) context window |
+| Prompt | **Runs** | [agentpedia](./agentpedia.mdx), with Runs / Harness / Forks / Duels as sub-tabs |
+| Weights | **Model** | the model explorer's Inspect view |
+| Weights | **Design** | the model designer |
+| Activations | **Traces** | [llama.cpp](./llamacpp.mdx) traces |
+| Activations | **Stepper** | the layer stepper |
+| Activations | **Lens** | the trace lens, plus the [WebML](./webml.mdx) lens lab (Reply / Guess / Compare) as sub-tabs |
+
+Sections and Home's cards both come from `tools.ts`, so the rail and the map cannot
+disagree. Each body is registered as an `embedded` view (`interp.<section>`), so
+`show("Stepper")` and `openPane` still reach it by name. Every section sits under a
+shared strip naming the model, the model locus and the trace.
+
+## Two layout-shell features it introduced
+
+Both are general; any pane can opt in.
+
+- **`sectionsLayout: 'rail'`** draws a pane's sections as a vertical rail
+  (`packages/ui/src/layout/SectionRail.tsx`), grouped by `SectionDecl.group`, with
+  vector icons named by `SectionDecl.glyph` (`NAMED_GLYPHS` in `glyphs.tsx`).
+  Collapsing to icons only is remembered per viewer in `localStorage`.
+- **`sectionsKeepAlive: true`** mounts a section on first visit and then hides it
+  instead of unmounting it. A design with unsaved edits survives a look at the
+  lens, and each kept body keeps its own section-scoped agent context.
+
+Keep-alive means a section's verbs stay bound while it is hidden. The keymap
+therefore gained a **`paneSection`** context key, and every single-key binding
+into the suite names its section (`whenSuiteSection` in `interp/ids.ts`) — `x`
+pressed in the lens must not delete a designer node. `suite.test.ts` enforces it.
+
+Panes that switched their own sections internally (agentpedia, the lens lab) are
+hosted unchanged: `SectionScopeContext` lets a host supply the value
+`usePaneSection()` returns, one level down (`interp/SubSections.tsx`).
+
+## Migration
+
+`RENAMED_VIEWS` (`layout/serialize.ts`) may now name a section:
+`interpretability.context`, `interpretability.architecture`, `agentpedia.hub` and
+`webml.lens` reopen as the suite on the matching section, collapsing to one pane.
+`VIEW_ALIASES` keeps the retired ids and titles resolving for the agent, and an
+alias open carrying params (an eval's `{turnId}`) now applies them. Command ids are
+unchanged; `section.show:llamacpp.server:{traces,lens,stepper}` are kept as shims.
+The llama.cpp pane keeps only Server and Models.
+
+## Contributions
+
+| Kind | ID | Notes |
+| --- | --- | --- |
+| Panel | `interpretability.suite` | Singleton document; rail + keep-alive |
+| Panels (embedded) | `interp.home` … `interp.lens` | Section bodies |
+| Command | `interp.open` | Open the suite at Home |

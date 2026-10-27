@@ -18,6 +18,12 @@ export interface KeyContext {
   paneFocus: string | null;
   /** Instance id of the focused pane — distinguishes two panes of one view. */
   paneInstance: string | null;
+  /**
+   * Active section of the focused pane, or null when it declares none. A pane that
+   * keeps hidden sections mounted needs it: a section's verbs must not fire while
+   * another section is the one on screen.
+   */
+  paneSection: string | null;
   /** Capture mode currently held, or null when nothing has captured input. */
   capture: CaptureMode | null;
   /** View id holding capture, or null. */
@@ -59,6 +65,11 @@ export const CONTEXT_KEYS: ContextKeyDoc[] = [
     key: 'paneInstance',
     type: 'string',
     description: 'Instance id of the focused pane, e.g. `editor.buffer#3`.',
+  },
+  {
+    key: 'paneSection',
+    type: 'string',
+    description: "Active section (in-pane tab) of the focused pane, e.g. 'stepper'. Null when none.",
   },
   {
     key: 'capture',

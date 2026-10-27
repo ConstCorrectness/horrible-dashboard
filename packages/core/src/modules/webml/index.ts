@@ -7,10 +7,12 @@
 import { nodeGgufModelId, probeWebGpu, SUPPORTED_ARCHS } from '@horrible/webml';
 
 import { isHosted } from '../../hosted';
-import { openPane } from '../../layout/controller';
+import { openPane, revealSection } from '../../layout/controller';
 import { lazyPane } from '../../lazy-pane';
 import { minibuffer } from '../../minibuffer';
 import type { ModuleManifest } from '../../registry';
+import { SUITE_SECTIONS, SUITE_VIEW } from '../interp/ids';
+import { setSubSection } from '../interp/SubSections';
 import { webmlEngine } from './engine';
 
 export { initWebmlRelay } from './relay';
@@ -20,10 +22,17 @@ export { useEngineState, useGpuReport, webmlEngine } from './engine';
 export { settlesAt, useLensRun, type LensRun, type LensToken } from './lens-run';
 
 const PlaygroundPanel = lazyPane(() => import('./panels/PlaygroundPanel'), 'PlaygroundPanel');
-const LensLabPanel = lazyPane(() => import('./panels/LensLabPanel'), 'LensLabPanel');
 
 export const PLAYGROUND_VIEW = 'webml.playground';
-export const LENS_LAB_VIEW = 'webml.lens';
+
+/**
+ * The lens lab, which is the interpretability suite's Lens section now: its
+ * Reply / Guess / Compare views are tabs there, beside the llama.cpp trace lens.
+ */
+export function openLensLab(tab: 'reply' | 'guess' | 'compare' = 'reply'): void {
+  setSubSection(SUITE_SECTIONS.lens, tab);
+  revealSection(SUITE_SECTIONS.lens, SUITE_VIEW);
+}
 
 /**
  * Whether "Run in this window" makes sense for a GGUF the node lists: an
@@ -66,19 +75,6 @@ export const webmlModule: ModuleManifest = {
       role: 'document',
       icon: '🧪',
       singleton: true,
-    },
-    {
-      id: LENS_LAB_VIEW,
-      title: 'Logit Lens',
-      component: LensLabPanel,
-      role: 'document',
-      icon: '🔬',
-      singleton: true,
-      sections: [
-        { id: 'reply', label: 'Reply', icon: '▦', key: 'r', default: true },
-        { id: 'guess', label: 'Guess', icon: '?', key: 'g' },
-        { id: 'compare', label: 'Compare', icon: '⇄', key: 'c' },
-      ],
     },
   ],
   settings: [
@@ -132,7 +128,7 @@ export const webmlModule: ModuleManifest = {
     {
       id: 'webml.openLens',
       title: 'WebML: Open the logit lens (last reply, guessing game, base vs fine-tune)',
-      run: () => void openPane(LENS_LAB_VIEW),
+      run: () => openLensLab('reply'),
     },
     {
       id: 'webml.unload',
