@@ -228,20 +228,47 @@ function summarize(samples) {
 
 // --- the page, over CDP ---------------------------------------------------------
 
-async function pageTarget(deadline) {
+async function pageTarget(child, deadline) {
+  // What the port last said, for the error: "nothing listening" and "no page among
+  // these targets" are different failures.
+  let last = 'nothing listening';
   while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`app exited (${child.exitCode}) before a page target appeared`);
+    }
     try {
       const targets = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json();
       const page = targets.find(
         (t) => t.type === 'page' && !t.url.startsWith('devtools:') && t.webSocketDebuggerUrl,
       );
       if (page) return page;
-    } catch {
-      // Not listening yet.
+      last = `targets ${JSON.stringify(targets.map((t) => `${t.type} ${t.url}`))}`;
+    } catch (err) {
+      last = String(err?.cause?.code ?? err?.message ?? err);
     }
     await sleep(100);
   }
-  throw new Error('no page target on the debugging port');
+  throw new Error(`no page target on the debugging port (last: ${last})`);
+}
+
+/**
+ * Command lines of the WebView2 browser processes (Windows), for a failed run: whether
+ * `--remote-debugging-port` reached the browser at all is the first question.
+ */
+function webview2Browsers() {
+  if (!isWin) return [];
+  const ps =
+    "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine }";
+  try {
+    return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+      .split(/\r?\n/)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function cdpSession(wsUrl) {
@@ -355,7 +382,7 @@ async function main() {
     result.timings.backendHealthyMs = Date.now() - t0;
 
     // UI: the shell's root element in the page.
-    const target = await pageTarget(deadline);
+    const target = await pageTarget(child, deadline);
     result.timings.pageTargetMs = Date.now() - t0;
     session = await cdpSession(target.webSocketDebuggerUrl);
     while (!(await session.evaluate(`!!document.querySelector('.shell--frame')`))) {
@@ -397,6 +424,12 @@ async function main() {
   } catch (err) {
     result.error = String(err?.message ?? err);
     console.error('  ✗', result.error);
+    result.diagnostics = {
+      appRunning: child.exitCode === null,
+      shellProcesses: tree(child.pid).shell.map((p) => p.name),
+      webview2Browsers: webview2Browsers(),
+    };
+    console.error('  diagnostics', JSON.stringify(result.diagnostics, null, 2));
   } finally {
     session?.close();
     const backendPids = tree(child.pid).backend.map((p) => p.pid);
