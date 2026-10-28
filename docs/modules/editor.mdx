@@ -359,7 +359,7 @@ Three consequences worth knowing:
 Closing the whole tab/window is guarded separately: dirty buffers flag themselves
 via `setPaneDirty`, and a `beforeunload` handler triggers the browser's native
 unsaved-changes prompt when `anyPaneDirty()` — the async choice dialog can't run
-during unload. (A native Tauri window-close confirmation can gate on the same flag.)
+during unload. (A native window-close confirmation in the desktop shell can gate on the same flag.)
 
 ## Agent integration
 
@@ -788,7 +788,7 @@ is **which files you can reach**:
 | -------------------- | ------------------------------------------------ | ---------------------------------------- |
 | Notes                | full                                             | full                                     |
 | Workspace files      | full — read/write through the backend FS API     | full — same path                         |
-| Arbitrary OS files   | no (`fs.nativeDialogs` absent; File System Access API deliberately not used for v1) | native open/save dialogs via Tauri; opened as `osfile:` buffers |
+| Arbitrary OS files   | no (`fs.nativeDialogs` absent; File System Access API deliberately not used for v1) | native open/save dialogs via the shell; opened as `osfile:` buffers |
 | Drag a file onto app | imports content as a new note                    | opens the file as a buffer               |
 
 Remember the layout-shell rule: with a remote backend in the browser,

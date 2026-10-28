@@ -6,7 +6,7 @@ sidebar_label: Setup & running
 # Setup & running
 
 How to get horrible-dashboard running from a fresh clone — the **browser** layout and
-the **desktop** (Tauri) layout share one frontend, so most of the setup is common.
+the **desktop** (Electron) layout share one frontend, so most of the setup is common.
 
 :::info Kept in sync with `package.json`
 The [Scripts reference](#scripts-reference) below mirrors the `scripts` block in the
@@ -23,7 +23,7 @@ page in the same change** (a Stop hook flags a `package.json` change that doesn'
 | **pnpm** | `10.28.2` | Pinned via `packageManager`. Easiest: `corepack enable` (uses the pinned version automatically). |
 | **Python** | ≥ 3.12 | The backend (`requires-python = ">=3.12"`). |
 | **uv** | latest | Python package/venv manager — [install guide](https://docs.astral.sh/uv/). The backend is managed with `uv`, never `pip`. |
-| **Rust + Tauri prereqs** | stable toolchain | **Desktop layout only.** `rustup` plus the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/) (WebView2 — preinstalled on Windows 11; `webkit2gtk` on Linux; Xcode Command Line Tools on macOS). The Tauri CLI itself comes from `pnpm install`. |
+| **Electron** | from `pnpm install` | **Desktop layout only.** Nothing to install by hand: Electron is a devDependency of `apps/desktop`, and its runtime downloads on first use. No Rust toolchain or system webview is needed. On Linux a sandboxed Electron needs unprivileged user namespaces (or run it with `--no-sandbox`). |
 
 ## Install
 
@@ -58,16 +58,18 @@ Backend health check: `GET http://localhost:8000/api/health`.
   bundling it into `pnpm dev` is purely a local-dev convenience; if `:9200` is already
   in use it just logs a warning and the rest of the stack stays up.
 
-## Run the desktop layout (Tauri)
+## Run the desktop layout (Electron)
 
 ```bash
 pnpm dev:desktop                    # LAN-reachable by default
 pnpm dev:desktop --host 127.0.0.1   # local only
 ```
 
-The Tauri shell **supervises the backend itself** (`apps/desktop/src-tauri/src/backend.rs`):
-it spawns uvicorn, or reuses one already running on :8000 — no separate backend start
-needed. The **first** run compiles Rust and takes several minutes; that's expected.
+This starts the Vite dev server and the Electron shell (`apps/desktop`) together; the
+shell loads the dev server (hot reload works as in the browser) and **supervises the
+backend itself** (`apps/desktop/src/backend.ts`): it spawns uvicorn, or reuses one
+already running on :8000 — no separate backend start needed. Closing the window stops
+the backend and Vite. F12 or Ctrl+Shift+I opens DevTools in development.
 
 Unlike `pnpm dev`, the desktop layout **defaults to `0.0.0.0`** — the equivalent of
 `dev:lan` for the browser layout. The desktop node is the one you pair a phone with and
@@ -75,12 +77,12 @@ run the [peer fabric](architecture/distributed.mdx) from, so the
 [Android companion](modules/mobile-android.mdx), remote control, and cross-node
 hassault matches all need the backend off the loopback. `scripts/dev-desktop.mjs` sets
 `HORRIBLE_DEV_HOST`, which is the single host knob the rest of the stack already reads
-(`apps/web/vite.config.ts` for the Vite dev server, `bind_host()` in `backend.rs` for
-uvicorn); pass `--host 127.0.0.1` or set the variable yourself to opt back out.
+(`apps/web/vite.config.ts` for the Vite dev server, `bindHost()` in
+`apps/desktop/src/backend.ts` for uvicorn); pass `--host 127.0.0.1` or set the variable yourself to opt back out.
 
 That exposes an **unauthenticated API to the network**, exactly as `pnpm dev:lan` does —
 fine on a home or office LAN, not on untrusted wifi. The default only applies to this dev
-launcher: `backend.rs` still falls back to loopback for any other caller, so a packaged
+launcher: the shell still falls back to loopback for any other caller, so a packaged
 build stays local-only.
 
 :::note Reusing an already-running backend
@@ -100,7 +102,17 @@ the desktop shell own the backend.
 
 ```bash
 pnpm build             # static web bundle (apps/web/dist)
-pnpm build:desktop     # native desktop installers (Tauri)
+pnpm build:desktop     # the web bundle, then this platform's desktop installers
+```
+
+`build:desktop` writes installers to `apps/desktop/release/` (NSIS `.exe` on Windows,
+AppImage and `.deb` on Linux, `.dmg`/`.zip` on macOS). A release build also bundles the
+Python backend first (`pnpm build:backend-runtime`); without it the installer works only
+next to a checkout. To try the packaged app without an installer:
+
+```bash
+pnpm build && pnpm --filter @horrible/desktop run package   # apps/desktop/release/*-unpacked
+pnpm smoke:desktop                                         # drive it end to end
 ```
 
 ## Backend on its own
@@ -135,9 +147,10 @@ Every script in the repo-root `package.json`:
 | `pnpm dev` | `node scripts/dev.mjs` | Full browser stack: FastAPI backend, Vite UI, **and** the game server (:9200) together (localhost:5173). `--no-gameserver` skips the last. |
 | `pnpm dev:web` | `pnpm --filter @horrible/web dev` | Frontend only (assumes a backend is already up). |
 | `pnpm dev:lan` | `node scripts/dev.mjs --host 0.0.0.0` | Same as `dev` but bound to `0.0.0.0` for LAN / peer-fabric access. |
-| `pnpm dev:desktop` | `node scripts/dev-desktop.mjs` | Desktop layout (`tauri dev`); the shell supervises the backend. Binds `0.0.0.0` by default — `--host 127.0.0.1` for local only. |
+| `pnpm dev:desktop` | `node scripts/dev-desktop.mjs` | Desktop layout (Vite + Electron); the shell supervises the backend. Binds `0.0.0.0` by default — `--host 127.0.0.1` for local only. |
 | `pnpm build` | `pnpm --filter @horrible/web build` | Production web bundle. |
-| `pnpm build:desktop` | `pnpm --filter @horrible/desktop build` | Native desktop build (`tauri build`). |
+| `pnpm build:desktop` | `pnpm build && pnpm --filter @horrible/desktop dist` | Desktop installers for this platform (electron-builder → `apps/desktop/release/`). |
+| `pnpm smoke:desktop` | `node scripts/desktop-smoke.mjs` | Launch the packaged desktop app and check it end to end (window, backend, CORS and `/ws`, shell commands, shutdown). |
 | `pnpm build:icons` | `node scripts/build_icons.mjs` | Regenerate app icons from source art. |
 | `pnpm typecheck` | `pnpm -r typecheck` | Typecheck every workspace package. |
 | `pnpm lint` | `eslint .` | Lint the whole repo. |

@@ -151,7 +151,7 @@ stall the table.
 ## Identity & OAuth (done)
 
 The server is an OAuth **client** using the GitHub **device flow** (no client secret,
-no callback server — headless/Tauri-friendly, like `backend/modules/training/google_auth.py`).
+no callback server — headless/desktop-friendly, like `backend/modules/training/google_auth.py`).
 On sign-in it upserts an account (`github:<id>`) and issues a signed **JWT** (`auth.py`);
 the node holds it server-side (`.data/games_token.json`, never handed to the browser)
 and presents it on `/game-ws`. A **dev token** (the token *is* the account id) is the

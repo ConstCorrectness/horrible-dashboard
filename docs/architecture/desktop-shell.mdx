@@ -70,7 +70,7 @@ un-hydrated so nothing can autosave a blank screen over the layout on disk.
 
 :::warning The titlebar has to be grabbable
 Under `chrome.workspaceTabs` the native window is undecorated and `TitleBar.tsx` is its
-titlebar: a slim `frame-tabs--bare` strip carrying `data-tauri-drag-region` and the
+titlebar: a slim `frame-tabs--bare` strip carrying `data-app-drag-region` (`-webkit-app-region: drag`) and the
 min/max/close cluster. (The capability is named for the workspace tab strip that used
 to be that titlebar.) In the browser it renders nothing.
 
@@ -631,7 +631,7 @@ holds focus, the window of the focused pane.
 
 Dropping a window on another window's titlebar merges them into tabs
 (`MERGE_INTO_WINDOW`). The titlebar is marked with `data-window-titlebar` for the
-hit-test — and **never** with `data-tauri-drag-region`, which belongs to the app's own
+hit-test — and **never** with `data-app-drag-region`, which belongs to the app's own
 titlebar. On a window, that attribute would drag the whole OS window instead of the
 window under the pointer.
 
@@ -768,7 +768,7 @@ calls `presentPane(null)`.
 
 Distinct again: this is the OS window (or, in the browser, the page), not a pane.
 `toggleAppFullscreen` in `core/fullscreen.ts` picks the mechanism — the `windowControl`
-seam under Tauri, the DOM Fullscreen API otherwise — so `window.fullscreen` is now
+seam under the desktop shell, the DOM Fullscreen API otherwise — so `window.fullscreen` is now
 granted in **both** layouts and the browser is no longer stuck windowed.
 
 What the capability does **not** grant is the `f11` binding. `keymap/reserved.ts`
@@ -781,14 +781,14 @@ control that only re-reads on its own click shows the wrong icon the moment the 
 leaves fullscreen any other way — which is most of the ways people leave it.
 
 On the native shell the command **un-maximizes before it fullscreens**, and re-applies
-the maximized state on the way out (`enter_fullscreen`/`leave_fullscreen` in
-`src-tauri/src/window.rs`). The app window is undecorated, and Windows clips an
+the maximized state on the way out (`enterFullscreen`/`leaveFullscreen` in
+`apps/desktop/src/window.ts`). The app window is undecorated, and Windows clips an
 undecorated _maximized_ window's client area to the monitor's **work area** so the
 taskbar stays usable. That clip survives the switch: the window frame grows to cover
 the whole monitor while the webview inside it stays work-area tall — which renders as
 a taskbar-shaped black band along the bottom of a fullscreen app, the OS taskbar
 hidden behind it. Dropping the maximized state first leaves Windows no work area to
-clip against. The previous state is remembered per window label, so someone who
+clip against. The previous state is remembered per window, so someone who
 fullscreens a maximized window does not get a small one back.
 
 Un-maximizing on the way *in* is only half of it, because nothing stopped the window
@@ -798,12 +798,11 @@ it is. Three routes reached it, and all three are now closed:
 | Route                                                     | Fix                                                                       |
 | --------------------------------------------------------- | ------------------------------------------------------------------------- |
 | The titlebar's maximize button (`window_toggle_maximize`)   | While fullscreen it **leaves fullscreen** instead — the same "restore" the gesture means on a maximized window, rather than a button that does nothing. |
-| Double-clicking the titlebar                                | That is `data-tauri-drag-region`, handled **natively inside the webview** — it never reaches a command, so it cannot be guarded in Rust. `TitleBar` stops emitting the attribute while fullscreen. |
-| Dragging an edge grip (`window_start_resize_dragging`)      | The command refuses while fullscreen, and `WindowResizeHandles` renders nothing there, so the cursor never suggests the gesture. |
+| Double-clicking the titlebar                                | A drag region is the window's caption to the OS, which maximizes on a double-click **natively** — it never reaches a command, so it cannot be guarded in the shell. `TitleBar` stops emitting `data-app-drag-region` while fullscreen. |
+| Dragging an edge                                            | Resizing is native: Electron hit-tests a few pixels inside each edge of a frameless window as a resize border — and turns that border off while maximized or fullscreen. `WindowResizeHandles` renders nothing in fullscreen either, so the cursor never suggests the gesture. (`window_start_resize_dragging` is a no-op kept for the `WindowControl` contract: the OS takes the press before the page's grips see it.) |
 
 The frontend half is not belt-and-braces: the drag region is the one route with no
-server side to guard, so the attribute has to go. The Rust guards cover the same
-gestures arriving from anywhere else.
+shell side to guard, so the attribute has to go.
 
 `mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
 several, so `restoreRect` is written and consumed in a single place.
@@ -816,15 +815,15 @@ a page, and so does Ctrl+wheel. The steps are Chromium's own (50% … 300%).
 | Layout  | Who zooms |
 | ------- | --------- |
 | Browser | **The browser.** Its page zoom already owns those keys, so the app binds nothing — a binding would `preventDefault` a working feature away. |
-| Desktop | **`core/zoom.ts`**, through the shell's `window_set_zoom` (`src-tauri/src/window.rs`). Tauri turns WebView2's own zoom keys off, so without this the keys did nothing. The commands are `shell.zoomIn`, `shell.zoomOut`, `shell.zoomReset`, registered only where the seam has `setZoom`. |
+| Desktop | **`core/zoom.ts`**, through the shell's `window_set_zoom` (`apps/desktop/src/window.ts`). The shell removes the application menu — and with it Chromium's own zoom accelerators — so without this the keys did nothing. The commands are `shell.zoomIn`, `shell.zoomOut`, `shell.zoomReset`, registered only where the seam has `setZoom`. |
 
 Rules that are quiet if wrong:
 
 - **Native zoom, not CSS `zoom`.** Every pane — canvases, CodeMirror, pointer maths,
   the 3D views — sees an ordinary page at a different device-pixel ratio, exactly as
   under browser zoom, so none of them has to know.
-- **Native browser panes are separate webviews** placed in *window* pixels, while a
-  pane measures itself in CSS pixels, which zoom makes bigger. `tauriWindow.ts` scales
+- **Native browser panes are separate views** placed in *window* pixels, while a
+  pane measures itself in CSS pixels, which zoom makes bigger. `desktopWindow.ts` scales
   their bounds by the zoom factor on the way to the shell; the panes' bounds polling
   re-syncs them after a zoom change.
 - **Ctrl+wheel yields** to anything that handled the event first: a canvas that zooms
@@ -839,7 +838,7 @@ The window layer is a **sibling of the shell's views**, inside `.shell-content`:
 
 ```
 .shell
-├── TitleBar               ← native shell only: Tauri drag region + window controls
+├── TitleBar               ← native shell only: drag region + window controls
 ├── .shell-content         (position: relative)
 │   ├── Oobe               first run
 │   ├── .shell-view        the desktop (backdrop)

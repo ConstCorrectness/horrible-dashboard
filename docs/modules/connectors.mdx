@@ -153,7 +153,7 @@ and a `submit` that calls `config.apply_config`.
 **Device flow**, because GitHub OAuth Apps don't support PKCE — an
 authorization-code flow would force shipping a client secret in an app that runs on
 the user's machine, which is not a secret. The device flow needs no secret and no
-redirect URI, so it also works headless and under Tauri unchanged.
+redirect URI, so it also works headless and under the desktop shell unchanged.
 
 ```mermaid
 sequenceDiagram
@@ -306,7 +306,7 @@ and it re-filed a duplicate source on every run.
 **Device flow**, like GitHub — but for a different reason. Hugging Face supports
 **public OAuth apps**, created without a client secret, whose device endpoint
 authenticates on the client id alone. Same payoff: no secret to ship, no redirect URI to
-register, works headless and under Tauri unchanged.
+register, works headless and under the desktop shell unchanged.
 
 Create the app from **Settings → Connected Apps → Developer Applications → Create App**
 ([`/settings/connected-applications`](https://huggingface.co/settings/connected-applications)),

@@ -271,7 +271,7 @@ Display type (`--games-display`) is sized in **container query units** against
 `.games-lobby-root`, not `vw`: this is a pane in a resizable dock, so viewport units
 would size the hero headline off the window while the pane sits 400px wide.
 The webfonts are **self-hosted** (`packages/ui/src/fonts/`), never the Google CDN —
-the app is offline-first and ships as a Tauri desktop build. Until a woff2 lands
+the app is offline-first and ships as a desktop build. Until a woff2 lands
 there, `font-display: swap` renders the Georgia fallback.
 
 :::note Motion stays guarded
@@ -1640,8 +1640,8 @@ never handed to the browser). Two OAuth flows produce it:
   session never gets as far as connecting.
 - **On the desktop shell** the consent page opens in the **system browser** (via the
   shell's `open_external` command — see
-  [windowing.mdx](../architecture/windowing.mdx)) rather than a popup: the Tauri
-  webview can't open windows at all, and the system browser is what OAuth wants
+  [windowing.mdx](../architecture/windowing.mdx)) rather than a popup: the desktop
+  shell's app page opens no windows of its own, and the system browser is what OAuth wants
   anyway (your existing GitHub/Google session; Google rejects embedded webviews).
   Authorize in the browser, then return to the app — the node's poll picks the
   token up the same way. That command is ACL-gated, and shipping it without its
@@ -1869,7 +1869,7 @@ play a **second computer** instead of a local sparring bot, see
 ## Browser vs desktop
 
 Identical in both layouts: the games module is pure frontend + the shared `/ws`
-channel, with no platform-specific code. Under Tauri the node backend it talks to is
+channel, with no platform-specific code. Under the desktop shell the node backend it talks to is
 the one the shell supervises.
 
 ## Roadmap

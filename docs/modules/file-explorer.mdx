@@ -53,7 +53,7 @@ override `HORRIBLE_WORKSPACE_ROOTS` for dev/test.
 **Out of the box:** when neither setting nor env is configured, the backend **sets
 up a default workspace** — a single root at **`~/Projects`**, created if it doesn't
 exist. That's deliberately a *user* workspace rather than the backend's launch
-directory, which under both the dev command and the Tauri desktop spawn is this
+directory, which under both the dev command and the desktop shell's spawn is this
 app's own repo checkout — not what a user wants their file explorer rooted at. This
 is cross-platform (`Path.home()`) and means the file explorer and every `files.*`
 agent/flow tool work immediately with no setup. `HORRIBLE_NO_DEFAULT_ROOT=1`
@@ -250,7 +250,7 @@ Desktop adds OS integration around the edges:
 | ------------------------ | ---------------------------------------- | ----------------------------------------- |
 | Browse/CRUD workspace roots | full, via backend FS API              | full, same path                           |
 | Add a new workspace root | type/paste a backend-host path           | native folder picker (`fs.nativeDialogs`) |
-| Reveal in Explorer/Finder | not available (command not registered)  | yes, via Tauri shell API                  |
+| Reveal in Explorer/Finder | not available (command not registered)  | yes, via the shell's `open_path` command  |
 | Drag file out of the app | no                                       | yes (native drag out)                     |
 | Drag file in             | uploads into the selected folder via backend | moves/copies natively, tree refreshes via watch events |
 

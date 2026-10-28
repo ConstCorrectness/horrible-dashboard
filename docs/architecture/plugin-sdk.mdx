@@ -197,7 +197,7 @@ and rewrites them to host-served shim URLs. This is load-bearing:
   bundles its own React will crash on hooks — the loader cannot detect this,
   so don't bypass the preset.
 - The same URLs work in Vite dev (served from `public/`), the production build,
-  and the Tauri webview. The shims are always served by the **page** origin —
+  and the desktop shell. The shims are always served by the **page** origin —
   under the desktop layout the plugin entry itself is fetched from the backend
   origin (see below), so the loader pins the shim specifiers to the page origin
   before evaluating the bundle.

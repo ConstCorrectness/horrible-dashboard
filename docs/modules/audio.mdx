@@ -141,23 +141,22 @@ window can see**. Chromium's "Requested device not found" is the same text for
 "this webview enumerates nothing"; only the device list tells them apart.
 Clubhouse voice uses it.
 
-### The desktop app runs WebView2's audio service unsandboxed
+### The desktop app runs Chromium's audio service unsandboxed
 
-On Windows the desktop shell passes `AudioServiceSandbox` in WebView2's
-`--disable-features` (`media::WEBVIEW2_ARGS` in `apps/desktop/src-tauri`, and
-`additionalBrowserArgs` for `main` in `tauri.conf.json`). On a machine where the
-sandboxed audio service crash-loops inside WebView2, and only there (Edge on the
-same build was fine), `enumerateDevices()` returned **no audio devices at all**:
-microphone permission was granted, the profile was fine, and every capture failed
-with "Requested device not found". With the sandbox off, all devices came back.
-The renderer stays sandboxed; this is what the enterprise
-`AudioSandboxEnabled=false` policy does.
+On Windows the desktop shell starts Chromium with
+`--disable-features=AudioServiceSandbox` (`apps/desktop/src/main.ts`). Under the
+Tauri shell, on a machine where the sandboxed audio service crash-looped inside
+WebView2, `enumerateDevices()` returned **no audio devices at all**: microphone
+permission was granted, the profile was fine, and every capture failed with
+"Requested device not found". With the sandbox off, all devices came back. The
+switch was carried over to Electron's Chromium rather than re-learned. The
+renderer stays sandboxed; this is what the enterprise `AudioSandboxEnabled=false`
+policy does.
 
-Two constraints on that string: setting arguments **replaces** wry's defaults, so
-it restates them (including `--autoplay-policy=no-user-gesture-required`, or
-mixer playback waits for a click); and every webview sharing the profile must use
-**identical** arguments or WebView2 refuses to create it, which is why a test
-pins the conf against the constant.
+The shell also sets `--autoplay-policy=no-user-gesture-required`, or mixer
+playback waits for a click, and grants the microphone (and device labels) to the
+app's own page without a prompt — the embedded browser's sites get a per-site
+prompt instead.
 
 ## Failures that are silent
 

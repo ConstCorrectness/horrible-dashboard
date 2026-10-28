@@ -1462,7 +1462,7 @@ never heard anything and never said why.
 
 :::note Desktop
 The TTS fetch used a bare `/api/agent/tts` path while every other call in the module
-went through `apiUrl`. Under Tauri the frontend is served from its own origin and the
+went through `apiUrl`. Under the desktop shell the frontend is served from its own origin and the
 backend lives on a port the shell reports at boot, so a relative `/api` URL resolves
 against the webview and never reaches the backend — the agent was mute on the desktop
 build. Relatedly, an `AudioContext` created without a user gesture starts `suspended`,
