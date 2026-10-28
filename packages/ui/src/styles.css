@@ -4408,8 +4408,10 @@ kbd {
 
 /* The list. `fixed` and positioned from the trigger's measured rect — the session
    bar sits inside a pane that clips its overflow, so an absolutely positioned
-   panel is cut off after a row or two. Above the window layer (30) and the
-   taskbar (40) for the same reason the minibuffer is. */
+   panel is cut off after a row or two. Rendered through a portal on `body`, since
+   `.os-window-body`'s `contain: strict` would otherwise capture and clip even a
+   fixed panel. Above the window layer (30) and the taskbar (40) for the same
+   reason the minibuffer is. */
 .agent-model-menu {
   position: fixed;
   z-index: 60;

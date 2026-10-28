@@ -718,7 +718,8 @@ Windows move the way a native window manager's do: short, decisive, decelerating
   they come.
 - **The pane fade is opacity only.** A transform on `.frame-pane-host`, even
   mid-animation, would make it the containing block of every `position: fixed` menu
-  inside the pane.
+  inside the pane. (The window body's `contain: strict` already does that at the
+  window level — see [below](#a-popover-inside-a-pane-must-portal-out).)
 - **Off** with the `desktop.animations` setting (mirrored onto
   `<html data-motion>` for the stylesheet) and whenever the system asks for reduced
   motion. Every change is then instant, closes included.
@@ -880,6 +881,17 @@ something is presented, since the promoted window has to escape the layer's box.
 On desktop the browser pane's **native child webview composites above all HTML**, so
 any overlay that must appear over it calls `suppressNativeOverlays()` — the treatment
 the command palette already uses.
+
+### A popover inside a pane must portal out
+
+`.os-window-body` has `contain: strict`, and layout/paint containment makes it the
+**containing block of every `position: fixed` descendant, and clips them** — so a
+`fixed` dropdown inside a pane is laid out relative to the window, not the viewport,
+and cut off at the window's edge, whatever z-index it carries. A panel that is meant
+to extend past its window (the Agent pane's `ModelPicker`, the settings page's
+`ModelCombobox`, the shared `ContextMenu`) renders through
+`createPortal(…, document.body)` and measures its trigger with
+`getBoundingClientRect()`, which is already in viewport coordinates.
 
 ## Agent verbs
 

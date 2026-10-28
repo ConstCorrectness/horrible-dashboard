@@ -26,7 +26,12 @@
  *
  * The panel is `position: fixed` and measured off the trigger: the session bar is
  * a narrow flex row inside a pane that clips its overflow, so an absolutely
- * positioned list would be cut off after two rows.
+ * positioned list would be cut off after two rows. **And it is portaled to
+ * `document.body`**, because `fixed` alone is not enough inside a desktop window:
+ * `.os-window-body` has `contain: strict`, which makes it the containing block for
+ * fixed descendants *and* clips them — so the viewport clamp below was measuring
+ * against the screen while the panel was laid out against, and cut off by, the
+ * window.
  *
  * **Refresh is a button, not a poll.** A remote provider's listing is cached
  * backend-side for ten minutes (a hosted catalog is a few hundred KB from the other
@@ -38,6 +43,7 @@
  * dropdown to serve the one time in a hundred that the list actually changed.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { resetSetting, setSetting, useSetting } from '../../settings';
 import { getAgentStatus, type AgentStatus } from './api';
@@ -199,9 +205,15 @@ export function ModelPicker({
     };
   }, [open]);
 
+  // Keyed on the panel being *mounted*, not on `open`: the panel waits for the
+  // anchor measured above, so on the `open` commit the search field does not exist
+  // yet and focusing it then is a silent no-op — typing lands on the trigger.
+  const shown = open && anchor !== null;
   useEffect(() => {
-    if (open) searchRef.current?.focus();
-    else setQuery('');
+    if (shown) searchRef.current?.focus();
+  }, [shown]);
+  useEffect(() => {
+    if (!open) setQuery('');
   }, [open]);
 
   // Close on a click anywhere else. Pointerdown rather than click so it closes
@@ -279,92 +291,95 @@ export function ModelPicker({
           <path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.2" />
         </svg>
       </button>
-      {open && anchor && (
-        <div
-          ref={panelRef}
-          className="agent-model-menu"
-          style={{
-            left: anchor.left,
-            top: anchor.top,
-            width: anchor.width,
-            maxHeight: anchor.maxHeight,
-          }}
-          role="dialog"
-        >
-          <div className="agent-model-searchrow">
-            <input
-              ref={searchRef}
-              type="text"
-              className="agent-model-search"
-              value={query}
-              placeholder="Filter models…"
-              aria-label="Filter models"
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onKeyDown}
-            />
-            <button
-              type="button"
-              className={`agent-model-refresh${refreshing ? ' is-busy' : ''}`}
-              aria-label="Refresh model list"
-              title="Re-fetch the hosted providers' model lists, ignoring the cache"
-              disabled={refreshing}
-              onClick={refresh}
-              onKeyDown={onKeyDown}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path
-                  d="M13 8a5 5 0 1 1-1.46-3.54"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M13 2v3.2h-3.2"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
-          <ul className="agent-model-list" role="listbox" aria-label="Model">
-            {filtered.length === 0 && <li className="agent-model-empty">No model matches</li>}
-            {filtered.map((c, i) => (
-              <li key={c.value || '__default'}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={c.value === effective}
-                  data-cursor={i === cursor}
-                  className={`agent-model-option${i === cursor ? ' is-cursor' : ''}${
-                    c.value === effective ? ' is-selected' : ''
-                  }`}
-                  onPointerEnter={() => setCursor(i)}
-                  onClick={() => choose(c.value)}
-                >
-                  <span className="agent-model-option-name">{c.label}</span>
-                  <span className="agent-model-option-group">{c.group}</span>
-                </button>
-              </li>
+      {open &&
+        anchor &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className="agent-model-menu"
+            style={{
+              left: anchor.left,
+              top: anchor.top,
+              width: anchor.width,
+              maxHeight: anchor.maxHeight,
+            }}
+            role="dialog"
+          >
+            <div className="agent-model-searchrow">
+              <input
+                ref={searchRef}
+                type="text"
+                className="agent-model-search"
+                value={query}
+                placeholder="Filter models…"
+                aria-label="Filter models"
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onKeyDown}
+              />
+              <button
+                type="button"
+                className={`agent-model-refresh${refreshing ? ' is-busy' : ''}`}
+                aria-label="Refresh model list"
+                title="Re-fetch the hosted providers' model lists, ignoring the cache"
+                disabled={refreshing}
+                onClick={refresh}
+                onKeyDown={onKeyDown}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M13 8a5 5 0 1 1-1.46-3.54"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M13 2v3.2h-3.2"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            <ul className="agent-model-list" role="listbox" aria-label="Model">
+              {filtered.length === 0 && <li className="agent-model-empty">No model matches</li>}
+              {filtered.map((c, i) => (
+                <li key={c.value || '__default'}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={c.value === effective}
+                    data-cursor={i === cursor}
+                    className={`agent-model-option${i === cursor ? ' is-cursor' : ''}${
+                      c.value === effective ? ' is-selected' : ''
+                    }`}
+                    onPointerEnter={() => setCursor(i)}
+                    onClick={() => choose(c.value)}
+                  >
+                    <span className="agent-model-option-name">{c.label}</span>
+                    <span className="agent-model-option-group">{c.group}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {notes.map((n) => (
+              <p key={n} className="agent-model-note">
+                {n}
+              </p>
             ))}
-          </ul>
-          {notes.map((n) => (
-            <p key={n} className="agent-model-note">
-              {n}
+            <p className="agent-model-count">
+              {refreshing
+                ? 'Refreshing…'
+                : refreshFailed
+                  ? 'Refresh failed — showing the last list'
+                  : `${filtered.length} of ${choices.length}`}
             </p>
-          ))}
-          <p className="agent-model-count">
-            {refreshing
-              ? 'Refreshing…'
-              : refreshFailed
-                ? 'Refresh failed — showing the last list'
-                : `${filtered.length} of ${choices.length}`}
-          </p>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

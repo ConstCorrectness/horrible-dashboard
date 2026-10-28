@@ -20,8 +20,11 @@
  *
  * The panel is `position: fixed` and measured off the input for the same reason as
  * the picker's: its hosts (a settings row, the onboarding card) clip overflow.
+ * It is portaled to `document.body` for the picker's reason too — a window body's
+ * `contain: strict` otherwise captures and clips even a fixed panel.
  */
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { matchesModelQuery } from './model-filter';
 
@@ -206,52 +209,55 @@ export function ModelCombobox({
         onKeyDown={onKeyDown}
         onBlur={() => commit(typed)}
       />
-      {open && anchor && (
-        <div
-          ref={panelRef}
-          className="agent-model-menu"
-          style={{
-            left: anchor.left,
-            top: anchor.top,
-            width: anchor.width,
-            maxHeight: anchor.maxHeight,
-          }}
-        >
-          <ul id={listId} className="agent-model-list" role="listbox" aria-label={ariaLabel}>
-            {filtered.length === 0 && (
-              <li className="agent-model-empty">
-                {typed
-                  ? `No listed model matches — Enter uses “${typed}”`
-                  : 'No models listed — type a model id'}
-              </li>
-            )}
-            {filtered.map((r, i) => (
-              <li key={r.value || '__default'}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={r.value === value}
-                  data-cursor={i === cursor}
-                  className={`agent-model-option${i === cursor ? ' is-cursor' : ''}${
-                    r.value === value ? ' is-selected' : ''
-                  }`}
-                  // Keep focus in the input, so picking a row is not also a blur
-                  // that commits the half-typed query first.
-                  onPointerDown={(e) => e.preventDefault()}
-                  onPointerEnter={() => setCursor(i)}
-                  onClick={() => commit(r.value)}
-                >
-                  <span className="agent-model-option-name">{r.label}</span>
-                  {r.free && <span className="agent-model-option-group">free</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="agent-model-count">
-            {shownCount} of {modelCount}
-          </p>
-        </div>
-      )}
+      {open &&
+        anchor &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className="agent-model-menu"
+            style={{
+              left: anchor.left,
+              top: anchor.top,
+              width: anchor.width,
+              maxHeight: anchor.maxHeight,
+            }}
+          >
+            <ul id={listId} className="agent-model-list" role="listbox" aria-label={ariaLabel}>
+              {filtered.length === 0 && (
+                <li className="agent-model-empty">
+                  {typed
+                    ? `No listed model matches — Enter uses “${typed}”`
+                    : 'No models listed — type a model id'}
+                </li>
+              )}
+              {filtered.map((r, i) => (
+                <li key={r.value || '__default'}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={r.value === value}
+                    data-cursor={i === cursor}
+                    className={`agent-model-option${i === cursor ? ' is-cursor' : ''}${
+                      r.value === value ? ' is-selected' : ''
+                    }`}
+                    // Keep focus in the input, so picking a row is not also a blur
+                    // that commits the half-typed query first.
+                    onPointerDown={(e) => e.preventDefault()}
+                    onPointerEnter={() => setCursor(i)}
+                    onClick={() => commit(r.value)}
+                  >
+                    <span className="agent-model-option-name">{r.label}</span>
+                    {r.free && <span className="agent-model-option-group">free</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="agent-model-count">
+              {shownCount} of {modelCount}
+            </p>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
