@@ -1031,8 +1031,12 @@ def add_bots(
     from backend.modules.hassault.match import MAX_PLAYERS
 
     taken = {p.name for p in room.players.values()}
+    # The roster turns over the room's bots, not this call's: counted per call,
+    # every bot added one at a time — the menu's "+1 bot", `add_bot` with no
+    # count — was archetype 0, so a room filled that way never had a sniper.
+    seated = sum(1 for p in room.players.values() if p.is_bot)
     out: list[MatchPlayer] = []
-    for i in range(max(0, count)):
+    for i in range(seated, seated + max(0, count)):
         if len(room.players) >= MAX_PLAYERS:
             break
         name = next(

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameRooms, type GameRoom } from '../hooks/useGameRooms';
 import { useRollingNumber } from '../hooks/useRollingNumber';
 import { accountName, signOut, useAuth } from '../auth';
-import { MAPS, mapArt, mapEntry, modeLabel } from '../maps';
+import { MAPS, TRAIN_MODE, defaultMode, mapArt, mapEntry, modeLabel } from '../maps';
 import { MapBackdrop } from './MapBackdrop';
 import { Wordmark } from './Logo';
 import { CallsignField } from './CallsignField';
@@ -19,7 +19,7 @@ export interface LandingProps {
   callsign: string;
   onCallsignChange: (name: string) => void;
   onJoin: (room: string, map: string) => void;
-  onHost: (map: string) => void;
+  onHost: (map: string, mode?: string) => void;
   onCreate: () => void;
   onSignIn: () => void;
   onChooseHandle: () => void;
@@ -195,7 +195,7 @@ export function Landing(props: LandingProps) {
                   type="button"
                   className="map-card rise"
                   style={{ ['--i' as string]: i }}
-                  onClick={() => props.onHost(m.id)}
+                  onClick={() => props.onHost(m.id, defaultMode(m.id))}
                 >
                   {art && <img src={art} alt="" loading="lazy" />}
                   <div className="map-card-meta">
@@ -206,7 +206,9 @@ export function Landing(props: LandingProps) {
                     <div className="display">{m.title}</div>
                     <p>{m.blurb}</p>
                   </div>
-                  <span className="map-card-cta">Open room</span>
+                  <span className="map-card-cta">
+                    {defaultMode(m.id) === TRAIN_MODE ? 'Train' : 'Open room'}
+                  </span>
                 </button>
               );
             })}

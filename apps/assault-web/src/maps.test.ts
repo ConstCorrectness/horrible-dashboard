@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAPS, MODE_OPTIONS, modesFor } from './maps';
+import { MAPS, MODE_OPTIONS, TRAIN_MODE, defaultMode, menuModes, modesFor } from './maps';
 
 describe('the modes Create match offers per map', () => {
   it('lists the aim range, with aim and AWP arena but no bomb modes', () => {
@@ -23,5 +23,16 @@ describe('the modes Create match offers per map', () => {
 
   it('never offers duel, which is a queue and not a room', () => {
     expect(MODE_OPTIONS).not.toContain('duel');
+  });
+
+  it('opens the aim range as offline training, not an empty room', () => {
+    // A room on hd_aim is a deathmatch with nobody in it: lanes, no targets.
+    expect(defaultMode('hd_aim')).toBe(TRAIN_MODE);
+    expect(menuModes('hd_aim')[0]).toBe(TRAIN_MODE);
+    expect(defaultMode('hd_dust2')).toBe('dm');
+    expect(menuModes('hd_dust2')).not.toContain(TRAIN_MODE);
+    // Never asked of the server, which has no such room mode.
+    expect(modesFor('hd_aim')).not.toContain(TRAIN_MODE);
+    expect(MODE_OPTIONS).not.toContain(TRAIN_MODE);
   });
 });

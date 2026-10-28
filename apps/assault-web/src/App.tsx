@@ -227,6 +227,7 @@ export default function App() {
         <DeploySplash
           room={target.room}
           map={target.map}
+          mode={target.mode}
           callsign={callsign}
           onCallsignChange={setCallsign}
           onDeploy={() => {

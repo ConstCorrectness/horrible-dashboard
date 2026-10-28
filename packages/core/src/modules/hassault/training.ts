@@ -353,6 +353,24 @@ export class TrainingRange {
     }));
   }
 
+  /**
+   * Put still dummies exactly on `points` — a drill station's own posts, for
+   * free practice on a range map. `place` stands them on spawn points, and on
+   * hd_aim every other spawn is another lane's shooter mark, behind a wall.
+   */
+  placeOn(points: { x: number; y: number; z: number }[]): void {
+    this.targets = points.slice(0, MAX_TARGETS).map((p, i) => ({
+      id: `dummy${i}`,
+      name: `Dummy ${i + 1}`,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      hp: TARGET_HP,
+      alive: true,
+      downFor: 0,
+    }));
+  }
+
   /** Whether the range has anything to shoot at. */
   get populated(): boolean {
     return this.targets.length > 0;

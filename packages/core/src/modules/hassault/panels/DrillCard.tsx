@@ -18,6 +18,12 @@ const MONO = 'var(--font-mono, ui-monospace, monospace)';
 const ACCENT = 'var(--accent)';
 const DIM = 'var(--text-dim)';
 
+/**
+ * Below the mode HUD's scoreboard and compass strip, which sits top centre at a
+ * higher z-index and used to cover the clock entirely.
+ */
+const BELOW_SCOREBOARD = '4.75rem';
+
 /** DESIGN.md's Display step: the drill's name, and the figures it exists to show. */
 const DISPLAY = '19px';
 /** DESIGN.md's Label and Telemetry steps share a size. */
@@ -44,7 +50,7 @@ export function DrillClock({ status }: { status: DrillStatus }) {
     <div
       style={{
         position: 'absolute',
-        top: '0.75rem',
+        top: BELOW_SCOREBOARD,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 40,
@@ -60,6 +66,36 @@ export function DrillClock({ status }: { status: DrillStatus }) {
       <div style={label}>{status.name}</div>
       <div style={{ fontFamily: MONO, fontSize: DISPLAY, color: 'var(--text-strong)' }}>
         {counting ? Math.ceil(status.remaining) : `${Math.ceil(status.remaining)}s`}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The range between runs: where its controls are. They live in the pause menu
+ * (its Range tab), because the mouse is the gun's until Escape gives it back.
+ */
+export function RangeHint({ drill }: { drill: string | null }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: BELOW_SCOREBOARD,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 40,
+        pointerEvents: 'none',
+        padding: '0.35rem 0.9rem',
+        background: 'rgba(13, 17, 23, 0.72)',
+        borderTop: `2px solid ${ACCENT}`,
+        clipPath: 'polygon(8px 0, calc(100% - 8px) 0, 100% 100%, 0 100%)',
+        textAlign: 'center',
+        color: 'var(--text)',
+      }}
+    >
+      <div style={label}>Aim range · free practice</div>
+      <div style={{ fontFamily: MONO, fontSize: SMALL, color: DIM, marginTop: 2 }}>
+        ESC · RANGE TAB · {drill ? `START ${drill.toUpperCase()}` : 'PICK A DRILL'} · PICK A GUN
       </div>
     </div>
   );

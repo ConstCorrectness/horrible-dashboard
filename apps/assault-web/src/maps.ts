@@ -19,6 +19,11 @@ export interface MapEntry {
   sites: boolean;
   /** The modes a room here may open in, when it is not what `sites` implies. */
   modes?: readonly string[];
+  /**
+   * A training map: its card opens the offline aim range (`TRAIN_MODE`), with
+   * the drills' moving targets, rather than a room nobody else is in.
+   */
+  range?: boolean;
 }
 
 export const MAPS: MapEntry[] = [
@@ -69,14 +74,32 @@ export const MAPS: MapEntry[] = [
   {
     id: 'hd_aim',
     title: 'Aim Range',
-    blurb: 'Lanes and a strafe gallery, for aim and AWP duels.',
+    blurb: 'Lanes and a strafe gallery: moving-target drills, or aim and AWP duels.',
     sites: false,
     modes: ['dm', 'aim', 'awp'],
+    range: true,
   },
 ];
 
 /** The modes Create match offers, in order. Duel is not one: it is a queue. */
 export const MODE_OPTIONS = ['dm', 'tdm', 'defuse', 'retake', 'aim', 'awp'] as const;
+
+/**
+ * The offline aim range. Not a server mode — nothing is opened on the game
+ * server, the targets are the client's own (`training.ts`) — so it is never in
+ * `modesFor`, only in what a range map's menu offers (`menuModes`).
+ */
+export const TRAIN_MODE = 'train';
+
+/** What Create match lists for `id`: the range first on a range map, then its room modes. */
+export function menuModes(id: string): string[] {
+  return mapEntry(id).range ? [TRAIN_MODE, ...MODE_OPTIONS] : [...MODE_OPTIONS];
+}
+
+/** What a map's card opens: the range on a range map, else deathmatch. */
+export function defaultMode(id: string): string {
+  return mapEntry(id).range ? TRAIN_MODE : 'dm';
+}
 
 /**
  * The modes a room on `id` may open in. The server's list (`/hassault/maps`,
@@ -129,6 +152,8 @@ export function modeLabel(mode: string): string {
       return 'Capture';
     case 'retake':
       return 'Retake';
+    case TRAIN_MODE:
+      return 'Aim Training';
     case 'aim':
       return 'Aim Arena';
     case 'awp':

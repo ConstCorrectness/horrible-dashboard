@@ -134,6 +134,24 @@ def test_a_join_opens_a_room_and_seats_the_player(referee: HassaultReferee):
     asyncio.run(go())
 
 
+def test_a_loadout_on_the_join_arms_the_first_spawn(referee: HassaultReferee):
+    # A guest has no stored loadout, and one sent after the welcome waits a
+    # life: picking the sniper and joining used to spawn you with the rifle.
+    from backend.modules.hassault import weapons
+
+    sniper = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["sniper"])
+
+    async def go():
+        conn = seat("alice")
+        conn.is_guest = True
+        await referee.join(conn, "hd_pit", loadout={"primary": "sniper"})
+        _room, player = referee.server.player_for(conn)
+        assert sniper in player.held
+        assert player.weapon == sniper
+
+    asyncio.run(go())
+
+
 def test_two_players_share_a_room_on_the_same_map(referee: HassaultReferee):
     async def go():
         a, b = seat("alice"), seat("bob")

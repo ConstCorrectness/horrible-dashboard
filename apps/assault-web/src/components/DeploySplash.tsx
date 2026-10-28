@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_CONTROLS, formatBytes, getMapCubes, keyLabel } from '@horrible/core';
 import { accountName, useAuth } from '../auth';
-import { mapEntry } from '../maps';
+import { TRAIN_MODE, mapEntry } from '../maps';
 import { MapBackdrop } from './MapBackdrop';
 
 export interface DeploySplashProps {
   /** Null opens a new room on `map`. */
   room: string | null;
   map: string;
+  /** The mode a new room opens in; `train` is the offline aim range, no room at all. */
+  mode?: string;
   callsign: string;
   onCallsignChange: (name: string) => void;
   onDeploy: () => void;
@@ -49,6 +51,7 @@ function key(action: string): string {
 export function DeploySplash({
   room,
   map,
+  mode,
   callsign,
   onCallsignChange,
   onDeploy,
@@ -111,7 +114,11 @@ export function DeploySplash({
         </div>
 
         <div className="splash-main">
-          <div className="kicker rise">{room ? `Joining room ${room}` : 'Opening a new room'}</div>
+          <div className="kicker rise">{room
+              ? `Joining room ${room}`
+              : mode === TRAIN_MODE
+                ? 'Aim training · offline'
+                : 'Opening a new room'}</div>
           <h1 className="display splash-title rise" style={{ ['--i' as string]: 1 }}>
             {entry.title}
           </h1>

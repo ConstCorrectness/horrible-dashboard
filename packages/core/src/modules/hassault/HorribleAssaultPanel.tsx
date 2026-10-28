@@ -195,10 +195,16 @@ import {
 import { GrenadeController } from './utility';
 import { TrainingRange, type DrillStatus } from './training';
 import { setWeaponTable, visualId } from './weapon-visuals';
-import { LOADOUT_KEY, loadoutSlots, parseLoadouts, serializeLoadouts } from './loadout';
+import {
+  LOADOUT_KEY,
+  loadoutSlots,
+  parseLoadouts,
+  serializeLoadouts,
+  type LoadoutChoice,
+} from './loadout';
 import { AGENTS_KEY, parseAgents, serializeAgents, skinFor, type AgentSpec } from './cosmetics';
-import { readBests, recordBest, type DrillSummary } from './training-drill';
-import { DrillCard, DrillClock } from './panels/DrillCard';
+import { readBests, recordBest, type DrillSpec, type DrillSummary } from './training-drill';
+import { DrillCard, DrillClock, RangeHint } from './panels/DrillCard';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
@@ -573,6 +579,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const [localYou, setLocalYou] = useState<SelfState | null>(null);
   /** The aim drills offered on the loaded map (`drills.py`). */
   const [drills, setDrills] = useState<DrillSummary[]>([]);
+  /** The drill list has been answered, either way, for the loaded map. */
+  const [drillsReady, setDrillsReady] = useState(false);
   /**
    * The running drill's phase and whole seconds left, mirrored out of the range
    * the way `localYou` is: pushed only when one of them changes.
@@ -581,6 +589,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const drillKeyRef = useRef('');
   /** Whether the finished run beat this browser's stored best. */
   const [drillBest, setDrillBest] = useState(false);
+  /** The drill the pause menu's Range tab will Start; `''` is free practice. */
+  const [rangeDrill, setRangeDrill] = useState('');
+  /**
+   * The range's own guns, or `null` for the T loadout. Sideless — the range has
+   * no teams — so the menu offers every gun. A ref as well, because changing it
+   * restarts the run from inside the same handler.
+   */
+  const [rangeGun, setRangeGun] = useState<LoadoutChoice | null>(null);
+  const rangeGunRef = useRef<LoadoutChoice | null>(null);
   /**
    * Current zoom step, mirrored out of `ShotController` for the view.
    *
@@ -1216,12 +1233,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // as the free range, which is all a backend older than the route can give.
   useEffect(() => {
     let cancelled = false;
+    setDrillsReady(false);
     void listDrills(mapName)
       .then((list) => {
-        if (!cancelled) setDrills(list);
+        if (cancelled) return;
+        setDrills(list);
+        setDrillsReady(true);
+        // Start defaults to moving targets: this map's first drill that is not
+        // the still-target one, else the any-map strafe. Free practice is the
+        // range's still dummies, which is what entering it already gives you.
+        const moving =
+          list.find((d) => d.map && d.pattern !== 'static') ??
+          list.find((d) => d.pattern !== 'static');
+        setRangeDrill((was) => (list.some((d) => d.id === was) ? was : (moving?.id ?? '')));
       })
       .catch(() => {
-        if (!cancelled) setDrills([]);
+        if (cancelled) return;
+        setDrills([]);
+        setDrillsReady(true);
       });
     return () => {
       cancelled = true;
@@ -3840,8 +3869,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       if (range) {
         range.reset();
         range.setWeapons(weapons, Math.min(2, weapons.length - 1));
-        // The range has no sides; its shooter carries the T pick.
-        range.setLoadout(loadoutSlots(weapons, loadoutChoice?.t, 't'));
+        // The range has no sides: the gun picked on its Range tab, any gun at
+        // all, or else the T pick, validated as T.
+        const gun = rangeGunRef.current;
+        range.setLoadout(
+          gun ? loadoutSlots(weapons, gun) : loadoutSlots(weapons, loadoutChoice?.t, 't'),
+        );
         // Placed relative to where we are about to stand, so the nearest dummies
         // are the ones in front of you rather than the ones the map happens to
         // list first.
@@ -3855,31 +3888,46 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       drillKeyRef.current = '';
       setDrillStatus(null);
       setDrillBest(false);
-      if (range && world && drillId) {
+      // A drill station has a place to stand; the any-map drill has none. On a
+      // modelled map the body is Rapier's, so it is grounded on the mesh and
+      // moved there too. Skipping that left you in whatever lane you spawned
+      // in — on hd_aim, Close — while the Gallery or Long Lane targets moved in
+      // a lane you could not see.
+      const standAt = (shooter: DrillSpec['shooter']) => {
+        if (!shooter) return;
+        const rapier = world3dRef.current ? rapierRef.current : null;
+        // `groundSpawn` takes a cell; the shooter is the cell's centre.
+        const at = rapier
+          ? rapier.groundSpawn({ x: shooter.x - 0.5, y: shooter.y - 0.5, z: shooter.z })
+          : shooter;
+        const p = createPlayer(at.x, at.y, at.z, shooter.yaw);
+        p.onGround = true;
+        playerRef.current = p;
+        rapier?.setPosition(at.x, at.y, at.z);
+      };
+      // Free practice on a map with stations: still dummies on the first still
+      // drill's posts, so the lane you are in has something in it.
+      const station = drillId
+        ? null
+        : (drills.find((d) => d.map === mapName && d.pattern === 'static') ??
+          drills.find((d) => d.map === mapName));
+      const wanted = drillId ?? station?.id ?? null;
+      if (range && world && wanted) {
         const at = playerRef.current;
-        void getDrill(drillId, mapName, at.x, at.y)
+        void getDrill(wanted, mapName, at.x, at.y)
           .then((spec) => {
-            range.startDrill(spec, world);
-            // A station has a place to stand. Cube maps only: a modelled map's
-            // body is Rapier's, and the any-map drill has no station anyway.
-            if (spec.shooter && !world3dRef.current) {
-              const p = createPlayer(
-                spec.shooter.x,
-                spec.shooter.y,
-                spec.shooter.z,
-                spec.shooter.yaw,
-              );
-              p.onGround = true;
-              playerRef.current = p;
-            }
+            if (drillId) range.startDrill(spec, world);
+            else range.placeOn(spec.targets);
+            standAt(spec.shooter);
           })
           .catch((err: unknown) => {
-            setError(err instanceof Error ? err.message : String(err));
+            // Free practice already has the spawn-point dummies to fall back on.
+            if (drillId) setError(err instanceof Error ? err.message : String(err));
           });
       }
       deploy();
     },
-    [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName, loadoutChoice],
+    [deploy, weapons, nativeClient, launchNative, itemTable, info, mapName, loadoutChoice, drills],
   );
 
   /**
@@ -4198,7 +4246,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   useEffect(() => {
     if (!info || initialJoinedRef.current) return;
     if (!props.initialRoom && !standalone) return;
+    // The range arms the guns it is handed, so it waits for the served table.
+    // and for the drill list, whose stations are where its dummies stand.
+    if (props.initialMode === 'train' && (weapons.length === 0 || !drillsReady)) return;
     initialJoinedRef.current = true;
+    if (props.initialMode === 'train' && !props.initialRoom) {
+      // The aim range: the offline training range, not a room. A room on hd_aim
+      // is a deathmatch with nobody in it — lanes and no targets — which is what
+      // the web page used to open. Its drills, gun and Start are the pause
+      // menu's Range tab, and the hint on screen says so.
+      train(null);
+      return;
+    }
     if (props.initialMode === 'duel' && !props.initialRoom) {
       // A duel is not a room to join but a queue: the server pairs two players
       // and opens the room itself, on the served duel map (the page loads it as
@@ -4220,6 +4279,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     joinRoom,
     standalone,
     deploy,
+    train,
+    weapons.length,
+    drillsReady,
   ]);
 
   // The control map, written straight through to settings so a rebind survives a
@@ -4860,6 +4922,32 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             onExitToMenu={exitToMenu}
             onShare={props.onShareRoom ? () => props.onShareRoom?.(net.room, mapName) : undefined}
             standalone={standalone}
+            loadout={{
+              weapons,
+              loadouts: loadoutChoice,
+              onLoadouts: (choice) => setSetting(LOADOUT_KEY, serializeLoadouts(choice)),
+            }}
+            range={
+              // Offline and not on the way into a room: the training range.
+              net.status !== 'idle'
+                ? undefined
+                : {
+                    drills,
+                    drill: rangeDrill,
+                    onDrill: setRangeDrill,
+                    status: drillStatus,
+                    weapons,
+                    gun: rangeGun ?? loadoutChoice?.t ?? {},
+                    onGun: (next) => {
+                      rangeGunRef.current = next;
+                      setRangeGun(next);
+                      // At once, mid-run included: Start is what resets a run.
+                      rangeRef.current?.setLoadout(loadoutSlots(weapons, next));
+                    },
+                    onStart: () => train(rangeDrill || null),
+                    onFree: () => train(null),
+                  }
+            }
             match={
               standalone
                 ? {
@@ -4940,6 +5028,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             only — online there is no range, and `drillStatus` stays null. */}
         {phase === 'playing' && !online && drillStatus && drillStatus.phase !== 'done' && (
           <DrillClock status={drillStatus} />
+        )}
+        {phase === 'playing' &&
+          net.status === 'idle' &&
+          !drillStatus &&
+          !menuOpen &&
+          !nativeRunning && (
+          <RangeHint drill={drills.find((d) => d.id === rangeDrill)?.name ?? null} />
         )}
         {phase === 'playing' && !online && drillStatus?.phase === 'done' && (
           <DrillCard

@@ -50,7 +50,7 @@ from typing import Any
 
 from functools import lru_cache
 
-from backend.modules.hassault import bots, mapsource, modes
+from backend.modules.hassault import bots, mapsource, modes, weapons
 from backend.modules.hassault.match import (
     MAX_NAME_LEN,
     MAX_PLAYERS,
@@ -243,6 +243,7 @@ class HassaultReferee:
         room_id: str | None = None,
         new: bool = False,
         mode: str | None = None,
+        loadout: Any = None,
     ) -> dict[str, Any]:
         """Seat a player, opening a room if there is none on that map.
 
@@ -264,6 +265,11 @@ class HassaultReferee:
         the desktop's "open an online room", which is a room to share, not a
         seat in whatever happens to be running. Ignored when `room_id` names a
         live room: that is a join, not a creation.
+
+        `loadout` is the client's pick (`weapons.loadouts_for` either shape),
+        carried on the join so the first spawn has it. Sent only after the
+        welcome, it waited a life — and a guest, who has no stored loadout,
+        always spawned first with the rifle, whatever they had picked.
         """
         existing = self.server.get(room_id) if room_id else None
         if room_id and existing is None:
@@ -290,6 +296,8 @@ class HassaultReferee:
             room_id = self.server.create(target_map, mode=mode).id
             self.creators[room_id] = conn.account_id
         loadouts, look = self.account_look(conn)
+        if isinstance(loadout, (dict, str)) and loadout:
+            loadouts = weapons.loadouts_for(loadout)
         room, player = await self.server.join(
             conn,
             target_map,

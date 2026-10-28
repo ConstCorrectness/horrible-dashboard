@@ -514,7 +514,10 @@ export class MatchSession {
     // invite is an invite to a game, not a request to change it. Undefined asks
     // for the server's default, so a caller that knows nothing about modes keeps
     // working unchanged.
-    sendChannel('hassault', 'join', { map, name, room, host, ranked, mode });
+    // The loadout rides along so the first spawn carries it; it is also re-sent
+    // after the welcome, for a server that reads it only there.
+    const loadout = this.loadoutChoice ?? undefined;
+    sendChannel('hassault', 'join', { map, name, room, host, ranked, mode, loadout });
   }
 
   /** Invite a friend to the match we are hosting. */

@@ -3051,7 +3051,9 @@ retake going wherever defuse does and neither on a map without sites
 (`HassaultReferee.map_modes`). `/hassault/maps` serves it per map as `modes`,
 and `join` refuses a menu mode a map does not offer, so the web client's Create
 match, which greys out the rest, never offers a room the server would refuse.
-The aim range offers deathmatch, aim and AWP arena. Duel is not a menu mode:
+The aim range offers deathmatch, aim and AWP arena as rooms, but its card and
+Create match open **Aim Training** first, which is no room at all: the offline
+range and its drills (see [aim drills](#aim-drills)). Duel is not a menu mode:
 Create match has a **Queue for a duel** button instead (accounts only), which
 opens the game on the served `duelMap` with `initialMode: 'duel'`, and the
 standalone panel queues rather than joins. Results in menu rooms stay unrated
@@ -4394,7 +4396,9 @@ bots and rejoining the same one does not silently double them.
 
 ### The pause menu, and why it is the same code
 
-`GameMenu.tsx` (Escape) shows the **same four panels**. A game's settings screen and
+`GameMenu.tsx` (Escape) shows the **same four panels**, plus two of its own:
+**Loadout** (what you carry, from the next spawn) and, in the training range,
+**Range** (drill, gun, Start and Restart), which it opens on. A game's settings screen and
 its *paused* settings screen differ only in what surrounds them, and two copies would
 drift — one gaining a slider the other never got. So the panels live in
 `menu-panels.tsx` and the two menus compose them: `MainMenu` in front of the orbiting
@@ -5297,7 +5301,9 @@ refuses a switch to anything not held, which is what makes a loadout a loadout
 rather than a list of favourites.
 
 - **Picked in the menu, per side, applied at the next spawn.** The pane's
-  **Loadout · T** and **Loadout · CT** rows (beside Host), and the native menu's
+  **Loadout · T** and **Loadout · CT** rows (beside Host), the pause menu's
+  **Loadout** tab (the same `LoadoutSideRow`, and the only picker the browser
+  client has, since it never shows the main menu), and the native menu's
   LOADOUT page, store `{t: {primary, secondary}, ct: {...}}` weapon ids under
   `hassault.loadout`, an account-scoped setting (an older flat
   `{primary, secondary}` still reads as both sides). The server validates it
@@ -5306,6 +5312,9 @@ rather than a list of favourites.
   `reset_loadout` picks the half for the player's team at every spawn, so a side
   swap carries the other side's guns from the next life. A change never applies
   mid-life: it is a decision about the next fight, not a way out of this one.
+  The client sends it on the game server's `join` as well as after the welcome,
+  so the first spawn has it: a guest has no stored loadout, and one that waited
+  for the welcome spawned the first life with the rifle.
 - **The number keys select slots.** 1 primary, 2 secondary, 3 knife, from the
   `slots` the private view now carries; the wheel steps through `held` only.
   Against a server too old to send `slots`, key N is weapon N as it always was.
@@ -5314,10 +5323,14 @@ rather than a list of favourites.
   and pistol, so the loadout picker has no say in a buy mode: the money does.
 - **Bots carry loadouts too**, by archetype (`bots.BOT_LOADOUTS`): the entry
   bot an SMG, the sniper a sniper and a Hand Cannon, the anchor the Breacher.
+  Archetypes turn over the room's bots, not one `add_bots` call's, so bots added
+  one at a time cycle through them too; counted per call, every one was the SMG
+  entry bot and no room filled that way had a sniper (`test_hassault_sniper.py`).
   `_choose_weapon` picks from what they hold, so a bot never asks for a gun the
   server would refuse.
 - **The training range carries the loadout as well** (`TrainingRange.setLoadout`,
-  `training.rs::set_loadout`), so Train hands you the guns a match does.
+  `training.rs::set_loadout`), so Train hands you the guns a match does, unless
+  the Range tab has picked a gun of its own.
 
 **Visuals borrow a base model.** There are five view models, props and HUD
 silhouettes, and twelve guns, so each weapon serves a `model` naming the one it
@@ -6730,6 +6743,26 @@ the drill list beside **Train**, which offers the loaded map's own drills plus
 `spawn_strafe`, the one that runs anywhere. A three-second countdown, a timer,
 then a results card: kills per minute, accuracy, headshot share, median reaction
 and median time to kill. A personal best per drill is kept in browser storage.
+
+**In the pause menu, the Range tab** (`RangePanel` in `panels/LoadoutPanel.tsx`)
+holds the same choices while you are in the range: the drill (defaulting to the
+map's first moving one), the gun (any gun, since the range has no sides; it swaps
+at once and does not reset a run) and **Start**, which reads **Restart** while
+that drill is running and begins it again from its countdown. A hint under the
+scoreboard says where it is, because the mouse belongs to the gun until Escape.
+Starting a drill moves you to its station's shooter mark on a modelled map too
+(grounded on the Rapier mesh), not only on a cube map: hd_aim spawns you at the
+Close station, so a Gallery or Long Lane drill used to run in a lane you could
+not see. **Free practice** on a map with stations stands its still dummies on
+the first still drill's posts (`TrainingRange.placeOn`), for the same reason:
+the spawn-point dummies on hd_aim are all in other lanes.
+
+**The browser client reaches the range** through the Aim Range card, which reads
+**Train**, and Create match's **Aim Training** chip (`TRAIN_MODE` in
+`apps/assault-web/src/maps.ts`, a client-only mode for maps marked `range`). Both
+open the panel with `initialMode: 'train'`, which enters `train(null)` once the
+weapons and the drill list have arrived, instead of joining a room. Until then
+the card opened a deathmatch room on hd_aim: lanes, and nobody in them.
 
 The design question was where the targets live, and the answer is **the client,
 on a schedule the server writes**:

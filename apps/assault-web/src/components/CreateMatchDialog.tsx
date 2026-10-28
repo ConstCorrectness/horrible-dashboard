@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useServerMaps } from '../hooks/useServerMaps';
-import { MAPS, MODE_OPTIONS, mapArt, mapEntry, modeLabel, modesFor } from '../maps';
+import {
+  MAPS,
+  TRAIN_MODE,
+  defaultMode,
+  mapArt,
+  mapEntry,
+  menuModes,
+  modeLabel,
+  modesFor,
+} from '../maps';
 
 /**
  * Pick a map and a mode, and open a fresh room on it; or queue for a ranked
@@ -24,8 +33,13 @@ export function CreateMatchDialog({
   const served = useServerMaps();
   const [selected, setSelected] = useState(MAPS[0]!.id);
   const [mode, setMode] = useState<string>('dm');
-  // Only what this map offers; the server refuses a room in anything else.
-  const allowed = modesFor(selected, served?.modes);
+  // Only what this map offers; the server refuses a room in anything else. The
+  // range is the client's own, so a range map offers it whatever the server says.
+  const options = menuModes(selected);
+  const allowed = [
+    ...(options.includes(TRAIN_MODE) ? [TRAIN_MODE] : []),
+    ...modesFor(selected, served?.modes),
+  ];
   const effective = allowed.includes(mode) ? mode : (allowed[0] ?? 'dm');
 
   useEffect(() => {
@@ -68,8 +82,12 @@ export function CreateMatchDialog({
                   type="button"
                   className="map-pick-item"
                   aria-pressed={selected === m.id}
-                  onClick={() => setSelected(m.id)}
-                  onDoubleClick={() => onLaunch(m.id, effective)}
+                  onClick={() => {
+                    setSelected(m.id);
+                    // Each map opens on what it is for: the range trains.
+                    setMode(defaultMode(m.id));
+                  }}
+                  onDoubleClick={() => onLaunch(m.id, defaultMode(m.id))}
                 >
                   {art && <img src={art} alt="" loading="lazy" />}
                   <span>{m.title}</span>
@@ -79,7 +97,7 @@ export function CreateMatchDialog({
           </div>
           <p className="hint">{mapEntry(selected).blurb}</p>
           <div className="chips" role="group" aria-label="Mode">
-            {MODE_OPTIONS.map((id) => (
+            {options.map((id) => (
               <button
                 key={id}
                 type="button"
@@ -121,7 +139,9 @@ export function CreateMatchDialog({
               className="btn btn-primary"
               onClick={() => onLaunch(selected, effective)}
             >
-              Open room on {mapEntry(selected).title}
+              {effective === TRAIN_MODE
+                ? `Train on ${mapEntry(selected).title}`
+                : `Open room on ${mapEntry(selected).title}`}
             </button>
           </div>
         </div>

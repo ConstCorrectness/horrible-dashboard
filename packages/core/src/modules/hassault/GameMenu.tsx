@@ -18,8 +18,9 @@
  */
 import { useState } from 'react';
 
-import type { Invitee, MapSummary, MatchInvite } from './api';
+import type { Invitee, MapSummary, MatchInvite, WeaponSpec } from './api';
 import type { Bindings } from './controls';
+import type { Loadouts } from './loadout';
 import {
   ControlsPanel,
   CrosshairPanel,
@@ -28,11 +29,21 @@ import {
   SettingsPanel,
   styles as panel,
 } from './menu-panels';
+import { LoadoutPanel, RangePanel, type RangePanelProps } from './panels/LoadoutPanel';
 import type { MatchPeer } from './session';
 
-export type MenuTab = 'settings' | 'crosshair' | 'servers' | 'friends' | 'controls';
+export type MenuTab =
+  | 'range'
+  | 'loadout'
+  | 'settings'
+  | 'crosshair'
+  | 'servers'
+  | 'friends'
+  | 'controls';
 
 const TABS: { id: MenuTab; label: string }[] = [
+  { id: 'range', label: 'Range' },
+  { id: 'loadout', label: 'Loadout' },
   { id: 'settings', label: 'Settings' },
   { id: 'crosshair', label: 'Crosshair' },
   { id: 'servers', label: 'Servers' },
@@ -78,6 +89,10 @@ export interface GameMenuProps {
    */
   standalone?: boolean;
   match?: MatchActions;
+  /** The served weapons and the stored loadouts: the Loadout tab, when given. */
+  loadout?: { weapons: WeaponSpec[]; loadouts: Loadouts | null; onLoadouts: (next: Loadouts) => void };
+  /** In the training range: its drill, gun, Start and Restart. Opens on this tab. */
+  range?: RangePanelProps;
 }
 
 /** What the desktop's toolbar does, for a host that has no toolbar. */
@@ -93,11 +108,17 @@ export interface MatchActions {
   onToggleCleanView: () => void;
 }
 
-const STANDALONE_TABS: MenuTab[] = ['settings', 'crosshair', 'controls'];
+const STANDALONE_TABS: MenuTab[] = ['range', 'loadout', 'settings', 'crosshair', 'controls'];
 
 export function GameMenu(props: GameMenuProps) {
-  const [tab, setTab] = useState<MenuTab>('settings');
-  const tabs = props.standalone ? TABS.filter((t) => STANDALONE_TABS.includes(t.id)) : TABS;
+  const [picked, setTab] = useState<MenuTab>(props.range ? 'range' : 'settings');
+  const tabs = (
+    props.standalone ? TABS.filter((t) => STANDALONE_TABS.includes(t.id)) : TABS
+  ).filter(
+    (t) => (t.id !== 'range' || props.range) && (t.id !== 'loadout' || props.loadout),
+  );
+  // A tab that has gone away (the range, once you join a match) falls back.
+  const tab = tabs.some((t) => t.id === picked) ? picked : 'settings';
   const match = props.match;
 
   return (
@@ -159,6 +180,8 @@ export function GameMenu(props: GameMenuProps) {
         </div>
 
         <div style={styles.body}>
+          {tab === 'range' && props.range && <RangePanel {...props.range} />}
+          {tab === 'loadout' && props.loadout && <LoadoutPanel {...props.loadout} />}
           {tab === 'settings' && <SettingsPanel standalone={props.standalone} />}
           {tab === 'servers' && (
             <ServerBrowserPanel

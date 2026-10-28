@@ -33,7 +33,8 @@ import { installNativeClient, nativeClientStatus } from './api';
 import { useNativeLaunch } from './native-launch';
 import type { DrillStats, DrillSummary } from './training-drill';
 import type { WeaponSpec } from './api';
-import { DEFAULT_LOADOUT, weaponsInSlot, type Loadouts } from './loadout';
+import type { Loadouts } from './loadout';
+import { LoadoutSideRow } from './panels/LoadoutPanel';
 import { SIDES, type AgentSpec, type Side } from './cosmetics';
 import type { DuelRating } from './api';
 import { describeControls, type Bindings } from './controls';
@@ -631,60 +632,30 @@ function PlaySection(props: MainMenuProps) {
           Applied at your next spawn, in every mode without a buy menu. */}
       {props.weapons.some((w) => w.slot) &&
         SIDES.map((side) => {
-          const chosen = props.loadouts?.[side];
           const sideAgents = props.agents.filter((a) => a.sides.includes(side));
           return (
-            <div key={side} style={panel.row}>
-              <div style={panel.rowMain}>
-                <span>{side === 't' ? 'Loadout · T' : 'Loadout · CT'}</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                {(['primary', 'secondary'] as const).map((slot) => {
-                  const offered = weaponsInSlot(props.weapons, slot, side);
-                  const wanted = chosen?.[slot];
-                  // A pick the other side carries shows as this side's default,
-                  // which is what the server will hand out.
-                  const value =
-                    wanted && offered.some((w) => w.id === wanted) ? wanted : DEFAULT_LOADOUT[slot];
-                  return (
-                    <select
-                      key={slot}
-                      value={value}
-                      onChange={(e) =>
-                        props.onLoadouts({
-                          ...props.loadouts,
-                          [side]: { ...chosen, [slot]: e.target.value },
-                        })
-                      }
-                      aria-label={`${side.toUpperCase()} ${slot} weapon`}
-                      style={{ width: 132, padding: '0 0.4rem' }}
-                    >
-                      {offered.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name}
-                        </option>
-                      ))}
-                    </select>
-                  );
-                })}
-                {sideAgents.length > 1 && (
-                  <select
-                    value={props.agentChoice[side] ?? sideAgents[0].id}
-                    onChange={(e) =>
-                      props.onAgents({ ...props.agentChoice, [side]: e.target.value })
-                    }
-                    aria-label={`${side.toUpperCase()} agent`}
-                    style={{ width: 132, padding: '0 0.4rem' }}
-                  >
-                    {sideAgents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
+            <LoadoutSideRow
+              key={side}
+              side={side}
+              weapons={props.weapons}
+              loadouts={props.loadouts}
+              onLoadouts={props.onLoadouts}
+            >
+              {sideAgents.length > 1 && (
+                <select
+                  value={props.agentChoice[side] ?? sideAgents[0].id}
+                  onChange={(e) => props.onAgents({ ...props.agentChoice, [side]: e.target.value })}
+                  aria-label={`${side.toUpperCase()} agent`}
+                  style={{ width: 132, padding: '0 0.4rem' }}
+                >
+                  {sideAgents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LoadoutSideRow>
           );
         })}
 
