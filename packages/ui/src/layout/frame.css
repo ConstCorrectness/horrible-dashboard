@@ -21,6 +21,7 @@
   align-items: stretch;
   flex: 1;
   min-width: 0;
+  -webkit-app-region: drag;
 }
 /* The strip reaches the top-right corner for the window controls, and its empty
    space is a drag surface (default cursor, no select). */
@@ -62,6 +63,7 @@
   flex: none;
   margin-left: 4px;
   align-self: stretch;
+  -webkit-app-region: no-drag;
 }
 .win-btn {
   display: inline-flex;
@@ -73,6 +75,7 @@
   color: var(--text-dim);
   cursor: pointer;
   padding: 0;
+  -webkit-app-region: no-drag;
 }
 .win-btn:hover {
   background: var(--bg-hover);

@@ -109,6 +109,9 @@ import { AppRoot } from '@horrible/ui';
 import { isTauri, resolveBackendOrigin } from './tauriBackend';
 import { createTauriGlobalShortcuts } from './tauriShortcuts';
 import { createTauriWindowControl } from './tauriWindow';
+import { isElectron, resolveElectronBackendOrigin } from './electronBackend';
+import { createElectronGlobalShortcuts } from './electronShortcuts';
+import { createElectronWindowControl } from './electronWindow';
 
 // Browser layout entry: browser capability set, built-in module registration,
 // then installed plugins — awaited so restored layouts find plugin panels and
@@ -129,10 +132,12 @@ async function boot(): Promise<void> {
   // paint is already themed — is untouched.
   const reactRoot = createRoot(root);
 
+  const isDesktop = isTauri() || isElectron();
+
   // Behind the hosted hub (backend/hub/), signed out means every /api call 401s:
   // show the sign-in screen instead of booting over the user's real settings.
-  // A plain backend has no /hub/me, so this is a no-op for `pnpm dev` and Tauri.
-  if (!isTauri()) {
+  // A plain backend has no /hub/me, so this is a no-op for `pnpm dev`, Tauri and Electron.
+  if (!isDesktop) {
     initWsOrigin((import.meta.env.VITE_WS_ORIGIN as string | undefined) ?? null);
     const hub = await probeHub();
     if (hub.mode === 'signedOut') {
@@ -158,21 +163,24 @@ async function boot(): Promise<void> {
     </StrictMode>,
   );
 
-  // Under Tauri the shell spawns the backend and tells us its origin; in the
-  // browser the origin stays null (relative paths through the Vite proxy).
+  // Under Tauri or Electron the desktop shell spawns the backend and tells us its origin;
+  // in the browser the origin stays null (relative paths through the Vite proxy).
   if (isTauri()) {
     const origin = await bootStep('backend', 'Locating the backend', resolveBackendOrigin);
     if (origin) initBackendOrigin(origin);
+  } else if (isElectron()) {
+    const origin = await bootStep('backend', 'Locating the backend', resolveElectronBackendOrigin);
+    if (origin) initBackendOrigin(origin);
   }
 
-  // Same frontend, two layouts: under Tauri claim the desktop capability set
+  // Same frontend, two layouts: under Tauri or Electron claim the desktop capability set
   // (native dialogs, window control, tray…) and wire the native window control;
   // the browser gets the browser set and leaves the seam null.
   // The keymap has to know its host and platform before any binding resolves:
   // some chords the native shell can claim are browser-owned in a tab, so the two
   // ship different defaults for the same command.
   const platform = detectPlatform();
-  initKeymapHost({ platform, host: isTauri() ? 'desktop' : 'browser' });
+  initKeymapHost({ platform, host: isDesktop ? 'desktop' : 'browser' });
 
   if (isTauri()) {
     // Per-platform, not the flat desktop list: WKWebView cannot capture a screen
@@ -191,6 +199,14 @@ async function boot(): Promise<void> {
     setGlobalShortcuts(createTauriGlobalShortcuts());
     // The webview can't spawn browser windows (window.open / target="_blank" are
     // silent no-ops), so route external-link clicks to the system browser.
+    installExternalLinkBridge();
+  } else if (isElectron()) {
+    // Under Electron, Chromium runs on every platform with native CDP support!
+    initCapabilities(desktopCapabilities('win'));
+    const control = createElectronWindowControl();
+    setWindowControl(control);
+    void control.browserWebview?.closeAll().catch(() => {});
+    setGlobalShortcuts(createElectronGlobalShortcuts());
     installExternalLinkBridge();
   } else {
     initCapabilities(BROWSER_CAPABILITIES);

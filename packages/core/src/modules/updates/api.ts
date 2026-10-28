@@ -49,7 +49,40 @@ interface RawUpdateInfo {
   error: string | null;
 }
 
+interface HorribleUpdaterBridge {
+  updater?: {
+    checkForUpdate?: (channel: string) => Promise<RawUpdateInfo>;
+    installUpdate?: (channel: string) => Promise<boolean>;
+  };
+}
+
 export async function checkForUpdate(channel: string): Promise<UpdateInfo | null> {
+  const electronPlatform = (window as unknown as { horriblePlatform?: HorribleUpdaterBridge }).horriblePlatform;
+  if (electronPlatform?.updater?.checkForUpdate) {
+    try {
+      const raw = await electronPlatform.updater.checkForUpdate(channel);
+      return {
+        available: raw.available,
+        currentVersion: raw.current_version,
+        version: raw.version,
+        notes: raw.notes,
+        date: raw.date,
+        channel: raw.channel,
+        error: raw.error,
+      };
+    } catch (err) {
+      return {
+        available: false,
+        currentVersion: '',
+        version: null,
+        notes: null,
+        date: null,
+        channel,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   const invoke = invoker();
   if (!invoke) return null;
   const raw = (await invoke('updater_check', { channel })) as RawUpdateInfo;
@@ -70,6 +103,15 @@ export async function checkForUpdate(channel: string): Promise<UpdateInfo | null
  * which is why callers must not put cleanup after the await.
  */
 export async function installUpdate(channel: string): Promise<boolean> {
+  const electronPlatform = (window as unknown as { horriblePlatform?: HorribleUpdaterBridge }).horriblePlatform;
+  if (electronPlatform?.updater?.installUpdate) {
+    try {
+      return await electronPlatform.updater.installUpdate(channel);
+    } catch {
+      return false;
+    }
+  }
+
   const invoke = invoker();
   if (!invoke) return false;
   return (await invoke('updater_install', { channel })) as boolean;

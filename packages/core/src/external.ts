@@ -19,9 +19,20 @@ interface TauriInternals {
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 }
 
-/** True when running inside the Tauri desktop shell (vs the browser layout). */
+interface HorriblePlatformBridge {
+  window?: {
+    openExternal?: (url: string) => Promise<boolean>;
+    openPath?: (path: string) => Promise<boolean>;
+  };
+}
+
+/** True when running inside the Tauri or Electron desktop shell (vs the browser layout). */
 export function isDesktopShell(): boolean {
-  return '__TAURI_INTERNALS__' in window;
+  return (
+    '__TAURI_INTERNALS__' in window ||
+    ('horriblePlatform' in window &&
+      Boolean((window as unknown as { horriblePlatform?: HorriblePlatformBridge }).horriblePlatform))
+  );
 }
 
 function tauriInvoke(): TauriInternals['invoke'] | null {
@@ -47,6 +58,15 @@ function tauriInvoke(): TauriInternals['invoke'] | null {
  * that need the user to *arrive* somewhere must check it.
  */
 export async function openExternal(url: string): Promise<boolean> {
+  const electronPlatform = (window as unknown as { horriblePlatform?: HorriblePlatformBridge }).horriblePlatform;
+  if (electronPlatform?.window?.openExternal) {
+    try {
+      return await electronPlatform.window.openExternal(url);
+    } catch {
+      return false;
+    }
+  }
+
   const invoke = tauriInvoke();
   if (invoke) {
     try {
@@ -73,6 +93,15 @@ export async function openExternal(url: string): Promise<boolean> {
  * {@link openExternal} does.
  */
 export async function openPath(path: string): Promise<boolean> {
+  const electronPlatform = (window as unknown as { horriblePlatform?: HorriblePlatformBridge }).horriblePlatform;
+  if (electronPlatform?.window?.openPath) {
+    try {
+      return await electronPlatform.window.openPath(path);
+    } catch {
+      return false;
+    }
+  }
+
   const invoke = tauriInvoke();
   if (!invoke) return false;
   try {
