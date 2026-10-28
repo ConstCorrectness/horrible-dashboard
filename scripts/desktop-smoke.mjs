@@ -136,6 +136,13 @@ async function main() {
     console.log(`\nDesktop smoke (${process.platform}, ${dev ? 'dev' : 'packaged'})`);
 
     await check('page is served from the app origin', async () => {
+      // firstWindow() resolves when the BrowserWindow is created, while it still
+      // shows about:blank — and that page has already "loaded", so waitForLoadState
+      // returns at once. Wait for the UI's own document instead; until then every
+      // later check would run against a page with no bridge and a `null` origin.
+      await page
+        .waitForURL((url) => url.protocol !== 'about:', { timeout: 60_000 })
+        .catch(() => {});
       await page.waitForLoadState('domcontentloaded');
       const origin = await page.evaluate(() => location.origin);
       assert(

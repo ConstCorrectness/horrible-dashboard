@@ -40,7 +40,11 @@ const option = (name, fallback) => {
   const i = argv.indexOf(name);
   return i === -1 ? fallback : argv[i + 1];
 };
-const exe = option('--exe');
+// Absolute, because the app is spawned with `cwd: appCwd`: Windows resolves a
+// relative executable against the child's cwd, not ours, so `--exe tauri-baseline/…`
+// with `--cwd tauri-baseline` looked for tauri-baseline/tauri-baseline/… (ENOENT).
+const exeArg = option('--exe');
+const exe = exeArg && resolve(exeArg);
 const label = option('--label', 'app');
 const idleSec = Number(option('--idle', '60'));
 const loadSec = Number(option('--load', '30'));
