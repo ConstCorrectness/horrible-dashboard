@@ -9441,7 +9441,7 @@ The only symptom otherwise is a status chip that never updates, on a client whos
 registry fetch is older than the node it is talking to.
 ---
 
-### On the game server: the creator's console, never in ranked
+### On the game server: host, creator and admin, never in ranked
 
 The standalone web client plays on the central game server, so its console's
 `POST /api/hassault/console/exec` lands there rather than on a node. Until the
@@ -9450,19 +9450,41 @@ route existed the game server's static web mount answered that POST with
 `backend/games_server/hassault_console.py`, which is deliberately much smaller
 than the node's console:
 
-- **Who.** The account that opened the room (`HassaultReferee.creators`,
-  recorded at creation), or an admin listed in `HASSAULT_ADMINS`
-  (comma-separated account ids). Not the room *host*: the host is whoever has
-  been seated longest, which a stranger becomes when the creator steps out. The
-  client sends the account's bearer token; a guest or a non-creator gets a 403
-  whose `detail` the console prints as is.
+- **Who.** Three roles, each able to do everything the one before can:
+
+  | Role | Who | May run |
+  | --- | --- | --- |
+  | host | the room's longest-seated human (`HassaultReferee.host_of`) | `server.bots.add`, `server.bots.remove`, `server.bots.kick_all`, `server.bots.freeze`, `help` |
+  | creator | the account that opened the room (`HassaultReferee.creators`) | the above, plus `player.god` and the bounded `gameplay.*` numbers |
+  | admin | named in `HASSAULT_ADMINS` | all of it in **any** room, plus `server.kick <name>` |
+
+  Cheats stay with the creator rather than the host because the host is
+  whoever has been seated longest, which a stranger becomes when the creator
+  steps out — running the bots is the room's business, everyone's damage scale
+  is not. `HASSAULT_ADMINS` is comma-separated account ids **or handles**
+  (`constcorrectness`, `@ConstCorrectness`): a game-server handle is unique and
+  locked once claimed, so it names one account as surely as its id. The client
+  sends the account's bearer token; a guest or a caller without the role gets a
+  403 whose `detail` the console prints as is. `help` lists what *you* may run.
 - **Where.** Never a ranked room (mode `duel`) — admins included. A node's own
   console refuses a duel room the same way; otherwise the node's owner opened
   every room it runs, so a node needs no token.
-- **What.** A whitelist applied to the simulation, so the server honours it:
-  `player.god` (the caller's own player; `god` and `play.god` alias it),
-  `server.bots.freeze`, and the bounded `gameplay.*` numbers. No Python, no
-  macros — those run on a player's own node, never on a public server.
+- **What.** A fixed command table applied to the simulation, so the server
+  honours it (`god` and `play.god` alias `player.god`, the caller's own player).
+  Both `server.bots.add 3 hard` and `server.bots.add(count=3, skill="hard")`
+  are accepted; the call form is parsed with `ast`, literal arguments only, and
+  never evaluated. No Python, no macros — those run on a player's own node,
+  never on a public server. `GET /api/hassault/console/definitions` serves the
+  table in the node's definitions shape, so the browser's autocomplete offers
+  what the server accepts.
+
+The menu's "host with N bots" and the pane's bot buttons send `add_bot` /
+`remove_bot` over the socket rather than the console route. The game server
+answers those through the same host check (`socket_bots`), against the socket's
+own account — so a **guest** who is hosting can add bots from the menu, though
+not type console commands. A refusal arrives as `room_settings_refused`, a
+notice rather than a match error. Both paths go through
+`HassaultReferee.add_bots` / `remove_bots`, which broadcast `roster`.
 
 ### Agent Tools Integration
 

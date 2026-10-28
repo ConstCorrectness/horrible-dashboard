@@ -50,7 +50,7 @@ from typing import Any
 
 from functools import lru_cache
 
-from backend.modules.hassault import mapsource, modes
+from backend.modules.hassault import bots, mapsource, modes
 from backend.modules.hassault.match import (
     MAX_NAME_LEN,
     MAX_PLAYERS,
@@ -350,6 +350,48 @@ class HassaultReferee:
             room, "room_settings", self.settings_payload(room)
         )
         return None
+
+    # -- bots ---------------------------------------------------------------
+    #
+    # One path for the console's `server.bots.*` and the menu's `add_bot` /
+    # `remove_bot` events; who may call it is the caller's to check
+    # (`hassault_console.role_of`). Bots never touch the ladder: `_record` files a
+    # human's session, and a room with a bot in it was never a rated shape.
+
+    async def add_bots(
+        self, room: Any, count: int, skill: str, team: int | None = None
+    ) -> list[str]:
+        added = [b.name for b in bots.add_bots(room, count, skill, team)]
+        if added:
+            await self.server.broadcast_event(
+                room, "roster", {"room": room.id, "added": added}
+            )
+        return added
+
+    async def remove_bots(
+        self, room: Any, count: int | None = None, name: str = ""
+    ) -> list[str]:
+        """Drop bots — `count` newest first, the one `name` matches, or all of them."""
+        if name:
+            needle = name.strip().lower()
+            matching = [p for p in room.players.values() if p.is_bot]
+            target = next(
+                (p for p in matching if p.name.lower() in (needle, f"[bot] {needle}")),
+                None,
+            ) or next((p for p in matching if needle in p.name.lower()), None)
+            gone = [target] if target is not None else []
+            for bot in gone:
+                room.remove(bot.id)
+        else:
+            gone = [p for p in reversed(list(room.players.values())) if p.is_bot]
+            if count is not None:
+                gone = gone[: max(0, count)]
+            room.remove_bots(len(gone))
+        if gone:
+            await self.server.broadcast_event(
+                room, "roster", {"room": room.id, "removed": len(gone)}
+            )
+        return [b.name for b in gone]
 
     def _has_space(self, map_name: str, mode: str | None = None) -> bool:
         """Whether a join on `map_name` in `mode` would land in a room that

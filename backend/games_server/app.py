@@ -871,6 +871,24 @@ async def hassault_ws(websocket: WebSocket) -> None:
                     await conn.send_json(
                         {"channel": "hassault", "event": "loadout", "data": chosen}
                     )
+            elif event in ("add_bot", "remove_bot"):
+                # The menu's "host with N bots" and the pane's bot buttons. Was
+                # unhandled here, so a room opened from the browser with bots
+                # asked for opened with none and nobody was told. Same rule as
+                # the console's `server.bots.*`, checked against this socket's
+                # own account — which is what lets a guest host add bots too.
+                from backend.games_server.hassault_console import socket_bots
+
+                refused = await socket_bots(conn, event, data)
+                if refused:
+                    # As a refused setting is: a notice, not a match error.
+                    await conn.send_json(
+                        {
+                            "channel": "hassault",
+                            "event": "room_settings_refused",
+                            "data": {"message": refused},
+                        }
+                    )
             elif event == "room_set":
                 refused = await referee.set_room_setting(conn, data)
                 if refused:
