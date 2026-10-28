@@ -1,0 +1,25 @@
+{
+  "name": "@horrible-dashboard/desktop-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "High-performance Electron desktop shell for horrible-dashboard (Linux)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc && node scripts/wrap-preload.cjs",
+    "dev": "tsc && node scripts/wrap-preload.cjs && electron --no-sandbox .",
+    "typecheck": "tsc --noEmit",
+    "package": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux",
+    "dist:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.8.0"
+  }
+}

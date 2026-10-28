@@ -271,3 +271,8 @@ packages/webml/kernel-tests/.results/
 
 # Map meshes before their AO edge splits, for bake_collision.py (maplib.COLLISION_DIR)
 tools/blender/.collision/
+
+# Electron distribution & benchmark test outputs
+dist-electron/
+benchmark-results/
+
