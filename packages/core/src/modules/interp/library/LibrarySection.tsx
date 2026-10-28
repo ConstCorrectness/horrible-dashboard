@@ -24,6 +24,7 @@ import { A } from '../attention/styles';
 import { S } from '../styles';
 import { SuiteFrame } from '../SuiteFrame';
 import { getFeature, type Artifact, type CatalogEntry, type Compat, type FeatureCard } from './api';
+import { NeuronpediaCard } from './NeuronpediaCard';
 import {
   askDownload,
   browse,
@@ -575,57 +576,8 @@ function NeuronpediaLookup() {
           {busy ? 'Looking up…' : 'Look up'}
         </button>
       </div>
-      {card && <FeatureView card={card} />}
+      {card && <NeuronpediaCard card={card} />}
     </section>
-  );
-}
-
-/** SentencePiece marks a leading space with `▁` (U+2581); read as text, it is a space. */
-function shown(token: string): string {
-  return token.replace(/▁/g, ' ');
-}
-
-function FeatureView({ card }: { card: FeatureCard }) {
-  if (card.error) return <div style={A.conflict}>{card.error}</div>;
-  return (
-    <div style={L.feature}>
-      <div style={L.artifactHead}>
-        <span style={L.artifactName}>
-          {card.model} / {card.source} / {card.index}
-        </span>
-        <span style={S.mono}>{card.cached ? 'cached' : 'fresh'}</span>
-      </div>
-      {(card.explanations ?? []).slice(0, 3).map((e, i) => (
-        <div key={i} style={L.explanation}>
-          “{e.text}” <span style={S.mono}>{e.by}</span>
-        </div>
-      ))}
-      <div style={S.mono}>
-        promotes{' '}
-        {(card.promotes ?? [])
-          .slice(0, 8)
-          .map((t) => JSON.stringify(shown(t)))
-          .join(' ')}
-      </div>
-      <div style={S.mono}>
-        max act {card.maxActivation?.toFixed(2) ?? '?'} · density{' '}
-        {card.density != null ? `${(card.density * 100).toFixed(3)}%` : '?'}
-      </div>
-      {(card.examples ?? []).slice(0, 4).map((ex, i) => (
-        <div key={i} style={L.example}>
-          {ex.tokens.map((t, j) => (
-            <span key={j} style={L.token(ex.maxValue ? (ex.values[j] ?? 0) / ex.maxValue : 0)}>
-              {shown(t)}
-            </span>
-          ))}
-        </div>
-      ))}
-      {card.url && (
-        <a href={card.url} target="_blank" rel="noreferrer" style={S.mono}>
-          {card.url}
-        </a>
-      )}
-    </div>
   );
 }
 
@@ -833,21 +785,4 @@ const L = {
     background: 'var(--bg-primary)',
     margin: '6px 0',
   } satisfies CSSProperties,
-  feature: { display: 'grid', gap: 6 } satisfies CSSProperties,
-  explanation: { fontSize: 13 } satisfies CSSProperties,
-  example: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: 11.5,
-    lineHeight: 1.7,
-    whiteSpace: 'pre-wrap',
-    background: 'var(--bg-primary)',
-    padding: '2px 6px',
-  } satisfies CSSProperties,
-  token(share: number): CSSProperties {
-    return share > 0.02
-      ? {
-          background: `color-mix(in srgb, var(--accent) ${Math.round(Math.min(1, share) * 70)}%, transparent)`,
-        }
-      : {};
-  },
 };

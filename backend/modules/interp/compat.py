@@ -14,6 +14,14 @@ is strict about what it can see and honest about what it cannot:
 Targets are the model the agent runs (its GGUF header, via the interpretability
 module) and the model the worker holds (an HF repo). An artifact can fit one and not
 the other; the Library shows both.
+
+**A GGUF's `general.base_model` is its parent, not itself.** Gemma 3 1B IT's GGUF
+names `google/gemma-3-1b-pt` there — the model it was fine-tuned *from*. Matching on
+it called a Gemma Scope SAE trained on the IT model incompatible with the IT model,
+while that SAE reproduced Neuronpedia's activations on it within 1%. A GGUF's own
+identity is its name parts (`basename`-`size_label`-`finetune` → `gemma-3-1b-it`),
+a weaker claim than a repo and labelled as one; an artifact trained on the parent
+is `unknown` — close weights, not the same ones.
 """
 
 from __future__ import annotations
@@ -42,6 +50,8 @@ def check(artifact: dict[str, Any], target: dict[str, Any] | None) -> dict[str, 
 
     trained_on = _repo(artifact.get("modelRepo"))
     model_repo = _repo(target.get("repo"))
+    name = str(target.get("name") or "").lower()
+    parents = {_repo(p) for p in target.get("parents") or []} - {None}
     repo_ok: bool | None = None
     if trained_on and model_repo:
         repo_ok = trained_on == model_repo
@@ -50,7 +60,20 @@ def check(artifact: dict[str, Any], target: dict[str, Any] | None) -> dict[str, 
             reasons.append(
                 f"trained on {artifact.get('modelRepo')}, this is {target.get('repo')}"
             )
-    elif not model_repo:
+    elif trained_on and name:
+        if trained_on.split("/", 1)[1] == name:
+            repo_ok = True
+            reasons.append(f"matched by the file's own name ({name}), not a repo")
+        elif trained_on in parents:
+            reasons.append(
+                f"trained on {artifact.get('modelRepo')}, the model this was fine-tuned "
+                "from — close weights, not the same ones"
+            )
+        else:
+            reasons.append(
+                f"trained on {artifact.get('modelRepo')}; this file names itself {name}"
+            )
+    elif not model_repo and not name:
         reasons.append("the model does not name the repo it came from")
     else:
         reasons.append("the artifact does not name the model it was trained on")
@@ -80,10 +103,23 @@ def gguf_target(metadata: dict[str, Any], path: str) -> dict[str, Any]:
     def suffix(key: str) -> Any:
         return next((v for k, v in metadata.items() if k.endswith("." + key)), None)
 
+    parts = [
+        metadata.get("general.basename"),
+        metadata.get("general.size_label"),
+        metadata.get("general.finetune"),
+    ]
+    count = metadata.get("general.base_model.count")
+    parents = [
+        metadata.get(f"general.base_model.{i}.repo_url")
+        for i in range(int(count) if isinstance(count, int) else 1)
+    ]
     return {
         "source": "gguf",
         "label": path.replace("\\", "/").rsplit("/", 1)[-1],
-        "repo": metadata.get("general.base_model.0.repo_url"),
+        # Only a key that names *this* model's repo; `base_model` is its parent.
+        "repo": metadata.get("general.source.repo_url"),
+        "name": "-".join(str(p) for p in parts if p) if parts[0] else None,
+        "parents": [p for p in parents if p],
         "dModel": suffix("embedding_length"),
         "layers": suffix("block_count"),
     }

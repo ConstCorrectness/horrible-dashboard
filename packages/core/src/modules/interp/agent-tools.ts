@@ -3,11 +3,12 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Five verbs, all read-only:
+ * group (the `interp` roster agent preloads it). Six verbs, all read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
  * - `interp.heads` — a trace's attention heads, scored and ranked.
+ * - `interp.features` — a trace's SAE features, with the reconstruction check and labels.
  * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
  * - `interp.goto` — show a section, and move the shared model locus.
  *
@@ -32,6 +33,14 @@ import {
   type HeadMetric,
 } from './heads/state';
 import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
+import {
+  encode as encodeFeatures,
+  featuresStore,
+  labelOf,
+  loadCard,
+  openTrace as openFeatureTrace,
+  refreshFeatureTraces,
+} from './features/state';
 import { libraryStore, refreshLibrary } from './library/state';
 import { setSubSection } from './SubSections';
 import { describeLayer, primeDigest, suiteDigest } from './suite-state';
@@ -156,6 +165,71 @@ export const interpAgentTools: AgentToolDecl[] = [
     },
   },
   {
+    name: 'interp.features',
+    description:
+      'What a Gemma Scope–style SAE reads in a llama.cpp trace: the reconstruction ' +
+      'self-check first (verified / drifted / not_checked, with FVU, cosine and L0 against ' +
+      'the L0 the SAE was trained to), then the strongest features in the trace and at a ' +
+      'position, each with its Neuronpedia label when there is one. A feature flagged ' +
+      'firstToken peaks on the token after BOS, where Neuronpedia labels were not drawn. ' +
+      'Report the check before any feature; a drifted check means the readings are suspect.',
+    params: {
+      type: 'object',
+      properties: {
+        traceId: { type: 'string', description: 'Trace to read (default: the one shown).' },
+        position: {
+          type: 'integer',
+          description: 'Also list the features at this token position.',
+        },
+        top: { type: 'integer', description: 'How many trace-wide features (default 10).' },
+      },
+    },
+    handler: async (args) => {
+      if (typeof args.traceId === 'string' && args.traceId) await openFeatureTrace(args.traceId);
+      else if (!featuresStore.get().result) await refreshFeatureTraces();
+      let r = featuresStore.get().result;
+      if (!r && featuresStore.get().traceId) r = await encodeFeatures();
+      const st = featuresStore.get();
+      if (!r) return { error: st.error ?? 'No trace has an installed SAE that fits it.' };
+      const top = Math.max(1, Math.min(30, Number(args.top ?? 10) || 10));
+      const picked = r.top.slice(0, top);
+      await Promise.all(picked.map((f) => loadCard(f.index)));
+      const cards = featuresStore.get().cards;
+      const tok = (p: number) => r.tokens.find((t) => t.position === p)?.text ?? `#${p}`;
+      const describe = (index: number, act: number) => {
+        const label = labelOf(cards, index);
+        return `F${index}${label ? ` "${label}"` : ''} ${act.toFixed(1)}`;
+      };
+      const at =
+        typeof args.position === 'number'
+          ? r.perToken.find((p) => p.position === args.position)
+          : undefined;
+      return {
+        trace: r.traceId,
+        model: r.model,
+        sae: `${r.artifactId} (${r.arch}, layer ${r.layer}, width ${r.width})`,
+        check: r.check,
+        fit: r.compat,
+        labels: r.neuronpedia
+          ? `Neuronpedia ${r.neuronpedia.model}/${r.neuronpedia.source}`
+          : 'none: Neuronpedia hosts no pages for this dictionary',
+        strongest: picked.map(
+          (f) =>
+            `${describe(f.index, f.peak)} at "${tok(f.position)}" (#${f.position}, ${f.tokens} tokens)` +
+            (f.firstToken ? ' · firstToken' : ''),
+        ),
+        atPosition: at
+          ? {
+              position: at.position,
+              token: tok(at.position),
+              active: at.active,
+              features: at.top.map((f) => describe(f.index, f.act)),
+            }
+          : undefined,
+      };
+    },
+  },
+  {
     name: 'interp.library',
     description:
       'The interpretability library: installed SAEs, transcoders and lenses, each with what ' +
@@ -173,8 +247,11 @@ export const interpAgentTools: AgentToolDecl[] = [
           kind: a.kind,
           trainedOn: a.modelRepo,
           facts: a.facts,
-          fits: a.compat.map((c) => `${c.target} (${c.source}): ${c.state}` +
-            (c.reasons.length ? ` — ${c.reasons.join('; ')}` : '')),
+          fits: a.compat.map(
+            (c) =>
+              `${c.target} (${c.source}): ${c.state}` +
+              (c.reasons.length ? ` — ${c.reasons.join('; ')}` : ''),
+          ),
         })),
         checkedAgainst: library?.targets ?? [],
         disk: library ? { usedBytes: library.usedBytes, budgetBytes: library.budgetBytes } : null,

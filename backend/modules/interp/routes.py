@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.modules.interp import artifacts, catalog, compat, env, neuronpedia
+from backend.modules.interp import artifacts, catalog, compat, env, neuronpedia, sae
 from backend.modules.interp.worker import WorkerUnavailable, worker
 
 router = APIRouter(prefix="/interp", tags=["interp"])
@@ -33,6 +33,13 @@ class DownloadRequest(BaseModel):
 
 class InstallRequest(BaseModel):
     group: str = "base"
+
+
+class LabelCheckRequest(BaseModel):
+    artifactId: str
+    index: int
+    #: The trace whose model the example is traced through.
+    traceId: str
 
 
 class WorkerOpRequest(BaseModel):
@@ -144,6 +151,158 @@ def delete_artifact(artifact_id: str) -> dict[str, Any]:
     if not artifacts.delete_artifact(artifact_id):
         raise HTTPException(status_code=404, detail=f"no artifact {artifact_id}")
     return {"ok": True}
+
+
+# ── features (SAEs on traces) ────────────────────────────────────────────────
+
+
+def _trace_or_404(trace_id: str) -> Any:
+    from backend.modules.llamacpp import traces
+
+    trace = traces.load(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"no trace {trace_id}")
+    return trace
+
+
+def _trace_target(trace: Any) -> dict[str, Any] | None:
+    """The model a trace was recorded on, as a compatibility target."""
+    from backend.modules.interpretability.gguf import read_header
+
+    path = str(trace.manifest.get("modelPath") or "")
+    try:
+        header = read_header(path)
+    except Exception:  # noqa: BLE001 — a moved or unreadable file is "unknown"
+        return None
+    return compat.gguf_target(header.metadata, path)
+
+
+def _sae_rows(target: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        {
+            **a,
+            "compat": compat.check(a, target),
+            "neuronpedia": catalog.neuronpedia_source(a["entryId"], a["choice"]),
+        }
+        for a in artifacts.list_artifacts()
+        if a["kind"] == "sae"
+    ]
+
+
+def _artifact_or_404(artifact_id: str) -> dict[str, Any]:
+    found = artifacts.get_artifact(artifact_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"no artifact {artifact_id}")
+    return found
+
+
+@router.get("/features/traces")
+def get_feature_traces() -> dict[str, Any]:
+    """Traces newest first, each with the installed SAEs that may apply to it
+    (compatible or unknown — never incompatible) and whether it recorded their layer."""
+    from backend.modules.llamacpp import traces
+
+    by_path: dict[str, dict[str, Any] | None] = {}
+    rows = artifacts.list_artifacts()
+    out = []
+    for trace in traces.list_traces():
+        path = str(trace.manifest.get("modelPath") or "")
+        if path not in by_path:
+            by_path[path] = _trace_target(trace)
+        target = by_path[path]
+        recorded = trace.manifest.get("layers") or []
+        captures_l_out = any(
+            str(c).startswith("l_out")
+            for c in trace.manifest.get("capture") or ["l_out"]
+        )
+        fits = []
+        for a in rows:
+            if a["kind"] != "sae":
+                continue
+            state = compat.check(a, target)["state"]
+            layer = (a.get("facts") or {}).get("layer")
+            has_layer = captures_l_out and (not recorded or layer in recorded)
+            if state != "incompatible" and has_layer:
+                fits.append({"artifactId": a["id"], "state": state})
+        out.append(
+            {
+                "traceId": trace.trace_id,
+                "modelName": trace.manifest.get("modelName"),
+                "prompt": str(trace.manifest.get("prompt") or "")[:120],
+                "createdAt": trace.manifest.get("createdAt"),
+                "fits": fits,
+            }
+        )
+    out.sort(key=lambda t: t["createdAt"] or 0, reverse=True)
+    return {"traces": out}
+
+
+@router.get("/features/saes")
+def get_saes(traceId: str = "") -> dict[str, Any]:
+    """Installed SAEs, each with whether it fits the trace's model."""
+    target = _trace_target(_trace_or_404(traceId)) if traceId else None
+    return {"target": target, "saes": _sae_rows(target)}
+
+
+@router.get("/features/{trace_id}")
+async def get_features(trace_id: str, artifactId: str) -> dict[str, Any]:
+    trace = _trace_or_404(trace_id)
+    art = _artifact_or_404(artifactId)
+    verdict = compat.check(art, _trace_target(trace))
+    if verdict["state"] == "incompatible":
+        # Encoding would return numbers; every one of them would be wrong.
+        return {"error": "; ".join(verdict["reasons"]), "compat": verdict}
+    try:
+        model = await asyncio.to_thread(sae.load, art)
+        out = await asyncio.to_thread(sae.encode_trace, trace, model)
+    except sae.SaeError as exc:
+        return {"error": str(exc), "compat": verdict}
+    return {
+        **out,
+        "traceId": trace.trace_id,
+        "model": trace.manifest.get("modelName"),
+        "compat": verdict,
+        "neuronpedia": catalog.neuronpedia_source(art["entryId"], art["choice"]),
+    }
+
+
+@router.get("/features/{trace_id}/feature/{index}")
+async def get_feature_values(
+    trace_id: str, index: int, artifactId: str
+) -> dict[str, Any]:
+    trace = _trace_or_404(trace_id)
+    art = _artifact_or_404(artifactId)
+    try:
+        model = await asyncio.to_thread(sae.load, art)
+        return await asyncio.to_thread(sae.feature_activations, trace, model, index)
+    except sae.SaeError as exc:
+        return {"error": str(exc)}
+
+
+@router.post("/features/label-check")
+async def post_label_check(req: LabelCheckRequest) -> dict[str, Any]:
+    """Trace Neuronpedia's top example for a feature through the trace's model and
+    compare activations. Sends nothing of the user's."""
+    trace = _trace_or_404(req.traceId)
+    art = _artifact_or_404(req.artifactId)
+    np_source = catalog.neuronpedia_source(art["entryId"], art["choice"])
+    if np_source is None:
+        return {
+            "state": "not_checked",
+            "reason": "Neuronpedia hosts no labels for this dictionary",
+        }
+    try:
+        return await sae.label_check(
+            art,
+            req.index,
+            np_source["model"],
+            np_source["source"],
+            str(trace.manifest.get("modelPath") or ""),
+        )
+    except sae.SaeError as exc:
+        return {"state": "not_checked", "reason": str(exc)}
+    except httpx.HTTPError as exc:
+        return {"state": "not_checked", "reason": f"could not reach Neuronpedia: {exc}"}
 
 
 # ── neuronpedia ──────────────────────────────────────────────────────────────

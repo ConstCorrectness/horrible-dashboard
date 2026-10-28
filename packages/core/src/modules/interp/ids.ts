@@ -22,6 +22,7 @@ export const SUITE_SECTIONS = {
   stepper: 'stepper',
   lens: 'lens',
   heads: 'heads',
+  features: 'features',
   library: 'library',
 } as const;
 

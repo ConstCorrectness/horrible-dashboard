@@ -142,6 +142,11 @@ def artifact_id(entry_id: str, choice: str) -> str:
 
 _WIDTH = re.compile(r"width_(\d+)([km]?)", re.I)
 _LAYER = re.compile(r"layer_(\d+)", re.I)
+#: A hook name that states its block: `model.layers.13.output`, `blocks.13.hook_resid_post`.
+_HOOK_LAYER = re.compile(r"(?:layers|blocks)\.(\d+)\.")
+#: The encoder weight's name across the conventions: Gemma Scope / SAELens `w_enc`
+#: or `W_enc`, shaped `[d_in, width]`.
+_ENCODER_KEYS = ("w_enc", "W_enc", "encoder.weight")
 
 #: Config keys that state the input width / dictionary width / layer, across the
 #: conventions in the wild (SAELens, Gemma Scope, circuit-tracer).
@@ -161,6 +166,21 @@ def _first(data: dict[str, Any], keys: tuple[str, ...]) -> int | None:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return int(value)
     return None
+
+
+def safetensors_shapes(path: Path) -> dict[str, list[int]]:
+    """Tensor shapes from a safetensors header — 8 bytes of length, then JSON — so
+    a 150 MB file states its widths without being read."""
+    with path.open("rb") as handle:
+        size = int.from_bytes(handle.read(8), "little")
+        if not 0 < size < 64 * 1024 * 1024:
+            return {}
+        header = json.loads(handle.read(size))
+    return {
+        k: list(v.get("shape") or [])
+        for k, v in header.items()
+        if isinstance(v, dict) and k != "__metadata__"
+    }
 
 
 def facts_for(choice: str, files: dict[str, Path]) -> dict[str, Any]:
@@ -187,6 +207,14 @@ def facts_for(choice: str, files: dict[str, Path]) -> dict[str, Any]:
             continue
         if not isinstance(data, dict):
             continue
+        hook = data.get("hf_hook_point_in") or data.get("hook_name")
+        if (
+            isinstance(hook, str)
+            and (m := _HOOK_LAYER.search(hook))
+            and "layer" not in facts
+        ):
+            facts["layer"] = int(m.group(1))
+            facts["source"]["layer"] = name.rsplit("/", 1)[-1]
         for fact, keys in (
             ("dIn", _DIN_KEYS),
             ("width", _WIDTH_KEYS),
@@ -196,6 +224,23 @@ def facts_for(choice: str, files: dict[str, Path]) -> dict[str, Any]:
             if value is not None and fact not in facts:
                 facts[fact] = value
                 facts["source"][fact] = name.rsplit("/", 1)[-1]
+    # The weights themselves: the encoder's shape is `[d_in, width]`, which is the
+    # strongest statement there is — it is what the arithmetic will use.
+    for name, path in files.items():
+        if not name.endswith(".safetensors") or "dIn" in facts:
+            continue
+        try:
+            shapes = safetensors_shapes(path)
+        except (OSError, ValueError) as exc:
+            logger.info("interp: could not read %s header (%s)", path, exc)
+            continue
+        enc = next((shapes[k] for k in _ENCODER_KEYS if k in shapes), None)
+        if enc and len(enc) == 2:
+            # `encoder.weight` (torch Linear) is [width, d_in]; the others [d_in, width].
+            d_in, width = (enc[1], enc[0]) if "encoder.weight" in shapes else enc
+            label = name.rsplit("/", 1)[-1]
+            facts["dIn"], facts["source"]["dIn"] = d_in, label
+            facts["width"], facts["source"]["width"] = width, label
     if "width" not in facts and (m := _WIDTH.search(choice)):
         facts["width"] = _parse_width(m.group(1), m.group(2))
         facts["source"]["width"] = "folder name"

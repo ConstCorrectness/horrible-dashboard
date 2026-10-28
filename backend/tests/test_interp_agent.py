@@ -60,6 +60,7 @@ def test_guide_and_frontend_declare_the_same_tools() -> None:
         "interp.state",
         "interp.attention",
         "interp.heads",
+        "interp.features",
         "interp.library",
         "interp.goto",
     }

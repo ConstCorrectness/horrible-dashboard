@@ -19,6 +19,7 @@ is downloaded before its size has been shown.
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -134,6 +135,27 @@ _ORG = {
     "olmo": "allenai",
     "deepseek": "deepseek-ai",
 }
+
+
+#: Neuronpedia's model id for each Gemma Scope residual entry. Its sources are named
+#: `{layer}-gemmascope-2-res-{width}` and host the **medium-L0** dictionary of each
+#: width — confirmed for 1B layer 13 16k by tracing Neuronpedia's own examples and
+#: matching its activations within ~1%. The small / big L0 dictionaries share the
+#: width but not the features, so they get no labels rather than someone else's.
+_NP_MODEL = {
+    "gemma-scope-2-1b-it-resid": "gemma-3-1b-it",
+    "gemma-scope-2-4b-it-resid": "gemma-3-4b-it",
+}
+_SCOPE_RESID = re.compile(r"resid_post/layer_(\d+)_width_(\d+[km])_l0_medium$")
+
+
+def neuronpedia_source(entry_id: str, choice: str) -> dict[str, str] | None:
+    """Where Neuronpedia keeps this dictionary's feature pages, if it does."""
+    model = _NP_MODEL.get(entry_id)
+    m = _SCOPE_RESID.search(choice or "")
+    if not model or not m:
+        return None
+    return {"model": model, "source": f"{m.group(1)}-gemmascope-2-res-{m.group(2)}"}
 
 
 def entry(entry_id: str) -> CatalogEntry | None:

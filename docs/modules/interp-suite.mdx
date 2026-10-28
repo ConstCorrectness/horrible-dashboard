@@ -11,7 +11,7 @@ window's lens lab used to be six panes that did not know about each other. They 
 one subject — the same model read at the prompt, the weights and the activations —
 so they are one pane now.
 
-**Status: Phase 5 of the suite plan** — frontend in
+**Status: Phase 6 of the suite plan** — frontend in
 `packages/core/src/modules/interp/`.
 
 ## The rail
@@ -28,6 +28,7 @@ so they are one pane now.
 | Activations | **Stepper** | the layer stepper |
 | Activations | **Lens** | the trace lens, plus the [WebML](./webml.mdx) lens lab (Reply / Guess / Compare) as sub-tabs |
 | Activations | **Heads** | every attention head of a trace, scored — see below |
+| Features | **Features** | SAE features of a trace, labelled and checked — see below |
 | — | **Library** | SAEs, transcoders and lenses; the GPU worker; Neuronpedia lookups — see below |
 
 Sections and Home's cards both come from `tools.ts`, so the rail and the map cannot
@@ -123,6 +124,65 @@ The section's state is a module store (`interp/heads/state.ts`), so the digest c
 its strongest head and `interp.heads` ranks a trace's heads for the agent whether or
 not the section is open.
 
+## Features
+
+What a sparse autoencoder reads in a trace. An SAE is a dictionary for one site of one
+model: Gemma Scope 2's `resid_post/layer_13_width_16k_l0_medium` rewrites Gemma 3 1B
+IT's residual stream after block 13 as a few of 16,384 directions. It runs in numpy on
+the residuals a llama.cpp trace already holds (`backend/modules/interp/sae.py`). That
+needs no torch and no GPU, about half a second for a 38-token trace. `l_out` is
+llama.cpp's name for exactly that site: the block's output after its post-norms and
+residual add.
+
+The section shows:
+
+- the token strip, shaded by the selected feature;
+- the features at the selected token beside the trace's strongest;
+- the selected feature's card: its activation across the prompt, then Neuronpedia's
+  label and examples.
+
+Selecting a token moves the shared locus, so the other tools follow.
+
+### Can these features be trusted here?
+
+Gemma Scope was trained on bf16 activations of the Hugging Face model. A trace holds a
+quantized GGUF's activations as computed by llama.cpp. An SAE fed the wrong activations
+still returns features, confident and wrong. So there are three checks, cheapest first:
+
+1. **Reconstruction, every encoding.** FVU (`Σ‖x − x̂‖² / Σ‖x − x̄‖²`) and cosine,
+   with position 0 left out. Gemma's BOS residual is the attention sink, about 9× the
+   norm of any other token, and SAEs are trained without it. The verdict is
+   `verified` at FVU ≤ 0.4, `drifted` above, and `not_checked` with fewer than two
+   tokens.
+2. **L0 against the trained L0.** Features active per token, beside the `l0` the SAE's
+   config states. A wrong site or a scale error moves this first.
+3. **The label check, per feature (Check the label).** It traces Neuronpedia's own top
+   example through this GGUF, then compares the activation at Neuronpedia's peak token
+   with Neuronpedia's bf16 value. The text is Neuronpedia's, so nothing of yours is
+   sent. The temporary trace is deleted afterwards.
+
+**Measured** on Gemma 3 1B IT Q8_0 with Scope 2 L13 16k medium:
+
+- **Reconstruction:** FVU 0.31, cosine 0.995.
+- **L0:** 60.0, against 60 trained.
+- **fp16 vs f32 trace storage:** the same FVU (0.3105 vs 0.3100).
+- **Label checks:** 8 of 8 matched at Neuronpedia's peak token, 7 of them within
+  about 1%. For example, F90 "cities" on " Newark" read 588.7 here against 586.0.
+
+One thing the checks surfaced: some features peak on the **first token after BOS**.
+F371 reads 1,127 there against Neuronpedia's maximum of 240 elsewhere. That residual
+is not an outlier (its norm is ordinary), so the activation is real. But Neuronpedia's
+examples never show that position, so such features are marked `first token` rather
+than hidden.
+
+**Labels** come from Neuronpedia, whose sources are named
+`{layer}-gemmascope-2-res-{width}` and host the **medium-L0** dictionary of each
+width. The small, big and seed variants share a width but not the features, so they
+get no labels rather than someone else's (`catalog.neuronpedia_source`).
+
+The fit check runs before encoding, and an `incompatible` SAE is refused rather than
+encoded.
+
 ## Library
 
 What the suite's later tools — features, steering, Jacobian lenses, circuits — stand
@@ -200,13 +260,19 @@ the Hub's own paths under `$DATA/interp/artifacts/`, with one row per artifact i
 
 ### Does it fit? Three answers
 
-Each artifact's **facts**, its input width, dictionary width and layer, are read from
-its config when it has one, or else from the folder name. Each fact records which,
-since a width parsed from a folder name is the weaker claim. The facts are checked
-against two models:
+Each artifact's **facts**, its input width, dictionary width and layer, come from the
+strongest source available. In order: the encoder's shape in the `params.safetensors`
+header (read without loading the file), then the config (including a hook name such
+as `model.layers.13.output`), then the folder name. Each fact records which, since a
+width parsed from a folder name is the weaker claim. The facts are checked against two
+models:
 
-- the agent's GGUF, which names its Hugging Face base in
-  `general.base_model.0.repo_url`;
+- the agent's GGUF, identified by its own name parts. `basename`, `size_label` and
+  `finetune` together give `gemma-3-1b-it`. Its `general.base_model` is **the model it
+  was fine-tuned from**: Gemma 3 1B IT's GGUF names `gemma-3-1b-pt` there. So an
+  artifact trained on that parent is `unknown`, not `compatible`. Matching on the
+  parent once called a Gemma Scope SAE incompatible with the very model it reproduces
+  within 1%.
 - the worker's loaded model.
 
 `compat.py` returns one of three states:
@@ -256,7 +322,7 @@ visible; it is pinned under the per-pane workspace-context budget by a test.
 | Piece | Where |
 | --- | --- |
 | **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
-| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
 | **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
 | **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
 | **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
@@ -312,3 +378,4 @@ The llama.cpp pane keeps only Server and Models.
 | Endpoints | `/api/interp/library/*` | Catalog, choices, download (ndjson, `confirmBytes`), artifacts with fit, delete |
 | Endpoints | `/api/interp/worker*` | Env install, start / stop, status, ops (`ping` `status` `load` `unload` `generate`) |
 | Endpoint | `/api/interp/neuronpedia/feature` | One feature card, cached |
+| Endpoints | `/api/interp/features/*` | Traces with fitting SAEs, SAEs per trace, encode, one feature's values, label check |

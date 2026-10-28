@@ -134,19 +134,36 @@ def test_a_contradiction_wins_over_a_missing_repo():
     assert verdict["state"] == "incompatible"
 
 
-def test_gguf_target_reads_the_base_model_from_the_header():
-    target = compat.gguf_target(
-        {
-            "general.architecture": "gemma3",
-            "general.base_model.0.repo_url": "https://huggingface.co/google/gemma-3-1b-it",
-            "gemma3.embedding_length": 1152,
-            "gemma3.block_count": 26,
-        },
-        "D:\\models\\gemma-3-1b-it-Q8_0.gguf",
-    )
+GEMMA_IT_HEADER = {
+    "general.architecture": "gemma3",
+    "general.basename": "gemma-3",
+    "general.size_label": "1B",
+    "general.finetune": "it",
+    # What ggml-org's real Gemma 3 1B IT GGUF states: the model it was tuned *from*.
+    "general.base_model.count": 1,
+    "general.base_model.0.repo_url": "https://huggingface.co/google/gemma-3-1b-pt",
+    "gemma3.embedding_length": 1152,
+    "gemma3.block_count": 26,
+}
+
+
+def test_a_gguf_is_identified_by_its_own_name_not_its_parent():
+    target = compat.gguf_target(GEMMA_IT_HEADER, "D:\models\gemma-3-1b-it-Q8_0.gguf")
     assert target["label"] == "gemma-3-1b-it-Q8_0.gguf"
+    assert target["repo"] is None  # base_model is the parent, not this file
+    assert target["parents"] == ["https://huggingface.co/google/gemma-3-1b-pt"]
     assert (target["dModel"], target["layers"]) == (1152, 26)
-    assert compat.check(GEMMA_SAE, target)["state"] == "compatible"
+    verdict = compat.check(GEMMA_SAE, target)
+    assert verdict["state"] == "compatible"
+    assert "own name" in verdict["reasons"][0]
+
+
+def test_an_artifact_trained_on_the_parent_is_unknown_not_compatible():
+    pt_sae = {**GEMMA_SAE, "modelRepo": "google/gemma-3-1b-pt"}
+    target = compat.gguf_target(GEMMA_IT_HEADER, "gemma-3-1b-it-Q8_0.gguf")
+    verdict = compat.check(pt_sae, target)
+    assert verdict["state"] == "unknown"
+    assert "fine-tuned from" in verdict["reasons"][0]
 
 
 # ── catalog ──────────────────────────────────────────────────────────────────
@@ -417,7 +434,9 @@ def test_the_worker_carries_all_three_states(backend_python_worker):
     # Failed, with the traceback verbatim: no such dtype (or, where this interpreter
     # has no torch, no torch) — either way an exception inside the op.
     reply = w.request(
-        "load", {"repo": "x/y", "dtype": "not_a_dtype", "allowDownload": True}, timeout=120
+        "load",
+        {"repo": "x/y", "dtype": "not_a_dtype", "allowDownload": True},
+        timeout=120,
     )
     assert reply["state"] == "failed"
     assert reply["traceback"].startswith("Traceback")
