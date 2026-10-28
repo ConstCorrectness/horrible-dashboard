@@ -4368,6 +4368,32 @@ before somebody is aiming at you. The gun works there — see
 [the training range](#the-training-range) — because the shoot-jump cannot be
 practised without one.
 
+### Demos (`.hademo`)
+
+**Record demo** (the pause menu in the browser, the pane's toolbar on the
+desktop) saves what you saw as a `.hademo` file; **Play a demo** opens one.
+`demo.ts` holds the format and both halves, and the panel's frame loop drives
+them:
+
+- **Recording** keeps one frame per `1 / tickRate` (30 per second), whatever
+  the display's rate (`DemoRecorder.due`): your own view, under your player id
+  (`header.pov`), plus every body the avatar pool drew that frame, as
+  `PlayerRow`s (`snapshotFromRow`). Kills from the feed become events and the
+  bar's frag bookmarks. Angles are the wire's, radians with yaw 0 = +x.
+- **Playback** leaves any match, loads the demo's own map if another is up,
+  and poses the world from `sampleCurrentFrame`: the camera behind the
+  recorder's eyes, everybody else through the same avatar pool a match uses.
+  Nothing is simulated or sent. The mouse stays free, because the bar is the
+  thing to use; a click on the world takes it only for the **Drone** camera
+  (F3 or C), which steers by it and starts a step behind the recorder.
+- **`parseDemo` refuses rather than loads** a file that is not a demo or has
+  no frames, and says so on screen.
+
+Neither half was wired at first: the recorder was never fed, so every demo
+saved before this has `"frames": []`, and loading one showed a bar whose
+clock never moved over a world nothing posed, with the pointer captured so the
+bar could not be clicked. Those files cannot be recovered; record new ones.
+
 ### The native client
 
 `apps/native-fps` sat in the Play section advertising a "native C++ / Vulkan client

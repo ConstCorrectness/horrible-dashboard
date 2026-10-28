@@ -205,12 +205,23 @@ import {
 import { AGENTS_KEY, parseAgents, serializeAgents, skinFor, type AgentSpec } from './cosmetics';
 import { readBests, recordBest, type DrillSpec, type DrillSummary } from './training-drill';
 import { DrillCard, DrillClock, RangeHint } from './panels/DrillCard';
+import { ReplayBar, ReplayNotice } from './panels/ReplayBar';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
 import { loadWorld3D, type World3D } from './world3d';
 import { ensureRapierInitialized, RapierPhysicsWorld } from './physics-rapier';
-import { DemoRecorder, DemoPlayer, type DemoBookmark, type DemoData } from './demo';
+import {
+  DemoError,
+  DemoPlayer,
+  DemoRecorder,
+  freecamFromView,
+  parseDemo,
+  rowFromSnapshot,
+  snapshotFromRow,
+  viewFromFreecam,
+  type DemoBookmark,
+} from './demo';
 import { KillFeed } from './panels/KillFeed';
 import { KillCardDeck } from './panels/KillCardDeck';
 import {
@@ -609,6 +620,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   // Match Recording & Replay Suite
   const recorderRef = useRef<DemoRecorder>(new DemoRecorder());
+  /** The newest kill-feed id already in the recording (or there before it began). */
+  const recordedKillRef = useRef(-1);
+  const playerNameRef = useRef(playerName);
+  playerNameRef.current = playerName;
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const demoPlayerRef = useRef<DemoPlayer>(new DemoPlayer());
@@ -633,7 +648,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   const startRecording = useCallback(() => {
     if (!recorderRef.current.isRecording()) {
-      recorderRef.current.start(info?.name || 'unknown_map', { 0: playerName || 'Player' });
+      // The recorder's own id is the one its frames carry for it (the frame loop
+      // records `you` under it), so playback starts behind the recorder's eyes.
+      const session = sessionRef.current;
+      const pov =
+        session?.state.status === 'joined' && session.state.playerId
+          ? session.state.playerId
+          : 'you';
+      // Kills already on the feed happened before this recording.
+      recordedKillRef.current = Math.max(-1, ...(session?.state.killfeed ?? []).map((k) => k.id));
+      recorderRef.current.start(
+        info?.name || 'unknown_map',
+        { [pov]: playerName || 'Player' },
+        pov,
+      );
       setIsRecording(true);
       setRecordingSeconds(0);
     }
@@ -644,7 +672,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const demo = recorderRef.current.stop();
       setIsRecording(false);
       if (demo) {
-        const json = JSON.stringify(demo, null, 2);
+        // Compact: a minute of frames pretty-printed is several times the size.
+        const json = JSON.stringify(demo);
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -656,25 +685,84 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     }
   }, []);
 
-  const loadReplayFile = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(e.target?.result as string) as DemoData;
-        if (data.header?.magic === 'HADEMO') {
-          demoPlayerRef.current.load(data);
-          setIsReplaying(true);
-          setReplayDuration(data.header.durationMs);
-          setReplayBookmarks(data.bookmarks);
-          setReplayPlaying(false);
-          setReplayTime(0);
+  /** Why the last demo would not load, shown on the replay bar's place. */
+  const [replayError, setReplayError] = useState('');
+
+  /**
+   * Play a `.hademo`.
+   *
+   * Leaves any match first — a demo is watched, not played over a live room —
+   * loads the demo's own map if another is up (bodies drawn on the wrong
+   * geometry are nonsense), and enters the world *without* taking the mouse:
+   * the bar is the thing to use, and a captured pointer cannot click it. It
+   * used to resume the game, which captured the pointer and left every control
+   * on the bar unreachable.
+   */
+  const loadReplayFile = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        let demo;
+        try {
+          demo = parseDemo(String(e.target?.result ?? ''));
+        } catch (err) {
+          setReplayError(
+            err instanceof DemoError ? err.message : 'This demo could not be read.',
+          );
+          return;
         }
-      } catch (err) {
-        console.error('Failed to parse .hademo file:', err);
-      }
-    };
-    reader.readAsText(file);
+        setReplayError('');
+        sessionRef.current?.leave();
+        if (demo.header.map && demo.header.map !== mapName) setMapName(demo.header.map);
+        const player = demoPlayerRef.current;
+        player.load(demo);
+        player.freecam.active = false;
+        player.play();
+        setFreecamActive(false);
+        setIsReplaying(true);
+        setReplayDuration(demo.header.durationMs);
+        setReplayBookmarks(demo.bookmarks);
+        setReplayPlaying(true);
+        setReplayTime(0);
+        setMenuOpen(false);
+        menuOpenRef.current = false;
+        setDeployed(true);
+        phaseRef.current = 'playing';
+        if (document.pointerLockElement) document.exitPointerLock();
+      };
+      reader.readAsText(file);
+    },
+    [mapName],
+  );
+
+  /**
+   * The drone camera on or off. Switched on, it starts exactly where the view
+   * already is — it used to start at the map's origin, wherever you had been
+   * watching from.
+   */
+  const toggleFreecam = useCallback(() => {
+    const cam = demoPlayerRef.current.freecam;
+    if (!cam.active) {
+      const p = playerRef.current;
+      const view = freecamFromView(p.yaw, p.pitch);
+      // A step behind and above the eye: the recorder's body is drawn while the
+      // drone flies, and starting at its eye starts inside its head.
+      const back = 4;
+      cam.setPosition(
+        p.x - Math.cos(p.yaw) * back,
+        p.y - Math.sin(p.yaw) * back,
+        eyeHeight(p) + 1.5,
+        view.yaw,
+        view.pitch,
+        0,
+        cam.fov,
+      );
+    }
+    cam.active = !cam.active;
+    setFreecamActive(cam.active);
   }, []);
+  const toggleFreecamRef = useRef(toggleFreecam);
+  toggleFreecamRef.current = toggleFreecam;
 
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
@@ -2123,6 +2211,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       let fpsFrames = 0;
       let hudAccum = 0;
       let remote: PlayerRow[] = [];
+      /** Seconds until the replay bar's clock is next told the time. */
+      let replayClock = 0;
 
       const frame = (now: number) => {
         raf = requestAnimationFrame(frame);
@@ -2142,6 +2232,47 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         const shots = shotsRef.current;
         const online = session != null && session.state.status === 'joined';
         const alive = !online || (session?.state.you?.alive ?? true);
+        // A demo being watched: the world is posed from its frames, nothing is
+        // simulated, and nothing is sent.
+        const replaying = isReplayingRef.current;
+        let replayRows: PlayerRow[] | null = null;
+        if (replaying) {
+          const demo = demoPlayerRef.current;
+          demo.update(dt);
+          const sample = demo.sampleCurrentFrame();
+          const pov =
+            sample.players.find((p) => p.id === demo.spectatorTargetId) ?? sample.players[0];
+          const cam = demo.freecam;
+          if (cam.active) {
+            const keys = keysRef.current;
+            cam.update(dt, {
+              forward: (keys.has('forward') ? 1 : 0) - (keys.has('back') ? 1 : 0),
+              strafe: (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0),
+              vertical: (keys.has('jump') ? 1 : 0) - (crouchRef.current ? 1 : 0),
+              boost: keys.has('sprint'),
+            });
+          } else if (pov) {
+            // Behind the recorded eyes: the player is the camera's anchor, so
+            // posing it is all the camera code needs.
+            player.x = pov.x;
+            player.y = pov.y;
+            player.z = pov.z;
+            player.yaw = pov.yaw;
+            player.pitch = pov.pitch;
+            player.crouch = pov.crouch ?? 0;
+          }
+          // Through the freecam every body is drawn, the recorder's included;
+          // behind its eyes, everybody else.
+          replayRows = sample.players
+            .filter((p) => cam.active || p !== pov)
+            .map(rowFromSnapshot);
+          replayClock -= dt;
+          if (replayClock <= 0) {
+            replayClock = 0.1;
+            setReplayTime(demo.currentTimeMs);
+            setReplayPlaying(demo.isPlaying);
+          }
+        }
 
         let moving = false;
         let strafe = 0;
@@ -2149,7 +2280,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         let fired = false;
         let altFired = false;
 
-        if (world) {
+        if (world && !replaying) {
           const keys = keysRef.current;
           // A dead player's input is discarded server-side, so predicting
           // movement from it would only be a correction waiting to happen.
@@ -2488,9 +2619,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // `PlayerRow`s so they go through the same avatar pool as everybody
           // else — a target that rendered differently from a player would be
           // practice against something the match does not contain.
-          remote = online
-            ? session.snapshots.sample(now, session.state.playerId)
-            : (rangeRef.current?.rows() ?? []);
+          remote = replayRows
+            ? replayRows
+            : online
+              ? session.snapshots.sample(now, session.state.playerId)
+              : (rangeRef.current?.rows() ?? []);
           // Set before the sync rather than in an effect of its own: the pool
           // builds and frees its wireframes inside `sync`, so the flag has to be
           // in force by the time it runs or the toggle lands a frame late.
@@ -2500,6 +2633,44 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           avatars.setLooks(online ? session.state.cosmetics : {});
           avatars.sync(remote, dt);
           remoteRowsRef.current = remote;
+          // One frame per `1 / tickRate`: the view from here, and every body the
+          // pool just drew. Not while watching a demo — that would record it.
+          const recorder = recorderRef.current;
+          if (!replaying && recorder.due()) {
+            const you = online ? session.state.you : null;
+            recorder.recordFrame([
+              {
+                id: online && session.state.playerId ? session.state.playerId : 'you',
+                name: playerNameRef.current || 'Player',
+                team:
+                  (online
+                    ? session.state.peers.find((p) => p.id === session.state.playerId)?.team
+                    : undefined) ?? 0,
+                x: player.x,
+                y: player.y,
+                z: player.z,
+                yaw: player.yaw,
+                pitch: player.pitch,
+                weapon: shots?.slot ?? 0,
+                hp: you?.hp ?? 100,
+                crouch: player.crouch,
+                alive,
+              },
+              ...remote.map(snapshotFromRow),
+            ]);
+            // Kills since the last frame, for the bar's frag bookmarks.
+            for (const note of session.state.killfeed) {
+              if (note.id <= recordedKillRef.current) continue;
+              recordedKillRef.current = note.id;
+              recorder.recordEvent({
+                type: 'kill',
+                killer: note.killerName,
+                victim: note.victimName,
+                weapon: note.weaponId,
+                head: note.isHeadshot,
+              });
+            }
+          }
           // Straight off the newest snapshot rather than the interpolated
           // sample: a grenade is not a player, it has no prediction to reconcile
           // with, and `NadePool` does its own smoothing toward the last position
@@ -2738,6 +2909,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             0,
             'YXZ',
           );
+          if (replaying && demoPlayerRef.current.freecam.active) {
+            // The freecam is its own eye: cube (x, y, height) → three (x, height, y).
+            const cam = demoPlayerRef.current.freecam;
+            const view = viewFromFreecam(cam);
+            camera.position.set(cam.x, cam.z, cam.y);
+            camera.rotation.set(view.pitch, -view.yaw - Math.PI / 2, view.roll, 'YXZ');
+            if (Math.abs(camera.fov - cam.fov) > 0.01) {
+              camera.fov = cam.fov;
+              camera.updateProjectionMatrix();
+            }
+          }
           // The weapon rides the camera, so it is updated with it: what it needs
           // is what the camera just did (angles) and what the player just did
           if (fired) {
@@ -2902,7 +3084,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             yaw: player.yaw,
             pitch: player.pitch,
             strafe,
-            visible: alive,
+            // The drone is nobody's eyes, so nobody's gun is in front of it.
+            visible: alive && !(replaying && demoPlayerRef.current.freecam.active),
             sinceLanded: Math.max(0, player.t - player.landedAt),
             ads: holdingNade ? 0 : scopedRef.current > 0 ? 1 : 0,
             pinPulled: holdingNade && (nades?.pinPulled ?? false),
@@ -3303,6 +3486,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   }, [grabInput]);
 
   const onCanvasClick = useCallback(() => {
+    if (isReplayingRef.current && !demoPlayerRef.current.freecam.active) return;
     if (menuOpenRef.current) {
       resumeGame();
       return;
@@ -3531,10 +3715,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       }
 
       // Replay Drone Freecam toggle (F3 or C during replay)
-      if (e.code === 'F3' || (isReplayingRef.current && e.code === 'KeyC')) {
+      if (isReplayingRef.current && (e.code === 'F3' || e.code === 'KeyC')) {
         e.preventDefault();
-        demoPlayerRef.current.freecam.active = !demoPlayerRef.current.freecam.active;
-        setFreecamActive(demoPlayerRef.current.freecam.active);
+        toggleFreecamRef.current();
         return;
       }
 
@@ -4223,6 +4406,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * pointer back, because the menu is a DOM overlay and needs a real mouse.
    */
   const exitToMenu = useCallback(() => {
+    // Watching a demo ends here too, whichever way out was taken: the bar's
+    // Close, or Leave in the pause menu Escape opens over it.
+    const demo = demoPlayerRef.current;
+    demo.pause();
+    demo.freecam.active = false;
+    setFreecamActive(false);
+    setIsReplaying(false);
     sessionRef.current?.leave();
     shotsRef.current?.reset();
     keysRef.current.clear();
@@ -4235,6 +4425,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     if (!standalone) unlockEscape();
     props.onExit?.();
   }, [releaseCapture, props.onExit, standalone]);
+
 
   // If launched with an initial room (e.g. from an invite link in assault-web),
   // join it automatically once the map geometry has loaded.
@@ -4824,7 +5015,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             two full-bleed layers would fight — this one is `pointerEvents: none`
             by design, so it would sit invisibly over the sign-in form's buttons
             while still dimming them. */}
-        {phase === 'playing' && !locked && !menuOpen && (
+        {/* Not while watching a demo: its mouse is free on purpose, for the bar. */}
+        {phase === 'playing' && !locked && !menuOpen && !isReplaying && (
           <div
             onClick={onCanvasClick}
             style={{
@@ -4929,7 +5121,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }}
             range={
               // Offline and not on the way into a room: the training range.
-              net.status !== 'idle'
+              net.status !== 'idle' || isReplaying
                 ? undefined
                 : {
                     drills,
@@ -4957,10 +5149,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                     recordingSeconds,
                     onRecord: startRecording,
                     onStopRecording: stopAndDownloadRecording,
-                    onReplayFile: (file) => {
-                      loadReplayFile(file);
-                      resumeGame();
-                    },
+                    onReplayFile: loadReplayFile,
                     cleanView,
                     onToggleCleanView: () => setCleanView((cv) => !cv),
                   }
@@ -5026,17 +5215,22 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
         {/* The aim drill: its clock while it runs, its score once it ends. Train
             only — online there is no range, and `drillStatus` stays null. */}
-        {phase === 'playing' && !online && drillStatus && drillStatus.phase !== 'done' && (
+        {phase === 'playing' &&
+          !online &&
+          !isReplaying &&
+          drillStatus &&
+          drillStatus.phase !== 'done' && (
           <DrillClock status={drillStatus} />
         )}
         {phase === 'playing' &&
           net.status === 'idle' &&
+          !isReplaying &&
           !drillStatus &&
           !menuOpen &&
           !nativeRunning && (
           <RangeHint drill={drills.find((d) => d.id === rangeDrill)?.name ?? null} />
         )}
-        {phase === 'playing' && !online && drillStatus?.phase === 'done' && (
+        {phase === 'playing' && !online && !isReplaying && drillStatus?.phase === 'done' && (
           <DrillCard
             status={drillStatus}
             best={drillBest}
@@ -5346,190 +5540,37 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         )}
 
         {isReplaying && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 12,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              background: 'rgba(20, 20, 25, 0.92)',
-              border: '1px solid rgba(255, 255, 255, 0.18)',
-              borderRadius: '8px',
-              padding: '8px 14px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '6px',
-              width: '90%',
-              maxWidth: '720px',
-              backdropFilter: 'blur(8px)',
-              zIndex: 100,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          <ReplayBar
+            map={mapName}
+            playing={replayPlaying}
+            timeMs={replayTime}
+            durationMs={replayDuration}
+            speed={replaySpeed}
+            bookmarks={replayBookmarks}
+            freecam={freecamActive}
+            onToggle={() => {
+              demoPlayerRef.current.togglePlay();
+              setReplayPlaying(demoPlayerRef.current.isPlaying);
+              setReplayTime(demoPlayerRef.current.currentTimeMs);
             }}
-          >
-            {/* Top row: Play/Pause, Scrubber bar, Timestamps */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                onClick={() => {
-                  demoPlayerRef.current.togglePlay();
-                  setReplayPlaying(demoPlayerRef.current.isPlaying);
-                }}
-                style={{
-                  background: 'rgba(35, 134, 54, 1)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  padding: '4px 10px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                {replayPlaying ? '⏸ Pause' : '▶ Play'}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(1, replayDuration)}
-                value={replayTime}
-                onChange={(e) => {
-                  const t = Number(e.target.value);
-                  demoPlayerRef.current.seek(t);
-                  setReplayTime(t);
-                }}
-                style={{
-                  flex: 1,
-                  cursor: 'pointer',
-                  accentColor: 'var(--accent, rgba(88, 166, 255, 1))',
-                }}
-              />
-              <span
-                style={{
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem',
-                  color: 'rgba(204, 204, 204, 1)',
-                  minWidth: '85px',
-                  textAlign: 'right',
-                }}
-              >
-                {(replayTime / 1000).toFixed(1)}s / {(replayDuration / 1000).toFixed(1)}s
-              </span>
-            </div>
-
-            {/* Bookmarks bar */}
-            {replayBookmarks.length > 0 && (
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '6px',
-                  overflowX: 'auto',
-                  paddingBottom: '2px',
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: '0.7rem',
-                    color: 'rgba(139, 148, 158, 1)',
-                    alignSelf: 'center',
-                  }}
-                >
-                  Frags:
-                </span>
-                {replayBookmarks.map((bm, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      demoPlayerRef.current.seekToBookmark(i);
-                      setReplayTime(demoPlayerRef.current.currentTimeMs);
-                    }}
-                    style={{
-                      fontSize: '0.65rem',
-                      padding: '2px 6px',
-                      borderRadius: '3px',
-                      border: '1px solid rgba(48, 54, 61, 1)',
-                      background:
-                        bm.type === 'streak'
-                          ? 'rgba(137, 87, 229, 1)'
-                          : bm.type === 'headshot'
-                            ? 'rgba(218, 54, 51, 1)'
-                            : 'rgba(210, 153, 34, 1)',
-                      color: 'white',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title={`Jump to ${bm.label} (-2.0s lead-in)`}
-                  >
-                    🎯 {bm.label} @ {(bm.timestamp / 1000).toFixed(1)}s
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Bottom row: Speeds, Drone Freecam, Close */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                fontSize: '0.75rem',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ color: 'rgba(139, 148, 158, 1)' }}>Speed:</span>
-                {[0.1, 0.25, 0.5, 1.0, 2.0, 4.0].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => {
-                      demoPlayerRef.current.setSpeed(s);
-                      setReplaySpeed(s);
-                    }}
-                    style={{
-                      padding: '1px 5px',
-                      borderRadius: '3px',
-                      border: '1px solid rgba(48, 54, 61, 1)',
-                      background:
-                        replaySpeed === s ? 'rgba(31, 111, 235, 1)' : 'rgba(33, 38, 45, 1)',
-                      color: 'white',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {s}x
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <button
-                  onClick={() => {
-                    demoPlayerRef.current.freecam.active = !demoPlayerRef.current.freecam.active;
-                    setFreecamActive(demoPlayerRef.current.freecam.active);
-                  }}
-                  style={{
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid rgba(48, 54, 61, 1)',
-                    background: freecamActive ? 'rgba(35, 134, 54, 1)' : 'rgba(33, 38, 45, 1)',
-                    color: 'white',
-                    cursor: 'pointer',
-                  }}
-                  title="Toggle 6-DOF Drone Freecam (F3 / C). Move: WASD, Space/Ctrl, Roll: Q/E, Zoom: Wheel"
-                >
-                  🚁 {freecamActive ? 'Drone Freecam: ON' : 'Drone Freecam (F3)'}
-                </button>
-                <button
-                  onClick={() => setIsReplaying(false)}
-                  style={{
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid rgba(68, 68, 68, 1)',
-                    background: 'rgba(48, 54, 61, 1)',
-                    color: 'white',
-                    cursor: 'pointer',
-                  }}
-                >
-                  ✕ Close
-                </button>
-              </div>
-            </div>
-          </div>
+            onSeek={(t) => {
+              demoPlayerRef.current.seek(t);
+              setReplayTime(t);
+            }}
+            onSpeed={(sp) => {
+              demoPlayerRef.current.setSpeed(sp);
+              setReplaySpeed(sp);
+            }}
+            onBookmark={(i) => {
+              demoPlayerRef.current.seekToBookmark(i);
+              setReplayTime(demoPlayerRef.current.currentTimeMs);
+            }}
+            onFreecam={toggleFreecam}
+            onClose={exitToMenu}
+          />
+        )}
+        {replayError && (
+          <ReplayNotice message={replayError} onDismiss={() => setReplayError('')} />
         )}
       </div>
     </div>

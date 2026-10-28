@@ -7,20 +7,34 @@
  * 3. 6-DOF Cinematic Drone Freecam with camera roll (Q/E), FOV zoom lens (15° to 120°), and inertia smoothing.
  * 4. Catmull-Rom spline dolly keyframe interpolation for montage cinematic camera sweeps.
  * 5. Clean view toggle (Ctrl+H) for zero-HUD video capture.
+ *
+ * The panel feeds the recorder once per frame (`due` → `recordFrame`, the
+ * player's own view plus every body the avatar pool drew) and, while a demo
+ * plays, draws `sampleCurrentFrame` through the same pool. Neither half was
+ * wired at first: every saved demo had `"frames": []`, and loading one showed a
+ * bar over a world nothing moved in.
+ *
+ * Angles in a frame are the wire's: radians, yaw 0 = +x (`PlayerRow`). The
+ * freecam keeps its own degrees, yaw 0 = +y; `freecamFromView` converts.
  */
+import type { PlayerRow } from './net';
 
 export interface DemoHeader {
   magic: 'HADEMO';
   version: 1;
   map: string;
   recordedAt: number;
+  /** Frames per second the recorder keeps; playback interpolates between them. */
   tickRate: number;
-  playerNames: Record<number, string>;
+  playerNames: Record<string, string>;
   durationMs: number;
+  /** The recorder's own id in `frames`: whose eyes playback starts behind. */
+  pov?: string;
 }
 
 export interface DemoPlayerSnapshot {
-  id: number;
+  /** The wire's player id. Numbers in a hand-written file are read as strings. */
+  id: string;
   name: string;
   team: number;
   x: number;
@@ -34,14 +48,19 @@ export interface DemoPlayerSnapshot {
   crouching?: boolean;
   sprinting?: boolean;
   sliding?: boolean;
+  /** Crouch animation, 0 standing to 1 crouched (`PlayerRow.crouch`). */
+  crouch?: number;
+  alive?: boolean;
 }
 
 export interface DemoEvent {
   tick: number;
   timestamp: number;
   type: 'kill' | 'shot' | 'hit' | 'grenade' | 'streak';
-  killerId?: number;
-  victimId?: number;
+  killerId?: string;
+  victimId?: string;
+  killer?: string;
+  victim?: string;
   weapon?: string;
   head?: boolean;
   nutshot?: boolean;
@@ -55,7 +74,7 @@ export interface DemoBookmark {
   timestamp: number;
   label: string;
   type: 'kill' | 'streak' | 'nutshot' | 'headshot';
-  targetPlayerId?: number;
+  targetPlayerId?: string;
 }
 
 export interface DemoFrame {
@@ -101,6 +120,118 @@ export function interpolateAngle(a0: number, a1: number, t: number): number {
   if (diff > 180) diff -= 360;
   if (diff < -180) diff += 360;
   return a0 + diff * t;
+}
+
+/** As `interpolateAngle`, in radians: the shortest way round. */
+export function interpolateRadians(a0: number, a1: number, t: number): number {
+  const turn = Math.PI * 2;
+  let diff = (a1 - a0) % turn;
+  if (diff > Math.PI) diff -= turn;
+  if (diff < -Math.PI) diff += turn;
+  return a0 + diff * t;
+}
+
+/**
+ * The freecam's angles for a view given the wire's way (radians, yaw 0 = +x),
+ * so switching to it starts exactly where the camera already is. The freecam's
+ * forward is `(-sin a, cos a)` and the player's `(cos y, sin y)`: `a = y - 90°`.
+ */
+export function freecamFromView(yaw: number, pitch: number): { yaw: number; pitch: number } {
+  return { yaw: ((yaw - Math.PI / 2) * 180) / Math.PI, pitch: (pitch * 180) / Math.PI };
+}
+
+/** The freecam's view back in the wire's terms, for the camera code. */
+export function viewFromFreecam(cam: DroneFreecam): { yaw: number; pitch: number; roll: number } {
+  return {
+    yaw: (cam.yaw * Math.PI) / 180 + Math.PI / 2,
+    pitch: (cam.pitch * Math.PI) / 180,
+    roll: (cam.roll * Math.PI) / 180,
+  };
+}
+
+/** A body the avatar pool drew, as a frame keeps it. */
+export function snapshotFromRow(row: PlayerRow): DemoPlayerSnapshot {
+  return {
+    id: row.id,
+    name: row.name,
+    team: row.team,
+    x: row.x,
+    y: row.y,
+    z: row.z,
+    yaw: row.yaw,
+    pitch: row.pitch,
+    weapon: row.weapon,
+    hp: row.hp,
+    crouch: row.crouch,
+    alive: row.alive,
+  };
+}
+
+/** A frame's body, back in the shape the avatar pool draws. */
+export function rowFromSnapshot(s: DemoPlayerSnapshot): PlayerRow {
+  return {
+    id: s.id,
+    name: s.name,
+    team: s.team,
+    x: s.x,
+    y: s.y,
+    z: s.z,
+    yaw: s.yaw,
+    pitch: s.pitch,
+    ground: true,
+    stale: false,
+    rtt: 0,
+    hp: s.hp,
+    alive: s.alive ?? s.hp > 0,
+    weapon: s.weapon,
+    kills: 0,
+    deaths: 0,
+    bot: false,
+    crouch: s.crouch ?? (s.crouching ? 1 : 0),
+  };
+}
+
+/** Why a file is not a demo this build can play, in words for the player. */
+export class DemoError extends Error {}
+
+/**
+ * A `.hademo` file's text, checked and normalised: ids as strings, and refused
+ * with a reason rather than loaded into a player that will draw nothing. An
+ * empty recording is the case that matters — it is what every demo saved before
+ * the recorder was wired contains.
+ */
+export function parseDemo(text: string): DemoData {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new DemoError('This file is not a demo: it is not JSON.');
+  }
+  const data = raw as Partial<DemoData> | null;
+  if (!data || !data.header || data.header.magic !== 'HADEMO') {
+    throw new DemoError('This file is not a .hademo demo.');
+  }
+  if (!Array.isArray(data.frames) || data.frames.length === 0) {
+    throw new DemoError(
+      'This demo has no frames, so there is nothing to play. Demos saved before ' +
+        'recording was fixed are all empty; record a new one.',
+    );
+  }
+  const frames = data.frames.map((f) => ({
+    ...f,
+    players: (f.players ?? []).map((p) => ({ ...p, id: String(p.id) })),
+    events: f.events ?? [],
+  }));
+  const last = frames[frames.length - 1];
+  return {
+    header: {
+      ...data.header,
+      pov: data.header.pov !== undefined ? String(data.header.pov) : undefined,
+      durationMs: Math.max(data.header.durationMs || 0, last.timestamp),
+    },
+    frames,
+    bookmarks: Array.isArray(data.bookmarks) ? data.bookmarks : [],
+  };
 }
 
 /**
@@ -276,9 +407,11 @@ export class DemoRecorder {
   private currentTick = 0;
   private startTime = 0;
   private pendingEvents: DemoEvent[] = [];
+  private lastFrameAt = -Infinity;
 
-  public start(mapName: string, playerNames: Record<number, string> = {}): void {
+  public start(mapName: string, playerNames: Record<string, string> = {}, pov?: string): void {
     this.active = true;
+    this.lastFrameAt = -Infinity;
     this.currentTick = 0;
     this.startTime = performance.now();
     this.frames = [];
@@ -289,10 +422,19 @@ export class DemoRecorder {
       version: 1,
       map: mapName,
       recordedAt: Date.now(),
-      tickRate: 60,
+      // Thirty, not the display's rate: playback interpolates between frames,
+      // and a minute at sixty with ten bodies is a file nobody wants to share.
+      tickRate: 30,
       playerNames: { ...playerNames },
       durationMs: 0,
+      pov,
     };
+  }
+
+  /** Whether a frame is owed: one per `1 / tickRate`, whatever the frame rate. */
+  public due(): boolean {
+    if (!this.active || !this.header) return false;
+    return performance.now() - this.lastFrameAt >= 1000 / this.header.tickRate;
   }
 
   public isRecording(): boolean {
@@ -334,7 +476,8 @@ export class DemoRecorder {
 
   public recordFrame(players: DemoPlayerSnapshot[]): void {
     if (!this.active) return;
-    const now = performance.now() - this.startTime;
+    this.lastFrameAt = performance.now();
+    const now = this.lastFrameAt - this.startTime;
     this.frames.push({
       tick: this.currentTick++,
       timestamp: now,
@@ -373,15 +516,18 @@ export class DemoPlayer {
   public cleanView = false;
   public freecam = new DroneFreecam();
   public dolly = new DollyPath();
-  public spectatorTargetId: number | null = null;
+  public spectatorTargetId: string | null = null;
 
   public load(demo: DemoData): void {
     this.demo = demo;
     this.currentTimeMs = 0;
     this.isPlaying = false;
-    if (demo.frames.length > 0 && demo.frames[0].players.length > 0) {
-      this.spectatorTargetId = demo.frames[0].players[0].id;
-    }
+    this.spectatorTargetId = demo.header.pov ?? demo.frames[0]?.players[0]?.id ?? null;
+  }
+
+  /** At the end and stopped: Play then starts again from the top. */
+  public get ended(): boolean {
+    return !!this.demo && this.currentTimeMs >= this.demo.header.durationMs;
   }
 
   public play(): void {
@@ -393,6 +539,7 @@ export class DemoPlayer {
   }
 
   public togglePlay(): void {
+    if (!this.isPlaying && this.ended) this.currentTimeMs = 0;
     this.isPlaying = !this.isPlaying;
   }
 
@@ -491,14 +638,16 @@ export class DemoPlayer {
         x: p0.x + (p1.x - p0.x) * alpha,
         y: p0.y + (p1.y - p0.y) * alpha,
         z: p0.z + (p1.z - p0.z) * alpha,
-        yaw: interpolateAngle(p0.yaw, p1.yaw, alpha),
-        pitch: interpolateAngle(p0.pitch, p1.pitch, alpha),
-        roll: interpolateAngle(p0.roll ?? 0, p1.roll ?? 0, alpha),
+        yaw: interpolateRadians(p0.yaw, p1.yaw, alpha),
+        pitch: interpolateRadians(p0.pitch, p1.pitch, alpha),
+        roll: interpolateRadians(p0.roll ?? 0, p1.roll ?? 0, alpha),
         weapon: alpha < 0.5 ? p0.weapon : p1.weapon,
         hp: alpha < 0.5 ? p0.hp : p1.hp,
         crouching: alpha < 0.5 ? p0.crouching : p1.crouching,
         sprinting: alpha < 0.5 ? p0.sprinting : p1.sprinting,
         sliding: alpha < 0.5 ? p0.sliding : p1.sliding,
+        crouch: (p0.crouch ?? 0) + ((p1.crouch ?? 0) - (p0.crouch ?? 0)) * alpha,
+        alive: alpha < 0.5 ? p0.alive : p1.alive,
       });
     }
 
