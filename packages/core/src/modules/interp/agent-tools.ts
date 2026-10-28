@@ -3,12 +3,14 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Six verbs, all read-only:
+ * group (the `interp` roster agent preloads it). Seven verbs; all but `interp.steer` read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
  * - `interp.heads` — a trace's attention heads, scored and ranked.
  * - `interp.features` — a trace's SAE features, with the reconstruction check and labels.
+ * - `interp.steer` — push a feature into the model and compare generations (runs the
+ *   model and records two traces, so it is a side effect the permission engine sees).
  * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
  * - `interp.goto` — show a section, and move the shared model locus.
  *
@@ -42,6 +44,7 @@ import {
   refreshFeatureTraces,
 } from './features/state';
 import { libraryStore, refreshLibrary } from './library/state';
+import { run as runSteer, setDraft as setSteerDraft, steerStore } from './steer/state';
 import { setSubSection } from './SubSections';
 import { describeLayer, primeDigest, suiteDigest } from './suite-state';
 
@@ -226,6 +229,78 @@ export const interpAgentTools: AgentToolDecl[] = [
               features: at.top.map((f) => describe(f.index, f.act)),
             }
           : undefined,
+      };
+    },
+  },
+  {
+    name: 'interp.steer',
+    description:
+      "Steer the traced GGUF with an SAE feature: add its direction at the SAE's layer (a " +
+      'llama.cpp control vector) and generate greedily with and without it. strength is in ' +
+      "units of the feature's own peak on the prompt: 1 is as strong as it fires; coherent " +
+      'text survives about -1.5..1.5, and negative suppresses. Returns whether the feature ' +
+      'moved the way it was pushed (report this first), how the first prediction shifted ' +
+      '(gained and lost tokens, KL) and both texts. Runs the model and records two traces. ' +
+      'Defaults to the feature, SAE and trace selected in Features.',
+    sideEffect: true,
+    specifierTemplate: 'F{feature} x{strength}',
+    params: {
+      type: 'object',
+      properties: {
+        feature: { type: 'integer', description: 'Feature index (default: the selected one).' },
+        strength: { type: 'number', description: "Multiple of the feature's peak (default 1)." },
+        prompt: { type: 'string', description: "Prompt to steer (default: the trace's)." },
+        traceId: { type: 'string', description: 'Trace whose model to use (default: Features).' },
+        maxTokens: { type: 'integer', description: 'Tokens to generate (default 32).' },
+      },
+    },
+    handler: async (args) => {
+      const f = featuresStore.get();
+      const r = f.result;
+      const draft = steerStore.get().draft;
+      const feature =
+        typeof args.feature === 'number' ? args.feature : (f.feature ?? draft.feature);
+      const traceId =
+        typeof args.traceId === 'string' && args.traceId
+          ? args.traceId
+          : draft.traceId || r?.traceId || '';
+      const artifactId = draft.artifactId || r?.artifactId || '';
+      if (feature === null || !traceId || !artifactId) {
+        return { error: 'Nothing to steer: open a trace with an SAE in Features first.' };
+      }
+      setSteerDraft({
+        feature,
+        traceId,
+        artifactId,
+        strength: typeof args.strength === 'number' ? args.strength : 1,
+        prompt:
+          typeof args.prompt === 'string' && args.prompt
+            ? args.prompt
+            : draft.prompt || (f.traces.find((t) => t.traceId === traceId)?.prompt ?? ''),
+        maxTokens: typeof args.maxTokens === 'number' ? args.maxTokens : draft.maxTokens,
+        label: labelOf(f.cards, feature) ?? '',
+      });
+      const out = await runSteer();
+      if (!out) return { error: steerStore.get().error ?? 'The run did not finish.' };
+      const nt = out.nextToken;
+      return {
+        feature: out.feature,
+        layer: out.layer,
+        strength: out.strength,
+        scale: out.scale,
+        arrived: out.arrived,
+        firstPrediction: nt
+          ? {
+              default: `${nt.defaultTop.token} ${(nt.defaultTop.default * 100).toFixed(1)}%`,
+              steered: `${nt.steeredTop.token} ${(nt.steeredTop.steered * 100).toFixed(1)}%`,
+              kl: nt.kl,
+              gained: nt.gained.slice(0, 5).map((m) => m.token),
+              lost: nt.lost.slice(0, 5).map((m) => m.token),
+            }
+          : null,
+        defaultText: out.default.text,
+        steeredText: out.steered.text,
+        traces: { default: out.defaultTraceId, steered: out.steeredTraceId },
       };
     },
   },

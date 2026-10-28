@@ -23,6 +23,7 @@ export const SUITE_SECTIONS = {
   lens: 'lens',
   heads: 'heads',
   features: 'features',
+  steer: 'steer',
   library: 'library',
 } as const;
 

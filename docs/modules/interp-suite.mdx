@@ -11,7 +11,7 @@ window's lens lab used to be six panes that did not know about each other. They 
 one subject — the same model read at the prompt, the weights and the activations —
 so they are one pane now.
 
-**Status: Phase 6 of the suite plan** — frontend in
+**Status: Phase 7 of the suite plan** — frontend in
 `packages/core/src/modules/interp/`.
 
 ## The rail
@@ -29,6 +29,7 @@ so they are one pane now.
 | Activations | **Lens** | the trace lens, plus the [WebML](./webml.mdx) lens lab (Reply / Guess / Compare) as sub-tabs |
 | Activations | **Heads** | every attention head of a trace, scored — see below |
 | Features | **Features** | SAE features of a trace, labelled and checked — see below |
+| Features | **Steer** | push a feature into the model; default and steered side by side — see below |
 | — | **Library** | SAEs, transcoders and lenses; the GPU worker; Neuronpedia lookups — see below |
 
 Sections and Home's cards both come from `tools.ts`, so the rail and the map cannot
@@ -183,6 +184,69 @@ get no labels rather than someone else's (`catalog.neuronpedia_source`).
 The fit check runs before encoding, and an `incompatible` SAE is refused rather than
 encoded.
 
+## Steer
+
+Add a feature's direction to the residual stream and read what the model does
+with it (`backend/modules/interp/steer.py`).
+
+**How.** A feature's decoder row is a direction. The tracer adds it, scaled, at the
+SAE's layer through llama.cpp's control-vector API (`llama_set_adapter_cvec`).
+llama.cpp adds layer `il`'s row right after block `il`, before `l_out` is named.
+So a steered trace's `l_out` includes the push, and the Features section, reading
+that trace, shows the feature lit up. The control-vector buffer starts at layer 1,
+which puts layer `il` at offset `(il − 1) · n_embd`; a test pins that offset.
+
+**Two traces per run.**
+
+- **The default** is a plain generation of the prompt.
+- **The steered run** is a fork of the default on the same prompt tokens:
+  `derivedFrom` names the default, and `edits: [{kind: "steer", feature, layer,
+  strength, scale}]` records the push.
+
+Generation is greedy, so any difference is the vector's and not the sampler's.
+Trying another strength on the same prompt reuses the default run.
+
+**Strength is in the feature's own units.** The scale added is `strength × peak`,
+where `peak` is the feature's strongest activation on the prompt. When the
+feature does not fire there, `peak` falls back to Neuronpedia's maximum. A raw
+scale would mean nothing across features: Gemma 3 1B's residual norm at layer 13
+is about 6,000, and a feature's peak is in the hundreds.
+
+Measured on Gemma 3 1B IT Q8_0, with F90 ("cities states regions") on "My
+favourite thing to do on a weekend is":
+
+| Strength | Steered continuation |
+| --- | --- |
+| default | "to curl up with a good book and a cup of tea." |
+| 0.5× | "to spend time with my dog, Buster…" |
+| 1× | "to visit the botanical gardens. It's a beautiful place…" |
+| 1.5× | "to visit.! It's a place that has been on my mind…" |
+| 2× and up | punctuation |
+
+The slider therefore marks anything past ±1.5 as past coherent.
+
+**Did it take?** Three readings, in the order they can go wrong:
+
+1. **Arrived.** The feature's mean activation on the prompt, default vs steered,
+   judged against the sign of the push. A push the SAE does not read back as this
+   feature is not steering with it, whatever the text does.
+2. **First prediction.** Each run's top token, the tokens that gained and lost the
+   most log-probability (among tokens above 10⁻⁴ in either run), and the KL.
+   This is the most sensitive reading. The France feature (F13769) at −1× on "The
+   Eiffel Tower is in the capital of" moved " France" from 99.6% to 47%, and
+   " Japan", " Germany" and " Tokyo" gained, while the greedy text still said France.
+3. **Text.** Both generations side by side, shaded from the first token where they
+   differ.
+
+Two findings shaped the design:
+
+- **BOS needs no special handling.** llama.cpp adds the vector at every position,
+  BOS included. A direct test decoding BOS alone before setting the vector produced
+  the same text at 1×, and the same collapse at 2× and 4×.
+- **Steering does not touch the chat.** It runs in the tracer only. The agent's
+  `interp.steer` declares a side effect, because it runs the model and writes two
+  traces, so the permission engine sees it.
+
 ## Library
 
 What the suite's later tools — features, steering, Jacobian lenses, circuits — stand
@@ -322,7 +386,7 @@ visible; it is pinned under the per-pane workspace-context budget by a test.
 | Piece | Where |
 | --- | --- |
 | **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
-| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.steer` (steer + compare; a side effect), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
 | **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
 | **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
 | **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
@@ -378,4 +442,5 @@ The llama.cpp pane keeps only Server and Models.
 | Endpoints | `/api/interp/library/*` | Catalog, choices, download (ndjson, `confirmBytes`), artifacts with fit, delete |
 | Endpoints | `/api/interp/worker*` | Env install, start / stop, status, ops (`ping` `status` `load` `unload` `generate`) |
 | Endpoint | `/api/interp/neuronpedia/feature` | One feature card, cached |
+| Endpoint | `/api/interp/steer` | Default + steered generations (ndjson), then arrived / next-token / texts |
 | Endpoints | `/api/interp/features/*` | Traces with fitting SAEs, SAEs per trace, encode, one feature's values, label check |

@@ -14,6 +14,7 @@ One window, a rail of tools, all reading **the same model** and following **one 
 | Activations | `lens`      | Each layer's residual read as words (tabs `trace` `reply` `guess` `compare`)            |
 | Activations | `heads`     | Every attention head of a trace, scored: induction, previous-token, duplicate, sink     |
 | Features    | `features`  | SAE features of a trace: per token, labelled, with a reconstruction and a label check   |
+| Features    | `steer`     | Push a feature into the model; default and steered generations side by side            |
 | —           | `library`   | SAEs, transcoders and lenses: installed, what they fit, the catalog; the GPU worker     |
 
 ## Tools
@@ -22,6 +23,7 @@ One window, a rail of tools, all reading **the same model** and following **one 
 - `interp.attention {from, to}` — per-layer rows: `L17 sliding, window 512, 8q/1kv × 256, KV from L13, (metadata)`. Use for "which layers…", "why is the cache small", "what changes at layer N".
 - `interp.heads {traceId?, metric?, top?}` — a trace's heads ranked by a score, each with its layer kind when the trace is of the loaded model. Induction and duplicate are `null` on a trace that repeats nothing: say they are not measurable and point the user at **Run induction probe** in the Heads section (it records a random word sequence, twice). Never read `null` as zero.
 - `interp.features {traceId?, position?, top?}` — what an SAE reads in a trace. **Report its `check` first**: `verified` (FVU at or under the threshold) or `drifted` (the SAE explains too little of these activations; every feature below is suspect), with L0 beside the L0 the SAE was trained to. Then the strongest features with their Neuronpedia labels. A feature marked `firstToken` peaks on the token right after BOS; its label was drawn from other positions, so say so. Suggest **Check the label** in the section when a reading matters: it traces Neuronpedia's own example through this GGUF and compares.
+- `interp.steer {feature?, strength?, prompt?, traceId?, maxTokens?}` — add a feature's direction at its SAE's layer and generate with and without it (greedy). `strength` is a multiple of the feature's own peak on the prompt: **1 is the natural strength; coherent text survives roughly −1.5..1.5**, beyond that Gemma 3 1B collapses into punctuation. Negative suppresses. **Report `arrived` first** — whether the feature itself moved the way it was pushed — then the first prediction's shift (gained and lost tokens, KL), then the texts. It runs the model and records two traces, so it asks permission like any acting tool; do not call it to answer a question the Features section already answers.
 - `interp.library` — installed artifacts with their stated facts (layer, input width, dictionary width, and where each was read) and a fit verdict per model; the disk budget; the catalog; the GPU worker (state, held model, VRAM). It never downloads: to get something, name the catalog entry and send the user to the Library section, where they confirm its size.
 - `interp.goto {section, tab?, layer?, position?}` — show it. Moving the locus moves every tool.
 - For trace contents (what the model was disposed to say at a layer), use the `lens` group.
@@ -52,6 +54,13 @@ Worker replies are `ran`, `failed` (the traceback is the answer — quote the la
 - Activations are on the SAE's own scale: compare a feature with itself across tokens, not with other features.
 - The **label check** is the strongest evidence that a label applies here: Neuronpedia's example, traced through this quantized GGUF, should activate the feature about as much (ratio near 1). Measured on Gemma 3 1B IT Q8_0 with Scope 2 L13 16k: 7 of 8 features within ~1%.
 - BOS (position 0) is left out of the reconstruction check and the rankings: its residual is the attention sink, ~9× the norm of other tokens.
+
+## Reading a steered run
+
+- **Steering is evidence about what a feature does, not proof.** A push of 1× that turns a weekend into "the botanical gardens" says the feature carries "places to visit"; a push that only breaks the text says the strength was wrong.
+- **arrived** is the control: the SAE reads the steered residual back. `did_not_arrive` means the push was absorbed or misplaced — do not interpret the text. `nothing_to_suppress` means a negative push on a feature that was not active.
+- **The first prediction is the most sensitive reading.** Measured: the France feature at −1× on "The Eiffel Tower is in the capital of" moved " France" 99.6% → 47%, with " Japan", " Germany", " Tokyo" gaining — while the greedy text still said France.
+- llama.cpp adds the vector at every position, BOS included. Measured: leaving BOS unsteered changed nothing on Gemma 3 1B.
 
 ## Glossary
 

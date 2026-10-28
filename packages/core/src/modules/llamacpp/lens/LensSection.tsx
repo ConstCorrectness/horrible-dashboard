@@ -512,9 +512,7 @@ export function LensSection() {
             onChange={(e) => setK(Math.max(1, Math.min(20, Number(e.target.value) || 5)))}
           />
         </label>
-        <label
-          title="Show every Nth layer. The span stays the same and the last layer is always kept, so the knee in a curve is still visible — narrow to a window once you can see where to look."
-        >
+        <label title="Show every Nth layer. The span stays the same and the last layer is always kept, so the knee in a curve is still visible — narrow to a window once you can see where to look.">
           Every
           <input
             type="number"
@@ -563,7 +561,13 @@ export function LensSection() {
             <p className="llama-meta">
               Forked from <code>{trace.derivedFrom}</code>
               {trace.edits?.length
-                ? ` · replaced position ${trace.edits.map((e) => e.position).join(', ')}`
+                ? ` · ${trace.edits
+                    .map((e) =>
+                      e.kind === 'steer'
+                        ? `steered with F${e.feature} ×${e.strength} at layer ${e.layer}`
+                        : `replaced position ${e.position}`,
+                    )
+                    .join(', ')}`
                 : ''}
               {diff ? ' · changed cells are outlined' : ' · parent unavailable, no diff'}
             </p>
@@ -662,8 +666,8 @@ export function LensSection() {
           </div>
           {grid.verified !== 'true' ? (
             <p className="llama-meta">
-              Only a verified reading can be filed — a caveat in a note does not survive the
-              first search that quotes its numbers.
+              Only a verified reading can be filed — a caveat in a note does not survive the first
+              search that quotes its numbers.
             </p>
           ) : null}
           {findingState ? (

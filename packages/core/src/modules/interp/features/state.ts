@@ -108,6 +108,13 @@ export async function refreshFeatureTraces(): Promise<void> {
 
 export async function openTrace(traceId: string): Promise<void> {
   set({ traceId, result: null, position: null, feature: null, values: null });
+  // A trace made since the list loaded (a steered run): without it in the list the
+  // picker would show another trace's name over this one's features.
+  if (!state.traces.some((t) => t.traceId === traceId)) {
+    void getFeatureTraces()
+      .then(({ traces }) => set({ traces }))
+      .catch(() => undefined);
+  }
   try {
     const { saes } = await getSaes(traceId);
     if (state.traceId !== traceId) return;

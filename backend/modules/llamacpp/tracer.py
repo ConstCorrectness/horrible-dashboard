@@ -431,6 +431,7 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
         context = make_ctx(model, cparams)
         if not context:
             raise RuntimeError("llama.cpp could not create a context")
+        steer = _apply_steer(llama_cpp, model, context, spec.get("steer"))
 
         meta = {
             "traceId": str(spec["traceId"]),
@@ -452,6 +453,9 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
             "capture": list(tracer.patterns),
             "derivedFrom": str(spec.get("derivedFrom") or ""),
             "edits": list(spec.get("edits") or []),
+            #: The control vector this run added, without the vector itself (that is
+            #: in the edit's provenance): which blocks, how strong.
+            **({"steer": steer} if steer else {}),
             "promptTokens": len(tokens),
             "maxTokens": gen_tokens,
             "chatTemplate": False,
@@ -478,6 +482,49 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
         free_model = _sym(llama_cpp, "llama_model_free", "llama_free_model")
         free_model(model)
         llama_cpp.llama_backend_free()
+
+
+def _apply_steer(
+    llama_cpp: Any, model: Any, context: Any, steer: Any
+) -> dict[str, Any] | None:
+    """Add a control vector to the residual stream of a layer range, for the whole run.
+
+    `steer` is `{vector: [n_embd floats], scale, layers: [first, last]}`. llama.cpp
+    adds layer `il`'s row right after block `il`, before `l_out` is named — so a
+    steered trace's `l_out` *includes* the push, and reading it back (an SAE, the
+    lens) shows the steering arrive. Its buffer starts at **layer 1**: block 0's
+    output cannot be steered, and layer `il` sits at offset `(il - 1) * n_embd`.
+    """
+    if not steer:
+        return None
+    n_embd = int(_sym(llama_cpp, "llama_model_n_embd", "llama_n_embd")(model))
+    n_layer = int(_sym(llama_cpp, "llama_model_n_layer", "llama_n_layer")(model))
+    vector = [float(v) for v in steer.get("vector") or []]
+    if len(vector) != n_embd:
+        raise RuntimeError(
+            f"the steering vector is {len(vector)} wide; this model's residual is {n_embd}"
+        )
+    first, last = (int(v) for v in (steer.get("layers") or [0, 0])[:2])
+    if not 1 <= first <= last < n_layer:
+        raise RuntimeError(
+            f"steering layers {first}..{last} are outside 1..{n_layer - 1} "
+            "(llama.cpp cannot steer block 0)"
+        )
+    scale = float(steer.get("scale") or 0.0)
+    buffer = (ctypes.c_float * (n_embd * n_layer))()
+    row = [v * scale for v in vector]
+    for il in range(first, last + 1):
+        offset = (il - 1) * n_embd
+        buffer[offset : offset + n_embd] = row
+    setter = _sym(llama_cpp, "llama_set_adapter_cvec", "llama_apply_adapter_cvec")
+    code = setter(context, buffer, n_embd * n_layer, n_embd, first, last)
+    if code != 0:
+        raise RuntimeError(f"llama.cpp refused the control vector (code {code})")
+    return {
+        "layers": [first, last],
+        "scale": scale,
+        "norm": math.sqrt(sum(v * v for v in row)),
+    }
 
 
 def _vocab(llama_cpp: Any, model: Any) -> Any:

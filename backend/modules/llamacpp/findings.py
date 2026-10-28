@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 MAX_POSITIONS = 24
 
 
+def describe_edit(edit: dict[str, Any]) -> str:
+    """One fork edit as words. Token swaps carry no `kind`; steering says so."""
+    if edit.get("kind") == "steer":
+        return (
+            f"steered with F{edit.get('feature')} of `{edit.get('artifactId')}` at layer "
+            f"{edit.get('layer')}, ×{edit.get('strength')} (scale {edit.get('scale')})"
+        )
+    return f"position {edit.get('position')}: {edit.get('fromId')} → {edit.get('toId')}"
+
+
 def render_note(
     trace: traces.Trace,
     grid: lens_module.LensGrid,
@@ -70,10 +80,7 @@ def render_note(
     ]
     if edits:
         parent = m.get("derivedFrom") or "?"
-        described = ", ".join(
-            f"position {e.get('position')}: {e.get('fromId')} → {e.get('toId')}"
-            for e in edits
-        )
+        described = ", ".join(describe_edit(e) for e in edits)
         lines.append(f"- **Forked from** `{parent}` with {described}")
     lines += ["", "## Prompt", "", "```", prompt or "(no prompt recorded)", "```", ""]
 

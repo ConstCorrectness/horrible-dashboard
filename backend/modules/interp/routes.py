@@ -13,7 +13,15 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.modules.interp import artifacts, catalog, compat, env, neuronpedia, sae
+from backend.modules.interp import (
+    artifacts,
+    catalog,
+    compat,
+    env,
+    neuronpedia,
+    sae,
+    steer,
+)
 from backend.modules.interp.worker import WorkerUnavailable, worker
 
 router = APIRouter(prefix="/interp", tags=["interp"])
@@ -40,6 +48,21 @@ class LabelCheckRequest(BaseModel):
     index: int
     #: The trace whose model the example is traced through.
     traceId: str
+
+
+class SteerRequest(BaseModel):
+    artifactId: str
+    feature: int
+    #: In units of the feature's own peak (see `steer.py`): 1.0 = as strong as it
+    #: ever fires on this prompt. Coherent text survives roughly -1.5..1.5.
+    strength: float = 1.0
+    #: The trace whose model (and, with no `prompt`, whose prompt) to steer. It is
+    #: reused as the default run when it is the same experiment.
+    traceId: str = ""
+    #: A fresh prompt instead, on `traceId`'s model (or `modelPath`).
+    prompt: str = ""
+    modelPath: str = ""
+    maxTokens: int = steer.DEFAULT_NEW_TOKENS
 
 
 class WorkerOpRequest(BaseModel):
@@ -303,6 +326,61 @@ async def post_label_check(req: LabelCheckRequest) -> dict[str, Any]:
         return {"state": "not_checked", "reason": str(exc)}
     except httpx.HTTPError as exc:
         return {"state": "not_checked", "reason": f"could not reach Neuronpedia: {exc}"}
+
+
+# ── steering ─────────────────────────────────────────────────────────────────
+
+
+@router.post("/steer")
+async def post_steer(req: SteerRequest) -> StreamingResponse:
+    """Default and steered generations of one prompt, streamed as ndjson, ending
+    with `{done, result}`: the two texts, whether the feature arrived, and how the
+    first prediction moved."""
+    art = _artifact_or_404(req.artifactId)
+    base = _trace_or_404(req.traceId) if req.traceId else None
+    model_path = req.modelPath or (str(base.manifest.get("modelPath")) if base else "")
+    if not model_path:
+        raise HTTPException(
+            status_code=422, detail="no model: give a traceId or a modelPath"
+        )
+    prompt = req.prompt or (str(base.manifest.get("prompt") or "") if base else "")
+    target = _trace_target(base) if base else None
+    verdict = compat.check(art, target)
+    if verdict["state"] == "incompatible":
+        raise HTTPException(status_code=409, detail="; ".join(verdict["reasons"]))
+
+    # The reference scale when the feature does not fire on this prompt at all:
+    # Neuronpedia's maximum, a public GET by id (cached).
+    reference: float | None = None
+    source = catalog.neuronpedia_source(art["entryId"], art["choice"])
+    if source is not None:
+        try:
+            card = await neuronpedia.feature(
+                source["model"], source["source"], req.feature
+            )
+            reference = card.get("maxActivation")
+        except httpx.HTTPError:
+            reference = None
+
+    async def gen() -> AsyncIterator[str]:
+        try:
+            async for event in steer.run(
+                art,
+                req.feature,
+                req.strength,
+                model_path=model_path,
+                prompt=prompt,
+                # Reused as the default only when it is the same experiment
+                # (`steer.run` checks prompt, model, length, layer).
+                baseline_trace_id=req.traceId,
+                max_tokens=req.maxTokens,
+                fallback_peak=reference,
+            ):
+                yield json.dumps(event) + "\n"
+        except (steer.SteerError, sae.SaeError) as exc:
+            yield json.dumps({"error": str(exc)}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 # ── neuronpedia ──────────────────────────────────────────────────────────────

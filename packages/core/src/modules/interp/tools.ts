@@ -109,6 +109,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     when: 'Gemma Scope 2 SAEs on a trace: features per token, Neuronpedia labels, a reconstruction check and a per-feature label check.',
   },
   {
+    section: SUITE_SECTIONS.steer,
+    label: 'Steer',
+    glyph: 'steer',
+    group: 'Features',
+    question: 'What does the model do when a feature is pushed harder — or taken away?',
+    when: 'Add a feature to the residual stream with a llama.cpp control vector; default and steered generations side by side.',
+  },
+  {
     section: SUITE_SECTIONS.library,
     label: 'Library',
     glyph: 'library',

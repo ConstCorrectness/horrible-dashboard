@@ -246,7 +246,8 @@ export interface TraceSummary {
   tokenSource?: 'text' | 'ids';
   /** Set on a fork: the trace it came from, and what was changed. */
   derivedFrom?: string;
-  edits?: TokenEdit[];
+  /** Token swaps, and (from the interp suite) steering pushes. */
+  edits?: TraceEdit[];
   capture?: string[];
 }
 
@@ -292,7 +293,22 @@ export interface TraceEstimate {
   error: string;
 }
 
+/** A fork's steering push: a feature direction added at a layer (`interp/steer.py`). */
+export interface SteerEdit {
+  kind: 'steer';
+  source: 'sae';
+  artifactId: string;
+  feature: number;
+  layer: number;
+  strength: number;
+  unit: number;
+  scale: number;
+}
+
+export type TraceEdit = TokenEdit | SteerEdit;
+
 export interface TokenEdit {
+  kind?: undefined;
   position: number;
   /** Stamped by the backend from the parent, never trusted from here. */
   fromId?: number;

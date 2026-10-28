@@ -20,6 +20,7 @@ import { revealSection } from '../../../layout/controller';
 import { SUITE_SECTIONS, SUITE_VIEW } from '../ids';
 import { NeuronpediaCard, shownToken } from '../library/NeuronpediaCard';
 import { S } from '../styles';
+import { steerWith } from '../steer/state';
 import { SuiteFrame } from '../SuiteFrame';
 import type { FeatureEncoding, LabelCheck } from './api';
 import {
@@ -379,7 +380,20 @@ function FeatureCardPanel({ r }: { r: FeatureEncoding }) {
         >
           Ask what it does
         </button>
-        <button type="button" disabled title="Steering arrives in Phase 7">
+        <button
+          type="button"
+          title="Add this feature's direction to the model at its layer, in the Steer section"
+          onClick={() => {
+            steerWith({
+              artifactId: r.artifactId,
+              feature: index,
+              label: labelOf(st.cards, index),
+              traceId: r.traceId,
+              prompt: st.traces.find((t) => t.traceId === r.traceId)?.prompt ?? '',
+            });
+            void revealSection(SUITE_SECTIONS.steer, SUITE_VIEW);
+          }}
+        >
           Steer with this
         </button>
       </div>

@@ -72,9 +72,13 @@ describe('interpretability suite manifest', () => {
       'interp.heads',
       'interp.library',
       'interp.state',
+      'interp.steer',
     ]);
-    // Read-only, so the permission engine never stops the agent explaining the screen.
-    expect((suite().agentTools ?? []).every((t) => !t.sideEffect)).toBe(true);
+    // Read-only, so the permission engine never stops the agent explaining the screen —
+    // except steering, which runs the model and records traces.
+    expect((suite().agentTools ?? []).filter((t) => t.sideEffect).map((t) => t.name)).toEqual([
+      'interp.steer',
+    ]);
     const ask = suite().regions?.find((r) => r.id === 'interp.ask');
     expect(ask?.position).toBe('right');
     const view = interpSuiteModule.panels?.find((p) => p.id === 'interp.ask');
