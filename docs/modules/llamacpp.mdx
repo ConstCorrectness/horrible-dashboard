@@ -650,6 +650,8 @@ does not resurrect an old selection over what you were typing.
 | `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
 | `GET` | `/api/llamacpp/traces/{id}/record/{i}/matrix?head=&cols=` | One 2-D plane read **through the record's strides**: tokens × features (max-abs pooled, full-resolution row norms) or one attention head's query × key matrix cropped to the KV in use |
 | `GET` | `/api/llamacpp/traces/{id}/record/{i}/heads` | Per-head entropy / self-weight / first-token weight for an attention record |
+| `GET` | `/api/llamacpp/traces/{id}/heads` | Every head of a pass scored (`heads.py`): previous-token, induction, duplicate, sink, self, entropy — induction/duplicate `null` on a prompt with no repeats |
+| `POST` | `/api/llamacpp/heads/probe` | Record the induction probe on a GGUF: a random word sequence twice, attention + `l_out` only; streams like `/traces` |
 | `GET` | `/api/llamacpp/traces/{id}/layer/{L}/delta?passIndex=` | What block `L` wrote into the residual stream, per token (relative change, cosine) |
 | `GET` | `/api/llamacpp/traces/{id}/experts?passIndex=` | Mixture-of-experts routing: per-token expert choices and weights, per-layer counts. `moe: false` on a dense model |
 | `POST` | `/api/llamacpp/traces/{id}/fork` | Re-run with some tokens replaced (NDJSON progress) |

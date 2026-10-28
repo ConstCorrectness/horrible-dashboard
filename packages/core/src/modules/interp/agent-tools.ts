@@ -3,20 +3,27 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Three verbs, all read-only:
+ * group (the `interp` roster agent preloads it). Four verbs, all read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
+ * - `interp.heads` — a trace's attention heads, scored and ranked.
  * - `interp.goto` — show a section, and move the shared model locus.
- *
- * Their usage notes and the domain primer live in the group's guide
- * (`backend/modules/agent/guides/interp.md`), delivered once the group is loaded.
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
 import { revealSection } from '../../layout/controller';
 import { setModelLocus } from '../../model-locus';
 import { interpretabilityStore } from '../interpretability/store';
+import { sameFile } from './attention/model';
+import {
+  headsStore,
+  measurable,
+  openTrace,
+  rankHeads,
+  refreshTraces,
+  type HeadMetric,
+} from './heads/state';
 import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
 import { setSubSection } from './SubSections';
 import { describeLayer, primeDigest, suiteDigest } from './suite-state';
@@ -79,6 +86,64 @@ export const interpAgentTools: AgentToolDecl[] = [
         })),
         conflicts: layout.conflicts,
         notes: layout.notes,
+      };
+    },
+  },
+  {
+    name: 'interp.heads',
+    description:
+      'The attention heads of a traced pass, scored and ranked: induction (copies the ' +
+      'token that followed an earlier copy), previous-token, duplicate, sink, self and ' +
+      'entropy, with each head’s layer kind when the trace is of the loaded model. ' +
+      'Induction and duplicate are null when the trace repeats nothing — say so, and ' +
+      'suggest the induction probe in the Heads section; do not read null as zero.',
+    params: {
+      type: 'object',
+      properties: {
+        traceId: { type: 'string', description: 'Trace to score (default: the one shown).' },
+        metric: {
+          type: 'string',
+          enum: ['induction', 'prevToken', 'duplicate', 'sink', 'selfWeight', 'entropy'],
+          description: 'Rank by this score (default induction, or prevToken if unmeasurable).',
+        },
+        top: { type: 'integer', description: 'How many heads to return (default 10).' },
+      },
+    },
+    handler: async (args) => {
+      if (typeof args.traceId === 'string' && args.traceId) await openTrace(args.traceId);
+      else if (!headsStore.get().table) await refreshTraces();
+      const table = headsStore.get().table;
+      if (!table) return { error: 'No trace with attention on this node yet.' };
+      if (table.error) return { error: table.error };
+      const wanted = (typeof args.metric === 'string' ? args.metric : '') as HeadMetric;
+      const metric: HeadMetric =
+        wanted && measurable(table, wanted)
+          ? wanted
+          : measurable(table, 'induction')
+            ? 'induction'
+            : 'prevToken';
+      await primeDigest();
+      const layout = interpretabilityStore.getAttention();
+      const kinds = layout && sameFile(layout.path, table.modelPath) ? layout.layers : null;
+      const top = Math.max(1, Math.min(40, Number(args.top ?? 10) || 10));
+      return {
+        trace: table.traceId,
+        model: table.model,
+        prompt: table.prompt,
+        tokens: table.tokens,
+        repeatedPositions: table.repeatedPositions,
+        inductionMeasurable: measurable(table, 'induction'),
+        rankedBy: metric,
+        layerKinds: kinds
+          ? 'from the attention layout (same file)'
+          : 'unknown: trace is of another file',
+        heads: rankHeads(table.heads ?? [], metric, top).map(
+          (h) =>
+            `L${h.layer} H${h.head}: ${metric} ${(h[metric] ?? 0).toFixed(3)}` +
+            ` · prev ${h.prevToken.toFixed(2)} · sink ${h.sink.toFixed(2)}` +
+            (kinds?.[h.layer] ? ` · ${kinds[h.layer].kind}` : '') +
+            (h.rows < 2 ? ' · one row only' : ''),
+        ),
       };
     },
   },

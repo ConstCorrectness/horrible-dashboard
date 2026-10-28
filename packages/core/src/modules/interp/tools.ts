@@ -91,4 +91,12 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     question: 'At which layer does the model know what it will say?',
     when: 'Read every layer as words — a trace, or the reply this window just wrote.',
   },
+  {
+    section: SUITE_SECTIONS.heads,
+    label: 'Heads',
+    glyph: 'heads',
+    group: 'Activations',
+    question: 'Which of the hundreds of heads are doing something nameable?',
+    when: 'Find induction, previous-token and sink heads; the probe records the prompt that reveals them.',
+  },
 ];

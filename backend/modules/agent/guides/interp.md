@@ -12,11 +12,13 @@ One window, a rail of tools, all reading **the same model** and following **one 
 | Activations | `traces`    | Record a forward pass (llama.cpp)                                                       |
 | Activations | `stepper`   | Step a trace node by node: attention maps, residual deltas, MoE routing                 |
 | Activations | `lens`      | Each layer's residual read as words (tabs `trace` `reply` `guess` `compare`)            |
+| Activations | `heads`     | Every attention head of a trace, scored: induction, previous-token, duplicate, sink     |
 
 ## Tools
 
 - `interp.state` — the full digest: model and where its description came from, the attention pattern, the KV cache, the locus and what that layer is, the last captured turn, the in-window lens run, caveats. **Call it before explaining the screen** unless the pane context in this turn already answers.
 - `interp.attention {from, to}` — per-layer rows: `L17 sliding, window 512, 8q/1kv × 256, KV from L13, (metadata)`. Use for "which layers…", "why is the cache small", "what changes at layer N".
+- `interp.heads {traceId?, metric?, top?}` — a trace's heads ranked by a score, each with its layer kind when the trace is of the loaded model. Induction and duplicate are `null` on a trace that repeats nothing: say they are not measurable and point the user at **Run induction probe** in the Heads section (it records a random word sequence, twice). Never read `null` as zero.
 - `interp.goto {section, tab?, layer?, position?}` — show it. Moving the locus moves every tool.
 - For trace contents (what the model was disposed to say at a layer), use the `lens` group.
 
@@ -48,6 +50,8 @@ A **conflict** means the sources disagree; report it, don't resolve it. A lens g
 **MTP head** — an extra block for multi-token prediction (speculative drafting), not the main pass.
 **Reach** — an upper bound on how far back information can have travelled by a layer: a windowed layer extends it by its window, a global or recurrent one reaches the whole context.
 **Logit lens** — unembed (final norm → LM head) the residual after each layer: what the model would say if it stopped there. **J-lens / J++** transport the residual through a fitted Jacobian first and read early layers better.
+**Induction head** — attends from a token to the token that _followed_ its previous occurrence, and copies it forward: the in-context copying circuit. Paired with an earlier **previous-token head**, which lets each position know what came before it.
+**Sink head** — parks most of its weight on position 0 when it has nothing to attend to; high `sink` with low entropy is usually that, not a meaningful pattern.
 **MoE** — a router sends each token to the top-k of N expert FFNs; total parameters set memory, active ones set compute.
 
 ## Pitfalls

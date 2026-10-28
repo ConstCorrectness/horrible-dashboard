@@ -399,6 +399,60 @@ export function runTrace(
   return streamNdjson('/llamacpp/traces', options, (obj) => onProgress(obj as Progress), signal);
 }
 
+// ── heads ───────────────────────────────────────────────────────────────────
+
+/** One attention head of a pass, scored. Mirrors backend `heads.HeadScore`. */
+export interface HeadScore {
+  layer: number;
+  head: number;
+  entropy: number;
+  selfWeight: number;
+  sink: number;
+  prevToken: number;
+  /** null when the prompt repeats nothing this head's rows could test — never 0. */
+  induction: number | null;
+  duplicate: number | null;
+  /** Query rows the scores average over (a pruned last block may hold one). */
+  rows: number;
+}
+
+export interface HeadTable {
+  traceId?: string;
+  model?: string;
+  modelPath?: string;
+  prompt?: string;
+  tokens?: number;
+  /** Query positions where induction is testable; 0 = not measurable on this prompt. */
+  repeatedPositions?: number;
+  layers?: number;
+  headsPerLayer?: number;
+  heads?: HeadScore[];
+  error?: string;
+}
+
+export function getTraceHeads(traceId: string, passIndex = 0): Promise<HeadTable> {
+  return apiGet<HeadTable>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/heads?passIndex=${passIndex}`,
+  );
+}
+
+/**
+ * Record the induction probe on `modelPath`: a random word sequence twice, with
+ * attention on — the trace the induction score needs. Streams like `runTrace`.
+ */
+export function runHeadsProbe(
+  modelPath: string,
+  onProgress: (p: Progress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamNdjson(
+    '/llamacpp/heads/probe',
+    { modelPath },
+    (obj) => onProgress(obj as Progress),
+    signal,
+  );
+}
+
 // ── the lens ────────────────────────────────────────────────────────────────
 
 /** A transport applied before unembedding. `identity` is the classic logit lens

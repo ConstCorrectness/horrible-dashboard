@@ -146,6 +146,17 @@ export function shareArcs(layers: LayerAttention[]): { from: number; to: number 
     .map((l) => ({ from: l.kvSourceLayer as number, to: l.layer }));
 }
 
+/**
+ * Two spellings of one weights file: separators and drive-letter case differ
+ * between the header reader and a trace manifest. The layout describes the agent's
+ * loaded model and a trace can be of any GGUF, so a layer kind may be shown beside
+ * a trace's heads only when this holds.
+ */
+export function sameFile(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+  return Boolean(a && b) && norm(a as string) === norm(b as string);
+}
+
 /** How many times smaller the real cache is than an all-global one, at a context. */
 export function savings(point: { bytes: number; bytesIfGlobal: number }): number | null {
   if (!point.bytes || !point.bytesIfGlobal) return null;

@@ -68,6 +68,7 @@ describe('interpretability suite manifest', () => {
     expect((suite().agentTools ?? []).map((t) => t.name).sort()).toEqual([
       'interp.attention',
       'interp.goto',
+      'interp.heads',
       'interp.state',
     ]);
     // Read-only, so the permission engine never stops the agent explaining the screen.

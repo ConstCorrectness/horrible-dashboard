@@ -33,6 +33,7 @@ const AttentionBody = lazyPane(() => import('./attention/AttentionSection'), 'At
 const TracesBody = lazyPane(() => import('./bodies/activations'), 'TracesBody');
 const StepperBody = lazyPane(() => import('./bodies/activations'), 'StepperBody');
 const LensBody = lazyPane(() => import('./bodies/activations'), 'LensBody');
+const HeadsBody = lazyPane(() => import('./heads/HeadsSection'), 'HeadsBody');
 // The chat (and its 3D avatar) loads when the Ask strip first opens, not with the suite.
 const AskPanel = lazyPane(() => import('./AskPanel'), 'AskPanel');
 
@@ -50,6 +51,7 @@ const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['compon
   traces: { title: 'Activation traces', component: TracesBody },
   stepper: { title: 'Layer stepper', component: StepperBody },
   lens: { title: 'Logit lens', component: LensBody },
+  heads: { title: 'Attention heads', component: HeadsBody },
 };
 
 export function suiteBodyView(section: SuiteSection): string {

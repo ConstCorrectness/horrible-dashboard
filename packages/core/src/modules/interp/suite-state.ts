@@ -25,6 +25,7 @@ import {
 } from '../interpretability/store';
 import { lensRuns, type LensRun } from '../webml/lens-run';
 import { fmtBytes, fmtContext, savings } from './attention/model';
+import { headsDigest } from './heads/state';
 
 export interface DigestInputs {
   arch: ModelArchitecture | null;
@@ -32,6 +33,8 @@ export interface DigestInputs {
   locus: ModelLocus;
   turns: readonly TurnSnapshot[];
   lensRun: LensRun | null;
+  /** The Heads section's one-line summary (`heads/state.ts`), if it has a trace. */
+  heads?: string | null;
 }
 
 export function readDigestInputs(): DigestInputs {
@@ -41,6 +44,7 @@ export function readDigestInputs(): DigestInputs {
     locus: getModelLocus(),
     turns: interpretabilityStore.getSnapshot(),
     lensRun: lensRuns.get(),
+    heads: headsDigest(),
   };
 }
 
@@ -84,6 +88,7 @@ export interface SuiteDigest {
   atLocus?: string;
   lastTurn?: string;
   windowLens?: string;
+  heads?: string;
   caveats?: string[];
   /** Full only. */
   layers?: string[];
@@ -157,6 +162,8 @@ export function buildDigest(
         : '') +
       (turn.exact ? '' : ' (token counts estimated)');
   }
+
+  if (inputs.heads) out.heads = inputs.heads;
 
   if (lensRun && lensRun.tokens.length) {
     out.windowLens =

@@ -56,7 +56,7 @@ def test_the_group_has_a_blurb_and_a_guide() -> None:
 
 def test_guide_and_frontend_declare_the_same_tools() -> None:
     tools = declared_tools()
-    assert tools == {"interp.state", "interp.attention", "interp.goto"}
+    assert tools == {"interp.state", "interp.attention", "interp.heads", "interp.goto"}
     guide = module_guide("interp") or ""
     named = set(re.findall(r"`(interp\.[A-Za-z]+)", guide))
     assert named == tools, f"guide names {named}, frontend declares {tools}"

@@ -28,6 +28,7 @@ from backend.modules.llamacpp import (
     capability,
     catalog,
     findings,
+    heads as heads_module,
     lens as lens_module,
     offload,
     stepper,
@@ -44,6 +45,7 @@ from backend.modules.llamacpp.models import (
     EstimateResponse,
     ExpertsResponse,
     ForkRequest,
+    HeadsProbeRequest,
     HeadSummaryResponse,
     InstallRequest,
     LayerPlanResponse,
@@ -605,6 +607,45 @@ def get_record_heads(trace_id: str, index: int) -> HeadSummaryResponse:
         record=record.to_dict(),
         heads=[{**h, "head": int(h["head"])} for h in heads],
     )
+
+
+@router.get("/traces/{trace_id}/heads")
+def get_trace_heads(trace_id: str, passIndex: int = 0) -> dict[str, Any]:
+    """Every attention head of one pass, scored (`heads.py`): previous-token,
+    induction, duplicate, sink, self, entropy. The finder the interpretability
+    suite's Heads section draws; induction is `null` on a prompt that repeats
+    nothing, never 0."""
+    trace = _require(trace_id)
+    return heads_module.head_table(trace, passIndex)
+
+
+@router.post("/heads/probe")
+async def run_heads_probe(req: HeadsProbeRequest) -> StreamingResponse:
+    """Record the trace the induction score needs: a random word sequence twice,
+    attention on, only the residual besides — so it costs megabytes, not the
+    gigabyte a default capture of the same length would."""
+    prompt = heads_module.probe_prompt(req.words, req.seed)
+
+    async def gen() -> AsyncIterator[str]:
+        spec = {
+            "modelPath": req.modelPath,
+            "prompt": prompt,
+            "tokenIds": None,
+            "capture": ["l_out"],
+            "derivedFrom": "",
+            "edits": [],
+            "maxTokens": 0,
+            "layers": [],
+            "attention": True,
+            "fidelity": "fp16",
+            "tokenCap": hardware.defaults().trace_token_cap,
+            "gpuLayers": 0,
+            "architecture": await asyncio.to_thread(_architecture, req.modelPath),
+        }
+        async for event in trace_runner.run_trace(spec):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @router.get(

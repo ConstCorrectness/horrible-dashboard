@@ -192,6 +192,15 @@ class TokenEdit(BaseModel):
     toId: int
 
 
+class HeadsProbeRequest(BaseModel):
+    """Record the induction probe (`heads.probe_prompt`) on one GGUF."""
+
+    modelPath: str
+    #: Distinct words in the sequence; the prompt repeats it, so it is twice this.
+    words: int = 24
+    seed: int = 0
+
+
 class TraceRequest(BaseModel):
     """Run one traced forward pass.
 
