@@ -122,6 +122,7 @@ from backend.modules.agentpedia import (
     register_agent_tools as register_agentpedia_tools,
 )
 from backend.modules.agentpedia import router as agentpedia_router
+from backend.modules.interp import router as interp_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
 from backend.modules.music import register_agent_tools as register_music_tools
@@ -347,6 +348,11 @@ async def lifespan(app: FastAPI):
         # mapped weights and a bound port. An orphan survives a reload and then
         # makes the next spawn fail on a port that looks free.
         llama_manager.stop()
+        # The interpretability worker holds a model in VRAM; an orphan keeps it
+        # there after a reload, and the next worker cannot fit its own.
+        from backend.modules.interp.worker import worker as interp_worker
+
+        interp_worker.stop()
         # The Voicemeeter Remote API is a per-process login. An unbalanced one
         # leaves the DLL holding a client slot for a process that is gone, and
         # the next login returns -2 instead of connecting.
@@ -479,6 +485,7 @@ app.include_router(discover_router, prefix="/api")
 app.include_router(briefing_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(agentpedia_router, prefix="/api")
+app.include_router(interp_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")

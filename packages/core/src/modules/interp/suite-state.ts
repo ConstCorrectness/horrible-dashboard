@@ -26,6 +26,7 @@ import {
 import { lensRuns, type LensRun } from '../webml/lens-run';
 import { fmtBytes, fmtContext, savings } from './attention/model';
 import { headsDigest } from './heads/state';
+import { libraryDigest } from './library/state';
 
 export interface DigestInputs {
   arch: ModelArchitecture | null;
@@ -35,6 +36,8 @@ export interface DigestInputs {
   lensRun: LensRun | null;
   /** The Heads section's one-line summary (`heads/state.ts`), if it has a trace. */
   heads?: string | null;
+  /** The Library's: artifacts, what fits, what the worker holds (`library/state.ts`). */
+  library?: string | null;
 }
 
 export function readDigestInputs(): DigestInputs {
@@ -45,6 +48,7 @@ export function readDigestInputs(): DigestInputs {
     turns: interpretabilityStore.getSnapshot(),
     lensRun: lensRuns.get(),
     heads: headsDigest(),
+    library: libraryDigest(),
   };
 }
 
@@ -89,6 +93,7 @@ export interface SuiteDigest {
   lastTurn?: string;
   windowLens?: string;
   heads?: string;
+  library?: string;
   caveats?: string[];
   /** Full only. */
   layers?: string[];
@@ -164,6 +169,7 @@ export function buildDigest(
   }
 
   if (inputs.heads) out.heads = inputs.heads;
+  if (inputs.library) out.library = inputs.library;
 
   if (lensRun && lensRun.tokens.length) {
     out.windowLens =

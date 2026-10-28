@@ -22,6 +22,7 @@ export const SUITE_SECTIONS = {
   stepper: 'stepper',
   lens: 'lens',
   heads: 'heads',
+  library: 'library',
 } as const;
 
 export type SuiteSection = (typeof SUITE_SECTIONS)[keyof typeof SUITE_SECTIONS];

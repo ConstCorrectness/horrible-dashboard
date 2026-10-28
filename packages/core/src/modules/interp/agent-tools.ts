@@ -3,12 +3,19 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Four verbs, all read-only:
+ * group (the `interp` roster agent preloads it). Five verbs, all read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
  * - `interp.heads` — a trace's attention heads, scored and ranked.
+ * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
  * - `interp.goto` — show a section, and move the shared model locus.
+ *
+ * `interp.library` reads and never downloads: a download is consent to a size, and
+ * the user gives it in the Library section, not the agent on their behalf.
+ *
+ * Their usage notes and the domain primer live in the group's guide
+ * (`backend/modules/agent/guides/interp.md`), delivered once the group is loaded.
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
@@ -25,6 +32,7 @@ import {
   type HeadMetric,
 } from './heads/state';
 import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
+import { libraryStore, refreshLibrary } from './library/state';
 import { setSubSection } from './SubSections';
 import { describeLayer, primeDigest, suiteDigest } from './suite-state';
 
@@ -144,6 +152,43 @@ export const interpAgentTools: AgentToolDecl[] = [
             (kinds?.[h.layer] ? ` · ${kinds[h.layer].kind}` : '') +
             (h.rows < 2 ? ' · one row only' : ''),
         ),
+      };
+    },
+  },
+  {
+    name: 'interp.library',
+    description:
+      'The interpretability library: installed SAEs, transcoders and lenses, each with what ' +
+      'it states about itself (layer, input width, dictionary width, and where each fact was ' +
+      'read) and whether it fits the agent’s GGUF and the worker’s model — compatible, ' +
+      'incompatible (with the contradiction) or unknown; the disk budget; the catalog of ' +
+      'what can be fetched; and the GPU worker (environment, state, held model, VRAM). ' +
+      'Read-only: downloads are confirmed by the user in the Library section.',
+    handler: async () => {
+      await refreshLibrary();
+      const { library, worker, catalog } = libraryStore.get();
+      return {
+        artifacts: (library?.artifacts ?? []).map((a) => ({
+          id: a.id,
+          kind: a.kind,
+          trainedOn: a.modelRepo,
+          facts: a.facts,
+          fits: a.compat.map((c) => `${c.target} (${c.source}): ${c.state}` +
+            (c.reasons.length ? ` — ${c.reasons.join('; ')}` : '')),
+        })),
+        checkedAgainst: library?.targets ?? [],
+        disk: library ? { usedBytes: library.usedBytes, budgetBytes: library.budgetBytes } : null,
+        catalog: catalog.map((e) => `${e.id}: ${e.title} (${e.repo})`),
+        worker: worker
+          ? {
+              state: worker.state,
+              envGroups: worker.env.groups,
+              envInstall: worker.env.state,
+              holding: worker.status?.loaded ?? null,
+              vramAllocatedBytes: worker.status?.vramAllocated ?? null,
+              device: worker.ping?.device ?? null,
+            }
+          : null,
       };
     },
   },

@@ -11,7 +11,7 @@ window's lens lab used to be six panes that did not know about each other. They 
 one subject — the same model read at the prompt, the weights and the activations —
 so they are one pane now.
 
-**Status: Phase 1 of the suite plan** — frontend in
+**Status: Phase 5 of the suite plan** — frontend in
 `packages/core/src/modules/interp/`.
 
 ## The rail
@@ -28,6 +28,7 @@ so they are one pane now.
 | Activations | **Stepper** | the layer stepper |
 | Activations | **Lens** | the trace lens, plus the [WebML](./webml.mdx) lens lab (Reply / Guess / Compare) as sub-tabs |
 | Activations | **Heads** | every attention head of a trace, scored — see below |
+| — | **Library** | SAEs, transcoders and lenses; the GPU worker; Neuronpedia lookups — see below |
 
 Sections and Home's cards both come from `tools.ts`, so the rail and the map cannot
 disagree. Each body is registered as an `embedded` view (`interp.<section>`), so
@@ -122,6 +123,124 @@ The section's state is a module store (`interp/heads/state.ts`), so the digest c
 its strongest head and `interp.heads` ranks a trace's heads for the agent whether or
 not the section is open.
 
+## Library
+
+What the suite's later tools — features, steering, Jacobian lenses, circuits — stand
+on. Backend in `backend/modules/interp/`, at `/api/interp`; the section is
+`interp/library/`.
+
+### The worker
+
+The backend has no torch, and keeps it that way. Anything that needs gradients or a
+Hugging Face model runs in **the worker**: a long-lived process in its own managed
+venv, `$DATA/interp-venv`, holding one model at a time.
+
+- **Environment** (`env.py`). Package groups, each installed on demand from the
+  section: `base` (torch with CUDA, transformers, accelerate, safetensors), `sae`
+  (sae-lens), `circuits` (circuit-tracer, nnsight). torch is pinned to the version the
+  notebook venv already has, so uv takes it from its cache rather than downloading
+  ~2.5 GB again. Kept apart from the notebook venv so research dependencies cannot
+  break notebooks.
+- **Process** (`worker.py`, `worker_main.py`). Started on demand and kept: loading a
+  model is the slow part. JSON lines over stdin/stdout, with requests matched to
+  replies by id. Spawned with blocking `Popen` and daemon reader threads, never
+  asyncio subprocesses, which break under `--reload` on Windows. Spawned `-I`, so
+  nothing of the backend is importable inside it. Stopped in the app's lifespan
+  shutdown, so a reload does not orphan a process holding VRAM.
+- **Every reply is one of three states:**
+  - `ran`, with a `result`;
+  - `failed`, with the traceback verbatim;
+  - `not_checked`, with the reason it declined.
+
+  `load` reads the Hugging Face cache only. A repo that is not cached is declined,
+  never silently downloaded, unless the caller passes `allowDownload` after showing
+  its size.
+
+Measured on an RTX 4080 Laptop GPU:
+
+- The worker answers `ready` immediately, and torch 2.11+cu128 imports on the first
+  `ping` (about 6 s).
+- `Qwen/Qwen3-0.6B` loads from the cache in about 6 s, at 1.19 GB of VRAM in bf16.
+
+### Artifacts
+
+A curated **catalog** (`catalog.py`), not free search: an SAE is only useful beside
+the exact model it was trained on, and every publishing repo is laid out its own way.
+Each entry says how a downloadable *choice* is formed:
+
+- a folder per choice, such as Gemma Scope 2's `resid_post/layer_13_width_16k_l0_medium`;
+- or the whole repo, for a transcoder set, where an attribution graph needs every
+  layer.
+
+Each entry also names which files make a usable artifact. Gemma Scope's ~800 MB
+`examples.safetensors` stays on the Hub. Entries in the catalog:
+
+| Entry | Repo |
+| --- | --- |
+| Gemma Scope 2, Gemma 3 1B/4B IT, residual SAEs | `google/gemma-scope-2-{1b,4b}-it` |
+| Gemma Scope 2, Gemma 3 1B IT, transcoders | `google/gemma-scope-2-1b-it` |
+| Qwen3 0.6B transcoders | `mwhanna/qwen3-0.6b-transcoders-lowl0` |
+| Llama 3.2 1B transcoders | `mntss/transcoder-Llama-3.2-1B` |
+| Jacobian lenses (J-lens / J++) | `neuronpedia/jacobian-lens` |
+| Assistant Axis vectors | `lu-christina/assistant-axis-vectors` (dataset) |
+
+**Nothing is written before its size is shown.** Browsing reads sizes from the Hub's
+tree API: one recursive listing, following its `Link: rel="next"` pages. A download
+then takes two steps:
+
+1. **Get** shows the size, the file count and what the library would weigh afterwards.
+2. **Download** sends that size back as `confirmBytes`. The backend refuses with 409
+   if the Hub now says otherwise, because consent was to that many bytes.
+
+Downloads also check the budget (`interp.libraryBudgetGb`, 40 GB) before writing. Each
+file is written to `.part` and renamed on success: a truncated `params.safetensors`
+would otherwise load and produce garbage features instead of failing. The files keep
+the Hub's own paths under `$DATA/interp/artifacts/`, with one row per artifact in
+`app.db` (`interp_artifacts`).
+
+### Does it fit? Three answers
+
+Each artifact's **facts**, its input width, dictionary width and layer, are read from
+its config when it has one, or else from the folder name. Each fact records which,
+since a width parsed from a folder name is the weaker claim. The facts are checked
+against two models:
+
+- the agent's GGUF, which names its Hugging Face base in
+  `general.base_model.0.repo_url`;
+- the worker's loaded model.
+
+`compat.py` returns one of three states:
+
+- **incompatible** when a stated fact contradicts the model: another repo, an input
+  width that is not `d_model`, or a layer the model does not have;
+- **compatible** when the trained-on repo matches and nothing contradicts it;
+- **unknown** otherwise. A matching width alone is not a yes, because other models
+  share `d_model`.
+
+An SAE applied to the wrong model still produces plausible numbers, all of them wrong.
+This check is where that is caught.
+
+### Neuronpedia
+
+`neuronpedia.py` is a read-only client for the public API. A feature lookup is a GET by
+public id (`/api/feature/` + model / source / index) and sends nothing of the user's.
+
+- **Cached** in `app.db` for a week.
+- **Trimmed to a card:** explanations, the logits the feature promotes and suppresses,
+  its density, and the top examples, each windowed around its peak token.
+
+The endpoints that would send the user's text are refused unless
+`interp.neuronpedia.allowText` is on. The gate (`require_text_allowed`) exists before
+any of them does, so the first one cannot be written without it. These endpoints are:
+
+- testing a prompt;
+- remote steering;
+- NLA explanations;
+- remote graph generation.
+
+The agent reads all of this through `interp.library`. That tool reads and never
+downloads: a download is consent to a size, and the user gives it.
+
 ## The agent
 
 The suite can be asked about. Every section publishes one **digest** of what the suite
@@ -137,7 +256,7 @@ visible; it is pinned under the per-pane workspace-context budget by a test.
 | Piece | Where |
 | --- | --- |
 | **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
-| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
 | **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
 | **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
 | **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
@@ -186,5 +305,10 @@ The llama.cpp pane keeps only Server and Models.
 | Kind | ID | Notes |
 | --- | --- | --- |
 | Panel | `interpretability.suite` | Singleton document; rail + keep-alive |
-| Panels (embedded) | `interp.home` … `interp.lens` | Section bodies |
+| Panels (embedded) | `interp.home` … `interp.library` | Section bodies |
 | Command | `interp.open` | Open the suite at Home |
+| Setting | `interp.libraryBudgetGb` | Library disk budget, GB (40; 0 = no limit) |
+| Setting | `interp.neuronpedia.allowText` | Allow endpoints that send your text to Neuronpedia (off) |
+| Endpoints | `/api/interp/library/*` | Catalog, choices, download (ndjson, `confirmBytes`), artifacts with fit, delete |
+| Endpoints | `/api/interp/worker*` | Env install, start / stop, status, ops (`ping` `status` `load` `unload` `generate`) |
+| Endpoint | `/api/interp/neuronpedia/feature` | One feature card, cached |

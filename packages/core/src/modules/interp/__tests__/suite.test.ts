@@ -69,6 +69,7 @@ describe('interpretability suite manifest', () => {
       'interp.attention',
       'interp.goto',
       'interp.heads',
+      'interp.library',
       'interp.state',
     ]);
     // Read-only, so the permission engine never stops the agent explaining the screen.

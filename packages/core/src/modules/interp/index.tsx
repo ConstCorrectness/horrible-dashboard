@@ -34,6 +34,7 @@ const TracesBody = lazyPane(() => import('./bodies/activations'), 'TracesBody');
 const StepperBody = lazyPane(() => import('./bodies/activations'), 'StepperBody');
 const LensBody = lazyPane(() => import('./bodies/activations'), 'LensBody');
 const HeadsBody = lazyPane(() => import('./heads/HeadsSection'), 'HeadsBody');
+const LibraryBody = lazyPane(() => import('./library/LibrarySection'), 'LibraryBody');
 // The chat (and its 3D avatar) loads when the Ask strip first opens, not with the suite.
 const AskPanel = lazyPane(() => import('./AskPanel'), 'AskPanel');
 
@@ -52,6 +53,7 @@ const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['compon
   stepper: { title: 'Layer stepper', component: StepperBody },
   lens: { title: 'Logit lens', component: LensBody },
   heads: { title: 'Attention heads', component: HeadsBody },
+  library: { title: 'Interpretability library', component: LibraryBody },
 };
 
 export function suiteBodyView(section: SuiteSection): string {
@@ -106,6 +108,28 @@ export const interpSuiteModule: ModuleManifest = {
       component: AskPanel,
       role: 'tool',
       embedded: true,
+    },
+  ],
+  settings: [
+    {
+      key: 'interp.libraryBudgetGb',
+      title: 'Library disk budget (GB)',
+      description:
+        'How much disk the interpretability library (SAEs, transcoders, lenses under the data ' +
+        'directory) may use. A download that would take it past this is refused before a byte ' +
+        'is written. 0 = no limit.',
+      type: 'number',
+      default: 40,
+    },
+    {
+      key: 'interp.neuronpedia.allowText',
+      title: 'Let Neuronpedia see my text',
+      description:
+        'Feature lookups by id send nothing of yours. Testing a prompt, remote steering, NLA ' +
+        'explanations and remote graph generation send your text to neuronpedia.org, and are ' +
+        'refused while this is off.',
+      type: 'boolean',
+      default: false,
     },
   ],
   commands: [

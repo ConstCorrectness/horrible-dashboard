@@ -13,12 +13,14 @@ One window, a rail of tools, all reading **the same model** and following **one 
 | Activations | `stepper`   | Step a trace node by node: attention maps, residual deltas, MoE routing                 |
 | Activations | `lens`      | Each layer's residual read as words (tabs `trace` `reply` `guess` `compare`)            |
 | Activations | `heads`     | Every attention head of a trace, scored: induction, previous-token, duplicate, sink     |
+| —           | `library`   | SAEs, transcoders and lenses: installed, what they fit, the catalog; the GPU worker     |
 
 ## Tools
 
 - `interp.state` — the full digest: model and where its description came from, the attention pattern, the KV cache, the locus and what that layer is, the last captured turn, the in-window lens run, caveats. **Call it before explaining the screen** unless the pane context in this turn already answers.
 - `interp.attention {from, to}` — per-layer rows: `L17 sliding, window 512, 8q/1kv × 256, KV from L13, (metadata)`. Use for "which layers…", "why is the cache small", "what changes at layer N".
 - `interp.heads {traceId?, metric?, top?}` — a trace's heads ranked by a score, each with its layer kind when the trace is of the loaded model. Induction and duplicate are `null` on a trace that repeats nothing: say they are not measurable and point the user at **Run induction probe** in the Heads section (it records a random word sequence, twice). Never read `null` as zero.
+- `interp.library` — installed artifacts with their stated facts (layer, input width, dictionary width, and where each was read) and a fit verdict per model; the disk budget; the catalog; the GPU worker (state, held model, VRAM). It never downloads: to get something, name the catalog entry and send the user to the Library section, where they confirm its size.
 - `interp.goto {section, tab?, layer?, position?}` — show it. Moving the locus moves every tool.
 - For trace contents (what the model was disposed to say at a layer), use the `lens` group.
 
@@ -31,6 +33,16 @@ Every layer row ends with its **basis**:
 - `tensors` — only the tensor directory shows it (a missing `attn_v` → K=V; `ssm_*` → Mamba; `shortconv` → conv).
 
 A **conflict** means the sources disagree; report it, don't resolve it. A lens grid marked unverified is not a reading. Token counts flagged estimated are estimates.
+
+## Does an artifact fit? Three answers
+
+- `compatible` — trained on this model's repo, and no stated fact contradicts it.
+- `incompatible` — a stated fact contradicts it (another repo, an input width that is not `d_model`, a layer the model lacks). Say which; an SAE on the wrong model still produces numbers, all wrong.
+- `unknown` — nothing contradicts it but not enough is stated: most often a GGUF whose header names no base model. Do not round this up to compatible.
+
+A width read from a **folder name** is a weaker claim than one read from a config; the artifact's `facts.source` says which.
+
+Worker replies are `ran`, `failed` (the traceback is the answer — quote the last line) or `not_checked` (it declined, and says why: no model loaded, a model not in the Hugging Face cache). `not_checked` is not a failure.
 
 ## Glossary
 
@@ -52,6 +64,8 @@ A **conflict** means the sources disagree; report it, don't resolve it. A lens g
 **Logit lens** — unembed (final norm → LM head) the residual after each layer: what the model would say if it stopped there. **J-lens / J++** transport the residual through a fitted Jacobian first and read early layers better.
 **Induction head** — attends from a token to the token that _followed_ its previous occurrence, and copies it forward: the in-context copying circuit. Paired with an earlier **previous-token head**, which lets each position know what came before it.
 **Sink head** — parks most of its weight on position 0 when it has nothing to attend to; high `sink` with low entropy is usually that, not a meaningful pattern.
+**SAE (sparse autoencoder)** — a wide dictionary trained to rewrite one site's activations (e.g. `resid_post` at layer 13) as a few active **features**. **Width** is the dictionary size (16k … 1M); **L0** is how many fire per token. Gemma Scope 2's are **JumpReLU**: a feature fires only above its own learned threshold.
+**Transcoder** — like an SAE, but reads an MLP's input and predicts its output, so features compose across layers; per-layer sets (and cross-layer **CLTs**) are what attribution graphs are built from.
 **MoE** — a router sends each token to the top-k of N expert FFNs; total parameters set memory, active ones set compute.
 
 ## Pitfalls

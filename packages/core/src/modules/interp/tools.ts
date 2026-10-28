@@ -11,7 +11,7 @@ export interface SuiteTool {
   label: string;
   /** `NAMED_GLYPHS` key. */
   glyph: string;
-  /** Rail group heading; absent for Home. */
+  /** Rail group heading; absent for Home and the Library, which stand apart. */
   group?: 'Prompt' | 'Weights' | 'Activations';
   /** The question this tool answers. */
   question: string;
@@ -98,5 +98,12 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     group: 'Activations',
     question: 'Which of the hundreds of heads are doing something nameable?',
     when: 'Find induction, previous-token and sink heads; the probe records the prompt that reveals them.',
+  },
+  {
+    section: SUITE_SECTIONS.library,
+    label: 'Library',
+    glyph: 'library',
+    question: 'Which SAEs, transcoders and lenses do I have — and do they fit this model?',
+    when: 'Fetch Gemma Scope 2 and friends (size shown first), run the GPU worker, look up a Neuronpedia feature.',
   },
 ];
