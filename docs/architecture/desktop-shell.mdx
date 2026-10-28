@@ -638,6 +638,23 @@ window under the pointer.
 A tab torn out of a merged window gets a window of its own (`WINDOW_FROM_PANE`, the
 `window.tearOff` command).
 
+### The titlebar's right-click menu
+
+Right-clicking a window's titlebar opens the `window.titlebar` context menu, which the
+`desktop` module contributes as two groups:
+
+- **Help.** `Help: <pane>` opens that pane's module page on the published docs, and
+  `All documentation` opens the docs home. The page is found by module id
+  (`registry.viewOwnerId`) in `ui/desktop/help-links.ts`; a module with no page gets
+  no per-pane item rather than a guessed URL, and `help-links.test.ts` checks every
+  listed page exists in `docs/`.
+- **Window verbs.** Minimize, Maximize or Restore (named by the window's state),
+  `Move to its own window` when the window holds more than one tab, and Close.
+
+A right-click on a tab is about **that** tab, not the active one: the tab buttons
+carry `data-instance-id` and the handler reads the target from the tab under the
+pointer.
+
 Dragging a window also **releases keyboard/pointer capture** first. A captured pane —
 a game, a terminal, the server-rendered browser — otherwise keeps the pointer and the
 drag never reaches the handler.
@@ -738,7 +755,7 @@ guess their way out of.
 
 A view opts in with **`fullscreen: true`** (`PanelDecl`/`WidgetDecl`) — `hassault.play`,
 `karaoke.stage`, `games.arcade`, `browser.view`, `visualizer.pane`. Only those get the
-`⛶` titlebar button, and only those escalate to **OS-window fullscreen** on a native
+fullscreen titlebar button (ahead of minimize), and only those escalate to **OS-window fullscreen** on a native
 shell. Escalating every presented pane would turn an ordinary "show me this bigger"
 into something that swallows the display; and the escalation remembers whether the app
 was *already* fullscreen, so leaving a presented game does not drop an app the user had
@@ -901,7 +918,8 @@ them equal and the bevel disappears, with no branching anywhere.
 
 That pair is also why **nothing may set `border-color` on a window**: the shorthand
 overrides all four sides and flattens the bevel. Focus is carried by the titlebar
-(`--win-titlebar-bg-active`) and the shadow instead. Control placement (left vs
-right) is a flex `order` token, not a JS branch.
+(`--win-titlebar-bg-active`) and the shadow instead. Control placement is not
+themeable: minimize, maximize and close sit at the right end of the titlebar in every
+theme.
 
 See [theming.mdx](theming.mdx).

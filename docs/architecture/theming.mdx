@@ -85,11 +85,11 @@ focused window, i.e. on the only window the user is looking at. Focus is carried
 the titlebar (`--win-titlebar-bg-active`) and the shadow instead, which is the older
 and more universal convention anyway.
 
-**`--win-controls-order`** is a flex `order`: `1` puts the window controls after the
-title (Windows-style), `-1` before it (macOS-style, which `glass` uses). Control
-*placement* is layout rather than colour, so it is still a token and still not a
-JavaScript branch. It moves the group; it does not restyle the buttons into traffic
-lights, which would need a component fork.
+**Window controls are not themeable by placement.** Minimize, maximize and close
+sit at the right end of every window's titlebar in every theme. There was a
+`--win-controls-order` token that let `glass` move them to the left, macOS-style;
+it was removed so the buttons are always where the user last found them, whatever
+theme is on.
 
 ## Selecting one
 

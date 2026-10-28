@@ -10,7 +10,10 @@
  */
 import {
   arrangeDesktop,
+  closePaneGuarded,
   currentThemeId,
+  paneDisplayTitle,
+  resolveView,
   cycleWindows,
   focusWindowDirection,
   snapFocused,
@@ -19,9 +22,7 @@ import {
   toggleWindowMinimized,
   getSetting,
   layoutStore,
-  openExternal,
   registry,
-  toastsStore,
   setBackdrop,
   setSetting,
   taskbarEntries,
@@ -31,6 +32,7 @@ import {
 } from '@horrible/core';
 
 import { BUILTIN_BACKDROPS } from './backdrops';
+import { docsPageFor, openDocs } from './help-links';
 import { SNAP_ARROWS, SNAP_CELLS, SNAP_PREFIX, snapCommandId } from './snap-palette';
 import {
   homeUnderlayId,
@@ -60,13 +62,6 @@ import { themeMenuItems } from './taskbar/Tray';
  * synthesizes one per registered provider, so a plugin's backdrop gets its
  * command without a second list to keep in step. See `registry.ts`.
  */
-/**
- * The published documentation. A constant rather than a setting: this is where
- * *this build's* docs live, and a user pointing it somewhere else is not a thing
- * anyone wants. Deployed from `docs/` by `.github/workflows/docs.yml`.
- */
-const DOCS_URL = 'https://constcorrectness.github.io/horrible-dashboard/';
-
 export const desktopModule: ModuleManifest = {
   id: 'desktop',
   title: 'Desktop',
@@ -74,27 +69,14 @@ export const desktopModule: ModuleManifest = {
   commands: [
     {
       /**
-       * The app's documentation. There is no in-app help surface at all — no tour,
-       * no help menu, no docs pane — while a full Docusaurus site is built from
-       * `docs/` and published on every push to `main`. Linking it is a one-line fix
-       * for the gap; writing a second copy of it inside the app is not.
-       *
-       * The result of `openExternal` is **checked**, because this is exactly the
-       * failure it exists to catch: `window.open` returns null behind a pop-up
-       * blocker and the Tauri invoke rejects on an older shell, and neither throws.
-       * A Help button that does nothing is worse than no Help button — the user
-       * concludes the docs do not exist rather than that a pop-up was blocked.
+       * The app's documentation. A full Docusaurus site is built from `docs/` and
+       * published on every push to `main`; linking it beats writing a second copy
+       * inside the app. A window's titlebar menu links the pane's own page — see
+       * `titlebarHelpItems` and `help-links.ts`.
        */
       id: 'shell.help',
       title: 'Help: Open the documentation',
-      run: async () => {
-        if (await openExternal(DOCS_URL)) return;
-        toastsStore.add(
-          'warning',
-          'Could not open the docs',
-          `Your browser may have blocked it. The documentation is at ${DOCS_URL}`,
-        );
-      },
+      run: () => openDocs(),
     },
     {
       // The home screen is a backdrop, so `window.minimize` cannot see it: that
@@ -258,8 +240,84 @@ export const desktopModule: ModuleManifest = {
     { kind: 'taskbar.window', items: (target) => taskbarWindowMenu(target) },
     { kind: 'taskbar', items: () => taskbarMenu() },
     { kind: 'taskbar.theme', items: () => themeMenuItems(currentThemeId()) },
+    // Two providers for one target so the menu draws a separator between the
+    // help and the window verbs — the separator only falls between groups.
+    { kind: 'window.titlebar', items: (target) => titlebarHelpItems(target) },
+    { kind: 'window.titlebar', items: (target) => titlebarWindowItems(target) },
   ],
 };
+
+/** The pane a titlebar right-click was about, if it is still open. */
+function titlebarPane(target: ContextTarget) {
+  const windowId = typeof target.windowId === 'string' ? target.windowId : null;
+  const instanceId = typeof target.instanceId === 'string' ? target.instanceId : null;
+  const win = layoutStore.getSnapshot().frame.windows.find((w) => w.id === windowId);
+  const pane = win?.area.tabs.find((t) => t.instanceId === instanceId);
+  return win && pane ? { win, pane } : null;
+}
+
+/**
+ * Help for the pane under the pointer: its module's page in the docs, then the
+ * docs as a whole. The per-pane item is dropped, not greyed, for a module with
+ * no page — `docsPageFor` never guesses a URL.
+ */
+function titlebarHelpItems(target: ContextTarget): ContextMenuItem[] {
+  const hit = titlebarPane(target);
+  if (!hit) return [];
+  const moduleId = registry.viewOwnerId(hit.pane.viewId);
+  const page = docsPageFor(moduleId);
+  const title = resolveView(hit.pane.viewId)?.title ?? paneDisplayTitle(hit.pane);
+  return [
+    ...(page
+      ? [
+          {
+            id: 'window.help',
+            label: `Help: ${title}`,
+            detail: `What the ${registry.viewOwner(hit.pane.viewId) ?? title} pane does and how to use it`,
+            run: () => openDocs(page),
+          },
+        ]
+      : []),
+    { id: 'window.helpAll', label: 'All documentation', run: () => openDocs() },
+  ];
+}
+
+/** The window verbs, named by the window's current state. */
+function titlebarWindowItems(target: ContextTarget): ContextMenuItem[] {
+  const hit = titlebarPane(target);
+  if (!hit) return [];
+  const { win, pane } = hit;
+  const maximized = win.mode === 'maximized' || win.snap === 'max';
+  return [
+    {
+      id: 'window.minimize',
+      label: 'Minimize',
+      run: () => void toggleWindowMinimized(win.id),
+    },
+    {
+      id: 'window.maximize',
+      label: maximized ? 'Restore' : 'Maximize',
+      run: () => void toggleWindowMaximized(win.id),
+    },
+    // Only where there is a tab to pull out; on a one-pane window it would
+    // close the window and open an identical one.
+    ...(win.area.tabs.length > 1
+      ? [
+          {
+            id: 'window.tearOff',
+            label: 'Move to its own window',
+            run: () => void tearOffPane(pane.instanceId),
+          },
+        ]
+      : []),
+    {
+      id: 'window.close',
+      label: 'Close',
+      danger: true,
+      run: () => void closePaneGuarded(pane.instanceId),
+    },
+  ];
+}
 
 /**
  * The backdrop picker, resolved from the registry at click time so a plugin's

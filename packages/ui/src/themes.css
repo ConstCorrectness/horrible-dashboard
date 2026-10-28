@@ -162,11 +162,6 @@
  * backdrop stays visible *through* the app — so this is the one theme where the
  * `--win-backdrop-filter` token earns its keep, and where surfaces are declared
  * with alpha rather than as flat colours.
- *
- * Window controls sit on the LEFT here (`--win-controls-order`), the macOS
- * convention. The glyphs stay `─ □ ✕` rather than becoming traffic lights: the
- * token moves the group, it does not restyle the buttons, and pretending
- * otherwise would need a component fork.
  */
 :root[data-theme='glass'] {
   color-scheme: dark;
@@ -217,7 +212,6 @@
   --taskbar-backdrop-filter: blur(20px) saturate(150%);
   --taskbar-bg: rgb(24 28 36 / 65%);
   --win-titlebar-h: 34px;
-  --win-controls-order: -1;
 }
 
 /* --------------------------------------------------------------------- hud --
@@ -621,10 +615,6 @@
   --win-shadow: var(--shadow-overlay);
   --win-shadow-focus: var(--shadow-overlay);
   --win-backdrop-filter: none;
-  /* Flex `order` for the window's control group: 1 puts it after the title
-     (Windows-style), -1 before it (macOS-style). Layout, not colour — which is
-     why it is a token and not a component branch. */
-  --win-controls-order: 1;
 
   --taskbar-bg: var(--bg-elevated);
   --taskbar-h: 40px;

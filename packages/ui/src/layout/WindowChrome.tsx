@@ -18,26 +18,26 @@ import { hasCapability, windowControl, type ResizeEdge } from '@horrible/core';
 
 import { useAppFullscreen } from '../hooks/useAppFullscreen';
 
-const MinimizeIcon = () => (
+export const MinimizeIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M1 5h8" stroke="currentColor" strokeWidth="1" fill="none" />
   </svg>
 );
 
-const MaximizeIcon = () => (
+export const MaximizeIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <rect x="1" y="1" width="8" height="8" stroke="currentColor" strokeWidth="1" fill="none" />
   </svg>
 );
 
-const RestoreIcon = () => (
+export const RestoreIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <rect x="1" y="3" width="6" height="6" stroke="currentColor" strokeWidth="1" fill="none" />
     <path d="M3 3V1h6v6H7" stroke="currentColor" strokeWidth="1" fill="none" />
   </svg>
 );
 
-const FullscreenIcon = () => (
+export const FullscreenIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path
       d="M1 3.5V1h2.5M6.5 1H9v2.5M9 6.5V9H6.5M3.5 9H1V6.5"
@@ -48,7 +48,7 @@ const FullscreenIcon = () => (
   </svg>
 );
 
-const LeaveFullscreenIcon = () => (
+export const LeaveFullscreenIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path
       d="M3.5 1v2.5H1M9 3.5H6.5V1M6.5 9V6.5H9M1 6.5h2.5V9"
@@ -59,7 +59,7 @@ const LeaveFullscreenIcon = () => (
   </svg>
 );
 
-const CloseIcon = () => (
+export const CloseIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" fill="none" />
   </svg>

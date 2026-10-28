@@ -256,7 +256,10 @@
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  width: 300px;
+  /* Sized by the footer: its five buttons need ~306px at their content width, and
+     at 300px they ran past the right padding and were clipped by the
+     `overflow: hidden` below, leaving "Theme" flush against the edge. */
+  width: 320px;
   max-height: 60vh;
   display: flex;
   flex-direction: column;

@@ -171,7 +171,10 @@
   align-items: center;
   gap: 6px;
   height: var(--win-titlebar-h, 30px);
-  padding: 0 4px 0 8px;
+  /* The right padding is the button's vertical margin, so the close button sits
+     as far from the right edge as from the top and bottom — 4px at the default
+     30px, 6px in `glass`'s 34px. 22px is `.os-window-btn`'s height. */
+  padding: 0 calc((var(--win-titlebar-h, 30px) - 22px) / 2) 0 8px;
   background: var(--win-titlebar-bg, var(--bg-elevated));
   border-bottom: 1px solid var(--border);
   cursor: grab;
@@ -241,18 +244,19 @@
   color: var(--text-strong);
 }
 
+/* Pinned to the right end in every theme. `margin-left: auto` rather than
+   relying on the title's `flex: 1`, so a short tab strip cannot leave them
+   floating mid-bar. */
 .os-window-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 auto;
-  /* Traffic-light themes put the controls on the left. One token, a flex order
-     change, no JavaScript branch and no per-platform component. */
-  order: var(--win-controls-order, 1);
+  margin-left: auto;
 }
 
 .os-window-btn {
-  width: 24px;
+  width: 28px;
   height: 22px;
   display: grid;
   place-items: center;

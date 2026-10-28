@@ -499,10 +499,23 @@ class ModuleRegistry {
   }
 
   viewOwner(viewId: string): string | undefined {
+    return this.viewModule(viewId)?.title;
+  }
+
+  /**
+   * The id of the module that declared `viewId` — the stable key, where
+   * `viewOwner` is the display title. The titlebar's Help item maps it to the
+   * module's page in `docs/modules/`.
+   */
+  viewOwnerId(viewId: string): string | undefined {
+    return this.viewModule(viewId)?.id;
+  }
+
+  private viewModule(viewId: string): ModuleManifest | undefined {
     for (const m of this.modules.values()) {
       const declared =
         m.panels?.some((p) => p.id === viewId) || m.widgets?.some((w) => w.id === viewId);
-      if (declared) return m.title;
+      if (declared) return m;
     }
     return undefined;
   }

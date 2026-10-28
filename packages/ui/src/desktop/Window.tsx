@@ -21,6 +21,7 @@ import {
   focusWindow,
   layoutStore,
   MIN_WINDOW_SIZE,
+  openContextMenu,
   paneDisplayTitle,
   presentPane,
   releaseCapture,
@@ -34,6 +35,14 @@ import {
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { PaneWithRegions } from '../layout/Region';
+import {
+  CloseIcon,
+  FullscreenIcon,
+  LeaveFullscreenIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+  RestoreIcon,
+} from '../layout/WindowChrome';
 import {
   animateGeometry,
   animateMinimize,
@@ -313,12 +322,26 @@ export const DesktopWindow = memo(function DesktopWindow({
         onDoubleClick={() => {
           if (!presented) toggleWindowMaximized(win.id);
         }}
+        // Help for this pane, and the window verbs (the `desktop` module's
+        // `window.titlebar` menu). A right-click on a tab is about that tab, not
+        // the active one, so the target is read from the tab under the pointer.
+        onContextMenu={(e) => {
+          const tab = (e.target as HTMLElement).closest<HTMLElement>('[data-instance-id]');
+          const instanceId = tab?.dataset.instanceId ?? active?.instanceId;
+          if (!instanceId) return;
+          if (openContextMenu(e, { kind: 'window.titlebar', windowId: win.id, instanceId })) {
+            e.preventDefault();
+            // Or the desktop underneath opens its own menu over this one.
+            e.stopPropagation();
+          }
+        }}
       >
         {win.area.tabs.length > 1 ? (
           <div className="os-window-tabs" ref={tabWheelRef} role="tablist">
             {win.area.tabs.map((tab, i) => (
               <button
                 key={tab.instanceId}
+                data-instance-id={tab.instanceId}
                 role="tab"
                 aria-selected={i === win.area.activeTab}
                 className={`os-window-tab${i === win.area.activeTab ? ' is-active' : ''}`}
@@ -344,29 +367,17 @@ export const DesktopWindow = memo(function DesktopWindow({
             {active ? paneDisplayTitle(active) : 'Window'}
           </span>
         )}
+        {/* Always the right end of the titlebar, in every theme. The glyphs are
+            the native strip's SVGs (WindowChrome.tsx) rather than `─ □ ✕` text:
+            three characters from three Unicode blocks render at three different
+            sizes and baselines, so evenly sized buttons still looked unevenly
+            spaced. */}
         <div className="os-window-controls">
-          <button
-            className="os-window-btn"
-            title="Minimize"
-            aria-label="Minimize"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => toggleWindowMinimized(win.id)}
-          >
-            ─
-          </button>
-          <button
-            className="os-window-btn"
-            title={maximized ? 'Restore' : 'Maximize'}
-            aria-label={maximized ? 'Restore' : 'Maximize'}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => toggleWindowMaximized(win.id)}
-          >
-            {maximized ? '❐' : '□'}
-          </button>
           {/* Only for a view that declares `fullscreen`. Presenting is a real
               escalation — it hides the taskbar and, on desktop, takes the whole
               display — so it is offered where a pane has said it wants the
-              screen, not on every window as a bigger maximize. */}
+              screen, not on every window as a bigger maximize. Ahead of the
+              three, as on the native strip, so they keep their positions. */}
           {decl?.fullscreen && (
             <button
               className="os-window-btn"
@@ -376,9 +387,27 @@ export const DesktopWindow = memo(function DesktopWindow({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => presentPane(presented ? null : (active?.instanceId ?? null))}
             >
-              {presented ? '⤡' : '⛶'}
+              {presented ? <LeaveFullscreenIcon /> : <FullscreenIcon />}
             </button>
           )}
+          <button
+            className="os-window-btn"
+            title="Minimize"
+            aria-label="Minimize"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => toggleWindowMinimized(win.id)}
+          >
+            <MinimizeIcon />
+          </button>
+          <button
+            className="os-window-btn"
+            title={maximized ? 'Restore' : 'Maximize'}
+            aria-label={maximized ? 'Restore' : 'Maximize'}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => toggleWindowMaximized(win.id)}
+          >
+            {maximized ? <RestoreIcon /> : <MaximizeIcon />}
+          </button>
           <button
             className="os-window-btn os-window-btn--close"
             title="Close"
@@ -386,7 +415,7 @@ export const DesktopWindow = memo(function DesktopWindow({
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => active && void closePaneGuarded(active.instanceId)}
           >
-            ✕
+            <CloseIcon />
           </button>
         </div>
       </div>
