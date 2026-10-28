@@ -21,6 +21,7 @@ from backend.modules.interp import (
     env,
     graphs,
     lenses,
+    nla,
     neuronpedia,
     sae,
     steer,
@@ -120,6 +121,34 @@ class AxisCapRequest(BaseModel):
     layers: list[int] = []
     tau: dict[str, float] = {}
     maxTokens: int = 48
+
+
+class NlaExplainRequest(BaseModel):
+    pairId: str = "qwen2.5-7b-L20"
+    #: One source: raw text, a conversation (through the base model's template),
+    #: a captured agent turn, or a trace of the base model.
+    text: str = ""
+    messages: list[dict[str, Any]] = []
+    turnId: str = ""
+    round: int = -1
+    traceId: str = ""
+    #: Positions to explain (negative from the end); the last `limit` otherwise.
+    positions: list[int] = []
+    limit: int = 3
+    samples: int = 1
+    maxTokens: int = nla.DEFAULT_MAX_TOKENS
+    temperature: float = nla.DEFAULT_TEMPERATURE
+    seed: int | None = None
+    #: Per-part GGUF paths, when more than one candidate is on disk.
+    basePath: str = ""
+    avPath: str = ""
+    arPath: str = ""
+
+
+class NlaScoreRequest(BaseModel):
+    readoutId: str
+    position: int
+    explanation: str
 
 
 class WorkerOpRequest(BaseModel):
@@ -554,7 +583,7 @@ def _ndjson(
                     yield json.dumps({"done": True, "result": result}) + "\n"
                 else:
                     yield json.dumps(event) + "\n"
-        except axis.AxisError as exc:
+        except (axis.AxisError, nla.NlaError) as exc:
             yield json.dumps({"error": str(exc)}) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
@@ -736,6 +765,151 @@ async def post_axis_cap(req: AxisCapRequest) -> StreamingResponse:
         return {**result, "layers": layers, "tau": floors, "check": ax.meta["check"]}
 
     return _ndjson(axis.run(spec), finish)
+
+
+# ── natural language autoencoders ────────────────────────────────────────────
+
+
+@router.get("/nla")
+async def get_nla() -> dict[str, Any]:
+    """Known NLA pairs with the GGUFs found for each part, and recent readouts."""
+    pairs = await asyncio.to_thread(nla.list_pairs)
+    return {
+        "pairs": pairs,
+        "readouts": nla.list_readouts(),
+        "defaults": {
+            "limit": 3,
+            "samples": 1,
+            "maxTokens": nla.DEFAULT_MAX_TOKENS,
+            "temperature": nla.DEFAULT_TEMPERATURE,
+            "goodCos": nla.GOOD_COS,
+            "weakCos": nla.WEAK_COS,
+            "minLift": nla.MIN_LIFT,
+            "earlyPositions": nla.EARLY_POSITIONS,
+            "nullExplanation": nla.NULL_EXPLANATION,
+        },
+    }
+
+
+@router.get("/nla/readouts/{readout_id}")
+async def get_nla_readout(readout_id: str) -> dict[str, Any]:
+    try:
+        return nla.load_readout(readout_id)
+    except nla.NlaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _nla_pair(
+    pair_id: str,
+    overrides: dict[str, str | None],
+    parts: tuple[str, ...] = ("base", "av", "ar"),
+) -> dict[str, Any]:
+    try:
+        return nla.resolve(pair_id, overrides, parts)
+    except nla.NlaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/nla/explain")
+async def post_nla_explain(req: NlaExplainRequest) -> StreamingResponse:
+    """Explain positions of a text, conversation, agent turn or trace with the AV,
+    score each explanation with the AR, streamed; the readout is stored."""
+    pair = await asyncio.to_thread(
+        _nla_pair,
+        req.pairId,
+        {"base": req.basePath, "av": req.avPath, "ar": req.arPath},
+    )
+    facts = {k: v for k, v in pair.items() if k not in ("files", "paths", "ready")}
+    spec: dict[str, Any] = {
+        "mode": "explain",
+        "pair": facts,
+        "basePath": pair["paths"]["base"],
+        "avPath": pair["paths"]["av"],
+        "arPath": pair["paths"]["ar"],
+        "positions": req.positions,
+        "limit": max(1, min(req.limit, 16)),
+        "samples": max(1, min(req.samples, 5)),
+        "maxTokens": max(16, min(req.maxTokens, 400)),
+        "temperature": max(0.0, min(req.temperature, 2.0)),
+        "seed": req.seed,
+    }
+    source: dict[str, Any]
+    if req.traceId:
+        trace = _trace_or_404(req.traceId)
+        try:
+            got = await asyncio.to_thread(nla.trace_vectors, trace, facts)
+        except nla.NlaError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        spec["vectors"] = got["vectors"].tolist()
+        spec["tokens"] = got["tokens"]
+        source = {"kind": "trace", "traceId": req.traceId}
+    elif req.turnId:
+        try:
+            messages, turn = axis.turn_messages(req.turnId, req.round)
+        except axis.AxisError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        spec["messages"] = messages
+        source = {**turn, "kind": "turn"}
+    elif req.messages:
+        spec["messages"] = axis.flatten_messages(req.messages)
+        source = {"kind": "messages"}
+    elif req.text.strip():
+        spec["text"] = req.text
+        source = {"kind": "text", "text": req.text[:400]}
+    else:
+        raise HTTPException(status_code=422, detail="nothing to explain")
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        gold = {int(p): v for p, v in result.pop("gold").items()}
+        return nla.save_readout(
+            {
+                **result,
+                "pairId": req.pairId,
+                "layer": facts["layer"],
+                "source": source,
+                "paths": pair["paths"],
+                "summary": nla.summarize(result["positions"]),
+            },
+            gold,
+        )
+
+    return _ndjson(nla.run(spec), finish)
+
+
+@router.post("/nla/score")
+async def post_nla_score(req: NlaScoreRequest) -> StreamingResponse:
+    """Score an explanation someone wrote or edited against a stored readout's
+    original vector at one position: the AR alone."""
+    try:
+        readout = nla.load_readout(req.readoutId)
+        gold = nla.load_gold(req.readoutId, req.position)
+    except nla.NlaError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not req.explanation.strip():
+        raise HTTPException(status_code=422, detail="no explanation to score")
+    pair = await asyncio.to_thread(
+        _nla_pair,
+        readout["pairId"],
+        {"ar": readout.get("paths", {}).get("ar")},
+        ("ar",),
+    )
+    spec = {
+        "mode": "score",
+        "pair": {k: v for k, v in pair.items() if k not in ("files", "paths", "ready")},
+        "arPath": pair["paths"]["ar"],
+        "items": [{"explanation": req.explanation, "vector": gold.tolist()}],
+    }
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        s = result["scores"][0]
+        return {
+            **s,
+            "position": req.position,
+            "readoutId": req.readoutId,
+            "verdict": nla.verdict(s.get("cos"), s.get("nullCos")),
+        }
+
+    return _ndjson(nla.run(spec, timeout=600), finish)
 
 
 # ── neuronpedia ──────────────────────────────────────────────────────────────

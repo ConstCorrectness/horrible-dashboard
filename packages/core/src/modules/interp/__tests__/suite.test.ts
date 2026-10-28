@@ -74,6 +74,7 @@ describe('interpretability suite manifest', () => {
       'interp.heads',
       'interp.lenses',
       'interp.library',
+      'interp.nla',
       'interp.state',
       'interp.steer',
     ]);

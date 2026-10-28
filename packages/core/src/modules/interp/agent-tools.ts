@@ -3,7 +3,7 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Ten verbs; all but `interp.steer` read-only:
+ * group (the `interp` roster agent preloads it). Eleven verbs; all but `interp.steer` read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
@@ -16,6 +16,8 @@
  *   model and records two traces, so it is a side effect the permission engine sees).
  * - `interp.axis` — the Assistant Axis built on a local GGUF: its held-out check, where
  *   roles sit on it, and the Axis section's last reading and cap (or a trace, read now).
+ * - `interp.nla` — natural language autoencoder readouts: each explained position's
+ *   words, its reconstruction cos and the neutral floor it is read above.
  * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
  * - `interp.goto` — show a section, and move the shared model locus.
  *
@@ -61,6 +63,7 @@ import {
   track as trackLens,
 } from './lenses/state';
 import { libraryStore, refreshLibrary } from './library/state';
+import { currentPair as currentNlaPair, nlaStore, openReadout, refreshNla } from './nla/state';
 import { searchVocab } from '../llamacpp/api';
 import { run as runSteer, setDraft as setSteerDraft, steerStore } from './steer/state';
 import { setSubSection } from './SubSections';
@@ -480,6 +483,69 @@ export const interpAgentTools: AgentToolDecl[] = [
           answerTokens: c.capped.tokens.filter((t) => t.generated).length,
           defaultText: c.default.text,
           cappedText: c.capped.text,
+        };
+      }
+      return out;
+    },
+  },
+  {
+    name: 'interp.nla',
+    description:
+      'Natural language autoencoder readouts (NLA section), run locally: an explainer model ' +
+      "(AV) put a position's layer-K residual into words, a reconstructor (AR) predicted the " +
+      'vector back from those words. Returns, per explained position: the explanation, its ' +
+      'reconstruction cos, the neutral floor (nullCos: a content-free sentence scored against ' +
+      'the same vector — read cos ABOVE it, never against 0), the verdict and flags (early ' +
+      'position, high norm). Defaults to the readout in view; readoutId picks a stored one. ' +
+      'Also says whether the pair’s three GGUFs are on disk. Read-only: explaining runs in ' +
+      'the section.',
+    params: {
+      type: 'object',
+      properties: {
+        readoutId: {
+          type: 'string',
+          description: 'A stored readout id (default: the one in view).',
+        },
+      },
+    },
+    handler: async (args) => {
+      if (!nlaStore.get().pairs.length) await refreshNla();
+      if (typeof args.readoutId === 'string' && args.readoutId) await openReadout(args.readoutId);
+      const st = nlaStore.get();
+      const pair = currentNlaPair(st);
+      if (!pair) return { error: 'No NLA pair is known on this node.' };
+      const out: Record<string, unknown> = {
+        pair: pair.label,
+        ready: pair.ready,
+        layer: pair.layer,
+        files: Object.fromEntries(
+          Object.entries(pair.files).map(([k, v]) => [k, v[0]?.split(/[\\/]/).pop() ?? null]),
+        ),
+        thresholds: st.defaults && {
+          carried: st.defaults.goodCos,
+          partial: st.defaults.weakCos,
+          minAboveNeutral: st.defaults.minLift,
+        },
+        storedReadouts: st.readouts.length,
+      };
+      const r = st.readout;
+      if (r) {
+        out.readout = {
+          id: r.id,
+          source: r.source,
+          tokens: r.tokens.length,
+          summary: r.summary,
+          seconds: r.timing.total,
+          positions: r.positions.map((p) => ({
+            position: p.position,
+            token: p.token,
+            verdict: p.verdict,
+            cos: p.best?.cos ?? null,
+            nullCos: p.best?.nullCos ?? null,
+            flags: p.flags,
+            explanation: p.best?.explanation ?? null,
+            otherSamples: p.samples.length - 1,
+          })),
         };
       }
       return out;

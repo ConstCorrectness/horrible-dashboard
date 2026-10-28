@@ -133,6 +133,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     when: 'Attribution graphs from Neuronpedia or circuit-tracer: prune, pin, group into supernodes, read the paths.',
   },
   {
+    section: SUITE_SECTIONS.nla,
+    label: 'NLA',
+    glyph: 'speech',
+    group: 'Circuits',
+    question: 'What is in this activation, in words — and do the words carry it?',
+    when: 'A natural language autoencoder on local GGUFs: one model explains a position’s residual, another reconstructs it from the explanation, scored against a neutral floor.',
+  },
+  {
     section: SUITE_SECTIONS.library,
     label: 'Library',
     glyph: 'library',

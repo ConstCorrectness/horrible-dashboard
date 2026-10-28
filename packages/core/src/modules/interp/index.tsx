@@ -38,6 +38,7 @@ const FeaturesBody = lazyPane(() => import('./features/FeaturesSection'), 'Featu
 const SteerBody = lazyPane(() => import('./steer/SteerSection'), 'SteerBody');
 const AxisBody = lazyPane(() => import('./axis/AxisSection'), 'AxisBody');
 const GraphBody = lazyPane(() => import('./graph/GraphSection'), 'GraphBody');
+const NlaBody = lazyPane(() => import('./nla/NlaSection'), 'NlaBody');
 const LibraryBody = lazyPane(() => import('./library/LibrarySection'), 'LibraryBody');
 // The chat (and its 3D avatar) loads when the Ask strip first opens, not with the suite.
 const AskPanel = lazyPane(() => import('./AskPanel'), 'AskPanel');
@@ -61,6 +62,7 @@ const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['compon
   steer: { title: 'Steering', component: SteerBody },
   axis: { title: 'Assistant axis', component: AxisBody },
   graph: { title: 'Attribution graph', component: GraphBody },
+  nla: { title: 'Natural language autoencoder', component: NlaBody },
   library: { title: 'Interpretability library', component: LibraryBody },
 };
 

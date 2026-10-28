@@ -31,6 +31,7 @@ import { featuresDigest } from './features/state';
 import { graphDigest } from './graph/state';
 import { lensCompareDigest } from './lenses/state';
 import { libraryDigest } from './library/state';
+import { nlaDigest } from './nla/state';
 import { steerDigest } from './steer/state';
 
 export interface DigestInputs {
@@ -51,6 +52,8 @@ export interface DigestInputs {
   steer?: string | null;
   /** The Axis section's: the axis, its held-out check, the last reading and cap. */
   axis?: string | null;
+  /** The NLA section's: the pair, the readout in view and its score against the floor. */
+  nla?: string | null;
   /** The Library's: artifacts, what fits, what the worker holds (`library/state.ts`). */
   library?: string | null;
 }
@@ -68,6 +71,7 @@ export function readDigestInputs(): DigestInputs {
     lenses: lensCompareDigest(),
     steer: steerDigest(),
     axis: axisDigest(),
+    nla: nlaDigest(),
     library: libraryDigest(),
   };
 }
@@ -118,6 +122,7 @@ export interface SuiteDigest {
   lenses?: string;
   steer?: string;
   axis?: string;
+  nla?: string;
   library?: string;
   caveats?: string[];
   /** Full only. */
@@ -199,6 +204,7 @@ export function buildDigest(
   if (inputs.lenses) out.lenses = inputs.lenses;
   if (inputs.steer) out.steer = inputs.steer;
   if (inputs.axis) out.axis = inputs.axis;
+  if (inputs.nla) out.nla = inputs.nla;
   if (inputs.library) out.library = inputs.library;
 
   if (lensRun && lensRun.tokens.length) {

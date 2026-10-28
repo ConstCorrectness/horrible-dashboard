@@ -66,6 +66,7 @@ def test_guide_and_frontend_declare_the_same_tools() -> None:
         "interp.library",
         "interp.steer",
         "interp.axis",
+        "interp.nla",
         "interp.goto",
     }
     guide = module_guide("interp") or ""
