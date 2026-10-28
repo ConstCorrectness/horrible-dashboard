@@ -70,6 +70,7 @@ describe('interpretability suite manifest', () => {
       'interp.features',
       'interp.goto',
       'interp.heads',
+      'interp.lenses',
       'interp.library',
       'interp.state',
       'interp.steer',

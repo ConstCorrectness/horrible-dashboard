@@ -181,13 +181,24 @@ def _safe_component(value: str) -> str:
     return cleaned
 
 
-def transport(spec: LensSpec, layer: int, h: np.ndarray) -> np.ndarray:
-    """Apply the lens's transport to one residual vector."""
+def transport(
+    spec: LensSpec, layer: int, h: np.ndarray, final_layer: int | None = None
+) -> np.ndarray | None:
+    """Apply the lens's transport to one residual vector.
+
+    `None` when a fitted lens has no map for `layer` — the embedding, or a layer
+    the fit skipped — and the cell is left empty rather than filled with another
+    lens's reading. The final block is the exception: a fitted lens maps every
+    layer *to the final one*, so the final block's own map is the identity, and
+    the published files leave it out for that reason.
+    """
     if spec.kind == "identity" or spec.directory is None:
         return h
     path = spec.directory / f"J_{layer}.npy"
     if not path.is_file():
-        raise LensError(f"lens {spec.id!r} has no matrix for layer {layer}")
+        if final_layer is not None and layer == final_layer:
+            return h
+        return None
     matrix = np.load(path, mmap_mode="r")
     if matrix.shape[1] != h.shape[0]:
         raise LensError(
@@ -217,6 +228,9 @@ class Unembedding:
     #: Gemma 2's `tanh(x/c) * c` on the final logits. None when the model has none.
     logit_softcap: float | None
     architecture: str
+    #: Decoder blocks (`{arch}.block_count`); the last is where a fitted lens is
+    #: the identity. 0 when the header does not say.
+    n_layer: int
     #: `tokenizer.ggml.model` — "gpt2", "llama", … It decides how a raw vocabulary
     #: entry is rendered, and re-reading the header for it would re-parse a
     #: 256k-entry string array every time a cell is drawn.
@@ -312,6 +326,7 @@ def load_unembedding(model_path: str | Path) -> Unembedding:
         norm_eps=float(eps) if isinstance(eps, (int, float)) else 1e-5,
         logit_softcap=float(softcap) if isinstance(softcap, (int, float)) else None,
         architecture=str(header.metadata.get("general.architecture") or ""),
+        n_layer=int(_metadata_suffix(header.metadata, ".block_count") or 0),
         tokenizer_model=str(header.metadata.get("tokenizer.ggml.model") or ""),
         vocab=[str(v) for v in header.metadata.get("tokenizer.ggml.tokens") or []],
         token_types=[
@@ -757,7 +772,9 @@ def compute_grid(
             column = column_of(matrix, residuals.n_tokens, position)
             if column is None:
                 continue
-            vector = transport(spec, layer, matrix[:, column])
+            vector = transport(spec, layer, matrix[:, column], un.n_layer - 1)
+            if vector is None:
+                continue  # no map for this layer: an empty cell, not a guess
             at[(layer, position)] = len(vectors)
             vectors.append(rms_norm(vector, un.norm_weight, un.norm_eps))
     if check:
@@ -1009,7 +1026,9 @@ def track_token(
             column = column_of(matrix, residuals.n_tokens, position)
             if column is None:
                 continue
-            vector = transport(spec, layer, matrix[:, column])
+            vector = transport(spec, layer, matrix[:, column], un.n_layer - 1)
+            if vector is None:
+                continue  # no map for this layer: an empty cell, not a guess
             at[(layer, position)] = len(vectors)
             vectors.append(rms_norm(vector, un.norm_weight, un.norm_eps))
     if not vectors:

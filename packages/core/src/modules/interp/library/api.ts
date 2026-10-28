@@ -202,6 +202,32 @@ export function getFeature(model: string, source: string, index: string): Promis
   return apiGet(`/interp/neuronpedia/feature?${q.toString()}`);
 }
 
+export interface LensTarget {
+  modelPath: string;
+  name: string;
+  compat: { state: CompatState; reasons: string[] };
+  /** Lens ids from this artifact already installed for that GGUF. */
+  installed: string[];
+}
+
+/** Local GGUFs a downloaded lens matches, and how many others were left out. */
+export function getLensTargets(
+  artifactId: string,
+): Promise<{ targets: LensTarget[]; unmatched: number }> {
+  return apiGet(`/interp/lens/targets?artifactId=${encodeURIComponent(artifactId)}`);
+}
+
+/** Convert a downloaded lens into the llama.cpp lens slot for one GGUF (worker). */
+export function installLens(
+  artifactId: string,
+  modelPath: string,
+): Promise<{
+  installed?: { lensId: string; layers: number[]; nPrompts: number }[];
+  error?: string;
+}> {
+  return apiPost('/interp/lens/install', { artifactId, modelPath });
+}
+
 export function workerOp(op: string, args: Record<string, unknown> = {}): Promise<WorkerReply> {
   return apiPost('/interp/worker/op', { op, args });
 }

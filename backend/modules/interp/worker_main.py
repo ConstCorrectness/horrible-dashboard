@@ -166,12 +166,75 @@ def op_generate(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def op_jlens_convert(args: dict[str, Any]) -> dict[str, Any]:
+    """Convert a Neuronpedia Jacobian / J++ lens (`torch.save` dict) into the slot
+    `llamacpp/lens.py` reads: one `J_<layer>.npy` (fp16) per layer + `lens.json`.
+
+    `weights_only=True`: the file is a pickle from the internet, and this refuses
+    anything but tensors and plain containers rather than running its code.
+
+    Layer `k` of the file is the residual after block `k` — llama.cpp's `l_out-k`.
+    Measured, not assumed (docs/modules/interp-suite.mdx): read that way, the
+    Gemma 3 1B lens surfaces two-hop bridge concepts tens of layers early; read as
+    block inputs it does slightly worse, and transposed it reads nothing.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    import numpy as np
+
+    torch = _torch()
+    src, dest = _Path(str(args["src"])), _Path(str(args["dest"]))
+    if not src.is_file():
+        raise NotChecked(f"no lens file at {src}")
+    data = torch.load(src, map_location="cpu", weights_only=True)
+    maps = data.get("J") if isinstance(data, dict) else None
+    if not isinstance(maps, dict) or not maps:
+        raise NotChecked(f"{src.name} holds no `J` maps — not a Jacobian lens file")
+    d_model = int(data.get("d_model") or 0)
+    dest.mkdir(parents=True, exist_ok=True)
+    layers: list[int] = []
+    for key, matrix in maps.items():
+        layer = int(key)
+        m = matrix.to(torch.float16).cpu().numpy()
+        if (
+            m.ndim != 2
+            or m.shape[0] != m.shape[1]
+            or (d_model and m.shape[0] != d_model)
+        ):
+            raise NotChecked(
+                f"J[{layer}] is {tuple(m.shape)}, not a {d_model}x{d_model} map"
+            )
+        np.save(dest / f"J_{layer}.npy", m)
+        layers.append(layer)
+    provenance = data.get("provenance")
+    manifest = {
+        "kind": "jacobian",
+        "label": str(args.get("label") or src.stem),
+        "provenance": str(args.get("provenance") or ""),
+        "fileProvenance": provenance if isinstance(provenance, (dict, str)) else None,
+        "layers": sorted(layers),
+        "dModel": d_model or int(next(iter(maps.values())).shape[0]),
+        "nPrompts": int(data.get("n_prompts") or 0),
+        "source": str(src),
+        "alignment": "J[k] reads l_out-k, the residual after block k",
+    }
+    (dest / "lens.json").write_text(_json.dumps(manifest, indent=2), encoding="utf-8")
+    return {
+        "dest": str(dest),
+        "layers": manifest["layers"],
+        "dModel": manifest["dModel"],
+        "nPrompts": manifest["nPrompts"],
+    }
+
+
 OPS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "ping": op_ping,
     "status": op_status,
     "load": op_load,
     "unload": op_unload,
     "generate": op_generate,
+    "jlens_convert": op_jlens_convert,
 }
 
 

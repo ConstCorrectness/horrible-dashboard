@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { usePaneSection } from '../../../layout/use-sections';
 import { getLlamaModels, type ModelEntry } from '../../llamacpp/api';
 import { LensSection } from '../../llamacpp/lens/LensSection';
+import { LensCompare } from '../lenses/LensCompare';
 import { StepperSection } from '../../llamacpp/stepper/StepperSection';
 import { TracesSection } from '../../llamacpp/TracesSection';
 import { LensLabPanel } from '../../webml/panels/LensLabPanel';
@@ -51,7 +52,11 @@ export function StepperBody() {
   );
 }
 
-export const LENS_TABS = [{ id: 'trace', label: 'Trace lens' }, ...LENS_LAB_TABS] as const;
+export const LENS_TABS = [
+  { id: 'trace', label: 'Trace lens' },
+  { id: 'lenses', label: 'Compare lenses' },
+  ...LENS_LAB_TABS,
+] as const;
 
 /** Under the Lens section's scope, `usePaneSection()` names the lens tab. */
 function LensSwitch() {
@@ -63,6 +68,7 @@ function LensSwitch() {
       </div>
     );
   }
+  if (section === 'lenses') return <LensCompare />;
   return <LensLabPanel />;
 }
 

@@ -3,12 +3,14 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Seven verbs; all but `interp.steer` read-only:
+ * group (the `interp` roster agent preloads it). Eight verbs; all but `interp.steer` read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
  * - `interp.heads` — a trace's attention heads, scored and ranked.
  * - `interp.features` — a trace's SAE features, with the reconstruction check and labels.
+ * - `interp.lenses` — one position read through every lens for the model (logit lens
+ *   and fitted Jacobian / J++), and a token's rank per layer under each.
  * - `interp.steer` — push a feature into the model and compare generations (runs the
  *   model and records two traces, so it is a side effect the permission engine sees).
  * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
@@ -43,7 +45,16 @@ import {
   openTrace as openFeatureTrace,
   refreshFeatureTraces,
 } from './features/state';
+import {
+  lensCompareStore,
+  openCompareTrace,
+  readAt,
+  refreshCompareTraces,
+  topByLayer,
+  track as trackLens,
+} from './lenses/state';
 import { libraryStore, refreshLibrary } from './library/state';
+import { searchVocab } from '../llamacpp/api';
 import { run as runSteer, setDraft as setSteerDraft, steerStore } from './steer/state';
 import { setSubSection } from './SubSections';
 import { describeLayer, primeDigest, suiteDigest } from './suite-state';
@@ -229,6 +240,58 @@ export const interpAgentTools: AgentToolDecl[] = [
               features: at.top.map((f) => describe(f.index, f.act)),
             }
           : undefined,
+      };
+    },
+  },
+  {
+    name: 'interp.lenses',
+    description:
+      'Read one position of a trace through every lens installed for its model, layer by ' +
+      'layer: the logit lens (what the model would say if it stopped there) and fitted ' +
+      'Jacobian / J++ lenses (what the layer holds, transported to the final layer). Give ' +
+      '`token` to get its rank at every layer under each lens — e.g. a two-hop bridge ' +
+      'concept that the Jacobian lens surfaces many layers before the logit lens. A fitted ' +
+      "lens's grid is never self-verified (only the logit lens can be); say so.",
+    params: {
+      type: 'object',
+      properties: {
+        traceId: { type: 'string', description: 'Trace to read (default: the one shown).' },
+        position: { type: 'integer', description: 'Prompt position (default: the last).' },
+        token: {
+          type: 'string',
+          description: 'A word to track across layers, e.g. " Japan" (leading space matters).',
+        },
+      },
+    },
+    handler: async (args) => {
+      if (typeof args.traceId === 'string' && args.traceId) await openCompareTrace(args.traceId);
+      else if (!lensCompareStore.get().traceId) await refreshCompareTraces();
+      if (typeof args.position === 'number') await readAt(args.position);
+      let st = lensCompareStore.get();
+      if (!st.traceId) return { error: 'No trace on this node yet.' };
+      if (typeof args.token === 'string' && args.token) {
+        const trace = st.traces.find((t) => t.traceId === st.traceId);
+        const found = trace ? await searchVocab(trace.modelPath, args.token.trim(), 20) : null;
+        const want = args.token;
+        const entry =
+          found?.tokens.find((e) => e.text === want) ??
+          found?.tokens.find((e) => e.text.trim() === want.trim());
+        if (!entry) return { error: `"${want}" is not one token in this model's vocabulary.` };
+        await trackLens(entry.id, entry.text);
+        st = lensCompareStore.get();
+      }
+      return {
+        trace: st.traceId,
+        position: st.position,
+        lenses: st.lenses.map((l) => ({
+          id: l.id,
+          label: l.label,
+          kind: l.kind,
+          verified: st.grids[l.id]?.verified,
+          topByLayer: st.grids[l.id] ? topByLayer(st.grids[l.id]) : null,
+          trackedRanks: st.track?.ranks[l.id] ?? null,
+        })),
+        tracked: st.track ? st.track.text : null,
       };
     },
   },

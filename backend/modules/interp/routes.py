@@ -18,6 +18,7 @@ from backend.modules.interp import (
     catalog,
     compat,
     env,
+    lenses,
     neuronpedia,
     sae,
     steer,
@@ -63,6 +64,12 @@ class SteerRequest(BaseModel):
     prompt: str = ""
     modelPath: str = ""
     maxTokens: int = steer.DEFAULT_NEW_TOKENS
+
+
+class LensInstallRequest(BaseModel):
+    artifactId: str
+    #: The GGUF to install the lens for (the lens slot is keyed by its sha).
+    modelPath: str
 
 
 class WorkerOpRequest(BaseModel):
@@ -326,6 +333,29 @@ async def post_label_check(req: LabelCheckRequest) -> dict[str, Any]:
         return {"state": "not_checked", "reason": str(exc)}
     except httpx.HTTPError as exc:
         return {"state": "not_checked", "reason": f"could not reach Neuronpedia: {exc}"}
+
+
+# ── fitted lenses ────────────────────────────────────────────────────────────
+
+
+@router.get("/lens/targets")
+def get_lens_targets(artifactId: str) -> dict[str, Any]:
+    """Local GGUFs a downloaded lens matches, and how many others were left out."""
+    art = _artifact_or_404(artifactId)
+    if art["kind"] != "jlens":
+        raise HTTPException(status_code=422, detail=f"{artifactId} is not a lens")
+    return lenses.targets(art)
+
+
+@router.post("/lens/install")
+async def post_lens_install(req: LensInstallRequest) -> dict[str, Any]:
+    art = _artifact_or_404(req.artifactId)
+    if art["kind"] != "jlens":
+        raise HTTPException(status_code=422, detail=f"{req.artifactId} is not a lens")
+    try:
+        return {"installed": await lenses.install(art, req.modelPath)}
+    except lenses.LensInstallError as exc:
+        return {"error": str(exc)}
 
 
 # ── steering ─────────────────────────────────────────────────────────────────

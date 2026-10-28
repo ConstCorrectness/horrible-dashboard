@@ -25,6 +25,7 @@ import { S } from '../styles';
 import { SuiteFrame } from '../SuiteFrame';
 import { getFeature, type Artifact, type CatalogEntry, type Compat, type FeatureCard } from './api';
 import { NeuronpediaCard } from './NeuronpediaCard';
+import { LensInstall } from './LensInstall';
 import {
   askDownload,
   browse,
@@ -369,6 +370,7 @@ function ArtifactRow({ a, index }: { a: Artifact; index: number }) {
           Delete
         </button>
       </div>
+      {a.kind === 'jlens' && <LensInstall artifactId={a.id} />}
     </li>
   );
 }
