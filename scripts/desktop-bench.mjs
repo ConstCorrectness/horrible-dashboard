@@ -5,12 +5,14 @@
  * backend down when closed.
  *
  *   node scripts/desktop-bench.mjs --exe <path> --label electron [--idle 60] [--load 30]
+ *     [--cwd <checkout>]   # whose backend the app runs (default: this checkout)
  *
  * Shell-agnostic on purpose — the same procedure measures the Electron shell and a
  * Tauri build of an older commit, so the two are compared like for like:
  *
- * - The app starts with the repo as its working directory (both shells then run the
- *   checkout's backend), on a fixed backend port, with a throwaway HORRIBLE_DATA_DIR.
+ * - The app starts with a checkout as its working directory (both shells then run
+ *   that checkout's backend), on a fixed backend port, with a throwaway
+ *   HORRIBLE_DATA_DIR.
  * - "UI ready" is the app shell's root element existing in the page, read over the
  *   Chrome DevTools Protocol on a debugging port (`--remote-debugging-port` for
  *   Electron, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS for WebView2).
@@ -44,6 +46,9 @@ const idleSec = Number(option('--idle', '60'));
 const loadSec = Number(option('--load', '30'));
 const backendPort = Number(option('--backend-port', '8765'));
 const cdpPort = Number(option('--cdp-port', '9333'));
+// The checkout whose backend the app runs: this one by default. A build of another
+// commit must run its own (its backend allows its own UI's origin, and no other).
+const appCwd = resolve(option('--cwd', REPO));
 if (!exe) {
   console.error('usage: desktop-bench.mjs --exe <path> --label <name> [--idle 60] [--load 30]');
   process.exit(2);
@@ -326,7 +331,7 @@ async function main() {
 
   console.log(`\nBenchmark: ${label} (${process.platform}) — ${exe}`);
   const t0 = Date.now();
-  const child = spawn(exe, args, { cwd: REPO, env, stdio: 'ignore', windowsHide: false });
+  const child = spawn(exe, args, { cwd: appCwd, env, stdio: 'ignore', windowsHide: false });
   const result = { label, platform: process.platform, exe, timings: {}, phases: {} };
   let session = null;
 
