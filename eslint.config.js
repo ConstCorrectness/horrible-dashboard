@@ -6,7 +6,7 @@ export default tseslint.config(
     ignores: [
       '**/dist/**',
       '**/node_modules/**',
-      '**/src-tauri/**',
+      'apps/desktop/release/**', // electron-builder output (unpacked app, installers)
       '**/.venv/**',
       '.data/**', // runtime data dir (e.g. the notebook module's managed kernel venv)
       '.data-*/**', // sibling data dirs (e.g. .data-peer2/ for the peer fabric)
@@ -26,6 +26,22 @@ export default tseslint.config(
         URL: 'readonly',
         Blob: 'readonly',
         Buffer: 'readonly',
+      },
+    },
+  },
+  {
+    // These drive the desktop app: Node 22's timers, fetch and WebSocket in the script,
+    // and the page's own globals inside the functions handed to the page to run.
+    files: ['scripts/desktop-smoke.mjs', 'scripts/desktop-bench.mjs'],
+    languageOptions: {
+      globals: {
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
       },
     },
   },

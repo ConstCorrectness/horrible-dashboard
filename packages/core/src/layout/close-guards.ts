@@ -45,7 +45,7 @@ export async function runCloseGuard(instanceId: string): Promise<boolean> {
 //
 // Panes flag themselves dirty here; if any is dirty when the tab/window is closed
 // or reloaded, the browser shows its native "Leave site? Changes may not be
-// saved" prompt. (In the Tauri desktop shell the same flag can gate a native
+// saved" prompt. (In the desktop shell the same flag can gate a native
 // window-close confirmation.)
 
 const dirtyPanes = new Set<string>();

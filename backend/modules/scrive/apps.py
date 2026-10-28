@@ -8,7 +8,7 @@ opaque `sandbox` origin throws on. So apps are served from **their own origin**,
 
 - Chromium (and WebView2) resolve every ``*.localhost`` name to loopback and treat it
   as a secure context, so WebGPU and Cache Storage work there.
-- Its host differs from the app UI's (`localhost:5173`, `tauri.localhost`) and the
+- Its host differs from the app UI's (`localhost:5173`, `app://horrible`) and the
   API's (`127.0.0.1:<port>`), so it shares no cookies, no storage and no same-origin
   access with either.
 

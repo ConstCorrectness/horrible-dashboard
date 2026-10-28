@@ -194,7 +194,7 @@ function bindUnloadFlush(): void {
 /**
  * Read the workspace list, retrying a failure before giving up.
  *
- * Boot is the one moment this call is *expected* to fail: the Tauri shell spawns
+ * Boot is the one moment this call is *expected* to fail: the desktop shell spawns
  * the backend and loads the UI concurrently, `pnpm dev` restarts the backend on
  * every save, and either way the first request can land on a port that is not
  * serving yet. A single attempt turns a half-second startup race into an empty

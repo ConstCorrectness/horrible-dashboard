@@ -4,7 +4,7 @@
  *
  * Three things here are load-bearing and easy to lose in a refactor:
  *
- * 1. The titlebar must NOT carry `data-tauri-drag-region`. That attribute lives on
+ * 1. The titlebar must NOT carry `data-app-drag-region`. That attribute lives on
  *    the app's own top strip; on a window it would drag the whole OS window instead
  *    of the window under the pointer, and the user would have no way to move it.
  * 2. Dragging **releases keyboard/pointer capture** first. A captured pane (a game,
@@ -309,7 +309,7 @@ export const DesktopWindow = memo(function DesktopWindow({
       <div
         className="os-window-titlebar"
         // The hook the merge hit-test looks for. Deliberately NOT
-        // `data-tauri-drag-region` — see note 1 at the top of this file.
+        // `data-app-drag-region` — see note 1 at the top of this file.
         data-window-titlebar=""
         data-window-id={win.id}
         // Neither gesture while presented: the window is `position: fixed` and

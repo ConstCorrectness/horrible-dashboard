@@ -2,8 +2,8 @@
  * The agent's browser engine for the **native** pane (desktop, `browser.nativeCdp`).
  *
  * The same `BrowserEngine` the headless backend Chromium implements, but driving the
- * real WebView2 surface the human is looking at, over the shell's in-process CDP
- * bridge (apps/desktop/src-tauri/src/browser_cdp.rs). That is the point of it: when
+ * real Chromium surface the human is looking at, over the shell's in-process CDP
+ * bridge (apps/desktop/src/webview.ts). That is the point of it: when
  * the agent clicks, the human sees the click, and can take over mid-task.
  *
  * Page understanding is shared, not reimplemented: `snapshot` and `media` evaluate

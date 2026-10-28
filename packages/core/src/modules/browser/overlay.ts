@@ -1,7 +1,7 @@
 /**
  * Suppression registry for **native overlays** — surfaces the OS composites above
  * the HTML layer, which today means the embedded browser's native child webview
- * (`browser.nativeWebview`, apps/desktop/src-tauri/src/webview.rs).
+ * (`browser.nativeWebview`, apps/desktop/src/webview.ts).
  *
  * ## Why this has to exist
  *

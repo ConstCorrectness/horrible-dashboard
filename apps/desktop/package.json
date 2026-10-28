@@ -2,13 +2,27 @@
   "name": "@horrible/desktop",
   "version": "0.4.4",
   "private": true,
-  "type": "module",
+  "description": "Desktop shell for horrible-dashboard (Electron)",
+  "author": "ConstCorrectness",
+  "main": "dist/main.js",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "tauri": "tauri"
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json && electron .",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "package": "tsc -p tsconfig.json && electron-builder --dir --publish never",
+    "dist": "tsc -p tsconfig.json && electron-builder --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.5.0"
+    "@types/node": "^22.10.0",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.18.0",
+    "playwright": "1.56.1",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.10"
   }
 }

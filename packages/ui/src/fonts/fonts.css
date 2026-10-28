@@ -1,7 +1,7 @@
 /* Self-hosted webfonts.
  *
  * Deliberately NOT the Google Fonts CDN: the app is offline-first and ships as a
- * Tauri desktop build, so a network dependency for text would mean the UI renders
+ * desktop build, so a network dependency for text would mean the UI renders
  * unstyled (or not at all) on a plane. The files sit next to this stylesheet and are
  * bundled by Vite like any other asset.
  *

@@ -159,7 +159,7 @@ export function gameAccent(id: string): string {
  *
  * When art does land: **self-host it** (`packages/ui/src/assets/games/`, imported so
  * Vite fingerprints it), never a CDN URL. The app is offline-first and ships as a
- * Tauri desktop build — the same rule the webfonts follow. Landscape, and dark or
+ * desktop build — the same rule the webfonts follow. Landscape, and dark or
  * dimmable: white display type and the scrim sit on top of it.
  */
 export const GAME_HERO: Record<string, string> = {};

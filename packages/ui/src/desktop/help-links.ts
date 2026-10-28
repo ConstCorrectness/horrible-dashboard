@@ -100,7 +100,7 @@ export function docsPageFor(moduleId: string | undefined): string | null {
  *
  * The result of `openExternal` is **checked**, because this is exactly the
  * failure it exists to catch: `window.open` returns null behind a pop-up blocker
- * and the Tauri invoke rejects on an older shell, and neither throws. A Help
+ * and the shell command rejects on an older shell, and neither throws. A Help
  * button that does nothing is worse than no Help button — the user concludes the
  * docs do not exist rather than that a pop-up was blocked.
  */

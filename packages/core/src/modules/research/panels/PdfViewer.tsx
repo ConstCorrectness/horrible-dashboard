@@ -7,7 +7,7 @@
  * used for one-off viewing without storing).
  *
  * The worker is instantiated Vite-natively (`new Worker(new URL(...))` +
- * `workerPort`) — no asset-copy plugin, works in both the web and Tauri builds.
+ * `workerPort`) — no asset-copy plugin, works in both the web and desktop builds.
  * Rendering is canvas per page with a selectable text layer; find is
  * text-layer-based: it walks page texts and jumps to the next matching page.
  */

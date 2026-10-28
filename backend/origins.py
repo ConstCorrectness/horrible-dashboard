@@ -18,13 +18,13 @@ import ipaddress
 from urllib.parse import urlsplit
 
 #: Where the UI is served from, when that is not this backend's own origin: the
-#: browser layout's Vite dev server, and the Tauri webview (`tauri://localhost` on
-#: macOS/Linux, `http://tauri.localhost` on Windows, including a `custom-protocol`
-#: build). The CORS allowlist, and the cross-origin half of the `/ws` check.
+#: browser layout's Vite dev server (which the desktop shell also loads in
+#: development), and the packaged desktop shell's own scheme (`app://horrible`, see
+#: `apps/desktop/src/main.ts`). The CORS allowlist, and the cross-origin half of the
+#: `/ws` check.
 UI_ORIGINS: tuple[str, ...] = (
     "http://localhost:5173",
-    "tauri://localhost",
-    "http://tauri.localhost",
+    "app://horrible",
 )
 
 

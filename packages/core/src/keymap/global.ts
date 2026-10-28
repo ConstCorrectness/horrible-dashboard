@@ -2,10 +2,8 @@
  * OS-level **global shortcuts** — bindings that fire while the app is unfocused.
  *
  * A seam, not an implementation, for the same reason `window.ts` is one: the
- * Tauri wiring belongs to the app entry, and `packages/` stays platform-agnostic.
- * The browser leaves the seam null, which is what the `shortcuts.global`
- * capability has always described but nothing implemented — before this there was
- * no global-shortcut plugin in `src-tauri` at all.
+ * shell wiring belongs to the app entry (apps/web/src/desktopShortcuts.ts), and
+ * `packages/` stays platform-agnostic. The browser leaves the seam null.
  *
  * See docs/architecture/keybindings.mdx.
  */

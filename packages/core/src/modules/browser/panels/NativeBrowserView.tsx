@@ -2,7 +2,7 @@
  * Native-webview viewport (desktop only, `browser.nativeWebview`) — one browser tab.
  *
  * Renders **nothing but a placeholder**: the actual page lives in a real child
- * webview the Tauri shell composites over this element's rectangle. That's the whole
+ * view the desktop shell composites over this element's rectangle. That's the whole
  * point — no iframe restrictions (`X-Frame-Options`/CSP can't refuse it), no frame
  * streaming, no decode cost, and native scrolling, input, clipboard and text
  * selection at native speed.

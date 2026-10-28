@@ -380,7 +380,7 @@ export function ChatWidget({
     let cancelled = false;
     void (async () => {
       const ok = await loadSessions();
-      // One retry: boot races the backend (the Tauri shell spawns it alongside the
+      // One retry: boot races the backend (the desktop shell spawns it alongside the
       // UI, `pnpm dev` restarts it on every save), and a pane that gives up on the
       // first refused connection shows an empty chat for a backend that is fine a
       // second later.

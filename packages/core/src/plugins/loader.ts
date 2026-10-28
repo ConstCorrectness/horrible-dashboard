@@ -51,7 +51,7 @@ function assertNamespaced(pluginId: string, contributions: PluginContributions):
 
 /**
  * Import a plugin entry module. The entry may live on a different origin than
- * the page (desktop: backend at 127.0.0.1:<port>, page at the Vite/tauri
+ * the page (desktop: backend at 127.0.0.1:<port>, page at the Vite/app://
  * origin), but its shim imports (`/plugin-runtime/*.js`, emitted root-absolute
  * by the SDK build preset) are served by the PAGE origin. A direct import()
  * would resolve them against the entry's origin and 404 — so fetch the source,

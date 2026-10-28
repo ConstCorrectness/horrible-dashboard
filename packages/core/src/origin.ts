@@ -1,15 +1,25 @@
 /**
  * Backend origin. The browser layout leaves it null — paths stay relative and
- * the Vite dev server proxies /api and /ws to the backend. The Tauri entry sets
+ * the Vite dev server proxies /api and /ws to the backend. The desktop entry sets
  * an absolute origin learned from the shell's `backend_status` command (the
  * shell spawns and supervises the backend), so dev and packaged desktop builds
  * share one code path with no proxy involved.
  */
 let backendOrigin: string | null = null;
+const originListeners = new Set<() => void>();
 
 /** Called once by the app entry before any API/WS use. null = relative paths. */
 export function initBackendOrigin(origin: string | null): void {
   backendOrigin = origin ? origin.replace(/\/+$/, '') : null;
+  originListeners.forEach((listener) => listener());
+}
+
+/** Run `listener` whenever {@link initBackendOrigin} is called. Returns an unsubscribe. */
+export function onBackendOrigin(listener: () => void): () => void {
+  originListeners.add(listener);
+  return () => {
+    originListeners.delete(listener);
+  };
 }
 
 export function getBackendOrigin(): string | null {

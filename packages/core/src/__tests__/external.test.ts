@@ -28,11 +28,11 @@ describe('openExternal', () => {
   });
 
   it('reports failure when the desktop shell rejects the invoke', async () => {
-    // Exactly the shape of the bug this suite exists for: the Tauri ACL rejects
-    // `open_external` when no `allow-open-external` permission is granted, and
-    // the rejection is the only signal anything went wrong.
-    const internals = { invoke: () => Promise.reject(new Error('not allowed')) };
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: internals });
+    // Exactly the shape of the bug this suite exists for: the shell refuses
+    // `open_external` (the old Tauri shell's ACL did, for want of one permission
+    // entry), and the rejection is the only signal anything went wrong.
+    const horribleDesktop = { invoke: () => Promise.reject('not allowed from this page') };
+    vi.stubGlobal('window', { horribleDesktop });
     await expect(openExternal('https://example.com')).resolves.toBe(false);
   });
 });

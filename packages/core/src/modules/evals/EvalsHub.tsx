@@ -1200,7 +1200,7 @@ function Suites({
           style={S.button}
           onClick={async () => {
             // `dialogs.prompt`, not `window.prompt`: the native one is unthemed,
-            // is blocked outright in the Tauri shell, and blocks the whole
+            // is blocked outright in the desktop shell, and blocks the whole
             // renderer while it is up.
             const name = await dialogs.prompt({
               title: 'New suite',

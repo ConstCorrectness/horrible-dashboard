@@ -8,6 +8,7 @@ import {
   commonsModule,
   dashboardModule,
   desktopCapabilities,
+  isDesktopShell,
   editorModule,
   filesModule,
   flowModule,
@@ -106,12 +107,9 @@ import {
 } from '@horrible/core';
 import { AppRoot } from '@horrible/ui';
 
-import { isTauri, resolveBackendOrigin } from './tauriBackend';
-import { createTauriGlobalShortcuts } from './tauriShortcuts';
-import { createTauriWindowControl } from './tauriWindow';
-import { isElectron, resolveElectronBackendOrigin } from './electronBackend';
-import { createElectronGlobalShortcuts } from './electronShortcuts';
-import { createElectronWindowControl } from './electronWindow';
+import { resolveBackendOrigin } from './desktopBackend';
+import { createDesktopGlobalShortcuts } from './desktopShortcuts';
+import { createDesktopWindowControl } from './desktopWindow';
 
 // Browser layout entry: browser capability set, built-in module registration,
 // then installed plugins — awaited so restored layouts find plugin panels and
@@ -131,13 +129,12 @@ async function boot(): Promise<void> {
   // and the rule the theme comment below protects — that the *shell's* first
   // paint is already themed — is untouched.
   const reactRoot = createRoot(root);
-
-  const isDesktop = isTauri() || isElectron();
+  const desktop = isDesktopShell();
 
   // Behind the hosted hub (backend/hub/), signed out means every /api call 401s:
   // show the sign-in screen instead of booting over the user's real settings.
-  // A plain backend has no /hub/me, so this is a no-op for `pnpm dev`, Tauri and Electron.
-  if (!isDesktop) {
+  // A plain backend has no /hub/me, so this is a no-op for `pnpm dev` and desktop.
+  if (!desktop) {
     initWsOrigin((import.meta.env.VITE_WS_ORIGIN as string | undefined) ?? null);
     const hub = await probeHub();
     if (hub.mode === 'signedOut') {
@@ -163,31 +160,25 @@ async function boot(): Promise<void> {
     </StrictMode>,
   );
 
-  // Under Tauri or Electron the desktop shell spawns the backend and tells us its origin;
-  // in the browser the origin stays null (relative paths through the Vite proxy).
-  if (isTauri()) {
+  // Under the desktop shell it spawns the backend and tells us its origin; in the
+  // browser the origin stays null (relative paths through the Vite proxy).
+  if (desktop) {
     const origin = await bootStep('backend', 'Locating the backend', resolveBackendOrigin);
-    if (origin) initBackendOrigin(origin);
-  } else if (isElectron()) {
-    const origin = await bootStep('backend', 'Locating the backend', resolveElectronBackendOrigin);
     if (origin) initBackendOrigin(origin);
   }
 
-  // Same frontend, two layouts: under Tauri or Electron claim the desktop capability set
+  // Same frontend, two layouts: under the shell claim the desktop capability set
   // (native dialogs, window control, tray…) and wire the native window control;
   // the browser gets the browser set and leaves the seam null.
   // The keymap has to know its host and platform before any binding resolves:
   // some chords the native shell can claim are browser-owned in a tab, so the two
   // ship different defaults for the same command.
   const platform = detectPlatform();
-  initKeymapHost({ platform, host: isDesktop ? 'desktop' : 'browser' });
+  initKeymapHost({ platform, host: desktop ? 'desktop' : 'browser' });
 
-  if (isTauri()) {
-    // Per-platform, not the flat desktop list: WKWebView cannot capture a screen
-    // while WebView2 and WebKitGTK can, and the difference is invisible to
-    // feature detection.
-    initCapabilities(desktopCapabilities(platform));
-    const control = createTauriWindowControl({ cdp: platform === 'win' });
+  if (desktop) {
+    initCapabilities(desktopCapabilities());
+    const control = createDesktopWindowControl();
     setWindowControl(control);
     // A reload wiped every pane session that owned a native browser overlay, but
     // the OS window (and its child webviews) survived it. Sweep before any pane
@@ -196,17 +187,9 @@ async function boot(): Promise<void> {
     void control.browserWebview?.closeAll().catch(() => {
       // Nothing to sweep, or the shell predates the command — not worth a toast.
     });
-    setGlobalShortcuts(createTauriGlobalShortcuts());
-    // The webview can't spawn browser windows (window.open / target="_blank" are
-    // silent no-ops), so route external-link clicks to the system browser.
-    installExternalLinkBridge();
-  } else if (isElectron()) {
-    // Under Electron, Chromium runs on every platform with native CDP support!
-    initCapabilities(desktopCapabilities('win'));
-    const control = createElectronWindowControl();
-    setWindowControl(control);
-    void control.browserWebview?.closeAll().catch(() => {});
-    setGlobalShortcuts(createElectronGlobalShortcuts());
+    setGlobalShortcuts(createDesktopGlobalShortcuts());
+    // The app page opens no windows of its own (the shell refuses window.open and
+    // target="_blank"), so route external-link clicks to the system browser.
     installExternalLinkBridge();
   } else {
     initCapabilities(BROWSER_CAPABILITIES);

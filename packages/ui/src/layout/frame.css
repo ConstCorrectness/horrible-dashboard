@@ -21,6 +21,12 @@
   align-items: stretch;
   flex: 1;
   min-width: 0;
+}
+/* What makes it one: Chromium hands presses here to the OS as the window caption
+   (move-drag, double-click maximize, the system menu). An attribute rather than the
+   class, so TitleBar can switch it off in fullscreen. Children that must stay
+   clickable would need `no-drag`; this region has none. */
+[data-app-drag-region] {
   -webkit-app-region: drag;
 }
 /* The strip reaches the top-right corner for the window controls, and its empty
@@ -49,7 +55,7 @@
    centres the window controls) overrode the base strip's `stretch`, so this div
    measured full width and **zero height**: an undecorated window whose titlebar
    was 28px of empty space that could not be grabbed anywhere. Nothing about it
-   looked broken, which is why it survived — `data-tauri-drag-region` was present
+   looked broken, which is why it survived — the drag-region attribute was present
    and correct the whole time, on an element with no area to hit. */
 .frame-tabs--bare .frame-tabs-scroll {
   align-self: stretch;
@@ -63,7 +69,6 @@
   flex: none;
   margin-left: 4px;
   align-self: stretch;
-  -webkit-app-region: no-drag;
 }
 .win-btn {
   display: inline-flex;
@@ -75,7 +80,6 @@
   color: var(--text-dim);
   cursor: pointer;
   padding: 0;
-  -webkit-app-region: no-drag;
 }
 .win-btn:hover {
   background: var(--bg-hover);

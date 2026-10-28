@@ -6,7 +6,7 @@ with a Rust toolchain: `launch_native` probes `apps/native-fps/target/**` and
 otherwise tells you to run `cargo build`, which is not an instruction a player can
 follow. Bundling it into the installer is the obvious alternative and does not work
 yet, because the desktop shell does not package the **backend** either
-(`apps/desktop/src-tauri/src/backend.rs`) — a bundled client would sit beside an app
+(`apps/desktop/src/backend.ts`) — a bundled client would sit beside an app
 with no route to launch it. So this follows `llamacpp/binaries.py`: CI publishes a
 per-platform asset on the release, and the node fetches the one it needs into
 `$HORRIBLE_DATA_DIR`. It works on a checkout today and needs no change the day the
