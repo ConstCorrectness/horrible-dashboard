@@ -3,7 +3,7 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Nine verbs; all but `interp.steer` read-only:
+ * group (the `interp` roster agent preloads it). Ten verbs; all but `interp.steer` read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
@@ -14,6 +14,8 @@
  *   and fitted Jacobian / J++), and a token's rank per layer under each.
  * - `interp.steer` — push a feature into the model and compare generations (runs the
  *   model and records two traces, so it is a side effect the permission engine sees).
+ * - `interp.axis` — the Assistant Axis built on a local GGUF: its held-out check, where
+ *   roles sit on it, and the Axis section's last reading and cap (or a trace, read now).
  * - `interp.library` — installed artifacts and what they fit, the catalog, the worker.
  * - `interp.goto` — show a section, and move the shared model locus.
  *
@@ -46,6 +48,8 @@ import {
   openTrace as openFeatureTrace,
   refreshFeatureTraces,
 } from './features/state';
+import { getTraceSeries } from './axis/api';
+import { axisStore, current as currentAxis, refreshAxes } from './axis/state';
 import { getGraphSummary } from './graph/api';
 import { graphStore, refreshGraphs } from './graph/state';
 import {
@@ -393,6 +397,92 @@ export const interpAgentTools: AgentToolDecl[] = [
         steeredText: out.steered.text,
         traces: { default: out.defaultTraceId, steered: out.steeredTraceId },
       };
+    },
+  },
+  {
+    name: 'interp.axis',
+    description:
+      'The Assistant Axis built on a local GGUF (Axis section): the direction separating the ' +
+      "model answering as its assistant from answering in roles. Returns the axis's held-out " +
+      'check (report it first: token AUC, separates / weak), the default layer and cap band, ' +
+      'where roles sit along it, and the last reading of a conversation, agent turn or trace ' +
+      '(mean, share below the assistant floor, trend) and the last capped generation. Give ' +
+      'traceId to read a trace of the same model now. Read-only: building and capping run in ' +
+      'the section.',
+    params: {
+      type: 'object',
+      properties: {
+        traceId: { type: 'string', description: 'A trace of the axis model to read along it now.' },
+        layer: {
+          type: 'integer',
+          description: 'Layer to read the trace at (default: the axis default).',
+        },
+      },
+    },
+    handler: async (args) => {
+      if (!axisStore.get().axes.length) await refreshAxes();
+      const ax = currentAxis();
+      if (!ax) return { error: 'No axis built on this node yet — build one in the Axis section.' };
+      const roles = Object.entries(ax.roleProjections)
+        .map(([name, v]) => ({ name, at: v[ax.defaultLayer] }))
+        .sort((a, b) => b.at - a.at);
+      const st = axisStore.get();
+      const out: Record<string, unknown> = {
+        axis: ax.id,
+        model: ax.modelName,
+        check: ax.check,
+        defaultLayer: ax.defaultLayer,
+        band: ax.layers[ax.defaultLayer]
+          ? {
+              assistant: ax.layers[ax.defaultLayer].assistant,
+              role: ax.layers[ax.defaultLayer].role,
+            }
+          : null,
+        cap: ax.cap,
+        assistantAt: ax.assistantProjection[ax.defaultLayer],
+        nearestRoles: roles.slice(0, 4),
+        farthestRoles: roles.slice(-4),
+        built: {
+          roles: ax.roles.length,
+          questions: ax.questions.length,
+          heldOut: ax.heldOut,
+          samples: ax.samples,
+        },
+      };
+      if (typeof args.traceId === 'string' && args.traceId) {
+        const series = await getTraceSeries(
+          ax.id,
+          args.traceId,
+          typeof args.layer === 'number' ? args.layer : undefined,
+        );
+        out.trace = {
+          traceId: series.traceId,
+          layer: series.layer,
+          templated: series.templated,
+          summary: series.summary,
+        };
+      } else if (st.monitor.result) {
+        const r = st.monitor.result;
+        out.lastReading = {
+          source: 'traceId' in r ? `trace ${r.traceId}` : r.source,
+          layer: r.layer,
+          summary: r.summary,
+          assistantOnly: 'assistantSummary' in r ? r.assistantSummary : undefined,
+          drift: 'drift' in r ? r.drift : undefined,
+        };
+      }
+      const c = st.cap.result;
+      if (c) {
+        out.lastCap = {
+          layers: c.layers,
+          floors: c.tau,
+          flooredTokens: c.capped.cappedTokens,
+          answerTokens: c.capped.tokens.filter((t) => t.generated).length,
+          defaultText: c.default.text,
+          cappedText: c.capped.text,
+        };
+      }
+      return out;
     },
   },
   {

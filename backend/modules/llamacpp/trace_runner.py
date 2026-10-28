@@ -62,8 +62,7 @@ def available() -> tuple[bool, str]:
     detail = verdict.reason or "llama-cpp-python is not available here"
     if verdict.certain:
         return False, (
-            f"activations are unavailable: {detail}. "
-            f"Install it with: {verdict.install}"
+            f"activations are unavailable: {detail}. Install it with: {verdict.install}"
         )
     return False, f"could not determine whether activations are available: {detail}"
 
@@ -80,6 +79,82 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     spec.setdefault("byteBudget", traces.budget_bytes())
     traces.traces_root().mkdir(parents=True, exist_ok=True)
 
+    saw_error = False
+    code = 0
+    async for event in _stream_process("backend.modules.llamacpp.tracer", spec):
+        if "_exit" in event:
+            code = int(event["_exit"])
+            continue
+        if event.get("error"):
+            saw_error = True
+        yield event
+
+    if code != 0 and not saw_error:
+        # A segfault inside a ggml callback lands here: no error line, just a
+        # dead process. This is the message that stops it reading as a hang.
+        yield {
+            "error": (
+                f"the tracer exited with code {code} without reporting an error — "
+                "most likely a crash inside llama.cpp. Nothing was written."
+            )
+        }
+        traces.delete_trace(str(spec["traceId"]))
+        return
+    if saw_error:
+        traces.delete_trace(str(spec["traceId"]))
+        return
+
+    pruned = traces.prune()
+    trace = traces.load(str(spec["traceId"]))
+    if trace is not None:
+        # Catalogued here — the one place every trace, forks included, is known
+        # to have finished. `prune()` above already dropped the rows it evicted.
+        from backend.modules.llamacpp import trace_catalog
+
+        trace_catalog.record(trace)
+    yield {
+        "status": "stored",
+        "traceId": spec["traceId"],
+        "pruned": pruned,
+        "trace": trace.summary_dict() if trace else None,
+    }
+
+
+async def stream_module(
+    module: str, spec: dict[str, Any], timeout: float = TIMEOUT_SECONDS
+) -> AsyncIterator[dict[str, Any]]:
+    """Run `python -m <module> <spec.json>` and stream its NDJSON events.
+
+    For the other llama.cpp subprocesses (the Assistant Axis runner) — the same
+    thread-spawned process, timeout and crash report as a trace, without the
+    trace bookkeeping. A process that dies without saying why ends with an
+    `error` event, never a stream that simply stops.
+    """
+    ok, reason = available()
+    if not ok:
+        yield {"error": reason}
+        return
+    saw_error = False
+    async for event in _stream_process(module, spec, timeout):
+        if "_exit" in event:
+            if int(event["_exit"]) != 0 and not saw_error:
+                yield {
+                    "error": (
+                        f"{module.rsplit('.', 1)[-1]} exited with code {event['_exit']} "
+                        "without reporting an error — most likely a crash inside llama.cpp"
+                    )
+                }
+            continue
+        if event.get("error"):
+            saw_error = True
+        yield event
+
+
+async def _stream_process(
+    module: str, spec: dict[str, Any], timeout: float = TIMEOUT_SECONDS
+) -> AsyncIterator[dict[str, Any]]:
+    """Spawn the module with `spec`, yield each stdout line as an event, then
+    `{"_exit": code}`. Timeouts kill the process and say so."""
     handle = tempfile.NamedTemporaryFile(
         "w", suffix=".json", delete=False, encoding="utf-8"
     )
@@ -87,7 +162,7 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         json.dump(spec, spec_file)
     spec_path = Path(handle.name)
 
-    cmd = [sys.executable, "-m", "backend.modules.llamacpp.tracer", str(spec_path)]
+    cmd = [sys.executable, "-m", module, str(spec_path)]
     env = dict(os.environ)
     # The subprocess resolves the data dir itself to find the trace directory;
     # pinning it explicitly (already resolved, always absolute) means a
@@ -120,14 +195,17 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
     await loop.run_in_executor(None, lambda: _spawn_pump(pump))
 
-    saw_error = False
-    deadline = time.monotonic() + TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             proc.kill()
-            yield {"error": f"the tracer ran past {TIMEOUT_SECONDS // 60} minutes"}
-            saw_error = True
+            name = (
+                "the tracer"
+                if module.endswith(".tracer")
+                else module.rsplit(".", 1)[-1]
+            )
+            yield {"error": f"{name} ran past {int(timeout) // 60} minutes"}
             break
         try:
             event = await asyncio.wait_for(queue.get(), timeout=remaining)
@@ -135,42 +213,11 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
             continue
         if event is None:
             break
-        if event.get("error"):
-            saw_error = True
         yield event
 
     code = await loop.run_in_executor(None, proc.wait)
     spec_path.unlink(missing_ok=True)
-
-    if code != 0 and not saw_error:
-        # A segfault inside a ggml callback lands here: no error line, just a
-        # dead process. This is the message that stops it reading as a hang.
-        yield {
-            "error": (
-                f"the tracer exited with code {code} without reporting an error — "
-                "most likely a crash inside llama.cpp. Nothing was written."
-            )
-        }
-        traces.delete_trace(str(spec["traceId"]))
-        return
-    if saw_error:
-        traces.delete_trace(str(spec["traceId"]))
-        return
-
-    pruned = traces.prune()
-    trace = traces.load(str(spec["traceId"]))
-    if trace is not None:
-        # Catalogued here — the one place every trace, forks included, is known
-        # to have finished. `prune()` above already dropped the rows it evicted.
-        from backend.modules.llamacpp import trace_catalog
-
-        trace_catalog.record(trace)
-    yield {
-        "status": "stored",
-        "traceId": spec["traceId"],
-        "pruned": pruned,
-        "trace": trace.summary_dict() if trace else None,
-    }
+    yield {"_exit": code}
 
 
 def _launch(cmd: list[str], env: dict[str, str]) -> subprocess.Popen[str]:

@@ -117,6 +117,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     when: 'Add a feature to the residual stream with a llama.cpp control vector; default and steered generations side by side.',
   },
   {
+    section: SUITE_SECTIONS.axis,
+    label: 'Axis',
+    glyph: 'axis',
+    group: 'Features',
+    question: 'Is this still the assistant talking — and can it be held there?',
+    when: 'Build the Assistant Axis on a local GGUF, read a conversation, agent turn or trace along it, and floor it while generating.',
+  },
+  {
     section: SUITE_SECTIONS.graph,
     label: 'Graph',
     glyph: 'graph',

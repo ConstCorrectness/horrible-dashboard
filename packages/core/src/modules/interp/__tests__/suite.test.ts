@@ -67,6 +67,7 @@ describe('interpretability suite manifest', () => {
   it('carries the interp agent tools and the Ask strip', () => {
     expect((suite().agentTools ?? []).map((t) => t.name).sort()).toEqual([
       'interp.attention',
+      'interp.axis',
       'interp.features',
       'interp.goto',
       'interp.graph',

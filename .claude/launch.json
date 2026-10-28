@@ -21,7 +21,7 @@
     {
       "name": "backend-b",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8200"],
+      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8200"],
       "port": 8200,
       "env": {
         "HORRIBLE_DATA_DIR": ".data-node-b"

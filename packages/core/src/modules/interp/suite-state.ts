@@ -25,6 +25,7 @@ import {
 } from '../interpretability/store';
 import { lensRuns, type LensRun } from '../webml/lens-run';
 import { fmtBytes, fmtContext, savings } from './attention/model';
+import { axisDigest } from './axis/state';
 import { headsDigest } from './heads/state';
 import { featuresDigest } from './features/state';
 import { graphDigest } from './graph/state';
@@ -48,6 +49,8 @@ export interface DigestInputs {
   lenses?: string | null;
   /** The Steer section's: the last run and whether it took. */
   steer?: string | null;
+  /** The Axis section's: the axis, its held-out check, the last reading and cap. */
+  axis?: string | null;
   /** The Library's: artifacts, what fits, what the worker holds (`library/state.ts`). */
   library?: string | null;
 }
@@ -64,6 +67,7 @@ export function readDigestInputs(): DigestInputs {
     graph: graphDigest(),
     lenses: lensCompareDigest(),
     steer: steerDigest(),
+    axis: axisDigest(),
     library: libraryDigest(),
   };
 }
@@ -113,6 +117,7 @@ export interface SuiteDigest {
   graph?: string;
   lenses?: string;
   steer?: string;
+  axis?: string;
   library?: string;
   caveats?: string[];
   /** Full only. */
@@ -193,6 +198,7 @@ export function buildDigest(
   if (inputs.graph) out.graph = inputs.graph;
   if (inputs.lenses) out.lenses = inputs.lenses;
   if (inputs.steer) out.steer = inputs.steer;
+  if (inputs.axis) out.axis = inputs.axis;
   if (inputs.library) out.library = inputs.library;
 
   if (lensRun && lensRun.tokens.length) {

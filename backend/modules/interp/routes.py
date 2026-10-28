@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from backend.modules.interp import (
     artifacts,
+    axis,
     catalog,
     compat,
     env,
@@ -85,6 +86,40 @@ class LensInstallRequest(BaseModel):
     artifactId: str
     #: The GGUF to install the lens for (the lens slot is keyed by its sha).
     modelPath: str
+
+
+class AxisBuildRequest(BaseModel):
+    modelPath: str
+    #: A pasted role list (one per line, `name: description`), or empty for the
+    #: built-in set; `roleCount` takes the first N of whichever it is.
+    rolesText: str = ""
+    roleCount: int = 0
+    questions: list[str] = []
+    heldOut: int = axis.DEFAULT_HELD_OUT
+    maxTokens: int = axis.DEFAULT_RESPONSE_TOKENS
+
+
+class AxisMonitorRequest(BaseModel):
+    axisId: str
+    layer: int | None = None
+    #: A conversation as role/content messages…
+    messages: list[dict[str, Any]] = []
+    #: …or a captured agent turn (the round's context, rebuilt by agentpedia).
+    turnId: str = ""
+    round: int = -1
+    tokenCap: int = 4096
+
+
+class AxisCapRequest(BaseModel):
+    axisId: str
+    messages: list[dict[str, Any]] = []
+    #: Shorthand for `messages`: an optional system prompt and one user message.
+    system: str = ""
+    prompt: str = ""
+    #: The band to floor and the floor at each layer; the axis's defaults when empty.
+    layers: list[int] = []
+    tau: dict[str, float] = {}
+    maxTokens: int = 48
 
 
 class WorkerOpRequest(BaseModel):
@@ -492,6 +527,215 @@ async def post_steer(req: SteerRequest) -> StreamingResponse:
             yield json.dumps({"error": str(exc)}) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+# ── assistant axis ───────────────────────────────────────────────────────────
+
+
+def _axis_or_404(axis_id: str) -> axis.Axis:
+    try:
+        return axis.load(axis_id)
+    except axis.AxisError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _ndjson(
+    events: AsyncIterator[dict[str, Any]], finish: Any = None
+) -> StreamingResponse:
+    """Relay a runner's events; `finish(result)` shapes the final `done` result."""
+
+    async def gen() -> AsyncIterator[str]:
+        try:
+            async for event in events:
+                if event.get("status") == "done" and "result" in event:
+                    result = event["result"]
+                    if finish is not None:
+                        result = finish(result)
+                    yield json.dumps({"done": True, "result": result}) + "\n"
+                else:
+                    yield json.dumps(event) + "\n"
+        except axis.AxisError as exc:
+            yield json.dumps({"error": str(exc)}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.get("/axis")
+async def get_axes() -> dict[str, Any]:
+    """Built axes, and the defaults a new build starts from."""
+    return {
+        "axes": axis.list_axes(),
+        "defaults": {
+            "roles": axis.default_roles(),
+            "assistantPrompts": axis.ASSISTANT_PROMPTS,
+            "questions": axis.DEFAULT_QUESTIONS,
+            "heldOut": axis.DEFAULT_HELD_OUT,
+            "maxTokens": axis.DEFAULT_RESPONSE_TOKENS,
+        },
+    }
+
+
+@router.post("/axis/build")
+async def post_axis_build(req: AxisBuildRequest) -> StreamingResponse:
+    """Build an axis on a local GGUF, streamed: one `sample` event per answer, then
+    `{done, result: <axis summary>}` once it is stored in the Library."""
+    from pathlib import Path
+
+    from backend.modules.llamacpp import traces
+
+    model = Path(req.modelPath).expanduser()
+    if not model.is_file():
+        raise HTTPException(status_code=404, detail=f"no such GGUF: {model}")
+    roles = (
+        axis.parse_roles(req.rolesText)
+        if req.rolesText.strip()
+        else axis.default_roles()
+    )
+    if req.roleCount > 0:
+        roles = roles[: req.roleCount]
+    if len(roles) < 3:
+        raise HTTPException(status_code=422, detail="an axis needs at least 3 roles")
+    questions = [q for q in req.questions if q.strip()] or axis.DEFAULT_QUESTIONS
+    if not 1 <= req.heldOut < len(questions):
+        raise HTTPException(
+            status_code=422,
+            detail="hold out at least one question and fit on at least one",
+        )
+    out_dir = axis.new_axis_dir(str(model))
+    spec = {
+        "mode": "build",
+        "modelPath": str(model),
+        "roles": roles,
+        "questions": questions,
+        "heldOut": req.heldOut,
+        "maxTokens": max(4, min(req.maxTokens, 128)),
+        "outDir": str(out_dir),
+    }
+
+    def finish(_result: Any) -> dict[str, Any]:
+        art = axis.register(out_dir, traces.model_sha(model))
+        return axis.Axis(art).summary()
+
+    # Hundreds of generations: allow an hour rather than a trace's twenty minutes.
+    return _ndjson(axis.run(spec, timeout=3600), finish)
+
+
+@router.get("/axis/{axis_id:path}/trace/{trace_id}")
+async def get_axis_trace(
+    axis_id: str, trace_id: str, layer: int | None = None
+) -> dict[str, Any]:
+    """A trace's projection along the axis, position by position."""
+    ax = _axis_or_404(axis_id)
+    trace = _trace_or_404(trace_id)
+    try:
+        return axis.trace_series(
+            trace, ax, ax.default_layer if layer is None else layer
+        )
+    except axis.AxisError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/axis/monitor")
+async def post_axis_monitor(req: AxisMonitorRequest) -> StreamingResponse:
+    """A conversation's projection along the axis, through the model's chat template."""
+    ax = _axis_or_404(req.axisId)
+    layer = ax.default_layer if req.layer is None else req.layer
+    source: dict[str, Any] = {"kind": "messages"}
+    if req.turnId:
+        try:
+            messages, source = axis.turn_messages(req.turnId, req.round)
+        except axis.AxisError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source["kind"] = "turn"
+    else:
+        messages = axis.flatten_messages(req.messages)
+    if not messages:
+        raise HTTPException(status_code=422, detail="no messages to read")
+    try:
+        vectors = axis.vectors_for(ax, [layer])
+    except axis.AxisError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    spec = {
+        "mode": "monitor",
+        "modelPath": ax.meta["modelPath"],
+        "vectors": vectors,
+        "messages": messages,
+        "tokenCap": max(64, min(req.tokenCap, 8192)),
+    }
+    bands = ax.bands(layer)
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        values = result["projections"].get(str(layer), [])
+        # Drift is read on what the assistant wrote, where the bands were measured.
+        own = [
+            v
+            for m in result["messages"]
+            if m["role"] == "assistant"
+            for v in values[m["start"] : m["end"]]
+        ]
+        return {
+            **result,
+            "layer": layer,
+            "values": values,
+            "bands": bands,
+            "source": source,
+            "summary": axis.drift_summary(values, bands),
+            "assistantSummary": axis.drift_summary(own, bands, skip=0) if own else None,
+            "drift": axis.message_drift(values, result["messages"], bands),
+        }
+
+    return _ndjson(axis.run(spec), finish)
+
+
+@router.post("/axis/cap")
+async def post_axis_cap(req: AxisCapRequest) -> StreamingResponse:
+    """A default and a capped generation of the same messages, streamed. Capping
+    floors the projection at each band layer on every generated token."""
+    ax = _axis_or_404(req.axisId)
+    messages = (
+        axis.flatten_messages(req.messages)
+        if req.messages
+        else (
+            ([{"role": "system", "content": req.system}] if req.system.strip() else [])
+            + ([{"role": "user", "content": req.prompt}] if req.prompt.strip() else [])
+        )
+    )
+    if not messages:
+        raise HTTPException(status_code=422, detail="no prompt to generate from")
+    cap = ax.meta["cap"]
+    layers = req.layers or [int(v) for v in cap["layers"]]
+    if not layers or min(layers) < 1:
+        raise HTTPException(
+            status_code=422, detail="llama.cpp cannot add a vector after block 0"
+        )
+    tau = {str(k): float(v) for k, v in (req.tau or cap["tau"]).items()}
+    for layer in layers:
+        if str(layer) in tau:
+            continue
+        band = ax.bands(layer).get("assistant") or {}
+        if band.get("p25") is None:
+            raise HTTPException(
+                status_code=422, detail=f"no floor known for layer {layer}"
+            )
+        tau[str(layer)] = band["p25"]
+    try:
+        vectors = axis.vectors_for(ax, layers)
+    except axis.AxisError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    floors = {str(layer): tau[str(layer)] for layer in layers}
+    spec = {
+        "mode": "cap",
+        "modelPath": ax.meta["modelPath"],
+        "vectors": vectors,
+        "tau": floors,
+        "messages": messages,
+        "maxTokens": max(1, min(req.maxTokens, 256)),
+    }
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        return {**result, "layers": layers, "tau": floors, "check": ax.meta["check"]}
+
+    return _ndjson(axis.run(spec), finish)
 
 
 # ── neuronpedia ──────────────────────────────────────────────────────────────

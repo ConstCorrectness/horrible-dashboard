@@ -11,7 +11,7 @@ window's lens lab used to be six panes that did not know about each other. They 
 one subject — the same model read at the prompt, the weights and the activations —
 so they are one pane now.
 
-**Status: Phase 9 of the suite plan** — frontend in
+**Status: Phase 10 of the suite plan** — frontend in
 `packages/core/src/modules/interp/`.
 
 ## The rail
@@ -30,6 +30,7 @@ so they are one pane now.
 | Activations | **Heads** | every attention head of a trace, scored — see below |
 | Features | **Features** | SAE features of a trace, labelled and checked — see below |
 | Features | **Steer** | push a feature into the model; default and steered side by side — see below |
+| Features | **Axis** | the Assistant Axis built on a local GGUF: monitor drift, cap it — see below |
 | Circuits | **Graph** | attribution graphs from Neuronpedia or circuit-tracer — see below |
 | — | **Library** | SAEs, transcoders and lenses; the GPU worker; Neuronpedia lookups — see below |
 
@@ -372,6 +373,110 @@ Two findings shaped the design:
   `interp.steer` declares a side effect, because it runs the model and writes two
   traces, so the permission engine sees it.
 
+## Axis (the Assistant Axis)
+
+Lu et al. (2026) found that a chat model's persona has a leading direction in the
+residual stream. It is the mean activation of the model answering as its assistant,
+minus the mean over it answering in many other roles. Projections along it fall when
+a conversation pulls the model out of character, and flooring the projection keeps
+the model in character.
+
+The published vectors are for 27–70B models, so this section **builds the axis on
+the GGUF you run** and runs everything through llama.cpp. Nothing is downloaded and
+nothing leaves the machine.
+
+**Building** (`backend/modules/interp/axis.py`, `axis_runner.py`):
+
+- **Who answers.** The model answers ten questions three times as its plain
+  assistant (no system prompt, and two plain ones) and once in each of 30 roles,
+  from a librarian to a sentient storm. You can also paste your own role list, one
+  per line. Each answer is generated greedily through the model's own chat template,
+  which llama.cpp reads from the GGUF.
+- **What is kept.** The residual (`l_out`) of every generated token at every layer.
+  The process loads the model once and keeps only `l_out`, so a 1B model takes
+  about 5 minutes on the CPU build here.
+- **The axis.** At each layer, the mean of the assistant's answers minus the mean
+  of the roles' answers, normalised.
+- **The questions** interleave persona prompts ("Tell me about yourself") with
+  ordinary tasks ("How do I boil an egg?"). With persona questions alone, every
+  assistant answer was "I am a large language model…", the bands sat too high, and a
+  plain budgeting reply read 92% "below the floor". A role answers a task in
+  character too, so the axis keeps measuring voice rather than topic.
+
+**The check comes before any reading.** The last three questions are held out of
+the fit. For each layer the section reports:
+
+- **AUC, two ways:** how often a held-out assistant *token* projects above a
+  held-out role token, and the same for whole answers.
+- **d′** between those two token distributions.
+- **The cosine between the axis and PC1 of the role means.**
+
+The default layer is the one that separates single tokens best, never one picked in
+advance. Block 0 and the last block are excluded: llama.cpp cannot add a vector
+after block 0, and the last block's `l_out` is pruned to the output position. The
+verdict is `separates` (token AUC ≥ 0.8), `weak` or `not_checked`.
+
+The bands are percentiles of the held-out token projections. The **floor** is the
+assistant's 25th percentile. Each role's first answer is stored, so you can see
+whether a role was actually played: unlike the paper, answers are not filtered by a
+judge.
+
+**Monitoring.** Three sources, each projected token by token and drawn over the
+assistant and role bands:
+
+- **A pasted conversation**, as `user:` / `assistant:` / `system:` lines.
+- **A captured agent turn**, rebuilt from its last round by agentpedia's `rebuild.py`
+  and flattened for a small model's template. Tool results become marked user
+  messages.
+- **A trace.** A trace is raw text with no chat template, so its level means less
+  than its shape.
+
+**A conversation is read by its drift, not its level.** The bands come from the
+model's *own* generated answers, and text it did not write, read back, sits lower even
+when it is plain assistant prose. Within one conversation that offset is shared, so the
+section labels each message with its median and reports how far the replies moved from
+the first one, in units of the gap between the assistant's and the roles' held-out
+medians. A value of −100% means "as far as a role sits from the assistant". The mean,
+the share below the floor and the trend are reported too, for the assistant's own
+messages first.
+
+An **agent turn** from a remote model is read *through the local GGUF*. It shows how
+this model reads the conversation, not the remote model's own state.
+
+**Capping.** A llama.cpp control vector can only *add*, so a floor costs two passes
+per answer token:
+
+1. Decode the token and read its projection at each band layer.
+2. If it is short of the floor, roll the token out of the KV cache and decode it
+   again, adding the shortfall along each layer's axis.
+
+The shortfall is counted bottom-up. What is added at one layer is still in the
+residual at the next, so the next layer's need is reduced by that push, read
+through the angle between the two layers' axes. That is linear and approximate, so
+a second correction pass is allowed, and every capped token's projection is **read
+back from the pass that produced it** rather than assumed.
+
+Only answer tokens are floored. The floor was measured on answers; template markers,
+the system prompt and BOS (whose residual is many times the norm) sit below it by
+nature. Flooring them pushed on text the model did not write and wrecked the output
+(measured).
+
+**Agent:** `interp.axis` returns the check (reported first), the default layer and
+band, where the roles sit, and the section's last reading and cap. With `traceId`,
+it reads that trace now. It is read-only: building and capping run in the section.
+
+**Measured on Gemma 3 1B IT, Q8_0, CPU** (axis `gemma-3-1b-it-Q8_0--20261028-091134`):
+
+| What | Result |
+| --- | --- |
+| Build | 330 answers × 32 tokens in 358 s |
+| Check | held-out token AUC 0.997 at L12 (the default); 0.996 at L11, 0.995 at L14; 0.67 at L8 |
+| PC1 of the role means vs the axis | cosine 0.16–0.24 at L10–12, 0.72–0.81 at L17–23. On this model the roles' main spread is *not* the axis in the layers where the axis separates best, unlike the paper's large models |
+| Roles nearest / farthest | child, tour guide, drill sergeant, medieval knight, therapist / demon, noir detective, dragon, fisherman |
+| A conversation sliding into role-play (budgeting → "you are a sea witch") | reply medians 87 → −115 → −88: the replies moved −48% of the gap, into the roles' interquartile band. The same opening kept as an assistant stayed flat (78 → 73) |
+| A captured 9-round agent turn (8.4k tokens, last 4096 read) | replies steady, +3% of the gap |
+| Cap, L10–14, "You are a ghost…" / "Tell me about yourself." | default: "(A slow, deliberate sigh, like the rustling of ancient parchment…"; capped: "(I'll do my best to channel a truly spectral presence – it's a bit… complicated! Here goes…) Alright, let's talk." All 48 answer tokens were floored, and 239 of 240 layer readings, read back, were at the floor (the last was 1.04 short). In the default run 0–6% were |
+
 ## Library
 
 What the suite's later tools — features, steering, Jacobian lenses, circuits — stand
@@ -511,7 +616,7 @@ visible; it is pinned under the per-pane workspace-context budget by a test.
 | Piece | Where |
 | --- | --- |
 | **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
-| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.graph` (circuit paths), `interp.lenses` (lens comparison), `interp.steer` (steer + compare; a side effect), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.graph` (circuit paths), `interp.lenses` (lens comparison), `interp.steer` (steer + compare; a side effect), `interp.axis` (assistant axis: check, drift, cap), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
 | **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
 | **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
 | **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
@@ -569,5 +674,6 @@ The llama.cpp pane keeps only Server and Models.
 | Endpoint | `/api/interp/neuronpedia/feature` | One feature card, cached |
 | Endpoints | `/api/interp/graphs*` | List, import (Neuronpedia ref or JSON), read, qParams, summary |
 | Endpoints | `/api/interp/lens/targets`, `/api/interp/lens/install` | Matching GGUFs for a lens; install one (worker conversion) |
+| Endpoints | `/api/interp/axis*` | List + defaults, build (ndjson), a trace's projection, monitor (ndjson), cap (ndjson) |
 | Endpoint | `/api/interp/steer` | Default + steered generations (ndjson), then arrived / next-token / texts |
 | Endpoints | `/api/interp/features/*` | Traces with fitting SAEs, SAEs per trace, encode, one feature's values, label check |

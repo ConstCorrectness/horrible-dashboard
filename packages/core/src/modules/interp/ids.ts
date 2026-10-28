@@ -24,6 +24,7 @@ export const SUITE_SECTIONS = {
   heads: 'heads',
   features: 'features',
   steer: 'steer',
+  axis: 'axis',
   graph: 'graph',
   library: 'library',
 } as const;
