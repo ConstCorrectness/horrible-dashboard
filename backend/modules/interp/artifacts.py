@@ -125,9 +125,13 @@ def delete_artifact(artifact_id: str) -> bool:
     if found is None:
         return False
     target = Path(found["path"])
-    root = artifacts_root().resolve()
-    # Only ever inside our own root: a row pointing elsewhere is not ours to delete.
-    if target.resolve().is_relative_to(root) and target.exists():
+    # Only ever inside our own roots (downloads, imported graphs): a row pointing
+    # elsewhere is not ours to delete.
+    roots = (
+        artifacts_root().resolve(),
+        (paths.data_dir() / "interp" / "graphs").resolve(),
+    )
+    if any(target.resolve().is_relative_to(r) for r in roots) and target.exists():
         shutil.rmtree(target) if target.is_dir() else target.unlink()
     with _db() as conn:
         conn.execute("DELETE FROM interp_artifacts WHERE id = ?", (artifact_id,))

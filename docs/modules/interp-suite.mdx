@@ -11,7 +11,7 @@ window's lens lab used to be six panes that did not know about each other. They 
 one subject — the same model read at the prompt, the weights and the activations —
 so they are one pane now.
 
-**Status: Phase 8 of the suite plan** — frontend in
+**Status: Phase 9 of the suite plan** — frontend in
 `packages/core/src/modules/interp/`.
 
 ## The rail
@@ -30,6 +30,7 @@ so they are one pane now.
 | Activations | **Heads** | every attention head of a trace, scored — see below |
 | Features | **Features** | SAE features of a trace, labelled and checked — see below |
 | Features | **Steer** | push a feature into the model; default and steered side by side — see below |
+| Circuits | **Graph** | attribution graphs from Neuronpedia or circuit-tracer — see below |
 | — | **Library** | SAEs, transcoders and lenses; the GPU worker; Neuronpedia lookups — see below |
 
 Sections and Home's cards both come from `tools.ts`, so the rail and the map cannot
@@ -124,6 +125,66 @@ recorded on, not necessarily the agent's model.
 The section's state is a module store (`interp/heads/state.ts`), so the digest carries
 its strongest head and `interp.heads` ranks a trace's heads for the agent whether or
 not the section is open.
+
+## Graph (attribution graphs)
+
+An attribution graph explains one prediction as a network: Anthropic's circuit
+tracing, as produced by `circuit-tracer` and shown on Neuronpedia. The bottom row
+is the prompt's embeddings, the middle holds transcoder features and error nodes,
+and the top is the output logits. Each signed edge says how much one node's
+activation pushed another's.
+
+**Getting one.** **Import** takes a Neuronpedia graph link
+(`neuronpedia.org/<model>/graph?slug=…`) or `<model>/<slug>`. It reads the graph's
+page from Neuronpedia's public API, then fetches the JSON file it names, capped at
+64 MB. **Open file** takes a local circuit-tracer run, which is the same format.
+Each graph is validated before it is kept: it needs metadata with prompt tokens,
+nodes with ids, layers, positions and types, and links whose ends exist (more than
+1% dangling refuses it). It is stored as `$DATA/interp/graphs/<model>--<slug>.json`
+with a Library row of kind `graph` (`backend/modules/interp/graphs.py`).
+
+**Reading it** (`interp/graph/`). The graph is drawn on a canvas, because the
+featured Dallas → Austin graph alone carries 34,801 edges:
+
+- **Layout:** token positions run left to right, and only the layers that hold a
+  node get a row.
+- **Edges:** accent for excitatory, danger for inhibitory, with opacity by weight.
+
+**Pruning is client-side and says what it does:**
+
+- **Features** are kept by circuit-tracer's cumulative `influence`, which is
+  smaller for more important nodes.
+- **Edges** are kept when they carry a set share of their target's strongest
+  input, so a node's few real inputs survive in a weak neighbourhood.
+
+**Interacting:**
+
+- **Click** a node for its strongest inputs and outputs (each clickable) and its
+  Neuronpedia label. Labels are fetched by `{layer}-{sourceSet}` when the graph
+  came from Neuronpedia.
+- **Ctrl-click** pins a node, and **Pinned only** shows the reader's subgraph.
+- **Shift-click** gathers nodes into a labelled **supernode**.
+
+Pins and supernodes are written into the graph's own `qParams`, the way
+Neuronpedia stores them, so they persist and travel with the file.
+
+**For the agent**, `interp.graph` walks the strongest excitatory paths back from
+the target logit to the embeddings, greedily and without reusing an edge. It
+labels every step, names each path's weakest link, and can walk only the pinned
+subgraph. A path is a summary, not the whole circuit, and the guide tells the
+agent to say so.
+
+**Local generation is not built.** It needs transcoders for a model this machine
+runs. The candidates are:
+
+- **Qwen3-0.6B:** the transcoder set is 18.8 GB.
+- **Llama 3.2 1B:** 17.3 GB.
+- **Gemma 3 1B IT:** Gemma Scope 2 transcoders, about 150 MB per layer and roughly
+  4 GB for all 26, plus the gated Hugging Face model. It is also unconfirmed that
+  `circuit-tracer` reads Scope 2's folder format.
+
+Each of those is a download to agree to first. The viewer reads circuit-tracer's
+output unchanged, so a local run, once possible, opens here like an import.
 
 ## Fitted lenses (Jacobian / J++)
 
@@ -450,7 +511,7 @@ visible; it is pinned under the per-pane workspace-context budget by a test.
 | Piece | Where |
 | --- | --- |
 | **`interp` roster agent** — "Interpretability guide" | `backend/modules/agent/roster.py`; scope `interp, lens, llamacpp, agentpedia, kb, arxiv`, preloads `interp` and `lens` |
-| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.lenses` (lens comparison), `interp.steer` (steer + compare; a side effect), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
+| **`interp` tool group** — `interp.state` (full digest), `interp.attention` (per-layer rows), `interp.heads` (a trace's heads, ranked), `interp.features` (SAE features + checks), `interp.graph` (circuit paths), `interp.lenses` (lens comparison), `interp.steer` (steer + compare; a side effect), `interp.library` (artifacts, fit, worker), `interp.goto` (section + locus) | declared on the suite pane, `interp/agent-tools.ts`; read-only, so never gated |
 | **Its primer** — tool usage, how-a-fact-is-known, a glossary (SWA, chunked, NoPE, KV sharing, K=V, MLA, DeltaNet, SSM, sinks, lens, J-lens, MoE), pitfalls | `backend/modules/agent/guides/interp.md`, delivered once the group loads — costs nothing per turn until then |
 | **Ask strip** — the chat pinned to `interp`, its own sessions, no picker | a right **region** of the suite (`interp.ask`, key `a`), not a section: a section would replace the thing being asked about |
 | **Ask about this** — in every section's strip, and *Ask why* on the attention block card | `interp/ask.ts`: opens the strip and sends a question naming the section and locus, addressed to `interp` |
@@ -506,6 +567,7 @@ The llama.cpp pane keeps only Server and Models.
 | Endpoints | `/api/interp/library/*` | Catalog, choices, download (ndjson, `confirmBytes`), artifacts with fit, delete |
 | Endpoints | `/api/interp/worker*` | Env install, start / stop, status, ops (`ping` `status` `load` `unload` `generate`) |
 | Endpoint | `/api/interp/neuronpedia/feature` | One feature card, cached |
+| Endpoints | `/api/interp/graphs*` | List, import (Neuronpedia ref or JSON), read, qParams, summary |
 | Endpoints | `/api/interp/lens/targets`, `/api/interp/lens/install` | Matching GGUFs for a lens; install one (worker conversion) |
 | Endpoint | `/api/interp/steer` | Default + steered generations (ndjson), then arrived / next-token / texts |
 | Endpoints | `/api/interp/features/*` | Traces with fitting SAEs, SAEs per trace, encode, one feature's values, label check |

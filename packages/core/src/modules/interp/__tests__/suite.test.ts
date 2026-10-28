@@ -69,6 +69,7 @@ describe('interpretability suite manifest', () => {
       'interp.attention',
       'interp.features',
       'interp.goto',
+      'interp.graph',
       'interp.heads',
       'interp.lenses',
       'interp.library',

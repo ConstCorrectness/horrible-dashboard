@@ -12,7 +12,7 @@ export interface SuiteTool {
   /** `NAMED_GLYPHS` key. */
   glyph: string;
   /** Rail group heading; absent for Home and the Library, which stand apart. */
-  group?: 'Prompt' | 'Weights' | 'Activations' | 'Features';
+  group?: 'Prompt' | 'Weights' | 'Activations' | 'Features' | 'Circuits';
   /** The question this tool answers. */
   question: string;
   /** When to reach for it. */
@@ -115,6 +115,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     group: 'Features',
     question: 'What does the model do when a feature is pushed harder — or taken away?',
     when: 'Add a feature to the residual stream with a llama.cpp control vector; default and steered generations side by side.',
+  },
+  {
+    section: SUITE_SECTIONS.graph,
+    label: 'Graph',
+    glyph: 'graph',
+    group: 'Circuits',
+    question: 'Which features, through which paths, produced this prediction?',
+    when: 'Attribution graphs from Neuronpedia or circuit-tracer: prune, pin, group into supernodes, read the paths.',
   },
   {
     section: SUITE_SECTIONS.library,

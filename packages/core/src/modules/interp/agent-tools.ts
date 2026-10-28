@@ -3,12 +3,13 @@
  *
  * Declared on the suite pane, so they are in the manifest whether or not the pane
  * is open, and progressively disclosed: they cost nothing until a turn loads the
- * group (the `interp` roster agent preloads it). Eight verbs; all but `interp.steer` read-only:
+ * group (the `interp` roster agent preloads it). Nine verbs; all but `interp.steer` read-only:
  *
  * - `interp.state` — the full digest of what the suite is looking at.
  * - `interp.attention` — the per-layer attention layout, for a range of layers.
  * - `interp.heads` — a trace's attention heads, scored and ranked.
  * - `interp.features` — a trace's SAE features, with the reconstruction check and labels.
+ * - `interp.graph` — the open attribution graph's strongest paths into its target logit.
  * - `interp.lenses` — one position read through every lens for the model (logit lens
  *   and fitted Jacobian / J++), and a token's rank per layer under each.
  * - `interp.steer` — push a feature into the model and compare generations (runs the
@@ -45,6 +46,8 @@ import {
   openTrace as openFeatureTrace,
   refreshFeatureTraces,
 } from './features/state';
+import { getGraphSummary } from './graph/api';
+import { graphStore, refreshGraphs } from './graph/state';
 import {
   lensCompareStore,
   openCompareTrace,
@@ -241,6 +244,31 @@ export const interpAgentTools: AgentToolDecl[] = [
             }
           : undefined,
       };
+    },
+  },
+  {
+    name: 'interp.graph',
+    description:
+      'The attribution graph open in the Graph section, as words: the target logit, the ' +
+      "strongest excitatory paths into it from the prompt's embeddings through transcoder " +
+      "features (each with its label when it has one), and the reader's supernodes. " +
+      'pinnedOnly walks only the pinned subgraph. A path is the greedy strongest chain, ' +
+      'not the whole circuit — say so, and name the weakest link.',
+    params: {
+      type: 'object',
+      properties: {
+        pinnedOnly: { type: 'boolean', description: 'Walk only pinned nodes (default false).' },
+      },
+    },
+    handler: async (args) => {
+      if (!graphStore.get().id) await refreshGraphs();
+      const id = graphStore.get().id;
+      if (!id)
+        return {
+          error: 'No attribution graph on this node yet — import one in the Graph section.',
+        };
+      const summary = await getGraphSummary(id, Boolean(args.pinnedOnly));
+      return { graph: id, pinned: graphStore.get().pinned.length, ...summary };
     },
   },
   {

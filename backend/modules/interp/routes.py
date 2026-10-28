@@ -18,6 +18,7 @@ from backend.modules.interp import (
     catalog,
     compat,
     env,
+    graphs,
     lenses,
     neuronpedia,
     sae,
@@ -64,6 +65,20 @@ class SteerRequest(BaseModel):
     prompt: str = ""
     modelPath: str = ""
     maxTokens: int = steer.DEFAULT_NEW_TOKENS
+
+
+class GraphImportRequest(BaseModel):
+    #: A Neuronpedia graph page URL or `model/slug`…
+    ref: str = ""
+    #: …or the graph file itself (a local circuit-tracer run).
+    json_text: str = ""
+    name: str = ""
+
+
+class GraphQParams(BaseModel):
+    pinnedIds: list[str] = []
+    #: `[label, *node_ids]` groups.
+    supernodes: list[list[str]] = []
 
 
 class LensInstallRequest(BaseModel):
@@ -333,6 +348,72 @@ async def post_label_check(req: LabelCheckRequest) -> dict[str, Any]:
         return {"state": "not_checked", "reason": str(exc)}
     except httpx.HTTPError as exc:
         return {"state": "not_checked", "reason": f"could not reach Neuronpedia: {exc}"}
+
+
+# ── attribution graphs ───────────────────────────────────────────────────────
+
+
+def _graph_or_404(graph_id: str) -> dict[str, Any]:
+    art = _artifact_or_404(graph_id)
+    if art["kind"] != "graph":
+        raise HTTPException(status_code=422, detail=f"{graph_id} is not a graph")
+    return art
+
+
+@router.get("/graphs")
+def get_graphs() -> dict[str, Any]:
+    return {"graphs": [a for a in artifacts.list_artifacts() if a["kind"] == "graph"]}
+
+
+@router.post("/graphs/import")
+async def post_graph_import(req: GraphImportRequest) -> dict[str, Any]:
+    try:
+        if req.json_text:
+            art = await asyncio.to_thread(graphs.import_json, req.json_text, req.name)
+        elif req.ref:
+            art = await graphs.import_reference(req.ref)
+        else:
+            raise HTTPException(status_code=422, detail="give a ref or the graph JSON")
+    except graphs.GraphError as exc:
+        return {"error": str(exc)}
+    except httpx.HTTPError as exc:
+        return {"error": f"could not fetch the graph: {exc}"}
+    return {"graph": art}
+
+
+@router.get("/graphs/{graph_id:path}/summary")
+async def get_graph_summary(graph_id: str, pinnedOnly: bool = False) -> dict[str, Any]:
+    """The strongest paths into the target, with Neuronpedia's labels for the
+    features on them when the graph came from there."""
+    art = _graph_or_404(graph_id)
+    try:
+        graph = await asyncio.to_thread(graphs.load, art)
+    except graphs.GraphError as exc:
+        return {"error": str(exc)}
+    first = graphs.summarize(graph, pinned_only=pinnedOnly)
+    labels = await graphs.neuronpedia_labels(
+        graph, first.get("pathNodes") or [], (art.get("facts") or {}).get("sourceSet")
+    )
+    return (
+        graphs.summarize(graph, pinned_only=pinnedOnly, labels=labels)
+        if labels
+        else first
+    )
+
+
+@router.put("/graphs/{graph_id:path}/qparams")
+def put_graph_qparams(graph_id: str, req: GraphQParams) -> dict[str, Any]:
+    art = _graph_or_404(graph_id)
+    return {"qParams": graphs.save_qparams(art, req.model_dump())}
+
+
+@router.get("/graphs/{graph_id:path}")
+def get_graph(graph_id: str) -> dict[str, Any]:
+    art = _graph_or_404(graph_id)
+    try:
+        return {"artifact": art, "graph": graphs.load(art)}
+    except graphs.GraphError as exc:
+        return {"error": str(exc)}
 
 
 # ── fitted lenses ────────────────────────────────────────────────────────────

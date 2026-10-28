@@ -61,6 +61,7 @@ def test_guide_and_frontend_declare_the_same_tools() -> None:
         "interp.attention",
         "interp.heads",
         "interp.features",
+        "interp.graph",
         "interp.lenses",
         "interp.library",
         "interp.steer",

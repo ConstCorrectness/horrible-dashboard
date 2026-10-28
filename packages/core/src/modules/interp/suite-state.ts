@@ -27,6 +27,7 @@ import { lensRuns, type LensRun } from '../webml/lens-run';
 import { fmtBytes, fmtContext, savings } from './attention/model';
 import { headsDigest } from './heads/state';
 import { featuresDigest } from './features/state';
+import { graphDigest } from './graph/state';
 import { lensCompareDigest } from './lenses/state';
 import { libraryDigest } from './library/state';
 import { steerDigest } from './steer/state';
@@ -41,6 +42,8 @@ export interface DigestInputs {
   heads?: string | null;
   /** The Features section's: the SAE, its verdict on the trace, the lead feature. */
   features?: string | null;
+  /** The Graph section's: the open graph, how much is shown, the pins. */
+  graph?: string | null;
   /** The lens comparison's: which lenses, and where a tracked token surfaces. */
   lenses?: string | null;
   /** The Steer section's: the last run and whether it took. */
@@ -58,6 +61,7 @@ export function readDigestInputs(): DigestInputs {
     lensRun: lensRuns.get(),
     heads: headsDigest(),
     features: featuresDigest(),
+    graph: graphDigest(),
     lenses: lensCompareDigest(),
     steer: steerDigest(),
     library: libraryDigest(),
@@ -106,6 +110,7 @@ export interface SuiteDigest {
   windowLens?: string;
   heads?: string;
   features?: string;
+  graph?: string;
   lenses?: string;
   steer?: string;
   library?: string;
@@ -185,6 +190,7 @@ export function buildDigest(
 
   if (inputs.heads) out.heads = inputs.heads;
   if (inputs.features) out.features = inputs.features;
+  if (inputs.graph) out.graph = inputs.graph;
   if (inputs.lenses) out.lenses = inputs.lenses;
   if (inputs.steer) out.steer = inputs.steer;
   if (inputs.library) out.library = inputs.library;
