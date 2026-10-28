@@ -24,10 +24,11 @@ await mkdir(webPublic, { recursive: true });
 await writeFile(path.join(webPublic, 'favicon.ico'), faviconIco);
 await copyFile(LOGO, path.join(webPublic, 'logo.svg'));
 
-const tauriIcons = path.join(ROOT, 'apps/desktop/src-tauri/icons');
-await mkdir(tauriIcons, { recursive: true });
-await writeFile(path.join(tauriIcons, 'icon.ico'), appIco);
-await writeFile(path.join(tauriIcons, 'icon.png'), appPngs[APP_ICON_SIZES.indexOf(256)]);
+// electron-builder's `buildResources` (apps/desktop/electron-builder.json).
+const desktopIcons = path.join(ROOT, 'apps/desktop/build');
+await mkdir(desktopIcons, { recursive: true });
+await writeFile(path.join(desktopIcons, 'icon.ico'), appIco);
+await writeFile(path.join(desktopIcons, 'icon.png'), await render(512));
 
 console.log(
   `favicon.ico ${faviconIco.length} bytes (${FAVICON_SIZES.join('/')}), ` +

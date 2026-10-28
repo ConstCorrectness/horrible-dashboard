@@ -23,7 +23,7 @@ export interface SnapConfig {
 
 export const DEFAULT_SNAP: SnapConfig = { edge: 12, corner: 72, gap: 0 };
 
-/** Viewport assumed when nothing has measured the surface yet (the Tauri default). */
+/** Viewport assumed when nothing has measured the surface yet (the desktop window's default). */
 export const NOMINAL_VIEWPORT = { w: 1280, h: 800 };
 
 /**
@@ -273,7 +273,7 @@ export function rescaleRect(rect: WindowRect, from: Size, to: Size): WindowRect 
  * never above the top edge, and never smaller than `MIN_WINDOW_SIZE`.
  *
  * The `y >= 0` clamp is not cosmetic. The app's own titlebar strip sits above the
- * surface and carries the Tauri drag region; a window allowed to sit at a negative y
+ * surface and carries the titlebar drag region; a window allowed to sit at a negative y
  * would put its own titlebar behind it, where dragging moves the OS window instead
  * and the user has no way to get the window back.
  */

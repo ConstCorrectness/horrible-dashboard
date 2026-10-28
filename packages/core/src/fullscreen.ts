@@ -49,7 +49,7 @@ export async function isAppFullscreen(): Promise<boolean> {
  * Separate from the OS window on purpose. Keyboard Lock activates only in
  * **JavaScript-initiated document fullscreen** — the spec excludes F11 and, by
  * extension, a native shell's borderless window, which never sets
- * `document.fullscreenElement`. So under Tauri this runs *in addition to* the
+ * `document.fullscreenElement`. So under the desktop shell this runs *in addition to* the
  * window going fullscreen: visually a no-op (the webview already fills the
  * screen), but it is the precondition `canHoldEscape` and system-key capture are
  * gated on. Without it the desktop layout — the one that most wants to hold the

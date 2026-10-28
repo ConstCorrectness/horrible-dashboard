@@ -7,7 +7,7 @@ slug: /
 # horrible-dashboard documentation
 
 A unified one-stop app for everything — "emacs for the agentic era". One web UI
-serves two layouts: a browser app and a cross-platform desktop app (a Tauri shell
+serves two layouts: a browser app and a cross-platform desktop app (an Electron shell
 wrapping the same frontend).
 
 These pages are the contract between the code and anyone (human or agent) working
@@ -19,7 +19,7 @@ on it — they describe the codebase as it is, not as it once was.
 flowchart TB
     subgraph FE["Frontend — one React app, two layouts"]
         Web["apps/web<br/>(browser)"]
-        Desk["apps/desktop<br/>(Tauri)"]
+        Desk["apps/desktop<br/>(Electron)"]
         UI["packages/ui<br/>layout shell"]
         Core["packages/core<br/>registry · commands · API client"]
         Mods["Modules<br/>agent · dashboard · editor · files · terminal ·<br/>observability · marketplace · settings · clubhouse · scratch · database · visualizer"]
@@ -54,7 +54,7 @@ flowchart TB
 **Architecture**
 
 - [Layout shell](architecture/layout-shell.mdx) — the shared frontend layout
-  (workspace, panels, command palette) and how the browser and desktop (Tauri)
+  (workspace, panels, command palette) and how the browser and desktop (Electron)
   versions differ.
 - [Data directories](architecture/data-directories.mdx) — where a node keeps its
   files, resolved once in `backend/paths.py` per launcher and per OS. Read before
@@ -362,7 +362,7 @@ to end (Phase 2+ — Tool/Router nodes, run history — is design).
 
 What still needs doing:
 
-- **Editor:** desktop-only `osfile:` source (arbitrary OS files via Tauri native
+- **Editor:** desktop-only `osfile:` source (arbitrary OS files via the shell's native
   dialogs) — designed in [editor.mdx](modules/editor.mdx), not yet implemented.
 - **File explorer:** live `files.*` WS watch events (clients currently re-list to
   refresh) — see [file-explorer.mdx](modules/file-explorer.mdx).

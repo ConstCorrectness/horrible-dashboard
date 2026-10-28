@@ -1,7 +1,7 @@
 /**
  * Backend API client. Both layouts reach the backend through the same relative
- * base: the web dev server proxies /api to localhost:8000, and the Tauri shell
- * loads the same frontend from that dev server (dev) or a configured origin.
+ * base: the web dev server proxies /api to localhost:8000, and the desktop shell
+ * sets an absolute backend origin (see origin.ts).
  */
 import { apiUrl } from './origin';
 import { recordClientIo } from './telemetry';

@@ -3,13 +3,13 @@
  *
  * Support is decided by feature detection **and** one capability, because
  * neither alone is enough. Display capture does not split along "browser or
- * desktop": it works in a browser, works in Tauri on Windows and Linux (WebView2
- * shows its own native picker; WebKitGTK has one from 2.42), and is broken in
- * WKWebView on macOS. So the bulk of the answer is feature detection of the exact
- * API about to be called — never a `window.__TAURI__` check standing in for it.
+ * desktop": it works in a browser and in the Electron desktop shell on every
+ * platform, and was broken in the old Tauri shell's WKWebView on macOS. So the bulk
+ * of the answer is feature detection of the exact API about to be called — never a
+ * desktop-shell check standing in for it.
  *
  * The capability covers the case feature detection provably cannot: see the
- * fourth state below. It is asserted per-platform by the shell
+ * fourth state below. It is asserted by the shell from what it knows of itself
  * (`desktopCapabilities`), so it is not the "static per-host list that is wrong
  * on one platform" this comment used to warn about.
  *
@@ -20,14 +20,15 @@
  * browser cannot do this".
  *
  * The fourth exists because feature detection has one blind spot it cannot see
- * past: **WKWebView exposes `getDisplayMedia` and then rejects it** with
+ * past: a webview can **expose `getDisplayMedia` and then reject it** with
  * `NotAllowedError` — the identical error a host produces by dismissing the
- * picker. So on the macOS desktop the API is present and lying, the probe would
- * say "available", the call would fail, and `startStream` would stay silent
- * because it correctly reads that error as a cancel. Nothing observable from
- * here distinguishes the two, so the shell asserts it instead: the
- * `media.displayCapture` capability is withheld on the macOS desktop and this
- * probe checks it before believing the API.
+ * picker (WKWebView did, under the Tauri shell on macOS). Then the API is present
+ * and lying, the probe would say "available", the call would fail, and
+ * `startStream` would stay silent because it correctly reads that error as a
+ * cancel. Nothing observable from here distinguishes the two, so the shell
+ * asserts it instead: a shell that cannot capture withholds the
+ * `media.displayCapture` capability and this probe checks it before believing
+ * the API.
  */
 
 import { hasCapability } from '../../capabilities';
@@ -55,7 +56,7 @@ export function probeCapture(): CaptureProbe {
     return {
       support: 'unsupported-shell',
       reason:
-        'This desktop shell cannot capture the screen — macOS webviews have no capture API. ' +
+        'This desktop shell cannot capture the screen. ' +
         'Open the dashboard in a browser to share your screen, or share panes semantically ' +
         'instead: guests still see the panes you mirror.',
     };

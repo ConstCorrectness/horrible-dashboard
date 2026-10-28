@@ -2,7 +2,7 @@
  * Live app-fullscreen state for the controls that show it.
  *
  * Reads through the core seam (`isAppFullscreen`), which resolves the native OS
- * window under Tauri and `document.fullscreenElement` in the browser, and
+ * window under the desktop shell and `document.fullscreenElement` in the browser, and
  * resubscribes to `fullscreenchange`. A control that only re-read on its own
  * click would show the wrong icon the moment the user left fullscreen any other
  * way — Escape in the browser, the OS window menu on desktop — which is most of

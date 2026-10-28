@@ -682,7 +682,7 @@ def test_model_file_route_exposes_content_range_to_the_desktop_webview(
         response = client.get(
             "/api/llamacpp/models/file",
             params={"path": str(target)},
-            headers={"Range": "bytes=0-3", "Origin": "tauri://localhost"},
+            headers={"Range": "bytes=0-3", "Origin": "app://horrible"},
         )
     assert response.status_code == 206
     exposed = response.headers["access-control-expose-headers"].lower()

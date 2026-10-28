@@ -324,13 +324,13 @@ Saying otherwise would be the most dangerous thing this module could do.
 
 ### Capture support is probed, then checked against the shell
 
-Display capture does not split along the `Capability` service's browser/desktop
-line: it works in a browser, works in Tauri on Windows (WebView2 shows its **own**
-native picker — no Rust-side handler is needed) and on Linux (WebKitGTK from
-2.42), and is broken in WKWebView on macOS. A flat per-host list would have to
-claim one answer for "desktop" and be wrong on one platform, so `capture.ts`
-feature-detects the exact API it is about to call rather than standing a
-`window.__TAURI__` check in for it.
+Display capture is feature-detected: `capture.ts` probes the exact API it is about
+to call rather than standing a desktop-shell check in for it. It works in a browser
+and in the desktop shell on every platform — Electron has no picker of its own, so
+the shell answers `getDisplayMedia` (`setDisplayMediaRequestHandler` in
+`apps/desktop/src/sessions.ts`) with the primary screen, plus system audio on
+Windows; macOS 15+ shows the system picker instead, and on Wayland the desktop
+portal's picker appears.
 
 The probe reports **four** states, the hardware module's rule: available,
 unavailable, `insecure-context`, or `unsupported-shell`. The `insecure-context`
@@ -339,15 +339,16 @@ state is real and distinct — a page served over plain HTTP off localhost has n
 the browser for an origin problem.
 
 `unsupported-shell` exists because feature detection has exactly one blind spot,
-and macOS sits in it. **WKWebView exposes `getDisplayMedia` and then rejects it**
-with `NotAllowedError` — the same error, indistinguishable, that the host produces
+and the old Tauri shell's macOS build sat in it. **WKWebView exposed
+`getDisplayMedia` and then rejected it** with `NotAllowedError` — the same error, indistinguishable, that the host produces
 by dismissing the picker. So the API detects as present, the call fails, and
 `startStream` stays silent because it is right to read that error as a cancel:
 click Share screen, nothing happens, no message anywhere. Nothing observable from
-the page separates the two, so the shell asserts it instead — the
-`media.displayCapture` capability is granted by `desktopCapabilities(platform)`
-everywhere except the macOS desktop, and the probe checks it **before** believing
-the API. Moving that check after the feature detection silently restores the bug.
+the page separates the two, so the shell asserts it instead — a shell that cannot
+capture withholds the `media.displayCapture` capability (`desktopCapabilities()`),
+and the probe checks it **before** believing the API. Every platform grants it
+today; moving that check after the feature detection would silently restore the
+bug the day one does not.
 
 Every state carries a sentence, and the pane renders it as **visible text**, not
 just the button's `title`: a tooltip never appears on a touch device, is never
@@ -552,11 +553,8 @@ Two limitations worth stating now rather than discovering later:
   [pre-flight check](#the-pre-flight-check) names the panes that would be exposed
   and blocks until the host agrees — but it is a warning, not a guarantee, and the
   semantic path is the one that is actually safe.
-- **macOS desktop cannot capture at all.** WKWebView exposes `getDisplayMedia` and
-  rejects it, so the shell withholds `media.displayCapture` there and the pane says
-  so in visible text before the click rather than failing silently after it.
-  Semantic mode works everywhere; pixel mode is browser-layout and Windows/Linux
-  desktop until a native capture path lands.
+- **The desktop shares the whole primary screen** (Windows, X11): there is no window
+  or tab picker outside macOS 15+ and Wayland, which bring the OS's own.
 - **A mesh does not scale.** One peer connection per guest means the host's
   upstream carries a copy of the stream per person. Fine for a working session,
   wrong for an audience — which is what the relay is for: the host sends **one**
@@ -786,11 +784,11 @@ feature.
 
 ## Browser vs desktop
 
-| | Browser | Desktop (Tauri) |
+| | Browser | Desktop |
 |---|---|---|
 | Session, invites, grants | ✅ | ✅ |
 | Semantic mirror | ✅ | ✅ |
-| Pixel capture | ✅ | Windows/Linux only — WKWebView has no capture API |
+| Pixel capture | ✅ | ✅ (primary screen; the OS picker on macOS 15+ and Wayland) |
 | Viewers audio bus | ✅ | ✅ |
 
 ## Watching a friend's agent

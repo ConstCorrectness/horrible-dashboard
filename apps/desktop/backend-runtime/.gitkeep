@@ -1,0 +1,14 @@
+The bundled Python backend is built into this directory by
+`node scripts/build-backend-runtime.mjs`, and everything it writes here is
+git-ignored — it is roughly a gigabyte of interpreter and site-packages.
+
+This placeholder is committed so the `extraResources` entry in
+electron-builder.json always has a directory to copy. Without it, a developer who
+has never built the runtime gets a packaging error about a missing directory, on a
+build that had no intention of shipping a backend. The build script clears this
+directory and then writes the placeholder back, so it survives a build too.
+
+An app packaged with only this file present still starts: `bundledRuntimeIn`
+(apps/desktop/src/backend.ts) checks for `backend/app.py` and the interpreter, not
+for the directory, so an incomplete runtime reports "no backend found" rather than
+spawning something that cannot import itself.

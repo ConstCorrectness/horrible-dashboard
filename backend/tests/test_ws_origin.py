@@ -57,11 +57,11 @@ def test_cors_uses_the_same_list(client) -> None:
     res = client.options(
         "/api/health",
         headers={
-            "origin": "http://tauri.localhost",
+            "origin": "app://horrible",
             "access-control-request-method": "GET",
         },
     )
-    assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    assert res.headers["access-control-allow-origin"] == "app://horrible"
     res = client.options(
         "/api/health",
         headers={

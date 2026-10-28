@@ -12,12 +12,12 @@ import { WindowControls } from './WindowChrome';
 
 export function TitleBar() {
   const nativeChrome = hasCapability('chrome.workspaceTabs');
-  // The strip stops being a drag region while the app is fullscreen. The native
-  // `data-tauri-drag-region` handler maximizes on double-click *inside the
-  // webview*, never reaching `window_toggle_maximize`, and maximizing a
-  // fullscreen undecorated window is what paints the taskbar-shaped black band
-  // along the bottom (see enter_fullscreen in src-tauri/src/window.rs). There is
-  // nothing to drag in fullscreen anyway.
+  // The strip stops being a drag region while the app is fullscreen. The OS
+  // treats a drag region as the window's caption, so a double-click on it
+  // maximizes natively, never reaching `window_toggle_maximize` — and maximizing
+  // a fullscreen frameless window is what paints the taskbar-shaped black band
+  // along the bottom (see enterFullscreen in apps/desktop/src/window.ts). There
+  // is nothing to drag in fullscreen anyway.
   const { fullscreen } = useAppFullscreen();
   if (!nativeChrome) return null;
   return (
@@ -27,7 +27,7 @@ export function TitleBar() {
           full width and zero height, and the titlebar has no grabbable pixel. */}
       <div
         className="frame-tabs-scroll"
-        {...(fullscreen ? {} : { 'data-tauri-drag-region': '' })}
+        {...(fullscreen ? {} : { 'data-app-drag-region': '' })}
       />
       <ShellIndicators />
       <WindowControls />

@@ -81,7 +81,7 @@ the old text-only `blog`-by-URL ingest if the capture op isn't available.
   text-layer find (jumps to the next matching page). Opened with params
   `artifactId | sourceId | url` and optional `page`. The worker is a Vite-native
   module worker (`new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs', …))`)
-  — no asset copying, same code in web and Tauri.
+  — no asset copying, same code in web and desktop.
 - **`research.pageViewer`** (multi-instance, document role) — a **fully
   sandboxed** iframe (`sandbox=""`, `referrerPolicy="no-referrer"`) over the
   stored HTML, with the origin URL one click from opening live in the browser

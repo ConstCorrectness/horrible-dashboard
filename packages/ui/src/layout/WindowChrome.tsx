@@ -134,9 +134,8 @@ const EDGES: { edge: ResizeEdge; cls: string }[] = [
  * They disappear in fullscreen. A fullscreen window has no edges to drag, and
  * dragging one anyway resizes the frame while Windows keeps an undecorated
  * window's work-area clip on the client — the taskbar-shaped black band along
- * the bottom that `enter_fullscreen` (src-tauri/src/window.rs) exists to
- * prevent. The Rust command refuses too; this stops the cursor from ever
- * suggesting the gesture.
+ * the bottom that `enterFullscreen` (apps/desktop/src/window.ts) exists to
+ * prevent. This stops the cursor from ever suggesting the gesture.
  */
 export function WindowResizeHandles() {
   const wc = windowControl();

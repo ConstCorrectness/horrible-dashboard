@@ -4935,13 +4935,12 @@ Four rules that fail silently if broken:
   that, the voice is silent.
 - **Speaking is metered on a 100 ms timer, not rAF.** rAF stops in a background
   tab, and a lobby is the thing you leave in the background.
-- **On Linux the desktop shell has to answer the permission request itself.**
-  WebKitGTK sends each `getUserMedia` call to the embedder, and denies any
-  request nobody answers. wry does not answer, so the voice bar showed
-  "Microphone permission was denied" on Ubuntu while Windows worked.
-  `apps/desktop/src-tauri/src/media.rs` grants microphone and device-list
-  requests. It does so only on the app's own windows (`main`, `ws-*`), never on
-  the embedded browser's webviews.
+- **The desktop shell answers the permission request itself.** Under the Tauri
+  shell, WebKitGTK sent each `getUserMedia` call to the embedder and denied any
+  request nobody answered, so the voice bar showed "Microphone permission was
+  denied" on Ubuntu while Windows worked. The Electron shell grants media to the
+  app's own origin (`configureAppSession` in `apps/desktop/src/sessions.ts`) and
+  never to the embedded browser's sites, which get a per-site prompt.
 
 By default the mic is open while you are in voice, with Mute and Deafen. With
 `hassault.voice.pushToTalk` on (a checkbox in the voice bar, or Settings) it is
@@ -5110,11 +5109,10 @@ a second identical card, and `service.retract()` on accept or decline clears eve
 surface at once. Two spellings of that key would be a bug that looks like nothing:
 everything still works, notifications just never clear.
 
-:::note This path needs no Tauri permission
+:::note This path needs no shell command
 The OS notification goes through the **Web Notification API**, gated on the
-`notifications.system` capability — not the Tauri notification plugin. The rule
-that a Tauri command needs an ACL entry *and* a `PERMISSION_FILES` line is real,
-and it does not apply here.
+`notifications.system` capability; the desktop shell grants notifications to the
+app's own origin like any other permission.
 :::
 
 #### An offline friend is queued on the *sender*
@@ -7366,10 +7364,9 @@ Tier 3 exists because `hassault.nativeClient` is on by default, which made the
 way into the game a Rust toolchain: the launch route's only answer to a missing
 binary was `cargo build --release`, which is not an instruction a player can
 follow. It is a **download** rather than something bundled in the installer for
-the same reason llama.cpp builds are — and for one more: the desktop shell does
-not package the backend yet (`apps/desktop/src-tauri/src/backend.rs`), so a
-client bundled into the installer today would sit beside an app with no route to
-launch it. See [releases](../architecture/releases.mdx).
+the same reason llama.cpp builds are: it is versioned and launched by the backend
+and lives under `$HORRIBLE_DATA_DIR`, which no installer touches. See
+[releases](../architecture/releases.mdx).
 
 :::warning Tier 3 must never compete on mtime
 The download is deliberately **not** another entry in `pick_binary`'s candidate

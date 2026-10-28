@@ -1,14 +1,14 @@
 /**
  * Host seam for **native OS-window control** (the phase-2 native shell). The
- * desktop entry (apps/web running under Tauri) injects a Tauri-backed
+ * desktop entry (apps/web running under the desktop shell) injects an
  * implementation that drives the shell's `window_*` commands
- * (apps/desktop/src-tauri/src/window.rs); the browser leaves the seam null.
+ * (apps/desktop/src/window.ts); the browser leaves the seam null.
  *
  * Feature code always gates on the matching capability before reaching for the
  * control (`window.fullscreen` for {@link WindowControl.toggleFullscreen}), so a
- * null control never surfaces to the user. Keeping the Tauri wiring in the app
+ * null control never surfaces to the user. Keeping the shell wiring in the app
  * entry and only a plain interface here preserves the "packages/ are
- * platform-agnostic; the entry owns Tauri" boundary. See
+ * platform-agnostic; the entry owns the shell" boundary. See
  * docs/architecture/layout-shell.mdx.
  */
 
@@ -41,7 +41,7 @@ export interface WebviewBounds {
  * The overlay is composited by the OS **above** the HTML layer, so it cannot be
  * z-indexed under anything the app draws. {@link setVisible} is how callers yield
  * that region — for the command palette, modals, pane drags, or a workspace switch.
- * See apps/desktop/src-tauri/src/webview.rs.
+ * See apps/desktop/src/webview.ts.
  */
 /** What a native page did on its own, reported by the shell (`browser-webview`). */
 export type BrowserWebviewEvent =
@@ -68,7 +68,7 @@ export interface BrowserCdpEvent {
  * `browser.nativeCdp` — the Chrome DevTools Protocol, in-process, scoped to one
  * native webview. Absent unless the shell grants the capability (Windows only).
  * The shell allowlists methods (page, DOM, input, script, read-only network) and
- * events; see apps/desktop/src-tauri/src/browser_cdp.rs.
+ * events; see apps/desktop/src/cdpPolicy.ts.
  */
 export interface BrowserCdpControl {
   /** Run one CDP method on webview `id`; resolves with its result object. */

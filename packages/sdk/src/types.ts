@@ -25,22 +25,22 @@ export type Capability =
   | 'browser.nativeWindow'
   // The embedded browser can overlay a **native child webview** on its pane, so a
   // page renders at native speed with no iframe restrictions and no frame streaming.
-  // Desktop-only (Tauri multi-webview). Distinct from `browser.nativeWindow`, which
-  // pops a page out to a separate OS window: this one stays inside the pane, at the
-  // cost of compositing above the HTML layer — see src-tauri/src/webview.rs.
+  // Desktop-only (an Electron `WebContentsView`). Distinct from `browser.nativeWindow`,
+  // which pops a page out to a separate OS window: this one stays inside the pane, at
+  // the cost of compositing above the HTML layer — see apps/desktop/src/webview.ts.
   | 'browser.nativeWebview'
   // The native pane is **drivable**: the shell bridges the Chrome DevTools Protocol
   // into that one webview in-process (no debug port), so the agent's browser tools
   // act on the page the human is looking at, and the pane can read its own
-  // navigation and network. Windows-only — WebView2 speaks CDP, WKWebView and
-  // WebKitGTK don't. See src-tauri/src/browser_cdp.rs.
+  // navigation and network. Every desktop platform (Chromium everywhere). See
+  // apps/desktop/src/webview.ts.
   | 'browser.nativeCdp'
-  // `getDisplayMedia` actually works here. Granted in every browser and on the
-  // Windows/Linux desktop, and **withheld on the macOS desktop**: WKWebView
-  // exposes the function and then rejects it with `NotAllowedError`, which is
-  // indistinguishable from the host dismissing the picker. Feature detection
-  // therefore cannot see this one — the API is present and lying — so it has to
-  // be a capability the shell asserts from what it knows about its own platform.
+  // `getDisplayMedia` actually works here. Granted in every browser and on every
+  // desktop platform. A shell that cannot capture must withhold it: a webview can
+  // expose the function and then reject it with `NotAllowedError` (WKWebView did),
+  // which is indistinguishable from the host dismissing the picker. Feature
+  // detection cannot see that — the API is present and lying — so it has to be a
+  // capability the shell asserts from what it knows about its own platform.
   | 'media.displayCapture';
 
 /**

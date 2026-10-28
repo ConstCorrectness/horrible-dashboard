@@ -1,13 +1,13 @@
 /**
  * Remote updates, from the frontend's side.
  *
- * Both commands live in the desktop shell (apps/desktop/src-tauri/src/updater.rs)
+ * Both commands live in the desktop shell (apps/desktop/src/updater.ts)
  * because only it can replace the running executable. In the **browser layout
  * there is nothing to update** — the page is served fresh on every load — so this
  * surface reports "not applicable" rather than an error, which is a different
  * thing again from "checked and up to date".
  */
-import { isDesktopShell } from '../../external';
+import { desktopBridge, isDesktopShell } from '../../desktop';
 
 export interface UpdateInfo {
   available: boolean;
@@ -24,13 +24,9 @@ export interface UpdateInfo {
   error: string | null;
 }
 
-interface TauriInternals {
-  invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
-}
-
-function invoker(): TauriInternals['invoke'] | null {
-  const internals = (window as { __TAURI_INTERNALS__?: TauriInternals }).__TAURI_INTERNALS__;
-  return internals?.invoke?.bind(internals) ?? null;
+function invoker(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
+  const bridge = desktopBridge();
+  return bridge ? bridge.invoke.bind(bridge) : null;
 }
 
 /** True when this layout can install an update at all. */
@@ -38,7 +34,7 @@ export function updatesSupported(): boolean {
   return isDesktopShell();
 }
 
-/** Rust returns snake_case; the rest of the app speaks camelCase. */
+/** The shell returns snake_case (the shape it inherited); the app speaks camelCase. */
 interface RawUpdateInfo {
   available: boolean;
   current_version: string;

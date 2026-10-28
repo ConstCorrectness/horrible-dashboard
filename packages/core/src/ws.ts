@@ -4,8 +4,9 @@
  */
 import type { WsMessage } from '@horribledashboard/sdk';
 
+import { isDesktopShell } from './desktop';
 import { crossOriginSocket, hubSignedOut, isHosted, socketUrl } from './hosted';
-import { wsUrl } from './origin';
+import { getWsOrigin, onBackendOrigin, wsUrl } from './origin';
 
 export type { WsMessage };
 
@@ -21,6 +22,8 @@ let wsPath = '/ws';
 let resolving = false;
 /** Sends issued while no socket was open yet, flushed on the next `open`. */
 const queued: string[] = [];
+/** Something has asked for the socket (it connects lazily, on first use). */
+let wanted = false;
 
 /**
  * Configure the WebSocket path/query string (default '/ws').
@@ -36,8 +39,16 @@ export function setWsPath(path: string): void {
 }
 
 function connect(): void {
+  wanted = true;
   if (
     hubSignedOut() ||
+    // Under the desktop shell the backend's origin is only known once the shell
+    // reports it ready, and modules subscribe long before that (the UI renders
+    // while the backend boots). Dialing now would aim at the page's own origin
+    // (`ws://horrible/ws`), fail, and grow the reconnect backoff for the whole
+    // boot — so the socket opened up to ten seconds after the backend was ready.
+    // Wait instead; `onBackendOrigin` below connects the moment it is set.
+    (isDesktopShell() && getWsOrigin() === null) ||
     resolving ||
     (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))
   ) {
@@ -58,6 +69,11 @@ function connect(): void {
   }
   open(wsUrl(wsPath));
 }
+
+onBackendOrigin(() => {
+  backoff = 500;
+  if (wanted) connect();
+});
 
 function open(url: string): void {
   socket = new WebSocket(url);

@@ -334,7 +334,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
             nested inside a view would vanish the moment you went home. It is
             inside `.shell-content` (already `position: relative`) so its
             coordinate space stops below the titlebar — which is what keeps a
-            window's titlebar from sliding under the Tauri drag region. */}
+            window's titlebar from sliding under the titlebar drag region. */}
         <WindowLayer />
       </div>
       {/* Outside `.shell-content`, so it takes its own strip of the shell rather

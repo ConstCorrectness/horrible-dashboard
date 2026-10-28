@@ -3,3 +3,8 @@ packages:
   - "packages/*"
   - "examples/plugins/*"
   - "website"
+
+# pnpm 10 runs no dependency install scripts unless listed. Electron's downloads the
+# Chromium-based runtime the desktop shell (apps/desktop) runs on.
+onlyBuiltDependencies:
+  - electron

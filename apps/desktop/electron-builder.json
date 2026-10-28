@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.horrible.dashboard",
+  "productName": "horrible-dashboard",
+  "executableName": "horrible-dashboard",
+  "copyright": "ConstCorrectness",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": ["dist/**/*.js", "package.json"],
+  "asar": true,
+  "extraResources": [
+    { "from": "../web/dist", "to": "web" },
+    { "from": "backend-runtime", "to": "backend-runtime", "filter": ["**/*", "!.gitkeep"] }
+  ],
+  "artifactName": "${productName}_${version}_${os}_${arch}.${ext}",
+  "electronLanguages": ["en-US"],
+  "publish": [
+    {
+      "provider": "generic",
+      "url": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/updater"
+    }
+  ],
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "include": "build/installer.nsh"
+  },
+  "linux": {
+    "target": ["AppImage", "deb"],
+    "category": "Development",
+    "icon": "build/icon.png",
+    "synopsis": "A local-first AI workbench and dashboard",
+    "maintainer": "ConstCorrectness"
+  },
+  "deb": {
+    "packageName": "horrible-dashboard"
+  },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.developer-tools",
+    "icon": "build/icon.png",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "Voice rooms and the voice agent use the microphone.",
+      "NSCameraUsageDescription": "Video in voice rooms uses the camera."
+    }
+  }
+}

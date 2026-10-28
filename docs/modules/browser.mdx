@@ -7,8 +7,8 @@ sidebar_label: Browser
 
 An **embedded web browser** pane: a URL bar, back/forward/reload/home, and a page
 rendered inline. It works in **both** layouts (the `apps/web` browser build and the
-Tauri desktop build) with no per-platform fork — behavior branches on a
-[capability](../architecture/layout-shell.mdx), never a `__TAURI__` check.
+desktop build) with no per-platform fork — behavior branches on a
+[capability](../architecture/layout-shell.mdx), never a desktop-shell check.
 
 It has **three rendering engines**, selected by the `browser.engine` setting:
 
@@ -25,9 +25,9 @@ It has **three rendering engines**, selected by the `browser.engine` setting:
   the app's trust model, and the server holding the **live DOM** is what makes the
   browser inherently agentic (the agent is handed content + an accessibility snapshot and
   can scrape/click/type). Opt-in and gated — see [Full engine](#full-engine-real-chromium).
-- **native** (desktop only, `browser.nativeWebview`) — a **real child webview** the Tauri
+- **native** (desktop only, `browser.nativeWebview`) — a **real Chromium view** the desktop
   shell composites over the pane's rectangle: an actual browser, with tabs, downloads,
-  devtools, saved passwords and a real Edge fingerprint. Fastest of the three by a wide
+  devtools, persistent logins and a plain Chrome fingerprint. Fastest of the three by a wide
   margin (no frame encode, no decode, native scrolling, input, clipboard and IME) and no
   site can refuse it. The price is that it is **not part of the HTML layer**: the OS
   paints it above everything the app draws. On **Windows** the agent drives it directly
@@ -86,8 +86,8 @@ backend Chromium that an iframe can't give: **📥 Save**
 
 - **⧉ Pop out / Open tab** — on **desktop** (capability `browser.nativeWindow`) opens
   the URL in a **real native window** (a true browser, bypassing X-Frame-Options
-  entirely) via the `WindowControl.openBrowserWindow` seam → the Tauri `browser_open_url`
-  command (`apps/desktop/src-tauri/src/window.rs`, http/https only). In the **browser**
+  entirely) via the `WindowControl.openBrowserWindow` seam → the shell's `browser_open_url`
+  command (`apps/desktop/src/window.ts`, http/https only). In the **browser**
   build the seam is null, so it falls back to `window.open` (a new tab).
 
 ## Agent tools
@@ -566,14 +566,17 @@ Dockerfile change. Without the extra, `GET /api/browser/engine` reports
 
 ## Native webview overlay (desktop)
 
-`browser.nativeWebview` renders a page in a **real child webview** that the Tauri shell
-parks over the pane's rectangle (`apps/desktop/src-tauri/src/webview.rs`;
-`NativeBrowserView.tsx` is the frontend half, and renders nothing but a placeholder
-`<div>`). No iframe restrictions, no frame encode or decode, native scrolling and input.
+`browser.nativeWebview` renders a page in a **real Chromium view** — an Electron
+`WebContentsView` — that the desktop shell parks over the pane's rectangle
+(`apps/desktop/src/webview.ts`; `NativeBrowserView.tsx` is the frontend half, and renders
+nothing but a placeholder `<div>`). No iframe restrictions, no frame encode or decode,
+native scrolling and input.
 
-It is built on Tauri's multi-webview API (`Window::add_child`), which is gated behind
-the crate's **`unstable` feature** — so `tauri` is pinned to `~2.11` rather than floating:
-an overlay that stops compiling is better than one that quietly changes behaviour.
+The views run in their **own session** (`persist:browser`), not the app's: separate
+cookies and storage, a plain Chrome user agent (Google sign-in and most bot walls refuse
+one carrying an `Electron/` token), no preload and no access to the app's bridge, and a
+per-site prompt for the microphone, camera, location, notifications and screen capture —
+the app's own page gets those without asking, a site never does.
 
 **The overlay is not part of the HTML layer.** The OS composites it *above* everything
 the frontend draws, and no z-index reaches it. That is the defining property of the
@@ -624,10 +627,10 @@ that no pane will ever hide or close again. `close_all_browser_webviews` sweeps 
 called once at boot before any pane mounts (`apps/web/src/main.tsx`). Nothing is lost —
 a pane still in the restored layout re-creates its own surface on mount.
 
-Only `http`/`https` URLs load, enforced in Rust: a child webview steered at
-`file:`/`tauri:` would run against local resources with app privileges. All six commands
-are `async` because `add_child` dispatches to the main thread and blocks on the reply —
-a sync command already runs there and would deadlock the app.
+Only `http`/`https` URLs load, enforced in the shell: a view steered at `file:`/`app:`
+would run against local resources with app privileges. `create` and `navigate` return as
+soon as the navigation *starts* — progress arrives as `load` events — so a slow site
+never holds up the pane's next bounds update.
 
 **A menu over the page shows a photo of it, not a hole.** With the CDP bridge, the tab is
 photographed (`Page.captureScreenshot`, within a 150 ms budget) before suppression hides
@@ -636,43 +639,36 @@ budget) the region is blank while hidden, as before.
 
 ### Tabs, downloads, devtools, logins
 
-- **Tabs.** Each tab is its own child webview (`<paneId>:<tabId>` to the shell), so a
+- **Tabs.** Each tab is its own view (`<paneId>:<tabId>` to the shell), so a
   background tab keeps its page, scroll and form state. The tab list lives in the
   pane's session, not React state, so a workspace switch keeps it. The shell reports
-  what pages do on their own as `browser-webview` events (`webview.rs`): **loads** keep
+  what pages do on their own as `browser-webview` events (`webview.ts`): **loads** keep
   the URL bar honest when a link is clicked *inside* the page, **titles** label the
   tabs, and **`target=_blank` / `window.open(url)` open a tab** here. A popup that asks
   for a size or position is let through as a real window instead — OAuth and payment
   flows post their result back through `window.opener`.
-- **Back/forward** read the tab's real history over CDP (`Page.getNavigationHistory`) on
-  Windows; elsewhere a per-tab stack built from load events stands in.
-- **Downloads** land where WebView2 puts them by default (the user's Downloads folder,
-  with its own progress flyout); the pane shows a status line with *Show folder*.
+- **Back/forward** read the tab's real history over CDP (`Page.getNavigationHistory`).
+- **Downloads** land in the user's Downloads folder with no save dialog; the pane shows
+  a status line with *Show folder*.
 - **Devtools**: F12 inside the page, the toolbar button, or the `browser.devtools`
-  command. Enabled on the browser webviews only. On Windows that includes release
-  builds, through WebView2's own `OpenDevToolsWindow`. On macOS and Linux the
-  inspector is Tauri's `Webview::open_devtools`, which only exists in debug builds
-  (or with Tauri's `devtools` feature, which this crate does not enable), so a
-  release build answers the command with an error. Calling it unconditionally broke
-  every non-Windows release build of v0.4.0.
-- **Logins**: cookies persist in the WebView2 profile, so sites stay signed in across
-  restarts, and password autosave + form autofill are on. The child webviews share the
-  app window's WebView2 environment (Tauri creates them in it), so site data lives in
-  the app's WebView2 user-data folder.
+  command — a detached DevTools window, on every platform and in release builds.
+- **Logins**: cookies persist in the `persist:browser` session, so sites stay signed in
+  across restarts. **There is no password manager or form autofill**: Chromium's live in
+  Chrome, not in the content layer Electron is built on. WebView2 had both; this is the
+  one thing the native pane lost in the move.
 
-### The CDP bridge (Windows)
+### The CDP bridge
 
-`browser.nativeCdp` (`apps/desktop/src-tauri/src/browser_cdp.rs`) gives the frontend the
-Chrome DevTools Protocol **in-process, scoped to one webview**:
-`ICoreWebView2::CallDevToolsProtocolMethod` for calls and
-`GetDevToolsProtocolEventReceiver` for events (re-emitted as `browser-cdp`). The agent's
+`browser.nativeCdp` (`apps/desktop/src/webview.ts`, allowlists in `cdpPolicy.ts`) gives
+the frontend the Chrome DevTools Protocol **in-process, scoped to one view**, through
+Electron's `webContents.debugger` — calls, and events re-emitted as `browser-cdp`. The agent's
 native engine (`native-engine.ts`) is built on it: `Runtime.evaluate` runs the shared page
 scripts, `Input.dispatchMouseEvent` / `insertText` / `dispatchKeyEvent` act (trusted
 events — `isTrusted` is true, which sites guarding against scripted clicks check), and
 `content` posts the live DOM to `POST /api/browser/extract`.
 
 **Why not `--remote-debugging-port`.** A debug port is a local TCP listener that hands
-*every* webview in the process — the app's own UI, its origin and the tokens it holds —
+*every* page in the process — the app's own UI, its origin and the tokens it holds —
 to any program on the machine. The in-process API reaches one webview and nothing outside
 the process can call it.
 
@@ -682,27 +678,26 @@ getResponseBody`. Events: `Page`, `Runtime`, `DOM`, `Network`. Refused: `Browser
 (the browser process), `Target.*` (attaching to other targets, the app included),
 `Storage.*`, `Fetch.*` (interception), `Security.*`, and `Emulation.*` — fingerprint
 overrides are exactly what bot walls look for. `Page.navigate` keeps the http(s)-only
-guard. Calls run on the webview's UI thread (WebView2 ignores them anywhere else) and
-reply over a channel.
+guard, and a call that has not answered in 30 seconds fails rather than hanging the tool.
 
-macOS (WKWebView) and Linux (WebKitGTK) have no CDP, so the capability is Windows-only;
-there `auto` keeps preferring the full engine.
+Every platform runs the same Chromium, so the capability is granted everywhere. (Under
+the Tauri shell it was Windows-only: WKWebView and WebKitGTK have no CDP.)
 
 ## Browser vs desktop
 
-| | Browser build | Desktop (Tauri) |
+| | Browser build | Desktop |
 | --- | --- | --- |
 | Inline framable sites | ✅ iframe | ✅ iframe |
 | Reader mode (any site) | ✅ | ✅ |
 | Full Chromium engine (any site, live DOM, agentic) | ✅ (gated + extra) | ✅ (gated + extra) |
 | Native in-pane webview (any site, fastest, tabs, downloads, logins) | ❌ | ✅ (`browser.nativeWebview`) |
-| Agent drives the page the human sees | full engine only | ✅ native on Windows (`browser.nativeCdp`); full elsewhere |
+| Agent drives the page the human sees | full engine only | ✅ native (`browser.nativeCdp`) |
 | Blocked-site escape (iframe mode) | Open in new tab (`window.open`) | **Native browser window** (`browser.nativeWindow`) |
 
 The full engine renders **the same backend Chromium** in both builds, so it's the general
-answer to framing-blocked sites in the browser build and on macOS/Linux. On Windows the
-native pane is the browser, for the human and the agent alike; the native-window pop-out
-remains an iframe-mode escape hatch.
+answer to framing-blocked sites in the browser build. On the desktop the native pane is
+the browser, for the human and the agent alike; the native-window pop-out remains an
+iframe-mode escape hatch.
 
 ## Known limitations / future
 
@@ -731,13 +726,11 @@ remains an iframe-mode escape hatch.
   the user's own browser and are invisible to the backend.
 - Iframe-block detection is best-effort; in iframe mode the manual escapes are always
   shown rather than auto-triggered.
-- The **native pane** is agent-drivable on Windows only, and is **invisible to the
-  network view** on every platform: the strip reads the backend session's telemetry.
+- The **native pane** is **invisible to the network view**: the strip reads the backend session's telemetry.
   The bridge already forwards `Network.*` events, so feeding them to the strip is the
   remaining work. Saving a native page files its extracted text (`blog`), not a
   self-contained archive — `capture` re-fetches subresources with the *backend*
-  session's cookies, which a native page doesn't have. The native pane also rides
-  Tauri's `unstable` multi-webview, so a Tauri upgrade needs it re-checked.
+  session's cookies, which a native page doesn't have.
 - The agent tools can't hand the model a **screenshot**: tool results reach the model
   as text, so a vision fallback for canvas-heavy pages needs image support in the tool
   relay first.

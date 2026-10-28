@@ -96,8 +96,8 @@ class SttService:
 
         # transformers 5 draws a tqdm bar while loading weights. A server has nobody
         # to show it to, and under the desktop supervisor a stderr write could raise
-        # `OSError: [Errno 22]` and fail the whole load (see `drain_stderr` in
-        # apps/desktop/src-tauri/src/backend.rs).
+        # `OSError: [Errno 22]` and fail the whole load (see `StderrTail` in
+        # apps/desktop/src/backend.ts).
         hf_logging.disable_progress_bar()
         try:
             self.processor = WhisperProcessor.from_pretrained(self.model_id)

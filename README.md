@@ -9,7 +9,7 @@
 ![React](https://img.shields.io/badge/React-19-20232A?style=flat&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-007ACC?style=flat&logo=typescript&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?style=flat&logo=fastapi&logoColor=white)
-![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB?style=flat&logo=tauri&logoColor=white)
+![Electron](https://img.shields.io/badge/Electron-44-47848F?style=flat&logo=electron&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-2021-000000?style=flat&logo=rust&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=flat&logo=vite&logoColor=white)
 ![Three.js](https://img.shields.io/badge/Three.js-r174-black?style=flat&logo=three.js&logoColor=white)
@@ -24,7 +24,7 @@
 One monorepo powers the entire ecosystem:
 
 - **Web Dashboard** (`apps/web`) — the full browser desktop experience.
-- **Desktop App** (`apps/desktop`) — cross-platform Tauri v2 shell that supervises and manages its own local FastAPI backend.
+- **Desktop App** (`apps/desktop`) — cross-platform Electron shell that supervises and manages its own local FastAPI backend.
 - **HorribleAssault** (`apps/assault-web` & `apps/native-fps`) — tactical 3D multiplayer FPS playable in-browser or via an ultra-low-latency native Rust client.
 - **Mobile Companion** (`apps/mobile-android`) — native Android client pairing via QR code to control panes, stream chat, and expose mobile sensors over the peer wire.
 - **Cloud Deployments** (`deploy/`) — multi-tenant hosted hub on Fly.io, central game server, and WebRTC media relay.
@@ -55,7 +55,7 @@ One monorepo powers the entire ecosystem:
 | **pnpm**              | `10.28.2`        | Workspace package manager (`corepack enable`)              |
 | **Python**            | ≥ 3.12           | FastAPI backend runtime (`backend/`)                       |
 | **uv**                | latest           | Python virtual environment and dependency manager          |
-| **Rust** _(optional)_ | stable toolchain | Needed for `apps/desktop` (Tauri v2) and `apps/native-fps` |
+| **Rust** _(optional)_ | stable toolchain | Needed for `apps/native-fps` only                          |
 
 ### Installation
 
@@ -74,7 +74,7 @@ uv sync
 # 1. Full Browser Stack (Backend :8000 + Vite UI :5173 + Game Server :9200)
 pnpm dev
 
-# 2. Desktop Layout (Tauri window supervising the local backend)
+# 2. Desktop Layout (Electron window supervising the local backend)
 pnpm dev:desktop
 
 # 3. Dedicated HorribleAssault Web Game
@@ -100,7 +100,7 @@ Open **http://localhost:5173** to land on **home**: your 3D avatar, an ask bar w
 horrible-dashboard/
 ├── apps/
 │   ├── web/               # Browser dashboard layout (Vite + React 19)
-│   ├── desktop/           # Desktop shell (Tauri v2 + Rust supervisor)
+│   ├── desktop/           # Desktop shell (Electron + backend supervisor)
 │   ├── assault-web/       # Dedicated browser client for HorribleAssault
 │   ├── native-fps/        # High-performance native 3D Rust client (wgpu + prediction)
 │   └── mobile-android/    # Native Android companion app (Kotlin + QR pairing)

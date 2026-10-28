@@ -86,7 +86,7 @@ core modules and a core module must not import `packages/ui` — the same reason
 
 Every "open this page for the user" in the app is a ladder, and each rung can fail
 silently. That is the whole difficulty: `window.open` returns `null` when a blocker
-eats it and the Tauri `invoke` *rejects* — neither throws anything a caller notices
+eats it and the shell's `invoke` *rejects* — neither throws anything a caller notices
 by default.
 
 ```mermaid
@@ -121,10 +121,9 @@ the click is simply gone. It now announces through `onExternalOpenFailed`, which
 
 ### The bug that motivated all of it
 
-Tauri v2 gates app commands behind the ACL: a command needs an `allow-*` permission
-**defined** in `apps/desktop/src-tauri/permissions/*.toml` **and listed** in
-`capabilities/default.json`. `open_external` was added, registered in
-`generate_handler!`, and shipped with neither.
+Under the old Tauri shell, app commands were gated behind Tauri v2's ACL: a command
+needed an `allow-*` permission **defined** in a permissions TOML **and listed** in
+the capability file. `open_external` was added, registered, and shipped with neither.
 
 So `invoke('open_external')` was rejected, `openExternal` caught it and returned
 `false`, and the link bridge discarded that `false` — which meant OAuth sign-in and
@@ -132,10 +131,9 @@ So `invoke('open_external')` was rejected, `openExternal` caught it and returned
 connector consent pages) did nothing at all, with no error anywhere. Three layers of
 correct-looking code and one missing line of TOML.
 
-`acl_coverage::every_command_is_permitted_and_capable` in
-`apps/desktop/src-tauri/src/main.rs` now parses `generate_handler!` and asserts both
-halves exist for every command. Adding a permission TOML means adding it to
-`PERMISSION_FILES` there, since `include_str!` needs literal paths.
+The Electron shell has one place a command is allowed — its name in `COMMANDS`
+(`apps/desktop/src/main.ts`) — so there is no second half to forget, and
+`scripts/desktop-smoke.mjs` calls `open_external` against the running app.
 
 ## What the wizard does not do
 
@@ -152,7 +150,7 @@ Two deliberately small things close that, rather than a fifth step:
 - The Start menu's footer carries a **Help** entry (`shell.help`) opening the
   published documentation. It checks `openExternal`'s boolean return and toasts the
   URL when it fails: `window.open` returns `null` behind a pop-up blocker and the
-  Tauri invoke rejects on an older shell, and neither throws — a Help button that
+  shell's invoke rejects on an older shell, and neither throws — a Help button that
   silently does nothing teaches the user that the docs do not exist.
 
 What it explicitly does **not** do is offer a boot-workspace picker. Booting into an
@@ -218,7 +216,7 @@ button is indistinguishable from a broken one.
 
 | File | Covers |
 | --- | --- |
-| `packages/core/src/__tests__/external.test.ts` | `openExternal`'s boolean under a blocker and under a rejecting Tauri invoke; the bridge announcing failure |
+| `packages/core/src/__tests__/external.test.ts` | `openExternal`'s boolean under a blocker and under a rejecting shell invoke; the bridge announcing failure |
 | `packages/core/src/__tests__/account.test.ts` | the blocked prompt surviving a failed attempt; cleared on success; `prefer: 'device'`; the redirect→device fallback |
 | `packages/core/src/__tests__/stores.test.ts` | both stores: shared publication, request de-duplication, a blip not reading as a sign-out, the connect-request bus |
-| `apps/desktop/src-tauri/src/main.rs` | every registered command has an ACL permission and a capability entry |
+| `scripts/desktop-smoke.mjs` | the shell's commands answer — `open_external` among them — and refuse what they must, in the packaged app |

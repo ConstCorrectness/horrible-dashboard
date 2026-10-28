@@ -4,8 +4,8 @@
  *
  * In the **browser** layout this module does nothing: the browser's own page zoom
  * already owns those keys, and binding them here would `preventDefault` a working
- * feature away. On the **desktop** the WebView has no zoom keys of its own (Tauri
- * turns them off), so the shell's `window_set_zoom` does the zooming and this module
+ * feature away. On the **desktop** the page has no zoom keys of its own (the shell
+ * removes the app menu that would carry them), so the shell's `window_set_zoom` does the zooming and this module
  * supplies the keys, the steps and the memory.
  *
  * Native zoom rather than CSS `zoom` on the root: every pane — canvases, CodeMirror,

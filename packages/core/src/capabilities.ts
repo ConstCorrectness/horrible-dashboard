@@ -27,24 +27,22 @@ export const DESKTOP_CAPABILITIES: Capability[] = [
   'tray',
   'browser.nativeWindow',
   'browser.nativeWebview',
+  'browser.nativeCdp',
   'media.displayCapture',
 ];
 
 /**
- * The desktop set for a specific platform.
+ * The desktop shell's set — the same on every OS: the shell (apps/desktop) is
+ * Electron, so every platform runs the same Chromium, CDP for the native browser
+ * pane and `getDisplayMedia` included.
  *
- * `DESKTOP_CAPABILITIES` is one list for three operating systems, which is fine
- * for everything driven by the shell's own code — but not for `getDisplayMedia`,
- * which WebView2 and WebKitGTK support and WKWebView does not. Granting it
- * uniformly would be the "static per-host list that has to claim one answer for
- * desktop and is wrong on one platform" that `share/capture.ts` warns about, so
- * the shell subtracts what its own platform cannot do.
+ * It was per-platform under the Tauri shell (WKWebView on macOS exposed
+ * `getDisplayMedia` and then rejected it; only WebView2 spoke CDP). If a platform
+ * ever cannot do something again, subtract it *here*, where `share/capture.ts` and
+ * the browser module will believe it.
  */
-export function desktopCapabilities(platform: 'mac' | 'win' | 'linux'): Capability[] {
-  // Only WebView2 speaks CDP, so only Windows can drive its native browser pane.
-  if (platform === 'win') return [...DESKTOP_CAPABILITIES, 'browser.nativeCdp'];
-  if (platform !== 'mac') return DESKTOP_CAPABILITIES;
-  return DESKTOP_CAPABILITIES.filter((c) => c !== 'media.displayCapture');
+export function desktopCapabilities(): Capability[] {
+  return [...DESKTOP_CAPABILITIES];
 }
 
 let active = new Set<Capability>();

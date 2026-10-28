@@ -1,55 +1,60 @@
 # Releases and remote updates
 
-**Status: implemented and keyed.** The desktop app checks a signed manifest —
-automatically in the background and on demand — downloads an update, verifies
-it, installs it and restarts. The signing keypair exists: the public half is in
-`tauri.conf.json` (key ID `DCD4A446DD335DBD`), so the shell registers the
-updater plugin. What remains before an update can actually reach anyone is the
-**private** half in the repo secrets and a first `v*` tag.
+**Status: implemented and keyed.** The desktop app (Electron, `apps/desktop`)
+checks its channel's update feed — automatically in the background and on
+demand — downloads an update, verifies its signature, installs it and restarts.
+The signing keypair exists: the public half is compiled into the shell (key ID
+`DCD4A446DD335DBD`). What remains before an update can actually reach anyone is
+the **private** half in the repo secrets and a first `v*` tag.
 
-- **Shell:** `apps/desktop/src-tauri/src/updater.rs`, plugin registered in `main.rs`
-- **Config:** `apps/desktop/src-tauri/tauri.conf.json` → `bundle`, `plugins.updater`
-- **CI:** `.github/workflows/release.yml`
+- **Shell:** `apps/desktop/src/updater.ts` (electron-updater + the signature
+  check), `src/minisign.ts`, the key in `src/updater-key.ts`
+- **Config:** `apps/desktop/electron-builder.json` (targets, `publish`)
+- **CI:** `.github/workflows/release.yml`, `scripts/publish-update-manifests.mjs`
 - **Frontend:** `packages/core/src/modules/updates/` (`auto.ts` is the background
   checker; `AppShell` starts it)
 
-## Why custom commands instead of the plugin's JS API
+## The channel is chosen per call
 
 The app has a release **channel**, and the channel is a user setting rather than
-a build-time fact — the same binary must be able to follow either. Tauri's JS
-`check()` uses the endpoints baked into `tauri.conf.json` and offers no way to
-choose one at runtime; only the Rust `UpdaterBuilder` does. So `updater_check`
-and `updater_install` resolve the channel to an endpoint on every call.
-
-Both are Tauri commands, which means both need an ACL entry — a permission in
-`permissions/updater.toml` **and** a listing in `capabilities/default.json`.
-Registering in `generate_handler!` alone rejects at runtime with no build error
-and no UI signal. `acl_coverage::every_command_is_permitted_and_capable` in
-`main.rs` is the test that catches it; a new permissions file must also be added
-to its `PERMISSION_FILES` list, because `include_str!` needs literal paths.
+a build-time fact — the same binary must be able to follow either. So
+`updater_check` and `updater_install` point electron-updater's generic feed at
+the channel's files on every call, rather than using the one electron-builder
+bakes into `app-update.yml`.
 
 ## The signature is the whole security model
 
-The manifest and the archive come over HTTPS from GitHub Releases, and HTTPS only
+The feed and the installer come over HTTPS from GitHub Releases, and HTTPS only
 says the bytes came from that host. Anyone who can publish a release — or take
-over the account — can serve an installer. `plugins.updater.pubkey` is what makes
-an update unforgeable without the private key, and the plugin refuses an unsigned
-or badly-signed archive rather than asking the user. There is deliberately no
+over the account — can serve an installer. electron-updater checks the
+download's sha512 against the feed, but feed and installer come from the same
+place, so that only proves the bytes arrived intact.
+
+What makes an update unforgeable is a **minisign signature** made in CI with the
+release key: `installUpdate` fetches `<installer>.sig`, verifies the downloaded
+file against `UPDATER_PUBKEY` (Ed25519, BLAKE2b-prehashed — `src/minisign.ts`,
+tested against real `tauri signer` output), and refuses to install, deleting the
+download, if it does not match. `autoInstallOnAppQuit` is off, so nothing
+unverified can be installed behind its back on quit. There is deliberately no
 bypass, not even behind a flag.
+
+The key is the one the Tauri shell used, and so is the tool that signs with it
+(`tauri signer`, which writes standard minisign). That is deliberate: installs
+still on the Tauri shell verify their move to Electron against the same
+identity — see [Moving installs off the Tauri shell](#moving-installs-off-the-tauri-shell).
 
 ### One-time setup
 
+Already done for this repository; written down for a new key.
+
 ```bash
-pnpm --filter @horrible/desktop exec tauri signer generate -w $HOME/.tauri/horrible.key
+pnpm dlx @tauri-apps/cli@2.9.6 signer generate -w $HOME/.tauri/horrible.key
 ```
 
-The CLI is a devDependency of `@horrible/desktop`, not of the root package, so a
-bare `pnpm tauri …` from the repo root fails with `Command "tauri" not found`.
 `$HOME` rather than `~` because PowerShell passes a bare `~` through to a native
 command literally, producing a directory called `~` in the repo.
 
-1. Public half → `apps/desktop/src-tauri/tauri.conf.json`, replacing
-   `REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY`.
+1. Public half → `UPDATER_PUBKEY` in `apps/desktop/src/updater-key.ts`.
 2. Private half → repo secret `TAURI_SIGNING_PRIVATE_KEY`; its password →
    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
@@ -58,21 +63,19 @@ install can ever be updated again** — a new key is a new identity and every
 client refuses a manifest it cannot verify. Back it up somewhere that is not the
 machine that generated it.
 
-Until step 1 is done, `updater::is_configured()` (a compile-time read of the
-config source, because the answer decides whether the plugin is registered at
-all, before there is an `AppHandle` to ask) is false: the plugin is skipped, the
-app starts normally, and `updater_check` returns an `error` saying the build
-cannot verify an update. It does **not** return "up to date", which would be a
-lie.
+A development build (`pnpm dev:desktop`) never updates itself: `updater_check`
+returns an `error` saying so rather than "up to date", which would be a lie. So
+does an install electron-updater cannot update in place (a `.deb`, or an
+unpacked directory rather than the AppImage).
 
 ## Channels and the fixed manifest URL
 
 ```mermaid
 flowchart LR
     Tag["git tag v1.2.3<br/>or v1.2.3-beta.1"] --> B["build ×4<br/>(win · linux · mac arm64 · mac x64)"]
-    B --> Rel["Release v1.2.3<br/>installers + signatures + latest.json"]
+    B --> Rel["Release v1.2.3<br/>installers + .sig + .blockmap + per-platform feeds"]
     Rel --> PM["publish-manifest"]
-    PM --> Fixed["Release 'updater'<br/>latest.json · beta.json"]
+    PM --> Fixed["Release 'updater'<br/>latest.yml · latest-linux.yml · latest-mac.yml<br/>(beta*.yml) · latest.json"]
     App["desktop app"] -->|reads| Fixed
     Fixed -->|points at| Rel
 ```
@@ -82,7 +85,10 @@ The app reads its manifest from a **permanent, non-moving release tagged
 the newest *non-prerelease*, so a beta manifest published on a prerelease would
 be unreachable there and a stable manifest would be shadowed the moment a beta
 was promoted. A fixed tag has no such semantics. Only the index lives there; the
-manifests point at assets on the real release.
+feeds point at assets on the real release — by absolute URL, which
+`publish-update-manifests.mjs` writes in, since electron-builder writes bare file
+names that would resolve against the `updater` release. It also merges the two
+mac jobs' feeds into the one `latest-mac.yml` electron-updater reads.
 
 `publish-manifest` runs after **all four** platform builds. A manifest published
 earlier would offer an update that 404s on whichever platform is still building.
@@ -90,9 +96,33 @@ For the same reason the release is not a draft: a draft release's assets need an
 authenticated request to download, so a manifest pointing at them would
 verify-then-404 on every client.
 
-The tag decides the channel: `v1.2.3` → `latest.json`, `v1.2.3-beta.1` →
-`beta.json`. Switching a client from beta back to stable does not downgrade it —
+The tag decides the channel: `v1.2.3` → `latest*.yml`, `v1.2.3-beta.1` →
+`beta*.yml`. Switching a client from beta back to stable does not downgrade it —
 it simply finds nothing until stable catches up.
+
+Windows updates are **differential**: electron-builder publishes a `.blockmap`
+beside each installer and electron-updater downloads only the blocks that changed,
+which matters for an installer that carries a gigabyte of backend runtime. The
+signature is still checked on the reassembled file.
+
+## Moving installs off the Tauri shell
+
+Versions up to 0.4.4 were Tauri builds. Their updater reads `updater/latest.json`
+(`beta.json`) in Tauri's format and verifies a minisign signature with the same
+key — so `publish-manifest` keeps writing that file, pointing at the Electron
+installers:
+
+- **Windows:** the Tauri updater runs the new NSIS installer. It is
+  electron-builder's assisted installer, so the user clicks through it once. Its
+  `customInstall` hook (`apps/desktop/build/installer.nsh`) then removes the Tauri
+  install silently — Tauri's uninstaller keeps app data in silent mode, and
+  `$HORRIBLE_DATA_DIR` is never an installer's business anyway — and puts back the
+  Start-menu and desktop shortcuts that uninstaller removed (both shells name them
+  after the product).
+- **Linux AppImage:** the Tauri updater swaps the AppImage file in place, and the
+  next start is the Electron build.
+- **macOS:** not bridged. The Tauri updater there wants a `.app.tar.gz`, which this
+  build does not produce; those installs update by hand once.
 
 ## Automatic checks
 
@@ -154,13 +184,13 @@ the data dir entirely — so neither an update nor a data-dir copy touches it.
 ## The bundled backend runtime
 
 The desktop shell has always *supervised* the backend but never *carried* it: without a
-repo checkout `backend.rs` reported `unavailable` — "packaged builds don't bundle the
+repo checkout the supervisor reported `unavailable` — "packaged builds don't bundle the
 backend yet" — which made a packaged install an app with no brain. A release now ships
 one.
 
-`scripts/build-backend-runtime.mjs` builds it, in CI before `tauri-action` runs (after,
+`scripts/build-backend-runtime.mjs` builds it, in CI before electron-builder runs (after,
 and the installer is built around an empty directory). The output lands in
-`apps/desktop/src-tauri/backend-runtime/` and is picked up by `bundle.resources`:
+`apps/desktop/backend-runtime/` and ships as an `extraResources` entry, outside the asar:
 
 ```
 backend-runtime/
@@ -184,9 +214,9 @@ no extras. Extras are opt-in by design (torch alone is ~460 MB), every one of th
 lazy-imported, and each answers with an install hint rather than a 500.
 
 :::warning Three spellings of one path
-`BUNDLED_RUNTIME_DIR` in `backend.rs`, the `--out` default in
-`build-backend-runtime.mjs`, and the `bundle.resources` glob in `tauri.conf.json` are
-the same path written three times. Only the first reports anything if they drift, and
+`BUNDLED_RUNTIME_DIR` in `apps/desktop/src/backend.ts`, the `--out` default in
+`build-backend-runtime.mjs`, and the `extraResources` entry in `electron-builder.json`
+are the same path written three times. Only the first reports anything if they drift, and
 what it reports is "no backend found" — which reads like a build that failed rather
 than a name that moved.
 :::
@@ -194,7 +224,7 @@ than a name that moved.
 The runtime is resolved **after** a repo checkout, never before. A developer running the
 packaged app from their own tree wants their edits; a bundled runtime is by definition
 the code as it was at release time, and silently preferring it is how you spend an
-afternoon debugging a change that was never running. `Runtime::bundled_in` also checks
+afternoon debugging a change that was never running. `bundledRuntimeIn` also checks
 for `backend/app.py` *and* the interpreter rather than just the directory: an interrupted
 install leaves a folder that exists and cannot run, and "no backend found" points at the
 install while a Python `ModuleNotFoundError` points at nothing useful.
@@ -233,18 +263,21 @@ reachable before its client assets exist is one where every Install button answe
 wrong download. `backend/tests/test_hassault_client_install.py` reads the workflow
 file and pins them.
 
-The client is a download rather than a bundled `externalBin` because the shell does
-not package the **backend** yet, and the route that launches the client is a backend
-route — a bundled client would sit beside an app with no way to start it.
+The client is a download rather than part of the installer because it is versioned and
+launched by the **backend** (the route that starts it is a backend route), and lives
+under `$HORRIBLE_DATA_DIR` with everything else an installer must not touch.
 
 ## Bundle targets
 
-`bundle.active` is now `true` with `createUpdaterArtifacts: true`. Targets are
-`nsis` (Windows), `app`/`dmg` (macOS) and `appimage`/`deb` (Linux). The manifest
-prefers the **NSIS installer over the MSI**: an MSI cannot update an app while it
-is running, which is the only situation an updater is ever in.
+Targets (`electron-builder.json`): `nsis` (Windows — an assisted, per-user
+installer; there is no MSI, which could not update a running app anyway), `dmg` +
+`zip` (macOS — the zip is what the mac updater consumes), and `AppImage` + `deb`
+(Linux — only the AppImage updates itself).
 
 Nothing here is code-signed by a platform authority yet, so Windows SmartScreen
 and macOS Gatekeeper will both warn on first launch. That is a separate,
 paid problem from update signing, which is about *this app trusting its own
-updates* and is what actually stops a malicious update.
+updates* and is what actually stops a malicious update. One platform makes it
+more than a warning: **macOS will not apply an update to an app that is not
+code-signed** (Squirrel.Mac requires it), so until there is an Apple Developer ID
+the mac build checks and downloads, and then the install fails with that reason.

@@ -21,7 +21,7 @@ flowchart TB
         KB["Keybinding service"]
     end
     Web["apps/web (browser)<br/>plain Vite entry"] -->|boots| Shell
-    Desk["apps/desktop (Tauri)<br/>Rust shell + same frontend"] -->|boots| Shell
+    Desk["apps/desktop (Electron)<br/>main process + same frontend"] -->|boots| Shell
     Shell -->|"HTTP + WebSocket"| BE["backend/ (FastAPI)<br/>agents · PTYs · files · notes · widget data"]
 ```
 
@@ -29,8 +29,8 @@ flowchart TB
 
 Implemented: module registry, spotlight (Ctrl+K), keybinding service
 (`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
-proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
-loading the same dev server). The shared `/ws` socket is consumed via a single
+proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Electron shell
+loading the same dev server, or the built UI from `app://horrible` when packaged). The shared `/ws` socket is consumed via a single
 multiplexed client (`packages/core/src/ws.ts`, channel subscriptions + `sendChannel`)
 — its users are the observability `telemetry` channel (see
 [../modules/observability.md](../modules/observability.mdx)) and the `agent`
@@ -85,13 +85,13 @@ the taskbar — `alt+x` for slash commands, and where `dialogs.prompt()` renders
 The **window layer** sits over the view as a sibling of it, not inside it, so windows
 do not vanish when the view is hidden (`.shell-view[hidden]` is `display: none`). It
 is bounded by `.shell-content`, which keeps a window titlebar from sliding under the
-native titlebar and its Tauri drag region — and the taskbar sits outside
+native titlebar and its drag region — and the taskbar sits outside
 `.shell-content`, so a maximized window cannot cover it. See
 [desktop-shell.mdx](desktop-shell.mdx).
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
-16/32/48), the SVG favicon copy, and the Tauri app icons (full size set) from
+16/32/48), the SVG favicon copy, and the desktop app icons (`apps/desktop/build/`) from
 `assets/logo.svg`. `assets/banner.svg` is the README banner.
 
 ## The workspace
@@ -173,11 +173,11 @@ on one.
 
 ## Platform capability service
 
-Modules must never check `window.__TAURI__` or user-agent sniff. `packages/core`
+Modules must never check `window.horribleDesktop` or user-agent sniff. `packages/core`
 exposes a capability service; feature code branches on capabilities and degrades
 gracefully:
 
-| Capability             | Browser                            | Desktop (Tauri)                  |
+| Capability             | Browser                            | Desktop (Electron)               |
 | ---------------------- | ---------------------------------- | -------------------------------- |
 | `fs.nativeDialogs`     | no (backend workspace roots only)  | yes (native open/save dialogs)   |
 | `shell.revealInOS`     | no                                 | yes                              |
@@ -187,23 +187,22 @@ gracefully:
 | `chrome.workspaceTabs` | no (the page is already in a window) | **yes** (undecorated window; the app draws the titlebar) |
 | `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
 | `tray`                 | no                                 | yes                              |
-| `media.displayCapture` | **yes**                            | **Windows/Linux only** — WKWebView on macOS exposes `getDisplayMedia` and rejects it |
+| `media.displayCapture` | **yes**                            | **yes** (the shell answers `getDisplayMedia` with the screen; macOS 15+ shows the system picker) |
 
-`media.displayCapture` is the one row that is **not** uniform across the desktop,
-which is why the shell calls `desktopCapabilities(platform)` rather than handing
-over the flat `DESKTOP_CAPABILITIES` list. It is also the one capability that
-exists *because* feature detection cannot answer the question: WKWebView exposes
-`navigator.mediaDevices.getDisplayMedia` and then rejects the call with
-`NotAllowedError` — byte-identical to the host dismissing the picker — so a probe
-would report "available", the share would fail, and the UI would correctly stay
-silent about what it read as a cancel. Everything else about capture is still
-feature-detected; see [the share module](../modules/share.mdx).
+Every row is now uniform across the desktop, because every platform runs the same
+Chromium. It was not under the Tauri shell: `media.displayCapture` was withheld on
+macOS, where WKWebView exposed `navigator.mediaDevices.getDisplayMedia` and then
+rejected the call with `NotAllowedError` — byte-identical to the host dismissing the
+picker — so a probe would have reported "available" and the share failed silently.
+That is why it is a capability at all, and why `desktopCapabilities()` is still a
+function: a shell that cannot do something must subtract it there. Everything else
+about capture is feature-detected; see [the share module](../modules/share.mdx).
 
 The `window.*`/`chrome.*` rows are the contract for the native shell (an
 app-drawn titlebar, OS fullscreen). They exist in the `Capability` union so the
-shell can branch on them. The Tauri shell grants these through `DESKTOP_CAPABILITIES`, and the
+shell can branch on them. The desktop shell grants these through `DESKTOP_CAPABILITIES`, and the
 desktop entry wires a `WindowControl` seam (`packages/core/src/window.ts`) to
-the shell's `window_*` commands (`apps/desktop/src-tauri/src/window.rs`).
+the shell's `window_*` commands (`apps/desktop/src/window.ts`).
 Shipped so far:
 
 - **`window.fullscreen`** — `shell.toggleFullscreen` takes the whole app
@@ -214,34 +213,25 @@ Shipped so far:
   `preventable: false`, so binding it in a tab yields a binding that silently
   never fires. The tray's `⛶` button is what makes the feature reachable in the
   browser.
-- **`chrome.workspaceTabs`** — the desktop window is **undecorated**
-  (`decorations: false`) and `TitleBar.tsx` is its titlebar: a native
-  `data-tauri-drag-region` (moves the window, maximizes on double-click, handled in
-  the webview), the min/maximize/close controls (`WindowControls`), and invisible
-  edge grips (`WindowResizeHandles`) that drive OS edge-resize since the window has
-  no native borders. The name is the workspace tab strip's, which used to be that
+- **`chrome.workspaceTabs`** — the desktop window is **frameless**
+  (`frame: false`) and `TitleBar.tsx` is its titlebar: a `data-app-drag-region`
+  strip (`-webkit-app-region: drag` — the OS's caption: it moves the window and
+  maximizes on double-click), the min/maximize/close controls (`WindowControls`),
+  and invisible edge grips (`WindowResizeHandles`). Electron keeps native resize
+  borders on a frameless window, so the OS takes an edge press before the grips
+  see it. The name is the workspace tab strip's, which used to be that
   titlebar.
 Both ship. (`window.perWorkspace` — a workspace in its own OS window — was removed
 with the workspaces.)
 
-The `window_*` custom commands are ACL-gated like any command here: each needs a
-permission in `apps/desktop/src-tauri/permissions/` listed in
-`capabilities/default.json` (the `data-tauri-drag-region` additionally needs the
-core `window:allow-start-dragging` / `window:allow-internal-toggle-maximize`
-permissions). Wiring a new native capability follows this same path: grant it in
-`DESKTOP_CAPABILITIES`, add the Tauri command(s) + their permission, extend the
-relevant host seam,
+Every shell command goes through one door: the preload exposes
+`window.horribleDesktop.invoke(command, args)` (and `listen(event, fn)`), and the
+main process answers only names in its `COMMANDS` table (`apps/desktop/src/main.ts`),
+only from the app's own page. Wiring a new native capability: grant it in
+`DESKTOP_CAPABILITIES`, add the command to `COMMANDS`, extend the relevant host seam,
 and gate the feature on `hasCapability(...)` so the browser degrades cleanly.
 The desktop build claims `DESKTOP_CAPABILITIES` (vs the browser's
-`BROWSER_CAPABILITIES`) via the `isTauri()` branch in `apps/web/src/main.tsx`.
-
-The commands take **`tauri::Window`** (or `tauri::Webview` for page zoom), never
-`WebviewWindow`. Tauri resolves a `WebviewWindow` argument only while the window
-holds a single webview, and every native browser pane adds a child webview — so
-with a Browser pane open, a `WebviewWindow` command is rejected ("current webview is
-not a WebviewWindow") and the titlebar buttons and F11 silently do nothing. For the
-same reason, look a window up with `app.get_window(label)`, not
-`get_webview_window`, which returns `None` for such a window.
+`BROWSER_CAPABILITIES`) via the `isDesktopShell()` branch in `apps/web/src/main.tsx`.
 
 ## Backend connection
 
@@ -259,25 +249,24 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
   Anything that executes on the backend (terminals, file access, agents) runs
   **where the backend runs**, not where the browser runs. Module docs call this
   out where it matters.
-- **Desktop:** the Tauri shell **spawns and supervises the backend itself**
-  (`apps/desktop/src-tauri/src/backend.rs`). On launch it locates the repo
-  checkout, reuses an already-running backend on `:8000` if there is one
+- **Desktop:** the shell **spawns and supervises the backend itself**
+  (`apps/desktop/src/backend.ts`). On launch it locates the repo
+  checkout (or, in a packaged install, the bundled runtime), reuses an already-running backend on `:8000` if there is one
   (dev-backend.ps1 coexistence; it must answer `GET /api/health` as
   `horrible-dashboard`, so a stranger holding the port is skipped rather than
   adopted), otherwise picks a port (8000 preferred, ephemeral fallback) and
   spawns uvicorn bound to `127.0.0.1` — via the repo's
   `.venv` python when present, else `uv run` — with MinGW dirs stripped from the
   child PATH (the `no OPENSSL_Applink` crash). It restarts the process with
-  backoff if it dies (3 fast failures → `failed` with the stderr tail) and kills
-  it on app exit. The frontend polls the `backend_status` Tauri command at boot
+  backoff if it dies (3 fast failures → `failed` with the stderr tail) and stops
+  it before the app exits. The frontend polls the `backend_status` command at boot
   and uses **absolute** http/ws URLs from then on — no Vite proxy in the loop,
   so dev and packaged builds exercise the same path. If the backend never comes
   up, boot proceeds pluginless; the boot splash records the failed step and the
   taskbar's tray shows the backend as offline.
 
-A packaged desktop build has no repo checkout: the supervisor reports
-`unavailable`, which is the plug point for a future bundled/downloaded runtime
-(python-build-standalone). A per-session auth token between shell and backend is
+A packaged desktop build has no repo checkout; it runs the bundled runtime instead
+(see [releases](releases.mdx#the-bundled-backend-runtime)). A per-session auth token between shell and backend is
 a planned follow-up — today anything on localhost can reach the API.
 
 The shell owns a single multiplexed WebSocket connection with reconnect/backoff;
@@ -350,7 +339,7 @@ if (ok) await remove();
 
 ## What belongs in each entry
 
-- `apps/web`: boot the shell, resolve the backend origin (Tauri: ask the shell's
+- `apps/web`: boot the shell, resolve the backend origin (desktop: ask the shell's
   `backend_status` command; browser: relative + proxy), register the browser
   capability set. Nothing feature-specific.
 - Boot is **async**: after registering built-in modules, the entry awaits
@@ -358,7 +347,6 @@ if (ok) await remove();
   [plugin-sdk.md](plugin-sdk.mdx)) before the first render, so restored layouts
   find plugin panels/widgets already registered. If the backend is down, boot
   proceeds without plugins.
-- `apps/desktop`: same boot, plus Tauri-only wiring — window chrome, tray, global
-  shortcuts, multi-window pop-out, native menu that dispatches to the same
-  command registry. Rust code in `src-tauri/` stays a thin shell; app logic
-  belongs in the backend or `packages/`.
+- `apps/desktop`: the Electron main process — window chrome, global shortcuts,
+  browser views, pop-out windows, updates, the backend supervisor. It stays a thin
+  shell; app logic belongs in the backend or `packages/`.

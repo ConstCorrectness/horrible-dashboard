@@ -503,7 +503,7 @@ weights in Cache Storage — which an opaque `sandbox` origin (the `{r3f}` patte
 throws on. So apps are served from a **real, separate origin**,
 `http://scrive-apps.localhost:<port>/<site>/<app>/`:
 
-- Chromium and WebView2 resolve every `*.localhost` name to loopback and treat it as
+- Chromium (so the desktop shell too) resolves every `*.localhost` name to loopback and treat it as
   a secure context, so WebGPU and Cache Storage work there (verified: a WGSL kernel
   over a million floats ran there in 22 ms and matched the CPU).
 - It shares no cookies, storage or same-origin access with the app UI or the API.
@@ -1442,7 +1442,7 @@ Notebook publishing benefits from all of this too.
 
 ## Browser vs desktop
 
-| Capability | Browser | Desktop (Tauri) |
+| Capability | Browser | Desktop |
 | --- | --- | --- |
 | Sites, pages, source editing | ✅ | ✅ |
 | Live preview (math, Mermaid, embeds) | ✅ | ✅ |

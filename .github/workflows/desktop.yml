@@ -1,0 +1,172 @@
+name: Desktop
+
+# The Electron desktop shell (apps/desktop), tested as a user would get it: built,
+# packaged by electron-builder, launched, and driven.
+#
+# - `unit`: the shell's own tests and typecheck.
+# - `smoke`: on Windows and Linux, package the app, then scripts/desktop-smoke.mjs
+#   drives the packaged binary through Playwright (window, backend, CORS and /ws,
+#   window controls, browser views and CDP, guards, shutdown), and
+#   scripts/desktop-bench.mjs measures its process tree at idle and under WebGL.
+# - `tauri-baseline`: the same benchmark, on the same kind of runner, against a
+#   Tauri build of the last commit that still had the Tauri shell — so the numbers
+#   in the summary are a comparison, not just numbers.
+#
+# Every job writes its results to the job summary and uploads the JSON.
+
+on:
+  push:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/web/**'
+      - 'packages/core/**'
+      - 'packages/ui/**'
+      - 'backend/origins.py'
+      - 'scripts/desktop-*.mjs'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/web/**'
+      - 'packages/core/**'
+      - 'packages/ui/**'
+      - 'backend/origins.py'
+      - 'scripts/desktop-*.mjs'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The last commit with the Tauri shell (apps/desktop/src-tauri), for the baseline.
+  TAURI_BASELINE: 6ab5d9ea276edfbe88ee94bcde3aa15c8bf31b88
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @horrible/desktop typecheck
+      - run: pnpm --filter @horrible/desktop test
+
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The app runs this checkout's backend (it is launched from here), as
+      # `pnpm dev:desktop` does — the bundled runtime is a release-only artifact.
+      - name: Install backend dependencies
+        run: uv sync
+
+      - name: Build the UI
+        run: pnpm build
+
+      - name: Package the desktop app
+        run: pnpm --filter @horrible/desktop run package
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/desktop-smoke.mjs
+
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        # A bare Xvfb has no window manager, so nothing can maximize a window.
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/desktop-smoke.mjs --no-wm
+
+      - name: Benchmark (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/desktop-bench.mjs --exe apps/desktop/release/win-unpacked/horrible-dashboard.exe --label electron --idle 90 --load 30
+
+      - name: Benchmark (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/desktop-bench.mjs --exe apps/desktop/release/linux-unpacked/horrible-dashboard --label electron --idle 90 --load 30
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: node scripts/desktop-report.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-results-${{ matrix.os }}
+          path: desktop-smoke-results/
+          if-no-files-found: ignore
+
+  tauri-baseline:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # This branch, for the benchmark script.
+      - uses: actions/checkout@v7
+      - name: Check out the Tauri baseline
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAURI_BASELINE }}
+          path: tauri-baseline
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: tauri-baseline/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: tauri-baseline/apps/desktop/src-tauri
+
+      - name: Install the baseline's dependencies
+        working-directory: tauri-baseline
+        run: |
+          pnpm install --frozen-lockfile
+          uv sync
+
+      # `--no-bundle`: the release executable, without an installer (and without the
+      # updater artifacts, which would need the signing key).
+      - name: Build the Tauri app
+        working-directory: tauri-baseline
+        run: pnpm --filter @horrible/desktop tauri build --no-bundle
+
+      - name: Benchmark
+        run: node scripts/desktop-bench.mjs --exe tauri-baseline/apps/desktop/src-tauri/target/release/horrible-dashboard-desktop.exe --cwd tauri-baseline --label tauri --idle 90 --load 30
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: node scripts/desktop-report.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-results-tauri-baseline
+          path: desktop-smoke-results/
+          if-no-files-found: ignore

@@ -1,24 +1,24 @@
 name: Release
 
-# Build the desktop app on all three OSes, sign the update artifacts, and publish
-# them to a GitHub Release together with the signed manifest the app's updater
-# reads. The docs workflow is the precedent for publishing from CI.
+# Build the desktop app (apps/desktop, Electron) on all three OSes, sign the update
+# artifacts, and publish them to a GitHub Release together with the update feeds
+# the app reads. The docs workflow is the precedent for publishing from CI.
 #
-# One-time setup before the first run (see docs/architecture/releases.mdx):
-#   1. `pnpm --filter @horrible/desktop exec tauri signer generate -w $HOME/.tauri/horrible.key`
-#      (the CLI is a devDependency of @horrible/desktop, not of the root package)
-#   2. Put the PUBLIC half in apps/desktop/src-tauri/tauri.conf.json → plugins.updater.pubkey
-#      (replacing REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY — until then the shell does
-#      not even register the updater plugin).
+# Signing: every installer is signed with minisign by `tauri signer sign` — the
+# same key and the same two secrets the Tauri shell used, so the update identity
+# carries over and installs still on the Tauri shell can verify the move to
+# Electron. One-time setup (see docs/architecture/releases.mdx):
+#   1. `pnpm dlx @tauri-apps/cli@2.9.6 signer generate -w $HOME/.tauri/horrible.key`
+#   2. Put the PUBLIC half in apps/desktop/src/updater-key.ts (UPDATER_PUBKEY).
 #   3. Put the PRIVATE half in the repo secret TAURI_SIGNING_PRIVATE_KEY, and its
 #      password in TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
 # The private key never enters the repository. Losing it means no existing install
 # can ever be updated again — a new key is a new identity, and every client refuses
-# a manifest it cannot verify. Back it up somewhere that is not this machine.
+# an update it cannot verify. Back it up somewhere that is not this machine.
 #
-# Channel: the tag decides. `v1.2.3` publishes `latest.json` (stable);
-# `v1.2.3-beta.1` publishes `beta.json`. Both live on the same release, because
-# `updater.rs` picks a channel by filename, not by host.
+# Channel: the tag decides. `v1.2.3` publishes the `latest*` feeds (stable);
+# `v1.2.3-beta.1` publishes `beta*`. Both live on the fixed `updater` release,
+# because `updater.ts` picks a channel by filename, not by host.
 
 on:
   push:
@@ -59,22 +59,31 @@ jobs:
   build:
     needs: create-release
     strategy:
-      # Never cancel the other two: a macOS build failing must not throw away a
+      # Never cancel the others: a macOS build failing must not throw away a
       # finished Windows one, since a partial release is still a release people
       # can update to on the platforms it did produce.
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-          # `--verbose` is what shows linuxdeploy's own output. Without it a failed
-          # AppImage is a bare "failed to run linuxdeploy" with no cause.
-          - platform: ubuntu-22.04
-            args: '--verbose'
           - platform: windows-latest
-            args: ''
+            args: '--win --x64'
+            manifest: latest.yml
+          - platform: ubuntu-22.04
+            args: '--linux --x64'
+            manifest: latest-linux.yml
+          # One job per mac architecture. Each renames its feed so the two do not
+          # overwrite each other; publish-manifest merges them. Both run on the
+          # arm64 runner, as the Tauri jobs did — which means the x64 build's
+          # bundled backend runtime is arm64 too (build-backend-runtime.mjs builds
+          # for the host), so on an Intel Mac only a checkout backend works.
+          - platform: macos-latest
+            args: '--mac --arm64'
+            manifest: latest-mac.yml
+            rename: latest-mac-arm64.yml
+          - platform: macos-latest
+            args: '--mac --x64'
+            manifest: latest-mac.yml
+            rename: latest-mac-x64.yml
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -91,88 +100,62 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - name: Cache cargo
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-
-      # Tauri's Linux build needs the system webkit/gtk headers; the other two
-      # platforms use OS-provided webviews and need nothing.
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The backend the app ships. Built before `tauri-action` because it lands in
-      # `src-tauri/backend-runtime`, which `bundle.resources` picks up — run it after,
-      # and the installer is built around an empty directory and every packaged app
-      # reports "no backend found". The step is ~1 GB of interpreter and wheels, which
-      # is what makes the app work offline on a machine with no Python.
+      # The backend the app ships, into apps/desktop/backend-runtime, which
+      # electron-builder copies as an extraResources entry — so it has to exist
+      # before packaging, or every packaged app reports "no backend found". ~1 GB of
+      # interpreter and wheels, which is what makes the app work offline on a
+      # machine with no Python.
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
 
       - name: Build the bundled backend runtime
         run: node scripts/build-backend-runtime.mjs
 
-      # linuxdeploy, which builds the AppImage, resolves the shared-library
-      # dependencies of every ELF file in the AppDir, the bundled runtime's wheels
-      # included. manylinux wheels vendor their libraries into `<pkg>.libs/` under
-      # hashed names and find them by an `$ORIGIN` rpath that linuxdeploy does not
-      # follow. v0.4.1 failed with "Could not find dependency:
-      # libk5crypto-b1f99d5c.so.3.1", and only the first miss is ever reported.
-      # Putting every `*.libs` directory, and the interpreter's own `lib/`, on
-      # LD_LIBRARY_PATH lets it resolve them all.
-      - name: Let linuxdeploy find the runtime's vendored libraries
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Build the UI
+        run: pnpm build
+
+      - name: Package the app
         shell: bash
         run: |
           set -euo pipefail
-          runtime="$PWD/apps/desktop/src-tauri/backend-runtime"
-          dirs=$(find "$runtime" -type d -name '*.libs' | sort | paste -sd: -)
-          echo "vendored library dirs: $(find "$runtime" -type d -name '*.libs' | wc -l)"
-          echo "LD_LIBRARY_PATH=${dirs:+$dirs:}$runtime/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          pnpm --filter @horrible/desktop build
+          pnpm --filter @horrible/desktop exec electron-builder --publish never ${{ matrix.args }}
 
-      - uses: tauri-apps/tauri-action@v0
+      # The signature the app checks before installing anything (updater.ts), and
+      # the one installs still on the Tauri shell check too.
+      - name: Sign the update artifacts
+        shell: bash
         env:
-          # A precaution, not the fix for v0.4.1 (that was the vendored libraries
-          # above). linuxdeploy's bundled `strip` predates the toolchains behind
-          # python-build-standalone and many wheels, and Tauri documents this as the
-          # remedy when it trips on their newer ELF sections. Stripping prebuilt
-          # extension modules gains nothing anyway. Only linuxdeploy reads it.
-          NO_STRIP: 'true'
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: apps/desktop
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'horrible-dashboard ${{ github.event.inputs.tag || github.ref_name }}'
-          # Not a draft: a draft release's assets need an authenticated request to
-          # download, so a manifest pointing at them would verify-then-404 on every
-          # client. The safety this gives up is recovered by `publish-manifest`,
-          # which is what actually makes a build reachable by the updater and runs
-          # only after all four platforms have uploaded.
-          releaseDraft: false
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-beta') }}
-          # Ship the NSIS installer in the manifest rather than the MSI: the MSI
-          # cannot update an app while it is running, which is the only situation
-          # an updater ever runs in.
-          updaterJsonPreferNsis: true
-          args: ${{ matrix.args }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd apps/desktop/release
+          for f in *.exe *.AppImage *.deb *.zip *.dmg; do
+            pnpm dlx @tauri-apps/cli@2.9.6 signer sign "$f"
+          done
 
-  # The hassault native client. A separate job from `build` on purpose: that one is
-  # `tauri-action` end to end, while this crate needs its own toolchain targets and a
-  # completely different set of Linux system libraries — winit/wgpu/cpal want X11,
-  # Wayland and ALSA headers, not webkit and gtk.
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd apps/desktop/release
+          if [ -n "${{ matrix.rename }}" ]; then mv "${{ matrix.manifest }}" "${{ matrix.rename }}"; fi
+          gh release upload "$TAG" \
+            *.exe *.AppImage *.deb *.zip *.dmg *.sig *.blockmap \
+            "${{ matrix.rename || matrix.manifest }}" --clobber
+
+  # The hassault native client. A separate job from `build` on purpose: this crate
+  # needs a Rust toolchain and its own set of Linux system libraries — winit/wgpu/cpal
+  # want X11, Wayland and ALSA headers — none of which the desktop app needs.
   #
   # These assets are **not** in the signed updater manifest. They are fetched by the
   # backend (`backend/modules/hassault/client_install.py`), verified against the
@@ -219,10 +202,8 @@ jobs:
         with:
           workspaces: apps/native-fps
 
-      # winit needs X11 + Wayland, cpal needs ALSA. Nothing here overlaps with the
-      # webkit/gtk set the Tauri job installs, which is why the two jobs cannot share
-      # a step: a missing header here fails the link with an error naming a C library,
-      # not a Rust crate.
+      # winit needs X11 + Wayland, cpal needs ALSA: a missing header here fails the
+      # link with an error naming a C library, not a Rust crate.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -257,44 +238,53 @@ jobs:
           cp "$BUILT" "${{ matrix.asset }}"
           gh release upload "$TAG" "${{ matrix.asset }}" --clobber
 
-  # `tauri-action` writes `latest.json` onto the release it just built, whose tag
-  # moves with every version. The app reads from a *fixed* tag instead (see
-  # MANIFEST_BASE in updater.rs), so the finished manifest is copied there under
-  # the channel's filename once every platform has uploaded its share — a manifest
-  # published before the last platform finishes would offer an update that 404s
-  # on the platform still building.
-  # `needs` both builds: a manifest is what makes a release reachable, and a
-  # release reachable before its client assets exist is one where every install
-  # button answers "publishes no client for your platform".
+  # Each platform uploaded its own feed onto the version's release. The app reads
+  # from the *fixed* `updater` release instead (see MANIFEST_BASE in
+  # apps/desktop/src/updater.ts), so the feeds are rewritten for it — absolute URLs,
+  # the channel's names, the two mac feeds merged, plus the Tauri-format manifest
+  # for installs still on the Tauri shell — and copied there once every platform has
+  # uploaded: a feed published before the last platform finishes would offer an
+  # update that 404s on the platform still building.
+  # `needs` both builds: a feed is what makes a release reachable, and a release
+  # reachable before its client assets exist is one where every install button
+  # answers "publishes no client for your platform".
   publish-manifest:
     needs: [build, build-native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Copy the manifest to the fixed updater release
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish the feeds to the fixed updater release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          case "$TAG" in
-            *-beta*) CHANNEL_FILE=beta.json ;;
-            *)       CHANNEL_FILE=latest.json ;;
-          esac
-
-          gh release download "$TAG" --pattern latest.json --dir . --clobber
-
-          if [ "$CHANNEL_FILE" != "latest.json" ]; then
-            mv latest.json "$CHANNEL_FILE"
-          fi
+          mkdir -p feeds/in feeds/out
+          gh release download "$TAG" --dir feeds/in --clobber \
+            --pattern 'latest*.yml' --pattern '*.exe.sig' --pattern '*.AppImage.sig'
+          node scripts/publish-update-manifests.mjs --tag "$TAG" --dir feeds/in --out feeds/out
 
           # Idempotent: the fixed release exists after the first run.
           gh release view updater >/dev/null 2>&1 || gh release create updater \
             --title "Update manifests" \
-            --notes "Signed update manifests read by the desktop app. Not a build — see .github/workflows/release.yml." \
+            --notes "Update feeds read by the desktop app. Not a build — see .github/workflows/release.yml." \
             --target "$GITHUB_SHA" \
             --latest=false
 
-          gh release upload updater "$CHANNEL_FILE" --clobber
+          gh release upload updater feeds/out/* --clobber

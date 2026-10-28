@@ -4,7 +4,7 @@
  *
  * ## Why this exists
  *
- * The desktop shell has always *supervised* the backend (`src-tauri/src/backend.rs`)
+ * The desktop shell has always *supervised* the backend (`apps/desktop/src/backend.ts`)
  * but never *carried* it: without a repo checkout it reported `unavailable` — "packaged
  * builds don't bundle the backend yet". Since the backend is the app's brain (agents,
  * data, every module's server side), that made a packaged install an empty shell. This
@@ -48,8 +48,8 @@
  *
  *   node scripts/build-backend-runtime.mjs [--out <dir>] [--clean]
  *
- * Default output is `apps/desktop/src-tauri/backend-runtime`, which is what
- * `tauri.conf.json` lists under `bundle.resources`. Git-ignored: it is a build output
+ * Default output is `apps/desktop/backend-runtime`, which `electron-builder.json` ships
+ * as an `extraResources` entry. Git-ignored: it is a build output
  * measured in gigabytes.
  */
 import { execFileSync } from 'node:child_process';
@@ -95,11 +95,11 @@ const PRUNE_DIRS = ['include', 'libs', join('Lib', 'test'), join('lib', 'python3
 /**
  * The committed placeholder inside the output directory.
  *
- * `bundle.resources` globs this folder, and a glob that matches nothing is a bundler
+ * `extraResources` copies this folder, and a folder that does not exist is a packaging
  * error — so the file has to exist even for a developer who has never built a runtime.
  * This script clears the directory first, which deletes it, so it is written back at
  * the end: without that, running the build once and then deleting the output leaves a
- * *tracked file missing* and the next `tauri build` failing for a reason that has
+ * *tracked file missing* and the next desktop build failing for a reason that has
  * nothing to do with the change being built.
  */
 const PLACEHOLDER = '.gitkeep';
@@ -120,7 +120,7 @@ function capture(cmd, args, opts = {}) {
 }
 
 function parseArgs(argv) {
-  const args = { out: join(REPO, 'apps', 'desktop', 'src-tauri', 'backend-runtime'), clean: false };
+  const args = { out: join(REPO, 'apps', 'desktop', 'backend-runtime'), clean: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--out') {
       args.out = resolve(argv[++i]);
@@ -295,7 +295,7 @@ function main() {
   const placeholderPath = join(outDir, PLACEHOLDER);
   const placeholderText = existsSync(placeholderPath)
     ? readFileSync(placeholderPath, 'utf8')
-    : "Placeholder so tauri.conf.json's bundle.resources glob always matches a file.\n";
+    : "Placeholder so electron-builder's extraResources always has a directory to copy.\n";
 
   if (args.clean || existsSync(outDir)) {
     log(`clearing ${outDir}`);

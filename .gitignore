@@ -141,10 +141,6 @@ node_modules/
 # on a fresh clone without a build step.
 !examples/plugins/*/dist/
 
-# Tauri / Rust
-src-tauri/target/
-apps/desktop/src-tauri/gen/
-
 # App local data (HORRIBLE_DATA_DIR — node identity key, peers, settings, vectordb).
 # Covers the default `.data/` and any sibling data dir (e.g. `.data-peer2/` for a
 # second local node during peer-fabric testing). Never commit these — they hold a
@@ -235,10 +231,10 @@ local.properties
 CLAUDE.local.md
 # The bundled Python backend runtime (scripts/build-backend-runtime.mjs): a
 # relocatable CPython plus every dependency, ~1 GB. A build output, rebuilt per
-# release by CI. The .gitkeep is committed so tauri.conf.json's resource glob
-# always matches something — see the note inside it.
-apps/desktop/src-tauri/backend-runtime/*
-!apps/desktop/src-tauri/backend-runtime/.gitkeep
+# release by CI. The .gitkeep is committed so electron-builder's extraResources
+# entry always has a directory to copy — see the note inside it.
+apps/desktop/backend-runtime/*
+!apps/desktop/backend-runtime/.gitkeep
 
 # 3D Model Raw Binaries & DCC Project Files (prevent pushing to git)
 *.fbx
@@ -271,3 +267,12 @@ packages/webml/kernel-tests/.results/
 
 # Map meshes before their AO edge splits, for bake_collision.py (maplib.COLLISION_DIR)
 tools/blender/.collision/
+
+# Desktop shell (apps/desktop): `build/` there is electron-builder's *input* (icons,
+# installer hooks), not an output — the outputs are `dist/` and `release/`.
+!apps/desktop/build/
+# Desktop shell (apps/desktop) build outputs, and desktop-smoke.mjs results.
+apps/desktop/dist/
+apps/desktop/release/
+desktop-smoke-results/
+

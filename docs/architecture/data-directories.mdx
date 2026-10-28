@@ -7,7 +7,7 @@ of the settings page shows the resolved roots.
 - **Resolver:** `backend/paths.py` (`data_dir`, `config_dir`, `cache_dir`, `log_dir`)
 - **Route:** `GET /api/paths` (`describe_roots`)
 - **UI:** `packages/core/src/modules/storage/` — a settings section, no pane
-- **Shell:** `open_path` in `apps/desktop/src-tauri/src/window.rs`
+- **Shell:** `open_path` in `apps/desktop/src/window.ts`
 - **Tests:** `backend/tests/test_paths.py`
 
 ## The bug this replaces
@@ -20,7 +20,7 @@ Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
 
 That default is **relative to the process's working directory**, and the working
 directory belongs to whichever launcher started the backend — `pnpm dev` runs it
-from the repo, the Tauri shell runs it from `find_repo_root()`, a packaged app
+from the repo, the desktop shell runs it from `findRepoRoot()`, a packaged app
 would run it from wherever the shortcut points. So "the data dir" quietly meant a
 different directory per launcher.
 
@@ -81,7 +81,7 @@ imagery ships with the app, so that directory is empty on a fresh install; see
 
 ### Why `%LOCALAPPDATA%` and not `%APPDATA%`
 
-Tauri's own `app_data_dir` picks roaming `%APPDATA%`, and this deliberately
+Electron's own `userData` (like Tauri's `app_data_dir` before it) picks roaming `%APPDATA%`, and this deliberately
 differs. Roaming profiles are copied to the domain server at logon and logoff, and
 this directory holds multi-gigabyte GGUFs, llama.cpp builds and karaoke media. The
 size of what we store makes roaming the wrong shelf.

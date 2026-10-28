@@ -78,6 +78,7 @@ export {
   type CardTag,
   type ResourceCardProps,
 } from './ResourceCard';
+export { desktopBridge, desktopInvoke, type DesktopBridge } from './desktop';
 export {
   installExternalLinkBridge,
   isDesktopShell,

@@ -217,7 +217,7 @@ full `navigator.keyboard.lock()` runs only when **all** of these hold.
 
 | Gate | Why |
 | --- | --- |
-| Keyboard Lock exists | Chromium only; WebKitGTK and WKWebView have no implementation |
+| Keyboard Lock exists | Chromium only (the desktop shell is Chromium everywhere); Firefox and Safari have no implementation |
 | The **document** is fullscreen | The spec excludes F11 and, with it, a native shell's borderless window — see `setDocumentFullscreen` in `fullscreen.ts`, which is why the desktop layout now enters document fullscreen alongside the OS window |
 | `keymap.captureSystemKeys` is on | Off by default. A window that swallows `alt+tab` without saying so is indistinguishable from a frozen machine |
 
@@ -275,9 +275,10 @@ input-source switch on macOS, so `area.fullscreen` ships as `mod+alt+f` there.
 A binding marked `global: true` is registered with the OS so it fires while the
 app is unfocused. Gated on the `shortcuts.global` capability, so it is a no-op in
 the browser. The frontend owns which command each accelerator runs
-(`keymap/global.ts`); the Rust side (`apps/desktop/src-tauri/src/shortcuts.rs`) is
-a dumb registrar that emits a `global-shortcut` event, so a rebind never needs a
-Rust change. Sequences are ineligible — the OS grabs one chord, not a prefix — and
+(`keymap/global.ts`); the shell side (`apps/desktop/src/shortcuts.ts`) is a dumb
+registrar that emits a `global-shortcut` event, so a rebind never needs a shell
+change. On Wayland the registration goes through the desktop portal (the shell turns
+on Chromium's `GlobalShortcutsPortal`), which may ask the user once. Sequences are ineligible — the OS grabs one chord, not a prefix — and
 `code:` specs are rejected rather than registered as the wrong key.
 
 ## Focus
