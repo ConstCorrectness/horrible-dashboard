@@ -357,7 +357,14 @@ async function main() {
     // WebView2 reads extra browser arguments from here; Electron ignores it.
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
   };
-  const args = [`--remote-debugging-port=${cdpPort}`];
+  const args = [
+    `--remote-debugging-port=${cdpPort}`,
+    // WebView2 also reads switches from the host's command line, and processes them
+    // last. On the windows-latest runner the environment variable above never reached
+    // the Tauri baseline's browser process (its own --disable-features did), while
+    // this did locally on the same runtime (155). Chromium ignores it under Electron.
+    `--edge-webview-switches=--remote-debugging-port=${cdpPort}`,
+  ];
   if (process.platform === 'linux') args.push('--no-sandbox');
 
   console.log(`\nBenchmark: ${label} (${process.platform}) — ${exe}`);
