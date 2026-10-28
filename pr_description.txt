@@ -1,14 +1,35 @@
-Title: 🧪 Improve testing coverage for `parse_rewrites` function
+Title: 🚀 Feat: High-performance Linux Electron desktop shell, packaging, and benchmark suite
 
 Description:
-🎯 **What:** Addressed testing gap for the `parse_rewrites` function in `backend/modules/search/pipeline.py`. Added robust edge-case validation since the functionality relies on somewhat brittle JSON extraction and parsing of LLM outputs.
+### 🎯 What & Why
+- **Problem**: On Linux, running Tauri resulted in severe rendering lag and eventual Out-of-Memory (OOM) crashes due to WebKitGTK / Wayland DMA-BUF buffer leakage during continuous WebGL canvas rendering (`Avatar3D.tsx`).
+- **Solution**: Built a dedicated, high-performance Electron desktop shell in `apps/desktop-electron` with hardware acceleration flags (`--enable-zero-copy`, `--ignore-gpu-blocklist`, `--no-sandbox`), while preserving Tauri in `apps/desktop` for Windows/macOS where WebView2 operates smoothly.
+- **Packaging & Updates**: Configured `electron-builder` for multi-platform distribution (`.AppImage`, `.deb`, NSIS `.exe`, `.zip`) and integrated `electron-updater` directly into the frontend update notification system.
+- **Performance Benchmarks**: Developed a standalone cross-platform benchmark suite (`scripts/benchmark-desktop.mjs`) to measure boot latency, physical memory footprint (RSS across process tree), memory growth slope (MB/min), and CPU utilization across Electron and Tauri.
 
-📊 **Coverage:** Test coverage includes handling:
-- `None` and empty strings.
-- Invalid JSON text wrapped in brackets.
-- Extracted elements that are empty or oversized (length > 300 characters).
-- Case-insensitive deduplication of queries.
-- Stringification of array elements of varying types (boolean, numbers, nulls).
-- Valid JSON arrays embedded within Markdown markdown codeblocks (i.e., ` ```json\n...\n``` `).
+---
 
-✨ **Result:** Enhanced the resilience and reliability of query extraction, closing out all identified testing blind-spots for this critical parsing step.
+### 📦 Key Changes
+1. **Desktop Electron Shell (`apps/desktop-electron`)**:
+   - `src/main.ts`: Chromium flags, single instance lock, window lifecycle, and static asset fallback.
+   - `src/preload.ts` & `scripts/wrap-preload.cjs`: Secure `contextBridge` exposing `window.horriblePlatform` with CommonJS module polyfill.
+   - `src/backend.ts`: FastAPI backend supervisor with port-probe discovery and process group shutdown.
+   - `src/browserView.ts`: Embedded child webviews via `WebContentsView` with native Chrome DevTools Protocol (`webContents.debugger`).
+   - `src/updater.ts`: Auto-updater integrating `electron-updater` with GitHub Releases.
+   - `electron-builder.json`: Bundles `apps/web/dist` and relocatable Python `backend-runtime`.
+2. **Frontend & Core Integration**:
+   - `apps/web/src/main.tsx`: Runtime detection of `window.horriblePlatform` and desktop capability injection.
+   - `apps/web/src/electronBackend.ts`, `electronShortcuts.ts`, `electronWindow.ts`: Desktop seams for port discovery, global accelerators, and window controls.
+   - `packages/core/src/external.ts`: Desktop URL opening and OS directory reveal support for Electron.
+   - `packages/core/src/modules/updates/api.ts`: Connected `checkForUpdate` and `installUpdate` to Electron updater bridge.
+   - `packages/ui/src/layout/frame.css`: Added `-webkit-app-region: drag/no-drag` for frameless window movement.
+3. **Tooling & Benchmarking**:
+   - `scripts/dev-desktop.mjs`: Auto-selects Electron on Linux and Tauri on Windows/macOS, with explicit `--shell <electron|tauri>` override.
+   - `scripts/benchmark-desktop.mjs`: Cross-platform benchmark suite tracking startup to interactive, memory leaks, and CPU load.
+
+---
+
+### 🧪 Verification
+- `pnpm -r typecheck`: Passed with 0 errors across all 11 workspace packages.
+- Directory packaging: Verified `pnpm --filter @horrible-dashboard/desktop-electron package` generates complete unpacked bundle in `dist-electron/linux-unpacked/`.
+- Benchmarks CLI: Verified `node scripts/benchmark-desktop.mjs --help` operates cleanly.
