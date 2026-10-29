@@ -34,7 +34,7 @@ use std::collections::VecDeque;
 use crate::console::{LogLine, Tone};
 use crate::damage::Placed;
 use crate::protocol::{Fx, HitMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
-use crate::radar::{self, Blip, Run};
+use crate::radar::{self, colors as rc, Blip, BlipKind, Edge, Mark, MarkKind, RadarSettings, Run};
 use crate::settings::Crosshair;
 
 /// One overlay vertex: a position already in clip space, and a colour with an
@@ -243,11 +243,26 @@ pub struct KillNote {
 /// painter, where nothing can test it.
 pub struct RadarView<'a> {
     pub plan: &'a [Run],
+    /// The wall outline, built once per map beside the plan (`radar::world_edges`).
+    pub edges: &'a [Edge],
     /// Where we are, in cubes, and which way we are facing, in **radians**.
     pub x: f32,
     pub y: f32,
     pub yaw: f32,
     pub blips: &'a [Blip],
+    /// Everything that is not a live body: last-known, gunfire, footsteps, the
+    /// bomb. Built by `radar::Memory::marks`, for the same reason `blips` is
+    /// built outside the painter.
+    pub marks: &'a [Mark],
+    pub sites: &'a [crate::protocol::ModeSite],
+    pub settings: RadarSettings,
+    /// The map's side in cubes, for the clamped and whole-map views.
+    pub ssize: f32,
+    /// Tab and the radar-zoom key, held.
+    pub scores: bool,
+    pub zoom: bool,
+    /// Our own last noise: its audible radius in cubes and 0..1 of its life left.
+    pub own_noise: Option<(f32, f32)>,
 }
 
 /// The developer console, as this frame's painter needs to see it.
@@ -3546,100 +3561,222 @@ fn short_room(room: &str) -> &str {
 
 /// The radar, drawn over the map's floor plan.
 ///
-/// The browser's `Radar.tsx` is the reference for the look — 110 cubes across,
-/// rotated so up is where you are looking, teammates blue and spotted enemies
-/// red — and this is deliberately *not* a port of how it draws. That version
-/// rasterises the map into an offscreen canvas once and blits it with a
-/// transform; there is no image and no transform here, so the plan arrives as
-/// merged runs (`radar::floor_plan`) and each one is drawn as an oriented thick
-/// line. See `radar.rs` for why that is the cheap shape.
+/// The browser's `Radar.tsx` is the reference for the look, and `radar.rs`
+/// holds every number that decides it — span, centre, rotation, blip sizes and
+/// palette are replayed from the browser's own fixture. This is deliberately
+/// *not* a port of how the browser draws: that one rasterises the map into an
+/// offscreen canvas once and blits it with a transform, and clips to a circle;
+/// there is no image, transform or clip here, so the plan arrives as merged runs
+/// (`radar::floor_plan`) and every segment is cut against the rim by
+/// `radar::clip_to_circle` before it is drawn. See `radar.rs` for why that is
+/// the cheap shape.
 ///
-/// **Rotated, not north-up.** North-up is easier to draw and much harder to read
-/// under pressure: it makes every glance a mental rotation before it is
-/// information.
+/// **Rotated by default, not north-up.** North-up is easier to draw and harder
+/// to read under pressure; `hassault.radar.rotate` is the player's choice.
 fn paint_radar(p: &mut Painter, r: &RadarView, u: f32) {
+    let full = r.scores && r.settings.full_on_scores;
     // 76 HUD units is the browser's 168 px on the 800-tall canvas it was tuned
     // against, which is what keeps the two clients the same size on screen
     // rather than the same number of pixels.
-    let radius = u * 38.0;
+    let radius = u * 38.0 * r.settings.hud_scale * if full { 1.5 } else { 1.0 };
     let cx = MARGIN * u + radius;
     let cy = MARGIN * u + radius;
-    let per_cube = (radius * 2.0) / radar::SPAN;
+    let f = radar::frame(&r.settings, r.x, r.y, r.yaw, r.ssize, r.scores, r.zoom);
+    let per_cube = (radius * 2.0) / f.span;
+    let at = |wx: f32, wy: f32| radar::project(&f, radius, wx, wy);
+    let icon = |kind: BlipKind| radar::blip_radius(kind, r.settings.icon_scale) * radius;
+    let inside = |(x, y): (f32, f32), pad: f32| (x * x + y * y).sqrt() <= radius - pad;
 
-    // The instrument's own ground, so the map underneath does not read through
-    // the floor plan as more floor plan.
-    p.disc(cx, cy, radius, 48, [0.031, 0.047, 0.071, 0.72]);
-
-    // Canvas's own rotation, reproduced: `ctx.rotate(-yaw - PI/2)` in a y-down
-    // space. Looking along +x must put "ahead" at the top of the instrument, and
-    // getting the sign wrong here yields a radar that is *plausible* — it turns
-    // when you turn — and mirrored.
-    let angle = -r.yaw - std::f32::consts::FRAC_PI_2;
-    let (sin, cos) = angle.sin_cos();
-    let project = |wx: f32, wy: f32| -> (f32, f32) {
-        let lx = (wx - r.x) * per_cube;
-        let ly = (wy - r.y) * per_cube;
-        (lx * cos - ly * sin, lx * sin + ly * cos)
+    // A world segment, projected and cut to the rim. There is no clip here, and
+    // an uncut plan is a square minimap inside a round frame.
+    let seg = |p: &mut Painter, (ax, ay): (f32, f32), (bx, by): (f32, f32), w: f32, c: [f32; 4]| {
+        if let Some((a, b)) = radar::clip_to_circle(at(ax, ay), at(bx, by), radius) {
+            p.line(cx + a.0, cy + a.1, cx + b.0, cy + b.1, w, c);
+        }
     };
 
-    let half_span = radar::SPAN * 0.5;
+    // The instrument's own ground, near-opaque so the scene behind does not
+    // read through the floor plan as more floor plan.
+    p.disc(cx, cy, radius, 48, rc::GROUND);
+
+    // Cull by world distance from the view's centre before projecting: the
+    // instrument is a circle of `span / 2` cubes whatever its rotation, and a
+    // 256-row map is mostly off it.
+    let reach = f.span * 0.5;
     for run in r.plan {
-        // Cull by row before transforming. A 256×256 map is thousands of runs
-        // and all but a band of them are off the instrument; rotating each one
-        // to discover that is the whole cost of the radar.
-        if (run.y - r.y).abs() > half_span {
+        if (run.y - f.cy).abs() > reach {
             continue;
         }
-        let a = project(run.x0, run.y);
-        let b = project(run.x1, run.y);
-        // Cut to the rim rather than drawn and hoped for: there is no clip here,
-        // and an uncut floor plan is a square minimap inside a round frame.
-        let Some((a, b)) = radar::clip_to_circle(a, b, radius) else {
+        seg(p, (run.x0, run.y), (run.x1, run.y), per_cube, radar::floor_color(run.band));
+    }
+
+    let mut g = 0.0;
+    while g <= r.ssize {
+        let w = (u * 0.25).max(1.0);
+        seg(p, (g, 0.0), (g, r.ssize), w, rc::GRID);
+        seg(p, (0.0, g), (r.ssize, g), w, rc::GRID);
+        g += radar::GRID_CUBES;
+    }
+
+    for site in r.sites {
+        let c = at(site.x, site.y);
+        let sr = site.radius * per_cube;
+        // Whole or not at all: a disc has no cheap clip, and half a site
+        // spilling past the rim is worse than the label alone.
+        if inside(c, sr) {
+            p.disc(cx + c.0, cy + c.1, sr, 32, rc::SITE);
+            p.ring(cx + c.0, cy + c.1, sr - u * 0.35, sr, radar::faded(rc::SITE_EDGE, 0.7));
+        }
+    }
+
+    for e in r.edges {
+        // An edge's own extent against the reach, both axes: edges are short and
+        // many, and most of them are nowhere near the instrument.
+        if e.y0.max(e.y1) < f.cy - reach
+            || e.y0.min(e.y1) > f.cy + reach
+            || e.x0.max(e.x1) < f.cx - reach
+            || e.x0.min(e.x1) > f.cx + reach
+        {
             continue;
-        };
-        p.line(
-            cx + a.0,
-            cy + a.1,
-            cx + b.0,
-            cy + b.1,
-            per_cube,
-            [0.549, 0.667, 0.824, 0.16],
-        );
+        }
+        seg(p, (e.x0, e.y0), (e.x1, e.y1), (u * 0.55).max(1.0), rc::WALL);
+    }
+
+    // CS2's "how far am I heard" ring, round wherever we are.
+    if let Some((cubes, life)) = r.own_noise {
+        let c = at(r.x, r.y);
+        let rr = cubes * per_cube * (1.0 - life * 0.25);
+        if life > 0.0 && inside(c, rr) {
+            p.ring(cx + c.0, cy + c.1, rr - u * 0.4, rr, radar::faded(rc::OWN_NOISE, life));
+        }
+    }
+
+    // Footsteps first, under everything with an edge: soft, wide, "about there".
+    for m in r.marks.iter().filter(|m| m.kind == MarkKind::Sound) {
+        let c = at(m.x, m.y);
+        let br = radar::SOUND_PING_CUBES * per_cube;
+        if !inside(c, br) {
+            continue;
+        }
+        // Two discs rather than a gradient this painter does not have: a wide
+        // faint one and a tighter core, which reads as soft at radar size.
+        p.disc(cx + c.0, cy + c.1, br, 16, radar::faded(rc::SOUND_PING, m.life * 0.6));
+        p.disc(cx + c.0, cy + c.1, br * 0.5, 12, radar::faded(rc::SOUND_PING, m.life));
+    }
+
+    // Site letters, upright whatever the rotation.
+    for site in r.sites {
+        // Up and to the left of the centre, as in the browser: the middle is
+        // where the bomb gets planted.
+        let offset = site.radius * per_cube * 0.55;
+        let c0 = at(site.x, site.y);
+        let c = (c0.0 - offset, c0.1 - offset);
+        if !inside(c, u * 4.0) {
+            continue;
+        }
+        let label = site.id.to_lowercase();
+        let scale = (u * 0.75).max(1.0);
+        let w = text_width(&label, scale);
+        p.text(cx + c.0 - w / 2.0, cy + c.1 - scale * 3.5, scale, rc::SITE_EDGE, &label);
+    }
+
+    for m in r.marks {
+        let c = at(m.x, m.y);
+        match m.kind {
+            MarkKind::LastKnown => {
+                let br = icon(BlipKind::LastKnown);
+                if !inside(c, 0.0) {
+                    continue;
+                }
+                p.ring(cx + c.0, cy + c.1, br - u * 0.45, br, radar::faded(rc::ENEMY, 0.85 * m.life));
+                let scale = (br / 4.0).max(0.6);
+                let w = text_width("?", scale);
+                p.text(cx + c.0 - w / 2.0, cy + c.1 - scale * 3.5, scale, radar::faded(rc::ENEMY, m.life), "?");
+            }
+            MarkKind::Heard => {
+                if !inside(c, 0.0) {
+                    continue;
+                }
+                let br = icon(BlipKind::Heard);
+                // A ring going out on arrival, so a new shot is noticed rather
+                // than merely present.
+                let arrive = (m.age / 0.5).min(1.0);
+                if arrive < 1.0 {
+                    let rr = br * (1.0 + arrive * 2.5);
+                    p.ring(cx + c.0, cy + c.1, rr - u * 0.45, rr, radar::faded(rc::ENEMY, 1.0 - arrive));
+                }
+                let grow = (0.55 + m.age * 4.0).min(1.0);
+                p.disc(cx + c.0, cy + c.1, br * grow, 12, radar::faded(rc::ENEMY, m.life));
+            }
+            _ => {}
+        }
     }
 
     for blip in r.blips {
-        let (bx, by) = project(blip.x, blip.y);
-        if (bx * bx + by * by).sqrt() > radius {
+        let c = at(blip.x, blip.y);
+        if !inside(c, 0.0) {
             continue;
         }
         // The enemy is drawn the larger of the two, as in the browser: a
         // teammate is context and an enemy is the reason you looked.
         let (size, color) = if blip.friendly {
-            (u * 1.45, [0.345, 0.651, 1.0, 0.95])
+            (icon(BlipKind::Mate), rc::MATE)
         } else {
-            (u * 1.72, RED)
+            (icon(BlipKind::Enemy), rc::ENEMY)
         };
-        p.disc(cx + bx, cy + by, size, 12, color);
+        p.disc(cx + c.0, cy + c.1, size, 12, color);
     }
 
-    // Us, last and **unrotated**: an arrow at the centre pointing up, which is
-    // the fixed reference everything else on the instrument is read against.
-    let s = u * 1.1;
-    let tip = (cx, cy - s * 2.6);
-    let right = (cx + s * 2.0, cy + s * 2.2);
-    let notch = (cx, cy + s * 1.1);
-    let left = (cx - s * 2.0, cy + s * 2.2);
-    p.tri(tip, right, notch, GREEN);
-    p.tri(tip, notch, left, GREEN);
+    for m in r.marks {
+        let c = at(m.x, m.y);
+        match m.kind {
+            MarkKind::Carrier if inside(c, 0.0) => {
+                let br = icon(BlipKind::Enemy) + u * 0.9;
+                p.ring(cx + c.0, cy + c.1, br - u * 0.7, br, rc::BOMB);
+            }
+            MarkKind::Bomb { pulse } => {
+                // Pinned inside the rim rather than dropped: where the bomb is,
+                // is the one thing both teams always know.
+                let br = icon(BlipKind::Bomb);
+                let d = (c.0 * c.0 + c.1 * c.1).sqrt();
+                let lim = radius - br * 1.4;
+                let k = if d > lim && d > 0.0 { lim / d } else { 1.0 };
+                let (bx, by) = (cx + c.0 * k, cy + c.1 * k);
+                let col = radar::faded(rc::BOMB, pulse);
+                p.rect(bx - br, by - br * 0.6, br * 2.0, br * 1.3, col);
+                p.line(bx + br * 0.4, by - br * 0.6, bx + br * 0.9, by - br * 1.2, u * 0.5, col);
+            }
+            _ => {}
+        }
+    }
 
-    // The rim, over everything, so the plan's cut edge reads as an edge.
-    p.ring(
-        cx,
-        cy,
-        radius - u * 0.35,
-        radius,
-        [0.706, 0.784, 0.902, 0.28],
-    );
+    // Us, last: pointing up on a rotating radar, turning on a north-up one, and
+    // off-centre when the radar is not always centred.
+    let me = at(r.x, r.y);
+    let s = icon(BlipKind::You) / 6.0;
+    let (sin, cos) = f.arrow_angle.sin_cos();
+    let pt = |x: f32, y: f32| (cx + me.0 + x * cos - y * sin, cy + me.1 + x * sin + y * cos);
+    let tip = pt(0.0, -6.0 * s);
+    let right = pt(4.5 * s, 5.0 * s);
+    let notch = pt(0.0, 2.5 * s);
+    let left = pt(-4.5 * s, 5.0 * s);
+    p.tri(tip, right, notch, rc::YOU);
+    p.tri(tip, notch, left, rc::YOU);
+
+    // The rim, over everything, so the plan's cut edge reads as an edge — and a
+    // 2px accent across its top, the HUD's top-border language bent round the
+    // instrument.
+    p.ring(cx, cy, radius - u * 0.35, radius, rc::RIM);
+    let accent = radar::faded(rc::YOU, 0.7);
+    let start = -0.68 * std::f32::consts::PI;
+    let sweep = 0.36 * std::f32::consts::PI;
+    let steps = 12;
+    for i in 0..steps {
+        let a0 = start + sweep * i as f32 / steps as f32;
+        let a1 = start + sweep * (i + 1) as f32 / steps as f32;
+        let rr = radius - u * 0.5;
+        p.line(cx + a0.cos() * rr, cy + a0.sin() * rr, cx + a1.cos() * rr, cy + a1.sin() * rr, u * 0.8, accent);
+    }
 }
 
 fn name_of(name: &str, id: &str) -> String {
@@ -5142,6 +5279,7 @@ mod tests {
                 bearing: 1.2,
                 up: 0,
                 weapon: "rifle".into(),
+                ..Default::default()
             },
             crate::protocol::NoiseEvent {
                 kind: "step".into(),
@@ -5149,6 +5287,7 @@ mod tests {
                 bearing: -0.8,
                 up: 1,
                 weapon: String::new(),
+                ..Default::default()
             },
         ];
         hud.on_self(&you);
@@ -6191,10 +6330,18 @@ mod tests {
     fn radar_view<'a>(plan: &'a [Run], blips: &'a [Blip], yaw: f32) -> RadarView<'a> {
         RadarView {
             plan,
+            edges: &[],
             x: 50.0,
             y: 50.0,
             yaw,
             blips,
+            marks: &[],
+            sites: &[],
+            settings: RadarSettings::default(),
+            ssize: 256.0,
+            scores: false,
+            zoom: false,
+            own_noise: None,
         }
     }
 
@@ -6213,11 +6360,7 @@ mod tests {
         let mut out = Vec::new();
         hud.build(&v, &mut out);
 
-        let want = if blip.friendly {
-            [0.345, 0.651, 1.0, 0.95]
-        } else {
-            RED
-        };
+        let want = if blip.friendly { rc::MATE } else { rc::ENEMY };
         let hits: Vec<[f32; 2]> = out
             .iter()
             .filter(|vert| vert.color == want)
@@ -6306,7 +6449,7 @@ mod tests {
         let mut out = Vec::new();
         hud.build(&v, &mut out);
         assert!(
-            !out.iter().any(|vert| vert.color == RED),
+            !out.iter().any(|vert| vert.color == rc::ENEMY),
             "a contact past the radar's span was drawn anyway"
         );
     }
@@ -6322,6 +6465,7 @@ mod tests {
             y: 50.5,
             x0: -500.0,
             x1: 500.0,
+            band: 3,
         }];
         let mut v = view(None);
         v.playing = true;
@@ -6334,7 +6478,7 @@ mod tests {
         let radius = u * 38.0;
         let cx = MARGIN * u + radius;
         let cy = MARGIN * u + radius;
-        let plan_color = [0.549, 0.667, 0.824, 0.16];
+        let plan_color = radar::floor_color(3);
         let mut seen = 0;
         for vert in out.iter().filter(|vert| vert.color == plan_color) {
             seen += 1;

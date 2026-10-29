@@ -6689,9 +6689,76 @@ The map outline is rasterised from the cube grid the client already downloaded,
 so the radar costs no extra request and no extra byte on the wire — and it is
 rasterised **once per map** into an offscreen canvas, because walking a 256×256
 grid sixty times a second to draw the same walls is how a minimap ends up costing
-more than the game. It is rotated so **up is where you are looking**: north-up is
-easier to draw and much harder to read under pressure, because it makes every
-glance a mental rotation before it is information.
+more than the game. By default it is rotated so **up is where you are looking**:
+north-up is easier to draw and much harder to read under pressure, because it
+makes every glance a mental rotation before it is information. North-up is a
+setting (below) because plenty of players learn maps the other way.
+
+### What is on it
+
+The radar used to read as a black disc: a 16%-alpha floor plan over a 72%-alpha
+ground. It now draws, bottom to top:
+
+| Layer | From |
+| --- | --- |
+| Floor, in six **height bands** (upper levels lighter) | `World.floor`, already downloaded |
+| A faint 16-cube grid | nothing — it is a scale to read distance off |
+| Bomb sites as amber discs with their letter | `mode.sites` (welcome) |
+| **Wall outlines**, crisp, one segment per straight run | `wallEdges`, built once per map |
+| Your own noise ring (CS2's "how far am I heard") | the client's own synthesised sounds |
+| Enemy **footstep blobs** | `you.noise` entries with `foe` and `est` |
+| Last-known `?` for a contact that stopped being spotted | positions already received |
+| **Gunfire dots** at the shot's origin | `you.heard` |
+| Teammates, spotted enemies, a ring round the bomb carrier | `players`, `you.spotted`, `mode.bomb` |
+| The bomb when dropped or planted (pulsing faster as the fuse runs) | `mode.bomb` |
+| Tactical pings | `you.pings` |
+
+Everything that decides where something lands, how big it is or what colour it
+is lives in `radar-view.ts` and is replayed natively from `radar-vectors.json`
+(see [the two clients](../architecture/hassault-two-clients.mdx#the-radar)).
+
+### Settings — CS's `cl_radar_*`
+
+| Row | CS | Default | What it does |
+| --- | --- | --- | --- |
+| `hassault.radar.scale` | `cl_radar_scale` | 0.7 | 0.3–1.3; **lower is more map**. Span = `110 × 0.7 / scale` cubes |
+| `hassault.radar.hudScale` | `cl_hud_radar_scale` | 1 | 0.8–1.3, the instrument's size |
+| `hassault.radar.iconScale` | `cl_radar_icon_scale_min` | 0.6 | 0.4–1, every blip's size |
+| `hassault.radar.centered` | `cl_radar_always_centered` | on | Off stops the view at the map's edge, so the arrow walks off-centre |
+| `hassault.radar.rotate` | `cl_radar_rotate` | on | Off is north-up with a turning arrow |
+| `hassault.radar.fullOnScores` | `cl_radar_square_with_scoreboard` | on | The whole map, north-up and 1.5× larger, while Tab is held |
+| `hassault.radar.soundPings` | — | on | Footstep blobs. Gunfire dots are not optional |
+
+The pro preset from the CS guides is `scale 0.4`, `rotate off`, `centered off`,
+`iconScale 0.4`, `hudScale 1.3`. **Radar zoom** (`radarZoom`, M by default) is
+held: it clamps the scale to 0.4 until released — the `+radarzoom` alias, without
+the console. It never zooms *in* a radar already set wider than that.
+
+### Gunfire and footsteps on the radar
+
+The rule is the CoD/Battlefield one, kept honest by the noise system's own
+invariant:
+
+- **An unsuppressed shot** puts the shooter's **origin** on the other side's radar
+  for `HEARD_SECONDS` (2.5 s): a red dot with a ring going out on arrival. It is
+  frozen where the shot was fired — a dot that followed the shooter would be a
+  wall hack on a timer — and it reaches a side only if a living member of that
+  side could actually hear it (`noise.hear`: same falloff, same wall muffle).
+  `MatchRoom.heard_by_side` builds it once per side per tick, like `spotted`.
+  In a free-for-all each player is their own side.
+- **A suppressor** opts out entirely, and now also shortens the shot's audible
+  radius by its `noise_mult` (−60%), which was declared on the attachment and
+  never applied.
+- **Footsteps, landings, reloads** stay bearing-only on the wire. Two optional
+  envelope keys make them drawable without making them a position: `foe` (the
+  source is on the other side) and `est`, how far away the noise *sounded*,
+  quantised to 8 cubes from the perceived volume — so a wall makes a footstep
+  read farther away, which is exactly what your ears gave you. The blob is soft,
+  four cubes wide and anchored where you stood when you heard it.
+
+Shots also now stamp `MatchPlayer.last_fire_time`, which PVS culling had been
+reading (and nothing writing) — so a shooter behind a wall was culled as if
+silent.
 
 ## The training range
 

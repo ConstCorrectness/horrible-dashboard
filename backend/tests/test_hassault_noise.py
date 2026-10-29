@@ -124,7 +124,10 @@ def test_the_envelope_carries_a_bearing_and_never_a_position():
     inaudible = Noise(kind="step", source="far", x=62.0, y=62.0, z=0.0, loudness=8.0)
     out = noise.envelope(world, (20.0, 20.0, 4.5), "me", [audible, inaudible])
     assert len(out) == 1
-    assert set(out[0]) == {"kind", "volume", "bearing", "up"}
+    # `est` is a quantised distance band (see `test_hassault_radar_heard`), not
+    # an offset: the keys a position would need are still absent.
+    assert set(out[0]) == {"kind", "volume", "bearing", "up", "est"}
+    assert not {"x", "y", "z", "dx", "dy"} & set(out[0])
 
 
 def test_a_shot_says_which_weapon_and_a_footstep_does_not():

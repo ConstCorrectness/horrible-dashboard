@@ -181,6 +181,61 @@
    "native": true
   },
   {
+   "key": "hassault.radar.scale",
+   "type": "number",
+   "default": 0.7,
+   "scope": "account",
+   "min": 0.3,
+   "max": 1.3,
+   "native": true
+  },
+  {
+   "key": "hassault.radar.hudScale",
+   "type": "number",
+   "default": 1,
+   "scope": "account",
+   "min": 0.8,
+   "max": 1.3,
+   "native": true
+  },
+  {
+   "key": "hassault.radar.iconScale",
+   "type": "number",
+   "default": 0.6,
+   "scope": "account",
+   "min": 0.4,
+   "max": 1,
+   "native": true
+  },
+  {
+   "key": "hassault.radar.centered",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.radar.rotate",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.radar.fullOnScores",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
+   "key": "hassault.radar.soundPings",
+   "type": "boolean",
+   "default": true,
+   "scope": "account",
+   "native": true
+  },
+  {
    "key": "hassault.nativeClient",
    "type": "boolean",
    "default": true,

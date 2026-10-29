@@ -19,6 +19,7 @@
 
 use crate::controls::{self, Controls};
 use crate::hud::{OverlayVertex, Painter};
+use crate::radar;
 use crate::settings::Settings;
 
 /// Which page is showing. Flat rather than a stack: there are three of them, and
@@ -28,6 +29,8 @@ pub enum Page {
     #[default]
     Root,
     Crosshair,
+    /// CS's `cl_radar_*` rows.
+    Radar,
     Video,
     /// The rows a quality preset writes, one by one.
     Advanced,
@@ -98,6 +101,7 @@ pub const KEY_ROWS: &[(controls::Action, &str, KeyGroup)] = {
         (A::Weapon4, "WEAPON 4", Combat),
         (A::Weapon5, "WEAPON 5", Combat),
         (A::Scores, "SCOREBOARD", Combat),
+        (A::RadarZoom, "RADAR ZOOM (HOLD)", Combat),
         (A::NadeHe, "HE GRENADE", Utility),
         (A::NadeFlash, "FLASHBANG", Utility),
         (A::NadeSmoke, "SMOKE", Utility),
@@ -177,6 +181,13 @@ pub enum Action {
     FpsLimit,
     ShowHitboxes,
     GrenadeArc,
+    RadarScale,
+    RadarHudScale,
+    RadarIconScale,
+    RadarRotate,
+    RadarCentered,
+    RadarFullOnScores,
+    RadarSoundPings,
     Sensitivity,
     /// Wait for the next key and bind it to this action.
     Bind(controls::Action),
@@ -421,6 +432,7 @@ impl Menu {
                     String::from(">"),
                     Action::Open(Page::Crosshair),
                 ),
+                row("RADAR", String::from(">"), Action::Open(Page::Radar)),
                 row("VIDEO", String::from(">"), Action::Open(Page::Video)),
                 row("CONTROLS", String::from(">"), Action::Open(Page::Controls)),
             ]
@@ -546,6 +558,23 @@ impl Menu {
                     ),
                     row("PASTE CODE", String::new(), Action::CrosshairPaste),
                     row("COPY CODE", String::new(), Action::CrosshairCopy),
+                    row("BACK", String::new(), Action::Back),
+                ]
+            }
+            Page::Radar => {
+                let r = &settings.radar;
+                vec![
+                    row("ZOOM", format!("{:.2}", r.scale), Action::RadarScale),
+                    row("SIZE", format!("{:.2}X", r.hud_scale), Action::RadarHudScale),
+                    row("ICON SIZE", format!("{:.2}", r.icon_scale), Action::RadarIconScale),
+                    row("ROTATE WITH VIEW", on_off(r.rotate), Action::RadarRotate),
+                    row("ALWAYS CENTRED", on_off(r.centered), Action::RadarCentered),
+                    row(
+                        "WHOLE MAP ON TAB",
+                        on_off(r.full_on_scores),
+                        Action::RadarFullOnScores,
+                    ),
+                    row("SOUND PINGS", on_off(r.sound_pings), Action::RadarSoundPings),
                     row("BACK", String::new(), Action::Back),
                 ]
             }
@@ -761,6 +790,7 @@ impl Menu {
         match self.page {
             Page::Root => "ESC RESUMES - ARROWS AND ENTER, OR THE MOUSE",
             Page::Crosshair => "SHARE CODES WORK IN THE BROWSER TOO",
+            Page::Radar => "LOWER ZOOM SHOWS MORE MAP - HOLD M TO ZOOM OUT",
             Page::Video => "RESOLUTION SCALES THE WORLD, NEVER THE HUD",
             Page::Advanced => "QUALITY WRITES THESE - CHANGING ONE MAKES IT CUSTOM",
             Page::Display => "* GPU AND API CHANGES APPLY ON RESTART",
@@ -776,6 +806,7 @@ impl Menu {
         match self.page {
             Page::Root => "PAUSED",
             Page::Crosshair => "CROSSHAIR",
+            Page::Radar => "RADAR",
             Page::Video => "VIDEO",
             Page::Advanced => "ADVANCED VIDEO",
             Page::Display => "DISPLAY AND GPU",
@@ -1181,6 +1212,37 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::GrenadeArc => {
             settings.grenade_arc = !settings.grenade_arc;
             vec![KEY_GRENADE_ARC]
+        }
+        Action::RadarScale => {
+            let (lo, hi) = radar::SCALE_RANGE;
+            settings.radar.scale = step_value(settings.radar.scale, step, 0.05, lo, hi);
+            vec![radar::KEY_SCALE]
+        }
+        Action::RadarHudScale => {
+            let (lo, hi) = radar::HUD_SCALE_RANGE;
+            settings.radar.hud_scale = step_value(settings.radar.hud_scale, step, 0.05, lo, hi);
+            vec![radar::KEY_HUD_SCALE]
+        }
+        Action::RadarIconScale => {
+            let (lo, hi) = radar::ICON_SCALE_RANGE;
+            settings.radar.icon_scale = step_value(settings.radar.icon_scale, step, 0.05, lo, hi);
+            vec![radar::KEY_ICON_SCALE]
+        }
+        Action::RadarRotate => {
+            settings.radar.rotate = !settings.radar.rotate;
+            vec![radar::KEY_ROTATE]
+        }
+        Action::RadarCentered => {
+            settings.radar.centered = !settings.radar.centered;
+            vec![radar::KEY_CENTERED]
+        }
+        Action::RadarFullOnScores => {
+            settings.radar.full_on_scores = !settings.radar.full_on_scores;
+            vec![radar::KEY_FULL_ON_SCORES]
+        }
+        Action::RadarSoundPings => {
+            settings.radar.sound_pings = !settings.radar.sound_pings;
+            vec![radar::KEY_SOUND_PINGS]
         }
         Action::Quality => {
             let quality = cycle(&Quality::ALL, settings.video.quality, step);

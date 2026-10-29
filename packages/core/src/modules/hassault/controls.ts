@@ -35,6 +35,7 @@ export type GameAction =
   | 'inspect'
   | 'ping'
   | 'scores'
+  | 'radarZoom'
   | 'noclip'
   | 'weapon1'
   | 'weapon2'
@@ -182,6 +183,12 @@ export const ACTIONS: readonly ActionDoc[] = [
   { action: 'chatTeam', label: 'Chat (team only)', group: 'Communication' },
   { action: 'scores', label: 'Scoreboard (hold)', group: 'View' },
   {
+    action: 'radarZoom',
+    label: 'Radar zoom out (hold)',
+    group: 'View',
+    note: 'Held. Shows about twice as much map on the radar until released — the pro bind for checking a far site without changing your radar settings.',
+  },
+  {
     action: 'noclip',
     label: 'Noclip',
     group: 'View',
@@ -205,6 +212,9 @@ export const DEFAULT_CONTROLS: Bindings = {
   inspect: ['KeyF'],
   ping: ['KeyZ'],
   scores: ['Tab'],
+  // M, which is the map key in most shooters that have one. Held: the radar
+  // zooms out while it is down, the s1mple bind without the console.
+  radarZoom: ['KeyM'],
   // N, not V: V is push-to-talk, where the native client has always had it.
   noclip: ['KeyN'],
   weapon1: ['Digit1'],

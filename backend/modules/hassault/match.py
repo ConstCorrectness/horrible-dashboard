@@ -150,6 +150,27 @@ SPOT_RANGE = 90.0
 #: real and a radar that only paints what is dead centre is a radar nobody trusts.
 SPOT_FOV = 1.35
 
+#: How long a gunshot keeps its shooter's origin on the other side's radar. The
+#: CoD/Battlefield rule: firing an unsuppressed weapon is the loudest thing in the
+#: game, and a few seconds of "a shot came from there" is what it costs you.
+#: Frozen at the origin rather than tracking the shooter: the sound came from
+#: where they *were*, and a dot that followed them would be a wall hack on a timer.
+HEARD_SECONDS = 2.5
+
+
+@dataclass(slots=True)
+class HeardShot:
+    """One unsuppressed shot, kept for `HEARD_SECONDS` so the radar can show it."""
+
+    shooter: str
+    team: int
+    x: float
+    y: float
+    z: float
+    loudness: float
+    at: float
+
+
 # How long an empty room is kept before it is retired. A room opened for a friend
 # who has not clicked the invite yet is empty and must survive; a room everyone
 # has left is ~590 KB of map planes and should not.
@@ -463,6 +484,10 @@ class MatchPlayer:
     # bounded by the same budget as movement, so it cannot outrun real time.
     sim_time: float = 0.0
     last_fire_at: float = -999.0
+    #: `time.monotonic()` of the last shot. `last_fire_at` is on the simulated
+    #: clock, which is the right one for fire rate and the wrong one for "was
+    #: this player loud within the last second", which PVS culling asks.
+    last_fire_time: float = 0.0
     #: Whether the last simulated command held walk. Silences footsteps.
     walking: bool = False
     #: What this player chose to carry, `{slot: weapon index}`. Applied at the
@@ -917,6 +942,10 @@ class MatchRoom:
         # every footstep's position would put the location of an enemy two rooms
         # away in the packet, which is a wall hack made of sound. See `noise.py`.
         self.noises: list[Noise] = []
+        # Unsuppressed shots of the last `HEARD_SECONDS`, one per shooter. Not
+        # cleared per tick like `noises`: a radar dot that lasted one tick would
+        # be a flicker, not information. Resolved per side in `heard_by_side`.
+        self.heard_shots: list[HeardShot] = []
         # Grenades in the air, and the smoke/fire they leave behind. Both are
         # **public**: a grenade you can see on your screen and a cloud standing in
         # a doorway are visible to everyone, so unlike noise there is nothing to
@@ -1752,6 +1781,101 @@ class MatchRoom:
             for team in {p.team for p in self.players.values()}
         }
 
+    # -- what the radar is allowed to show from gunfire ------------------------
+
+    def _record_heard_shot(self, player: MatchPlayer, loudness: float) -> None:
+        """Remember an unsuppressed shot for the other side's radar.
+
+        One entry per shooter: a rifle at 700 rpm is one dot that keeps being
+        refreshed, not a trail of them.
+        """
+        self.heard_shots = [s for s in self.heard_shots if s.shooter != player.id]
+        self.heard_shots.append(
+            HeardShot(
+                shooter=player.id,
+                team=player.team,
+                x=player.state.x,
+                y=player.state.y,
+                z=player.state.z,
+                loudness=loudness,
+                at=time.monotonic(),
+            )
+        )
+
+    def side_of(self, player: MatchPlayer) -> Any:
+        """The key a side's shared radar is filed under.
+
+        The team, when there are teams. In a free-for-all each player is their
+        own side, so the key is their id: a team number there would hand one
+        player's ears to everybody who happens to share the default team.
+        """
+        if getattr(self.mode, "teams", True) and player.team >= 0:
+            return player.team
+        return player.id
+
+    def heard_by_side(self, now: float | None = None) -> dict[Any, list[dict]]:
+        """Every side's gunfire radar for this tick, each computed once.
+
+        A shot reaches a side when it came from somebody not on it **and** a
+        living member of that side could actually hear it: `noise.hear`, the same
+        falloff and the same wall muffle the audio uses. So a shot across the map
+        that nobody on your team heard paints nothing, and one through a wall
+        still does, because a wall muffles rather than mutes.
+
+        What goes on the wire is the **origin** and the age, never a live
+        position. See `HEARD_SECONDS` for why the dot does not follow the shooter.
+        """
+        now = time.monotonic() if now is None else now
+        self.heard_shots = [s for s in self.heard_shots if now - s.at < HEARD_SECONDS]
+        sides = {self.side_of(p) for p in self.players.values()}
+        if not self.heard_shots:
+            return {side: [] for side in sides}
+        ears: dict[Any, list[tuple[float, float, float]]] = {}
+        for p in self.players.values():
+            if not p.alive:
+                continue
+            ears.setdefault(self.side_of(p), []).append(
+                weapons.eye_position(
+                    p.state.x, p.state.y, p.state.z, physics.eye_height(p.state)
+                )
+            )
+        shooter_side = {
+            s.shooter: (
+                self.side_of(self.players[s.shooter])
+                if s.shooter in self.players
+                else s.team
+            )
+            for s in self.heard_shots
+        }
+        out: dict[Any, list[dict]] = {}
+        for side in sides:
+            rows: list[dict] = []
+            for shot in self.heard_shots:
+                if shooter_side[shot.shooter] == side:
+                    continue
+                sound = Noise(
+                    kind="shot",
+                    source=shot.shooter,
+                    x=shot.x,
+                    y=shot.y,
+                    z=shot.z,
+                    loudness=shot.loudness,
+                )
+                if not any(
+                    noise.hear(self.world, ear, sound) for ear in ears.get(side, [])
+                ):
+                    continue
+                rows.append(
+                    {
+                        "id": shot.shooter,
+                        "x": round(shot.x, 2),
+                        "y": round(shot.y, 2),
+                        "age": round(now - shot.at, 2),
+                    }
+                )
+            out[side] = rows
+        return out
+
     def smoked(
         self, a: tuple[float, float, float], b: tuple[float, float, float]
     ) -> bool:
@@ -1873,6 +1997,7 @@ class MatchRoom:
                 z=nz,
                 loudness=loudness,
                 weapon=weapon,
+                source_team=player.team if player is not None else -1,
             )
         )
 
@@ -2264,7 +2389,15 @@ class MatchRoom:
         # approach ends the moment you take the shot.
         # The weapon rides along so the listener hears *which* gun: a shot's
         # loudness already comes from the weapon, and its voice does too.
-        self._noise(player, "shot", noise.shot_loudness(weapon), weapon.id)
+        # A suppressor shortens how far the shot carries, and takes it off the
+        # other side's radar entirely, which is the trade the attachment exists
+        # for in every shooter that has one.
+        noise_mult = weapons.noise_mult_for(player.attachments)
+        loudness = noise.shot_loudness(weapon) * noise_mult
+        self._noise(player, "shot", loudness, weapon.id)
+        player.last_fire_time = time.monotonic()
+        if noise_mult >= 1.0 and not is_knife:
+            self._record_heard_shot(player, loudness)
 
         # Advanced only for a shot that actually went out — every early return
         # above is a trigger pull that produced nothing, and counting those would
@@ -2582,7 +2715,10 @@ class MatchRoom:
         }
 
     def private_view_for(
-        self, player: MatchPlayer, spotted: dict[int, list[str]] | None = None
+        self,
+        player: MatchPlayer,
+        spotted: dict[int, list[str]] | None = None,
+        heard: dict[Any, list[dict]] | None = None,
     ) -> dict[str, Any]:
         """The half only this player gets.
 
@@ -2592,7 +2728,8 @@ class MatchRoom:
         `spotted` is this tick's radar for every team, from `spotted_by_team`.
         Optional so a caller with one player and no tick around it still works;
         `_broadcast` always passes it, because computing it here would be
-        computing each team's answer once per member of that team.
+        computing each team's answer once per member of that team. `heard` is
+        the gunfire half of the radar, from `heard_by_side`, on the same terms.
         """
         you = player.private_view(time.monotonic())
         # The room's live knife boost, beside the momentum it scales: a tuned
@@ -2616,6 +2753,10 @@ class MatchRoom:
         you["spotted"] = (
             self.spotted_by(player) if spotted is None else spotted.get(player.team, [])
         )
+        # Unsuppressed gunfire somebody on our side heard: an origin and an age.
+        you["heard"] = (self.heard_by_side() if heard is None else heard).get(
+            self.side_of(player), []
+        )
         you["noise"] = noise.envelope(
             self.world,
             weapons.eye_position(
@@ -2626,6 +2767,8 @@ class MatchRoom:
             ),
             player.id,
             self.noises,
+            listener_team=player.team,
+            teams=getattr(self.mode, "teams", True),
         )
         # The mode's answer for *this* player: money, a progress bar, whether
         # they are carrying something. Inside `you`, which is the only part of a
@@ -2998,6 +3141,9 @@ class MatchServer:
         # every living enemy — which made it the most expensive thing in this
         # method by a wide margin when it ran per recipient.
         spotted = room.spotted_by_team()
+        # Gunfire on the radar, also once per side: each shot is tested against
+        # every living ear, so per recipient it would be the same multiplier.
+        heard = room.heard_by_side()
         # And serialised once. `players` is most of the packet and identical for
         # every recipient, so this is the difference between sixteen dumps of
         # sixteen rows and one. `None` if the split failed, which sends everyone
@@ -3013,7 +3159,7 @@ class MatchServer:
             try:
                 # `private_view_for` drains this player's hitmarkers, so it is
                 # called exactly once per player per tick on both paths.
-                you = room.private_view_for(player, spotted)
+                you = room.private_view_for(player, spotted, heard)
                 send_text = getattr(conn, "send_text", None)
                 pvs_active = getattr(room, "pvs_culling", False)
                 if not pvs_active and template is not None and send_text is not None:

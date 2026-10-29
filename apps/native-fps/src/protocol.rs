@@ -428,6 +428,11 @@ pub struct SelfState {
     /// itself would be a wall hack with extra steps.
     #[serde(default)]
     pub spotted: Vec<String>,
+    /// Unsuppressed gunfire somebody on our side heard: the shot's **origin**,
+    /// frozen there, and its age. `MatchRoom.heard_by_side`, resolved per side
+    /// on the server exactly as `spotted` is.
+    #[serde(default)]
+    pub heard: Vec<HeardRow>,
     #[serde(rename = "move", default)]
     pub movement: Option<MoveState>,
     /// The mode's answer for us. `Option` for the same reason `movement` is: a
@@ -507,6 +512,27 @@ pub struct NoiseEvent {
     /// Which weapon made it — shots only, and absent on every other kind.
     #[serde(default)]
     pub weapon: String,
+    /// The source is on the other side. Absent for a teammate.
+    #[serde(default)]
+    pub foe: bool,
+    /// How far away it *sounded*, in cubes, quantised to 8 server-side. A
+    /// distance band for the radar's blob, never a coordinate.
+    #[serde(default)]
+    pub est: Option<f32>,
+}
+
+/// One unsuppressed shot our side heard: where it was fired from, and when.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct HeardRow {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// Seconds since the shot, on the server's clock.
+    #[serde(default)]
+    pub age: f32,
 }
 
 /// One landed hit, from the shooter's side.

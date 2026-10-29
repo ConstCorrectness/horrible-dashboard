@@ -1838,3 +1838,18 @@ def calculate_material_penetration(
     penetration_ratio = 1.0 - (thickness / max_thickness) * 0.4
     damage_factor = max(0.1, min(0.9, base_falloff * mat_factor * penetration_ratio))
     return True, round(damage_factor, 3)
+
+
+def noise_mult_for(attachments: dict[str, str] | None) -> float:
+    """How much a player's fitted attachments scale the sound of a shot.
+
+    The product over every slot, so a second quiet part would compose rather
+    than be shadowed. Unknown ids are ignored: `_parse_attachments` already
+    drops them, and this is not the place to be stricter than the parser.
+    """
+    mult = 1.0
+    for attachment_id in (attachments or {}).values():
+        found = ATTACHMENTS_BY_ID.get(attachment_id)
+        if found is not None:
+            mult *= found.noise_mult
+    return mult

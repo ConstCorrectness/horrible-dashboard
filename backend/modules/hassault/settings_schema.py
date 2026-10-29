@@ -171,6 +171,22 @@ SCHEMA: tuple[SettingSpec, ...] = (
         hex_color=True,
         native=True,
     ),
+    # ---- the radar (CS's `cl_radar_*`, defaults are CS's defaults) ----
+    # `scale` is `cl_radar_scale`: lower shows *more* map. The span across the
+    # instrument is `110 * 0.7 / scale` cubes, so the default is the old 110.
+    _num("hassault.radar.scale", 0.7, "account", 0.3, 1.3, native=True),
+    # `cl_hud_radar_scale`: the instrument's size on screen.
+    _num("hassault.radar.hudScale", 1, "account", 0.8, 1.3, native=True),
+    # `cl_radar_icon_scale_min`: the size of every blip, 0.6 being today's.
+    _num("hassault.radar.iconScale", 0.6, "account", 0.4, 1, native=True),
+    # `cl_radar_always_centered`: off lets the map stop at its own edge.
+    _flag("hassault.radar.centered", True, "account", native=True),
+    # `cl_radar_rotate`: off is north-up, with the arrow turning instead.
+    _flag("hassault.radar.rotate", True, "account", native=True),
+    # `cl_radar_square_with_scoreboard`: the whole map while Tab is held.
+    _flag("hassault.radar.fullOnScores", True, "account", native=True),
+    # Ours: the faint blobs for enemy footsteps. Gunfire dots are not optional.
+    _flag("hassault.radar.soundPings", True, "account", native=True),
     # ---- this machine ----
     _flag("hassault.nativeClient", True, "machine"),
     _text(

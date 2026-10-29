@@ -67,6 +67,7 @@ that both sides replay, or merely asserted in a comment.
 | Shot geometry | `trace.ts`, `weapons.py`, `trace.rs` | same fixture (`traces`, `bodies`) |
 | Operator clip selection | `models/clips.ts`, `clips.rs` | `__tests__/clip-vectors.json` |
 | Surface tint, face shades, detail tile | `geometry.ts` + `surfaces.ts`, `geometry.rs` + `detail.rs` | `__tests__/surface-vectors.json` |
+| Radar frame (span, centre, rotation), blip sizes, floor bands, wall outline, palette, settings reader | `radar-view.ts`, `radar.rs` | `__tests__/radar-vectors.json` (`UPDATE_RADAR_VECTORS=1`); its noise radii are also read back by `test_hassault_radar_heard.py` |
 | Light rig, sky, fog and point lights | `atmosphere.py` (served), `atmosphere.ts`, `atmosphere.rs` + `lighting.wgsl.inc` | `tests/browser_parity.rs`, which reads the TS and Python sources: fallback rigs, candela rule, attenuation |
 | Signed envelope + node id | Python, Kotlin (the Android companion) | `backend/tests/test_network_mobile_conformance.py` |
 
@@ -88,7 +89,6 @@ maintenance hazard, listed so that changing one sends you to the other:
 | Tone curve, sky shader | `HorribleAssaultPanel.tsx` + `atmosphere.ts` `createSky`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
 | Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
 | Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
-| Radar span, colours, blip sizes | `panels/Radar.tsx`, `radar.rs` + `hud.rs` | The same contact is at a different distance from the centre in each client |
 | Effect lifetimes, tints, blast curves | `effects.ts`, `effects.rs` | A tracer that lingers in one client and blinks in the other |
 | Build-in timing, band, rise, glow | `reveal.ts`, `reveal.rs` + `shader.wgsl` | The map assembles at a different speed or from a different direction |
 | Grenade and cloud tints, fuse blink rate | `nades.ts`, `nades.rs` | Smoke reads as a different colour depending on which client you launched |
@@ -321,6 +321,29 @@ right direction and wrong distance is the same lie in a quieter voice.
 Drawn only once joined, matching the browser's `online &&` gate. Train has no
 server and therefore no `spotted` — and the centre of the instrument is the one
 thing on it that must not be a guess.
+
+### Pinned, not copied
+
+The radar used to sit in the *not pinned* table, and its two copies agreed by a
+comment ("76 HUD units is the browser's 168 px"). Everything that decides the
+picture is now one TypeScript module, `radar-view.ts`, whose own output is the
+fixture `radar.rs` replays: `radarFrame` (span from `cl_radar_scale`, the zoom
+key, the clamped un-centred view, north-up), `project`, `blipRadius` as a
+**fraction of the radius** (the one unit both clients mean the same thing by),
+`floorBand`, `wallEdges` in the same order, the palette, and the settings reader
+including its garbage handling. A divergence is now a failing `cargo test`, not a
+screenshot.
+
+What is still drawn differently, on purpose: the browser blits a canvas and
+clips; natively, runs and wall edges are cut by `clip_to_circle`, and a site disc
+or noise ring that would cross the rim is skipped rather than cut, because a disc
+has no cheap clip. Footstep blobs are a radial gradient in the browser and two
+stacked discs here.
+
+`radar::Memory` holds the two things the radar remembers between frames — the
+last-known position of a contact that stopped being spotted, and recent foe
+footsteps — and is fed from the same snapshot as everything else. It only ever
+holds positions this client was already sent.
 
 ## Utility and effects
 

@@ -81,7 +81,14 @@ const BUY_KEYS = [
 ];
 import { useNativeLaunch } from './native-launch';
 import { FlashAssistToast, FlashOverlay, NadeTray, Radar } from './panels/Radar';
-import type { FlashAssist } from './panels/Radar';
+import type { FlashAssist, RadarSound } from './panels/Radar';
+import {
+  OWN_NOISE_RADII,
+  RADAR_KEYS,
+  readRadarSettings,
+  shotRadius,
+  SOUND_PING_SECONDS,
+} from './radar-view';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
 import {
   EMPTY_PROGRESS,
@@ -548,6 +555,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const [loadoutError, setLoadoutError] = useState('');
   const [botSkill, setBotSkill] = useState('normal');
   const [showScores, setShowScores] = useState(false);
+  /** Whether the radar-zoom key is held. */
+  const [radarZoom, setRadarZoom] = useState(false);
   /** Whether the buy menu is being held open. Local: only the *menu* is. */
   const [showBuy, setShowBuy] = useState(false);
   /**
@@ -809,6 +818,37 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // client shares and the Settings tab still offers there.
   const hitboxSetting = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
   const arcSetting = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
+  // The radar's CS-style rows, read once per render and clamped to the
+  // schema's ranges by the same reader the native fixture pins.
+  const radarScale = useSetting<number>(RADAR_KEYS.scale);
+  const radarHudScale = useSetting<number>(RADAR_KEYS.hudScale);
+  const radarIconScale = useSetting<number>(RADAR_KEYS.iconScale);
+  const radarCentered = useSetting<boolean>(RADAR_KEYS.centered);
+  const radarRotate = useSetting<boolean>(RADAR_KEYS.rotate);
+  const radarFullOnScores = useSetting<boolean>(RADAR_KEYS.fullOnScores);
+  const radarSoundPings = useSetting<boolean>(RADAR_KEYS.soundPings);
+  const radarSettings = useMemo(() => {
+    const bag: Record<string, unknown> = {
+      [RADAR_KEYS.scale]: radarScale,
+      [RADAR_KEYS.hudScale]: radarHudScale,
+      [RADAR_KEYS.iconScale]: radarIconScale,
+      [RADAR_KEYS.centered]: radarCentered,
+      [RADAR_KEYS.rotate]: radarRotate,
+      [RADAR_KEYS.fullOnScores]: radarFullOnScores,
+      [RADAR_KEYS.soundPings]: radarSoundPings,
+    };
+    return readRadarSettings((key) => bag[key]);
+  }, [
+    radarScale,
+    radarHudScale,
+    radarIconScale,
+    radarCentered,
+    radarRotate,
+    radarFullOnScores,
+    radarSoundPings,
+  ]);
+  /** Our own last noise, for the radar's how-far-am-I-heard ring. */
+  const ownNoiseRef = useRef<{ radius: number; at: number } | null>(null);
   const [localAids, setLocalAids] = useState(() => ({
     hitboxes:
       consoleRegistry.getBool('server.show_hitboxes') || consoleRegistry.getBool('draw.hitboxes'),
@@ -834,8 +874,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
-  /** Recent noises, for the direction ring. */
-  const [heard, setHeard] = useState<{ id: number; at: number; event: NoiseEvent }[]>([]);
+  /** Recent noises, for the direction ring and the radar's sound blobs. */
+  const [heard, setHeard] = useState<({ id: number } & RadarSound)[]>([]);
 
   // ---- Native process lifecycle bridge ---------------------------------------
   /** Maps the game server will adjudicate. Empty until fetched, or if it is down. */
@@ -2578,12 +2618,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                   isVent,
                 );
                 audio.own(stepKind, isVent ? 0.65 : 0.52);
+                ownNoiseRef.current = { radius: OWN_NOISE_RADII.step, at: Date.now() };
               }
             } else if (!player.onGround || !moving) {
               strideRef.current = 0;
             }
             if (wasOnGround && !player.onGround && player.velZ > 0) {
               audio.own(isVent ? 'step_metal' : 'jump', isVent ? 0.6 : 0.5);
+              ownNoiseRef.current = { radius: OWN_NOISE_RADII.jump, at: Date.now() };
             }
             // Breaking the surface, in either direction. Synthesised locally like
             // every other sound we make: the server does not send our own noises
@@ -2595,13 +2637,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             if (nowWet !== wasWet) {
               wasWet = nowWet;
               audio.own('splash', 0.8);
+              ownNoiseRef.current = { radius: OWN_NOISE_RADII.splash, at: Date.now() };
             }
             if (player.fallSpeed > 0) {
               // Louder the harder the landing, which is the audible half of the
               // fall-damage rule: you hear that a drop was expensive.
               audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
+              ownNoiseRef.current = { radius: OWN_NOISE_RADII.land, at: Date.now() };
             }
-            if (fired) audio.own('shot', 0.55, shotsRef.current?.weapon);
+            if (fired) {
+              const gun = shotsRef.current?.weapon;
+              audio.own('shot', 0.55, gun);
+              if (gun) {
+                ownNoiseRef.current = {
+                  radius: shotRadius(gun.damage, gun.id === 'knife'),
+                  at: Date.now(),
+                };
+              }
+            }
           }
         }
 
@@ -2781,12 +2834,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             // ring draws, and a player on headphones and a player on laptop
             // speakers should not be playing different games.
             const at = Date.now();
+            // Anchored to where we stood: the radar draws the blob along the
+            // bearing from *that* point, not from wherever we walk next.
+            const from = { x: playerRef.current.x, y: playerRef.current.y };
             const batch = session.pendingNoise.map((event, i) => ({
               id: at * 100 + i,
               at,
               event,
+              from,
             }));
-            setHeard((prev) => [...prev.filter((h) => at - h.at < NOISE_TTL_MS), ...batch]);
+            // Kept for the longer of the two readers: the ring fades in under a
+            // second, the radar's blob lingers a little longer.
+            const keep = Math.max(NOISE_TTL_MS, SOUND_PING_SECONDS * 1000);
+            setHeard((prev) => [...prev.filter((h) => at - h.at < keep), ...batch]);
             session.pendingNoise = [];
           }
 
@@ -3787,6 +3847,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }, 200);
       }
       if (action === 'scores') setShowScores(true);
+      if (action === 'radarZoom') setRadarZoom(true);
       if (action === 'buy') setShowBuy(true);
       // While the menu is held, the number row buys instead of selecting. Two
       // jobs for one row rather than a second set of keys elsewhere: the menu is
@@ -3854,6 +3915,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         sessionRef.current?.sendVoice(false);
       }
       if (action === 'scores') setShowScores(false);
+      if (action === 'radarZoom') setRadarZoom(false);
       if (action === 'buy') setShowBuy(false);
       if (action === 'crouch' && !crouchToggleRef.current) crouchRef.current = false;
       if (action === 'ping') {
@@ -5468,6 +5530,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 rows={remoteRowsRef.current}
                 spotted={you?.spotted ?? EMPTY_SPOTTED}
                 pings={you?.pings}
+                heard={you?.heard}
+                sounds={heard}
+                sites={net.mode?.sites}
+                bomb={net.modeState?.bomb}
+                settings={radarSettings}
+                scoresHeld={showScores}
+                zoomHeld={radarZoom}
+                ownNoise={ownNoiseRef.current}
               />
             )}
 

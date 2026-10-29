@@ -66,6 +66,7 @@ import {
 } from './crosshair';
 import { CrosshairShapes, useCrosshairSpec } from './crosshair-view';
 import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
+import { RADAR_DEFAULTS, RADAR_KEYS, readRadarSettings } from './radar-view';
 import type { MatchPeer } from './session';
 
 /** How often the browser re-asks while it is the visible panel. */
@@ -514,6 +515,7 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
         fallback={0.7}
         onChange={(v) => void setSetting(VOLUME_KEY, v)}
       />
+      <RadarRows />
       <div style={styles.row}>
         <div style={styles.rowMain}>
           <span>Crouch</span>
@@ -631,6 +633,118 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
         <VoiceCommsPanel />
       </div>
     </div>
+  );
+}
+
+/** An Off/On pair, the shape every boolean row on this page uses. */
+function OnOff({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div style={{ display: 'flex', gap: '0.25rem' }}>
+      {[
+        { on: false, label: 'Off' },
+        { on: true, label: 'On' },
+      ].map((option) => (
+        <button
+          key={option.label}
+          onClick={() => onChange(option.on)}
+          style={{ ...styles.choice, ...(value === option.on ? styles.choiceActive : null) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The radar, as CS lays it out: `cl_radar_scale`, `cl_hud_radar_scale`,
+ * `cl_radar_icon_scale_min`, `cl_radar_always_centered`, `cl_radar_rotate` and
+ * `cl_radar_square_with_scoreboard`. The same rows the native menu writes, read
+ * through the same clamp (`readRadarSettings`).
+ */
+function RadarRows() {
+  const raw = {
+    [RADAR_KEYS.scale]: useSetting<number>(RADAR_KEYS.scale),
+    [RADAR_KEYS.hudScale]: useSetting<number>(RADAR_KEYS.hudScale),
+    [RADAR_KEYS.iconScale]: useSetting<number>(RADAR_KEYS.iconScale),
+    [RADAR_KEYS.centered]: useSetting<boolean>(RADAR_KEYS.centered),
+    [RADAR_KEYS.rotate]: useSetting<boolean>(RADAR_KEYS.rotate),
+    [RADAR_KEYS.fullOnScores]: useSetting<boolean>(RADAR_KEYS.fullOnScores),
+    [RADAR_KEYS.soundPings]: useSetting<boolean>(RADAR_KEYS.soundPings),
+  } as Record<string, unknown>;
+  const r = readRadarSettings((key) => raw[key]);
+  const flags: { key: string; label: string; hint: string; value: boolean }[] = [
+    {
+      key: RADAR_KEYS.rotate,
+      label: 'Rotate with view',
+      hint: 'Off keeps north up and turns your arrow instead.',
+      value: r.rotate,
+    },
+    {
+      key: RADAR_KEYS.centered,
+      label: 'Always centred',
+      hint: 'Off stops the map at its own edge, so you see more map near a border.',
+      value: r.centered,
+    },
+    {
+      key: RADAR_KEYS.fullOnScores,
+      label: 'Whole map with scoreboard',
+      hint: 'While Tab is held, the radar shows the entire map, north up.',
+      value: r.fullOnScores,
+    },
+    {
+      key: RADAR_KEYS.soundPings,
+      label: 'Sound pings',
+      hint: 'Faint red blobs for enemy footsteps: direction and roughly how far they sounded. Unsuppressed gunfire is always an exact dot.',
+      value: r.soundPings,
+    },
+  ];
+  return (
+    <>
+      <h4 style={styles.heading}>Radar</h4>
+      <Slider
+        label="Zoom"
+        hint="Lower shows more map. 0.4 is the common pro setting; hold M (radar zoom) for it on demand."
+        value={r.scale}
+        min={0.3}
+        max={1.3}
+        step={0.05}
+        suffix=""
+        fallback={RADAR_DEFAULTS.scale}
+        onChange={(v) => void setSetting(RADAR_KEYS.scale, v)}
+      />
+      <Slider
+        label="Size"
+        hint="How big the radar is on screen."
+        value={r.hudScale}
+        min={0.8}
+        max={1.3}
+        step={0.05}
+        suffix="×"
+        fallback={RADAR_DEFAULTS.hudScale}
+        onChange={(v) => void setSetting(RADAR_KEYS.hudScale, v)}
+      />
+      <Slider
+        label="Icon size"
+        hint="The dots for players, gunfire and pings."
+        value={r.iconScale}
+        min={0.4}
+        max={1}
+        step={0.05}
+        suffix=""
+        fallback={RADAR_DEFAULTS.iconScale}
+        onChange={(v) => void setSetting(RADAR_KEYS.iconScale, v)}
+      />
+      {flags.map((f) => (
+        <div key={f.key} style={styles.row}>
+          <div style={styles.rowMain}>
+            <span>{f.label}</span>
+            <span style={styles.dim}>{f.hint}</span>
+          </div>
+          <OnOff value={f.value} onChange={(v) => void setSetting(f.key, v)} />
+        </div>
+      ))}
+    </>
   );
 }
 

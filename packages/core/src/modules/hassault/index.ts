@@ -88,10 +88,22 @@ export const hassaultModule: ModuleManifest = {
       icon: '⌖',
       singleton: true,
       regions: [
-        { id: 'hassault.companion', label: 'Match', icon: '▤', position: 'right', defaultSize: 320 },
+        {
+          id: 'hassault.companion',
+          label: 'Match',
+          icon: '▤',
+          position: 'right',
+          defaultSize: 320,
+        },
         { id: 'hassault.radar', label: 'Radar', icon: '⦿', position: 'right' },
         { id: 'hassault.voice', label: 'Voice', icon: '◖', position: 'right' },
-        { id: 'hassault.console', label: 'Console', icon: '⌨', position: 'bottom', defaultSize: 220 },
+        {
+          id: 'hassault.console',
+          label: 'Console',
+          icon: '⌨',
+          position: 'bottom',
+          defaultSize: 220,
+        },
       ],
     },
     {
@@ -102,7 +114,13 @@ export const hassaultModule: ModuleManifest = {
       icon: '◈',
       singleton: true,
       regions: [
-        { id: 'hassault.console', label: 'Console', icon: '⌨', position: 'bottom', defaultSize: 220 },
+        {
+          id: 'hassault.console',
+          label: 'Console',
+          icon: '⌨',
+          position: 'bottom',
+          defaultSize: 220,
+        },
         { id: 'hassault.radar', label: 'Radar', icon: '⦿', position: 'right', defaultSize: 300 },
       ],
     },
@@ -539,6 +557,61 @@ export const hassaultModule: ModuleManifest = {
         'white, green, cyan, amber, magenta or red, or a custom #rrggbb. A custom colour may be any hue but not dark: one below the luma floor is lifted towards white, because a dark crosshair on a dark map is the one choice that would make the game worse.',
       type: 'string',
       default: 'white',
+    },
+    {
+      key: 'hassault.radar.scale',
+      title: 'Radar zoom',
+      description:
+        'CS’s cl_radar_scale, 0.3–1.3. Lower shows more of the map: 0.7 (the default) is 110 cubes across, 0.4 is nearly twice that. Holding the radar-zoom key (M unless rebound in Controls) zooms out to 0.4 while held.',
+      type: 'number',
+      default: 0.7,
+    },
+    {
+      key: 'hassault.radar.hudScale',
+      title: 'Radar size',
+      description: 'CS’s cl_hud_radar_scale, 0.8–1.3: how big the instrument is on screen.',
+      type: 'number',
+      default: 1,
+    },
+    {
+      key: 'hassault.radar.iconScale',
+      title: 'Radar icon size',
+      description:
+        'CS’s cl_radar_icon_scale_min, 0.4–1: the size of every dot on the radar. Smaller dots overlap less on a zoomed-out radar.',
+      type: 'number',
+      default: 0.6,
+    },
+    {
+      key: 'hassault.radar.centered',
+      title: 'Radar always centred',
+      description:
+        'CS’s cl_radar_always_centered. On keeps you in the middle; off stops the map at its own edge, so standing near a wall of the map shows more map instead of empty space.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.radar.rotate',
+      title: 'Radar rotates',
+      description:
+        'CS’s cl_radar_rotate. On turns the map so up is where you look; off keeps north up and turns your arrow instead, which many players find easier to learn a map with.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.radar.fullOnScores',
+      title: 'Whole map with scoreboard',
+      description:
+        'CS’s cl_radar_square_with_scoreboard. While the scoreboard (Tab) is held, the radar shows the entire map.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.radar.soundPings',
+      title: 'Radar sound pings',
+      description:
+        'Faint red blobs for enemy footsteps, landings and reloads you hear: at the direction they came from and roughly how far they sounded, never an exact position. A wall makes a sound read farther away. Unsuppressed gunfire is always shown as an exact red dot at the shot’s origin.',
+      type: 'boolean',
+      default: true,
     },
     {
       // Declared here rather than only in the native client's `settings.rs`, so

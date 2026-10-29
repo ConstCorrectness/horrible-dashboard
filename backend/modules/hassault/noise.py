@@ -25,6 +25,25 @@ hold) made on information ears genuinely carry. You can tell roughly where and
 roughly how far, which is exactly the resolution a player should be working at, and
 it is not enough to draw a dot on a map with.
 
+### What the radar may draw from it
+
+Two optional keys turn an envelope entry into a radar blob without turning it
+into a position:
+
+- `foe` — the source is on the other side. Without it a teammate's footstep would
+  paint a red ping, and the only way for a client to tell would be to compare the
+  bearing against teammate positions, which is guessing.
+- `est` — how far away it *sounded*, in cubes, quantised to `EST_STEP`. Computed
+  from the **perceived** volume, so a footstep behind a wall reads as farther
+  away than it is: that is what your ears gave you, and the blob is a drawing of
+  your ears, not of the enemy. The quantisation is the point — `volume` alone,
+  un-muffled with `occluded`, would resolve distance to a twentieth of a cube.
+
+Gunfire is the one exception that carries an exact origin, and it does not travel
+here: `MatchRoom.heard_shots` resolves it per side, like `spotted`, because a shot
+is the loudest thing in the game and revealing the shooter is the whole mechanic
+(the CoD/Battlefield rule — and, as there, a suppressor opts out).
+
 ### Why crouching is the point
 
 The loudest thing in the game is movement, and crouching silences it completely
@@ -90,6 +109,10 @@ WALL_MUFFLE = 0.35
 # player on a 256-cube map is an entry in somebody's packet.
 MIN_AUDIBLE = 0.06
 
+#: The resolution of `est`, in cubes. Coarse on purpose: "about 16 away" is a
+#: sound; "15.3 away" is a coordinate.
+EST_STEP = 8.0
+
 
 @dataclass(slots=True, frozen=True)
 class Noise:
@@ -107,6 +130,9 @@ class Noise:
     has no weapon, and sending `""` rather than omitting the field would make the
     client special-case a value the wire did not need to carry."""
     weapon: str = ""
+    """The source's team, so a listener can be told whether it was a foe. `-1`
+    for a noise with no player behind it."""
+    source_team: int = -1
 
 
 def shot_loudness(weapon) -> float:
@@ -170,11 +196,39 @@ def hear(
     return volume, bearing, up, occluded
 
 
+def estimate(loudness: float, volume: float) -> float:
+    """How far away a noise *sounded*, quantised to `EST_STEP`.
+
+    Inverts the linear falloff using the volume the listener actually got —
+    muffle included — so a wall makes a noise seem farther, never nearer.
+    """
+    sounded = max(0.0, loudness * (1.0 - volume))
+    return round(sounded / EST_STEP) * EST_STEP
+
+
+def is_foe(
+    noise: Noise, listener_id: str, listener_team: int | None, teams: bool
+) -> bool:
+    """Whether a noise came from the other side.
+
+    Without teams everybody else is a foe. A noise with no player behind it is
+    nobody's foe — it is the world making a sound. A caller that did not say
+    who is listening (`listener_team=None`) gets no answer rather than a guess.
+    """
+    if listener_team is None or not noise.source or noise.source == listener_id:
+        return False
+    if not teams or listener_team < 0:
+        return True
+    return noise.source_team != listener_team
+
+
 def envelope(
     world: World,
     listener: tuple[float, float, float],
     listener_id: str,
     noises: list[Noise],
+    listener_team: int | None = None,
+    teams: bool = True,
 ) -> list[dict[str, Any]]:
     """The audible subset of `noises`, in wire form, for one listener.
 
@@ -199,6 +253,9 @@ def envelope(
             entry["occluded"] = True
         if noise.weapon:
             entry["weapon"] = noise.weapon
+        if is_foe(noise, listener_id, listener_team, teams):
+            entry["foe"] = True
+        entry["est"] = estimate(noise.loudness, volume)
         out.append(entry)
     return out
 

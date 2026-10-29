@@ -243,6 +243,26 @@ export interface NoiseEvent {
    * decision; not enough to locate either. */
   weapon?: string;
   occluded?: boolean;
+  /** The source is on the other side. Absent for a teammate, and from a server
+   * that predates the radar's sound pings. */
+  foe?: boolean;
+  /** How far away it *sounded*, in cubes, quantised server-side to 8. Muffled
+   * through a wall reads farther: a distance band for the radar's blob, not a
+   * coordinate (see `noise.estimate`). */
+  est?: number;
+}
+
+/**
+ * An unsuppressed shot somebody on our side heard. The **origin** of the shot,
+ * frozen there, with its age — never the shooter's live position. Resolved per
+ * side on the server (`MatchRoom.heard_by_side`), the gunfire half of the radar.
+ */
+export interface HeardRow {
+  id: string;
+  x: number;
+  y: number;
+  /** Seconds since the shot, on the server's clock. */
+  age: number;
 }
 
 /** The half of our own state nobody else is sent. */
@@ -354,6 +374,8 @@ export interface SelfState {
    * saying so every tick would be a per-player id list that never changes.
    */
   spotted?: string[];
+  /** Gunfire our side heard — see `HeardRow`. Absent from an older server. */
+  heard?: HeardRow[];
   /**
    * Tactical pings / callouts visible to our team.
    *

@@ -549,6 +549,9 @@ pub struct Settings {
     /// and the app only honours it in Train and in a room this player hosts —
     /// a practice aid, never something to read lineups off in a real match.
     pub grenade_arc: bool,
+    /// CS's `cl_radar_*` rows, read through the one reader the radar fixture
+    /// pins against the browser's (`radar::RadarSettings::from_values`).
+    pub radar: crate::radar::RadarSettings,
 }
 
 /// The GPU rows, as the menu steps them.
@@ -606,6 +609,7 @@ impl Default for Settings {
             gpu: GpuPick::default(),
             show_hitboxes: false,
             grenade_arc: false,
+            radar: crate::radar::RadarSettings::default(),
         }
     }
 }
@@ -728,6 +732,7 @@ impl Settings {
         if let Some(v) = flag(KEY_GRENADE_ARC) {
             s.grenade_arc = v;
         }
+        s.radar = crate::radar::RadarSettings::from_values(values);
         s
     }
 
@@ -782,6 +787,7 @@ impl Settings {
             }
             KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
             KEY_GRENADE_ARC => json!(self.grenade_arc),
+            key if key.starts_with("hassault.radar.") => return self.radar.value_for(key),
             _ => return None,
         })
     }

@@ -47,8 +47,8 @@ use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::chat::{ChatChannel, ChatState};
-use hassault_native::cosmetics::Cosmetics;
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
+use hassault_native::cosmetics::Cosmetics;
 use hassault_native::damage::{DamageNumbers, Placed};
 use hassault_native::decals::{DecalPool, MarkKind, MARK_COLOR};
 use hassault_native::editor::{self, EditRequest, Editor, Selection};
@@ -70,7 +70,7 @@ use hassault_native::prop;
 use hassault_native::protocol::{
     Command, Event, Fx, HitMarker, ModeInfo, ModeShared, PlayerRow, SelfState,
 };
-use hassault_native::radar::{self, Blip, Run};
+use hassault_native::radar::{self, Blip, Edge, Mark, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
@@ -292,6 +292,17 @@ pub struct App {
     /// See `radar::floor_plan`: it is a property of the map, and rebuilding it
     /// per frame is how a minimap costs more than the map.
     radar_plan: Vec<Run>,
+    /// The wall outline, built beside the plan for the same reason.
+    radar_edges: Vec<Edge>,
+    /// Last-known positions and recent enemy footsteps (`radar::Memory`).
+    radar_memory: radar::Memory,
+    /// This frame's non-body radar contacts, kept to reuse the allocation.
+    radar_marks: Vec<Mark>,
+    /// The steady clock the radar's fades run on.
+    radar_epoch: std::time::Instant,
+    /// Our own last noise for the radar ring: audible radius and when. A
+    /// `Cell` because it is set from `play_own`, which only borrows.
+    own_noise: std::cell::Cell<Option<(f32, std::time::Instant)>>,
     /// The map designer, when this window is one. `None` is every other mode —
     /// edit mode is a thing a window becomes, not a flag every window carries.
     editor: Option<Editor>,
@@ -458,6 +469,8 @@ struct Keys {
     /// scores *during* a lull, and a toggle is a scoreboard you leave up by
     /// accident and then die behind.
     scores: bool,
+    /// The radar-zoom key, held: the radar shows `radar::ZOOM_SCALE` until released.
+    radar_zoom: bool,
     /// The action key: plant, defuse, take a flag.
     ///
     /// **Held, not pressed**, which is why it lives here with `fire` rather than
@@ -502,6 +515,7 @@ impl App {
         radar_plan: Vec<Run>,
     ) -> App {
         let map_name = world.info.name.clone();
+        let radar_edges = radar::world_edges(&world);
         // Read off the bag before it is moved into the struct. The camera is
         // constructed before the settings are, so a saved FOV taken from
         // `Camera::default()` would sit unapplied until the player opened the
@@ -605,6 +619,11 @@ impl App {
             last_fire_sent_ms: f64::NEG_INFINITY,
             decals: DecalPool::default(),
             radar_plan,
+            radar_edges,
+            radar_memory: radar::Memory::default(),
+            radar_marks: Vec::new(),
+            radar_epoch: std::time::Instant::now(),
+            own_noise: std::cell::Cell::new(None),
             editor: None,
             edit_jobs: None,
             blips: Vec::new(),
@@ -911,8 +930,10 @@ impl App {
             } else {
                 &self.drawn
             };
-            let real: HashMap<&str, (i32, i32)> =
-                rows.iter().map(|r| (r.id.as_str(), (r.team, r.weapon))).collect();
+            let real: HashMap<&str, (i32, i32)> = rows
+                .iter()
+                .map(|r| (r.id.as_str(), (r.team, r.weapon)))
+                .collect();
             let visual = visual_rows(&self.weapons, rows);
             if let Some(squad) = self.squad.as_mut() {
                 squad.update(dt, &visual, &self.self_id);
@@ -920,7 +941,10 @@ impl App {
             }
         }
         // Drawn as the base model it borrows (`WeaponSpec::visual`).
-        let weapon = self.held().map(|w| w.visual().to_string()).unwrap_or_default();
+        let weapon = self
+            .held()
+            .map(|w| w.visual().to_string())
+            .unwrap_or_default();
         if weapon != self.viewmodel.weapon() {
             // A weapon swap drops the scope: the step is an index into *this*
             // weapon's levels, and carrying it across would put you at a
@@ -974,7 +998,9 @@ impl App {
         // knife runs — see `inspects::knife_archetype`.
         let prop_name = if display_weapon == "knife" {
             let skin_id = equipped_skin.and_then(|s| s.id.as_deref()).unwrap_or("");
-            hassault_native::inspects::knife_prop_id(hassault_native::inspects::knife_archetype(skin_id, ""))
+            hassault_native::inspects::knife_prop_id(hassault_native::inspects::knife_archetype(
+                skin_id, "",
+            ))
         } else {
             display_weapon.as_str()
         };
@@ -1256,8 +1282,15 @@ impl App {
     /// One of our own noises, dead centre. `weapon` gives it the voice of the gun
     /// in our hands rather than the generic shot.
     fn play_own(&self, kind: &str, volume: f32, weapon: bool) {
+        // The radar's ring, whether or not there is audio to play it on: how far
+        // you carry is information, not a sound effect.
+        let held = self.held();
+        let knife = held.is_some_and(|w| w.id == "knife");
+        if let Some(radius) = radar::own_noise_radius(kind, held.map(|w| w.damage), knife) {
+            self.own_noise.set(Some((radius, std::time::Instant::now())));
+        }
         let Some(audio) = &self.audio else { return };
-        audio.own(kind, volume, if weapon { self.held() } else { None });
+        audio.own(kind, volume, if weapon { held } else { None });
     }
 
     /// Bots to add once we are in a room. Ignored without a socket, which is not
@@ -1394,6 +1427,7 @@ impl App {
                     self.decals.clear();
                     self.mesh = build_world_mesh(&self.world);
                     self.radar_plan = hassault_native::radar::floor_plan(&self.world);
+                    self.radar_edges = hassault_native::radar::world_edges(&self.world);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.set_world(&self.mesh);
                         // A draft may change its sky or its lamps as well as
@@ -1556,8 +1590,11 @@ impl App {
         if self.weapons.iter().any(|w| !w.slot.is_empty()) {
             // The range has no sides; its shooter carries the T pick, as the
             // browser's does.
-            self.range
-                .set_loadout(hassault_native::api::loadout_slots(&self.weapons, &choice, "t"));
+            self.range.set_loadout(hassault_native::api::loadout_slots(
+                &self.weapons,
+                &choice,
+                "t",
+            ));
             self.you = Some(self.range.self_state());
         }
         self.menu.loadout.choice = choice.clone();
@@ -1882,7 +1919,9 @@ impl App {
                     // The moment the room exists, and the only moment it is worth
                     // trying: the request is host-only and we are the host of
                     // whatever this welcome named.
-                    if let (Some(socket), Some(choice)) = (self.socket.as_ref(), self.loadout.as_ref()) {
+                    if let (Some(socket), Some(choice)) =
+                        (self.socket.as_ref(), self.loadout.as_ref())
+                    {
                         if let Err(e) = socket.send_loadout(choice) {
                             eprintln!("hassault: could not send the loadout ({e})");
                         }
@@ -2040,14 +2079,24 @@ impl App {
                                 let is_stab = *alt;
                                 for (i, end) in ends.iter().enumerate() {
                                     let face = faces.get(i).copied().unwrap_or(FACE_NONE);
-                                    if face != FACE_NONE && face >= 0 && (face as usize) < FACE_NORMALS.len() {
-                                        let slash_angle = 0.785 + (end[0] * 17.1 + end[1] * 31.3).sin() * 0.35;
+                                    if face != FACE_NONE
+                                        && face >= 0
+                                        && (face as usize) < FACE_NORMALS.len()
+                                    {
+                                        let slash_angle =
+                                            0.785 + (end[0] * 17.1 + end[1] * 31.3).sin() * 0.35;
                                         let kind = if is_stab {
                                             MarkKind::KnifeStab
                                         } else {
                                             MarkKind::KnifeSlash
                                         };
-                                        self.decals.mark_kind(*end, face, kind, slash_angle, MARK_COLOR);
+                                        self.decals.mark_kind(
+                                            *end,
+                                            face,
+                                            kind,
+                                            slash_angle,
+                                            MARK_COLOR,
+                                        );
                                     }
                                 }
                             }
@@ -2121,6 +2170,11 @@ impl App {
                             audio.heard(event, yaw, &self.weapons);
                         }
                     }
+                    // And remembered for the radar's footstep blobs, anchored to
+                    // where we stood when we heard them.
+                    let now = self.radar_epoch.elapsed().as_secs_f32();
+                    self.radar_memory
+                        .hear(&s.you.noise, (self.camera.x, self.camera.y), now);
                     // Grenades and clouds. Both were declared in `protocol.rs`
                     // and read by nothing at all until now — parsed every tick,
                     // 20 times a second, and thrown away.
@@ -2633,9 +2687,9 @@ impl App {
             airborne: !state.on_ground,
             crouch: state.crouch,
         };
-        let Some(shot) = self
-            .range
-            .fire_moving(&self.world, x, y, z, eye, yaw, pitch, scoped, motion)
+        let Some(shot) =
+            self.range
+                .fire_moving(&self.world, x, y, z, eye, yaw, pitch, scoped, motion)
         else {
             return;
         };
@@ -2903,7 +2957,10 @@ impl App {
                     .map(|p| p.team)
                     .unwrap_or(0);
                 let groups = hassault_native::buy_menu::buy_groups(
-                    self.mode.as_ref().map(|m| m.catalog.as_slice()).unwrap_or(&[]),
+                    self.mode
+                        .as_ref()
+                        .map(|m| m.catalog.as_slice())
+                        .unwrap_or(&[]),
                     team,
                 );
                 let (open, buy) = hassault_native::buy_menu::press(&groups, self.buy_group, digit);
@@ -2927,6 +2984,7 @@ impl App {
             Action::Sprint => self.keys.sprint = down,
             Action::Crouch => self.keys.crouch = down,
             Action::Scores => self.keys.scores = down,
+            Action::RadarZoom => self.keys.radar_zoom = down,
             Action::Use => self.keys.use_key = down,
             // Held rather than toggled, like the scoreboard: a menu you can
             // leave up by accident is one you die behind.
@@ -3146,7 +3204,14 @@ impl App {
                                 .as_ref()
                                 .map(|d| d.name.clone())
                                 .unwrap_or_else(|| skin.skin_id.clone());
-                            (format!("OPENED: {} ({:.3})", name.to_uppercase(), skin.float_value), true)
+                            (
+                                format!(
+                                    "OPENED: {} ({:.3})",
+                                    name.to_uppercase(),
+                                    skin.float_value
+                                ),
+                                true,
+                            )
                         }
                         Err(e) => (e, false),
                     });
@@ -3156,7 +3221,9 @@ impl App {
     }
 
     fn poll_clipboard(&mut self) {
-        let Some((rx, paste)) = &self.clipboard else { return };
+        let Some((rx, paste)) = &self.clipboard else {
+            return;
+        };
         let paste = *paste;
         let result = match rx.try_recv() {
             Ok(result) => result,
@@ -3260,7 +3327,12 @@ impl App {
         // every frame for a prop that has not moved is work for nothing.
         if !self.prop_fitted {
             match renderer.use_prop(weapon) {
-                Some(info) if self.viewmodel.fit_prop(info.bounds.0, info.bounds.1).is_some() => {
+                Some(info)
+                    if self
+                        .viewmodel
+                        .fit_prop(info.bounds.0, info.bounds.1)
+                        .is_some() =>
+                {
                     self.viewmodel.set_prop_layout(info.parts, info.markers);
                     self.prop_fitted = true;
                 }
@@ -3644,7 +3716,8 @@ impl App {
                 let Some((key, raw)) = self.menu.step_loadout(row.action, step) else {
                     return;
                 };
-                self.writer.save(key, serde_json::Value::String(raw.clone()));
+                self.writer
+                    .save(key, serde_json::Value::String(raw.clone()));
                 if key == "hassault.loadout" {
                     if let Ok(choice) = serde_json::from_str::<serde_json::Value>(&raw) {
                         // Live now: the range re-arms, and a match hears the pick
@@ -4491,23 +4564,52 @@ impl ApplicationHandler for App {
                 // stepped 20 times a second while the bodies moved smoothly
                 // would disagree with the screen it sits on.
                 self.blips.clear();
+                self.radar_marks.clear();
                 if let Some(you) = &self.you {
-                    self.blips.extend(radar::blips(
-                        &self.drawn,
-                        &self.self_id,
-                        self.my_team(),
-                        &you.spotted,
-                    ));
+                    let team = self.my_team();
+                    self.blips.extend(radar::blips(&self.drawn, &self.self_id, team, &you.spotted));
+                    let now = self.radar_epoch.elapsed().as_secs_f32();
+                    self.radar_memory
+                        .track(&self.drawn, &self.self_id, team, &you.spotted, now);
+                    let bomb = self.mode_state.as_ref().map(|m| &m.bomb);
+                    // A ring round the carrier only where the carrier is already
+                    // drawn: a teammate, or an enemy somebody can see.
+                    let carrier_at = bomb
+                        .filter(|b| b.state == "carried")
+                        .and_then(|b| self.drawn.iter().find(|r| r.id == b.carrier && r.alive))
+                        .filter(|r| r.id != self.self_id)
+                        .filter(|r| r.team == team || you.spotted.iter().any(|id| id == &r.id))
+                        .map(|r| (r.x, r.y));
+                    self.radar_memory.marks(
+                        now,
+                        &you.heard,
+                        bomb,
+                        carrier_at,
+                        self.settings.radar.sound_pings,
+                        &mut self.radar_marks,
+                    );
                 }
+                let own_noise = self.own_noise.get().and_then(|(radius, at)| {
+                    let life = radar::fade_out(at.elapsed().as_secs_f32(), radar::OWN_NOISE_SECONDS);
+                    (life > 0.0).then_some((radius, life))
+                });
                 // Centred on the camera, which is the prediction — where we
                 // believe we are — and not on the last snapshot. Anything else
                 // makes your own arrow lag your own movement.
                 let radar = self.joined.then(|| RadarView {
                     plan: &self.radar_plan,
+                    edges: &self.radar_edges,
                     x: self.camera.x,
                     y: self.camera.y,
                     yaw: self.camera.yaw.to_radians(),
                     blips: &self.blips,
+                    marks: &self.radar_marks,
+                    sites: self.mode.as_ref().map(|m| m.sites.as_slice()).unwrap_or(&[]),
+                    settings: self.settings.radar,
+                    ssize: self.world.ssize as f32,
+                    scores: self.keys.scores,
+                    zoom: self.keys.radar_zoom,
+                    own_noise,
                 });
                 // Built before the view, not inside it: each of these is an
                 // owned value the borrowed `ConsoleView` points at, and one

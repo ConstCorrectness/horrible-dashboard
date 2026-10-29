@@ -5,64 +5,125 @@
  * and nothing else.** The radar in particular is not a client-side decision —
  * which enemies appear on it is `MatchRoom.spotted_by`, resolved on the server
  * because only the server holds the two things the answer depends on, the
- * level's geometry and the smoke standing in it.
+ * level's geometry and the smoke standing in it. The same goes for gunfire
+ * (`you.heard`, `MatchRoom.heard_by_side`) and for the sound blobs, which are
+ * drawn from the noise envelope's bearing and its quantised `est`.
  *
- * The map outline is drawn from the cube grid the client already downloaded, so
- * a radar costs no extra request and no extra byte on the wire. It is rasterised
- * **once per map** into an offscreen canvas and blitted every frame; walking a
- * 256×256 grid sixty times a second to draw the same walls is the obvious way to
- * make a minimap cost more than the game.
+ * The map is drawn from the cube grid the client already downloaded, so a radar
+ * costs no extra request and no extra byte on the wire. The floor is rasterised
+ * **once per map** into an offscreen canvas and blitted every frame; the wall
+ * outline is one `Path2D`, also built once, stroked under the frame's transform.
+ * Walking a 256×256 grid sixty times a second to draw the same walls is the
+ * obvious way to make a minimap cost more than the game.
+ *
+ * Every number that decides where something lands, how big it is or what colour
+ * it is lives in `radar-view.ts`, pinned against the native radar by
+ * `radar-vectors.json`.
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from "react";
 
-import type { TacticalSpec } from '../api';
-import type { FlashLayer } from '../flash-layer';
-import type { PingRow, PlayerRow } from '../net';
-import type { World } from '../world';
+import type { TacticalSpec } from "../api";
+import type { FlashLayer } from "../flash-layer";
+import type {
+  HeardRow,
+  ModeBomb,
+  ModeSite,
+  NoiseEvent,
+  PingRow,
+  PlayerRow,
+} from "../net";
+import {
+  blipRadius,
+  fadeOut,
+  FLOOR_BANDS,
+  floorBand,
+  floorColor,
+  floorRange,
+  GRID_CUBES,
+  HEARD_SECONDS,
+  LAST_KNOWN_SECONDS,
+  OWN_NOISE_SECONDS,
+  project,
+  RADAR_COLORS,
+  radarFrame,
+  type RadarSettings,
+  type Rgba,
+  SOUND_PING_CUBES,
+  SOUND_PING_SECONDS,
+  wallEdges,
+} from "../radar-view";
+import type { World } from "../world";
 
-/** Size of the radar in CSS pixels. */
+/** Size of the radar in CSS pixels at `hudScale` 1. */
 const SIZE = 168;
-
-/** How many cubes fit across the radar. Everything outside is clipped. */
-const SPAN = 110;
-
-const TEAM_YOU = '#7ee787';
-const TEAM_MATE = '#58a6ff';
-const TEAM_ENEMY = '#f85149';
+/** How much bigger the instrument grows while it shows the whole map. */
+const FULL_MAP_GROWTH = 1.5;
+/** Canvas pixels per cube in the offscreen floor plan. */
+const PLAN_SCALE = 2;
 
 const PING_RADAR_COLORS: Record<string, string> = {
-  spotted: 'rgb(239, 68, 68)',
-  watch: 'rgb(6, 182, 212)',
-  danger: 'rgb(245, 158, 11)',
-  utility: 'rgb(59, 130, 246)',
+  spotted: "rgb(239, 68, 68)",
+  watch: "rgb(6, 182, 212)",
+  danger: "rgb(245, 158, 11)",
+  utility: "rgb(59, 130, 246)",
 };
 
-/**
- * Rasterise the map's walls once, into a canvas that is then just blitted.
- *
- * Drawn from `isSolid` rather than from the mesh: the radar wants the floor plan
- * — where you cannot walk — and the mesh is a set of surfaces, which is a
- * different question with a much more expensive answer.
- */
-function renderMap(world: World, scale: number): HTMLCanvasElement | null {
-  if (typeof document === 'undefined') return null;
-  const size = Math.ceil(world.ssize * scale);
-  const canvas = document.createElement('canvas');
+/** A palette entry as a canvas colour, optionally faded. */
+function css(c: Rgba, alpha = 1): string {
+  const [r, g, b, a] = c;
+  return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${(a * alpha).toFixed(3)})`;
+}
+
+/** The floor plan: open cells tinted by height band, rasterised once. */
+function renderPlan(world: World): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const size = Math.ceil(world.ssize * PLAN_SCALE);
+  const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.fillStyle = 'rgba(140, 170, 210, 0.16)';
+  const solid = (x: number, y: number) => world.isSolid(x, y);
+  const [lo, hi] = floorRange(world.ssize, solid, (x, y) =>
+    world.floorAt(x, y),
+  );
+  // One fillStyle per band rather than per cell: setting a style is the
+  // expensive half of a fillRect.
+  const bands: [number, number][][] = Array.from({ length: FLOOR_BANDS }, () => []);
   for (let y = 0; y < world.ssize; y += 1) {
     for (let x = 0; x < world.ssize; x += 1) {
       // Open cells are the *floor plan*, so they are what gets painted — solid
       // cube is the negative space, and painting that instead gives a map that
       // reads inside-out.
-      if (world.isSolid(x, y)) continue;
-      ctx.fillRect(x * scale, y * scale, scale, scale);
+      if (solid(x, y)) continue;
+      bands[floorBand(world.floorAt(x, y), lo, hi)].push([x, y]);
     }
   }
+  bands.forEach((cells, band) => {
+    ctx.fillStyle = css(floorColor(band));
+    for (const [x, y] of cells)
+      ctx.fillRect(x * PLAN_SCALE, y * PLAN_SCALE, PLAN_SCALE, PLAN_SCALE);
+  });
   return canvas;
+}
+
+/** The wall outline as one path in cube coordinates. */
+function renderWalls(world: World): Path2D | null {
+  if (typeof Path2D === "undefined") return null;
+  const path = new Path2D();
+  for (const e of wallEdges(world.ssize, (x, y) => world.isSolid(x, y))) {
+    path.moveTo(e.x0, e.y0);
+    path.lineTo(e.x1, e.y1);
+  }
+  return path;
+}
+
+/** One enemy footstep, landing or reload, as heard. */
+export interface RadarSound {
+  at: number;
+  event: NoiseEvent;
+  /** Where *we* stood when we heard it: the blob is anchored to the ear. */
+  from: { x: number; y: number };
 }
 
 export interface RadarProps {
@@ -76,50 +137,250 @@ export interface RadarProps {
   spotted: readonly string[];
   /** Tactical team pings. */
   pings?: readonly PingRow[];
+  /** Gunfire our side heard, straight from `you.heard`. */
+  heard?: readonly HeardRow[];
+  /** Recent noise envelope entries, for the footstep blobs. */
+  sounds?: readonly RadarSound[];
+  sites?: readonly ModeSite[];
+  bomb?: ModeBomb;
+  settings: RadarSettings;
+  scoresHeld: boolean;
+  zoomHeld: boolean;
+  /** Our own last noise: its audible radius in cubes and `Date.now()` it was made. */
+  ownNoise?: { radius: number; at: number } | null;
 }
 
-export function Radar({ world, me, myId, myTeam, rows, spotted, pings }: RadarProps) {
+interface LastKnown {
+  x: number;
+  y: number;
+  /** `Date.now()` the contact was lost; 0 while it is still spotted. */
+  lost: number;
+}
+
+export function Radar({
+  world,
+  me,
+  myId,
+  myTeam,
+  rows,
+  spotted,
+  pings,
+  heard,
+  sounds,
+  sites,
+  bomb,
+  settings,
+  scoresHeld,
+  zoomHeld,
+  ownNoise,
+}: RadarProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const scale = 2;
   // Rebuilt only when the map changes. The dependency is the world object
   // itself, which is replaced wholesale on a map load.
-  const plan = useMemo(() => (world ? renderMap(world, scale) : null), [world]);
+  const plan = useMemo(() => (world ? renderPlan(world) : null), [world]);
+  const walls = useMemo(() => (world ? renderWalls(world) : null), [world]);
+  // Where each enemy was last seen. Only positions this client was already sent
+  // while they were spotted — the "?" adds memory, not information.
+  const lastKnown = useRef(new Map<string, LastKnown>());
+
+  const full = scoresHeld && settings.fullOnScores;
+  const size = Math.round(
+    SIZE * settings.hudScale * (full ? FULL_MAP_GROWTH : 1),
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
+    const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx || !me) return;
+    const now = Date.now();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (canvas.width !== SIZE * dpr) {
-      canvas.width = SIZE * dpr;
-      canvas.height = SIZE * dpr;
+    if (canvas.width !== size * dpr) {
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, SIZE, SIZE);
+    ctx.clearRect(0, 0, size, size);
 
-    const radius = SIZE / 2;
-    const pxPerCube = SIZE / SPAN;
+    const radius = size / 2;
+    const ssize = world?.ssize ?? 256;
+    const frame = radarFrame(settings, me, ssize, scoresHeld, zoomHeld);
+    const perCube = (radius * 2) / frame.span;
+    const at = (x: number, y: number): [number, number] => {
+      const [px, py] = project(frame, radius, x, y);
+      return [radius + px, radius + py];
+    };
+    const inside = (x: number, y: number, pad = 0) =>
+      Math.hypot(x - radius, y - radius) <= radius - pad;
+    const icon = (kind: Parameters<typeof blipRadius>[0]) =>
+      blipRadius(kind, settings.iconScale) * radius;
 
+    // ---- the instrument and the map, under the world transform ----
     ctx.save();
     ctx.beginPath();
     ctx.arc(radius, radius, radius - 1, 0, Math.PI * 2);
     ctx.clip();
-    ctx.fillStyle = 'rgba(8, 12, 18, 0.72)';
-    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillStyle = css(RADAR_COLORS.ground);
+    ctx.fillRect(0, 0, size, size);
 
-    // Rotated so *up is where you are looking*. The alternative — north-up — is
-    // easier to draw and much harder to read under pressure: it makes every
-    // glance a mental rotation before it is information.
+    ctx.save();
     ctx.translate(radius, radius);
-    ctx.rotate(-me.yaw - Math.PI / 2);
-    if (plan) {
-      ctx.drawImage(
-        plan,
-        -me.x * pxPerCube,
-        -me.y * pxPerCube,
-        (plan.width / scale) * pxPerCube,
-        (plan.height / scale) * pxPerCube,
-      );
+    ctx.rotate(frame.angle);
+    ctx.scale(perCube, perCube);
+    ctx.translate(-frame.cx, -frame.cy);
+    if (plan) ctx.drawImage(plan, 0, 0, ssize, ssize);
+
+    // A faint world-space grid: scale you can read distance off, and the
+    // subtle structure the HUD uses instead of gradients.
+    ctx.strokeStyle = css(RADAR_COLORS.grid);
+    ctx.lineWidth = 1 / perCube;
+    ctx.beginPath();
+    for (let g = 0; g <= ssize; g += GRID_CUBES) {
+      ctx.moveTo(g, 0);
+      ctx.lineTo(g, ssize);
+      ctx.moveTo(0, g);
+      ctx.lineTo(ssize, g);
+    }
+    ctx.stroke();
+
+    // Bomb sites under the walls, so a site's edge never hides a corridor.
+    for (const site of sites ?? []) {
+      ctx.beginPath();
+      ctx.arc(site.x, site.y, site.radius, 0, Math.PI * 2);
+      ctx.fillStyle = css(RADAR_COLORS.site);
+      ctx.fill();
+      ctx.setLineDash([3 / perCube, 2 / perCube]);
+      ctx.strokeStyle = css(RADAR_COLORS.siteEdge, 0.7);
+      ctx.lineWidth = 1 / perCube;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (walls) {
+      ctx.strokeStyle = css(RADAR_COLORS.wall);
+      ctx.lineWidth = 1.15 / perCube;
+      ctx.lineCap = "square";
+      ctx.stroke(walls);
+    }
+
+    // CS2's "how far can I be heard" ring, round wherever we are.
+    if (ownNoise) {
+      const life = fadeOut((now - ownNoise.at) / 1000, OWN_NOISE_SECONDS);
+      if (life > 0) {
+        ctx.beginPath();
+        // Grows into its radius as it fades, so it reads as a sound going out
+        // rather than a circle being drawn.
+        ctx.arc(
+          me.x,
+          me.y,
+          ownNoise.radius * (1 - life * 0.25),
+          0,
+          Math.PI * 2,
+        );
+        ctx.strokeStyle = css(RADAR_COLORS.ownNoise, life);
+        ctx.lineWidth = 1.2 / perCube;
+        ctx.stroke();
+      }
+    }
+
+    // Enemy footsteps: soft, wide, "about there". Anchored to where we stood
+    // when we heard them, along the bearing, at the distance they *sounded*.
+    if (settings.soundPings) {
+      for (const s of sounds ?? []) {
+        if (!s.event.foe || s.event.est === undefined) continue;
+        const life = fadeOut((now - s.at) / 1000, SOUND_PING_SECONDS);
+        if (life <= 0) continue;
+        const wx = s.from.x + Math.cos(s.event.bearing) * s.event.est;
+        const wy = s.from.y + Math.sin(s.event.bearing) * s.event.est;
+        const blob = ctx.createRadialGradient(
+          wx,
+          wy,
+          0,
+          wx,
+          wy,
+          SOUND_PING_CUBES,
+        );
+        blob.addColorStop(0, css(RADAR_COLORS.soundPing, life));
+        blob.addColorStop(1, css(RADAR_COLORS.soundPing, 0));
+        ctx.fillStyle = blob;
+        ctx.beginPath();
+        ctx.arc(wx, wy, SOUND_PING_CUBES, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    // ---- labels and blips, in screen space so they stay upright ----
+    for (const site of sites ?? []) {
+      // Up and to the left of the centre, inside the disc: the middle is where
+      // the bomb gets planted, and a letter under the bomb is one you cannot read.
+      const offset = site.radius * perCube * 0.55;
+      const [sx0, sy0] = at(site.x, site.y);
+      const sx = sx0 - offset;
+      const sy = sy0 - offset;
+      if (!inside(sx, sy, 6)) continue;
+      ctx.font = `800 ${Math.max(9, radius * 0.13).toFixed(1)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = css(RADAR_COLORS.siteEdge);
+      ctx.fillText(site.id.toUpperCase(), sx, sy);
+    }
+
+    // Last-known: update the memory from this frame's contacts first.
+    const known = lastKnown.current;
+    const alive = new Map(rows.filter((r) => r.alive).map((r) => [r.id, r]));
+    for (const row of rows) {
+      if (row.team === myTeam || row.id === myId) continue;
+      if (row.alive && spotted.includes(row.id))
+        known.set(row.id, { x: row.x, y: row.y, lost: 0 });
+    }
+    for (const [id, k] of known) {
+      if (
+        !alive.has(id) ||
+        (k.lost > 0 && now - k.lost > LAST_KNOWN_SECONDS * 1000)
+      ) {
+        known.delete(id);
+      } else if (k.lost === 0 && !spotted.includes(id)) {
+        k.lost = now;
+      }
+    }
+    for (const k of known.values()) {
+      if (k.lost === 0) continue;
+      const life = fadeOut((now - k.lost) / 1000, LAST_KNOWN_SECONDS);
+      const [kx, ky] = at(k.x, k.y);
+      if (!inside(kx, ky)) continue;
+      const r = icon("lastKnown");
+      ctx.beginPath();
+      ctx.arc(kx, ky, r, 0, Math.PI * 2);
+      ctx.strokeStyle = css(RADAR_COLORS.enemy, 0.85 * life);
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.font = `700 ${(r * 1.7).toFixed(1)}px ui-monospace, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = css(RADAR_COLORS.enemy, life);
+      ctx.fillText("?", kx, ky + 0.5);
+    }
+
+    // Gunfire: an exact dot at the shot's origin, with a ring going out from
+    // it on arrival so a new one is noticed rather than merely present.
+    for (const h of heard ?? []) {
+      const life = fadeOut(h.age, HEARD_SECONDS);
+      if (life <= 0) continue;
+      const [hx, hy] = at(h.x, h.y);
+      if (!inside(hx, hy)) continue;
+      const r = icon("heard");
+      const arrive = Math.min(1, h.age / 0.5);
+      if (arrive < 1) {
+        ctx.beginPath();
+        ctx.arc(hx, hy, r * (1 + arrive * 2.5), 0, Math.PI * 2);
+        ctx.strokeStyle = css(RADAR_COLORS.enemy, 1 - arrive);
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(hx, hy, r * Math.min(1, 0.55 + h.age * 4), 0, Math.PI * 2);
+      ctx.fillStyle = css(RADAR_COLORS.enemy, life);
+      ctx.fill();
     }
 
     for (const row of rows) {
@@ -128,84 +389,160 @@ export function Radar({ world, me, myId, myTeam, rows, spotted, pings }: RadarPr
       // Teammates are unconditional — that is a radio, and every team shooter
       // works that way. An enemy has to have been seen by somebody on our side.
       if (!friendly && !spotted.includes(row.id)) continue;
-      const px = (row.x - me.x) * pxPerCube;
-      const py = (row.y - me.y) * pxPerCube;
-      if (Math.hypot(px, py) > radius) continue;
+      const [px, py] = at(row.x, row.y);
+      if (!inside(px, py)) continue;
+      const r = icon(friendly ? "mate" : "enemy");
       ctx.beginPath();
-      ctx.arc(px, py, friendly ? 3.2 : 3.8, 0, Math.PI * 2);
-      ctx.fillStyle = friendly ? TEAM_MATE : TEAM_ENEMY;
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fillStyle = css(friendly ? RADAR_COLORS.mate : RADAR_COLORS.enemy);
       ctx.fill();
+      if (bomb?.state === "carried" && bomb.carrier === row.id) {
+        ctx.beginPath();
+        ctx.arc(px, py, r + 2, 0, Math.PI * 2);
+        ctx.strokeStyle = css(RADAR_COLORS.bomb);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+      }
     }
 
-    // Tactical pings on the radar: diamond / diamond-ring blip in callout color
-    if (pings) {
-      for (const p of pings) {
-        const px = (p.x - me.x) * pxPerCube;
-        const py = (p.y - me.y) * pxPerCube;
-        const dist = Math.hypot(px, py);
-        const clampedDist = Math.min(dist, radius - 5);
-        const factor = dist > 0 ? clampedDist / dist : 0;
-        const drawX = px * factor;
-        const drawY = py * factor;
-        const color = PING_RADAR_COLORS[p.kind] || 'rgb(224, 185, 106)';
+    // The bomb on the ground or in a site. Planted, it pulses faster as the
+    // fuse runs down — the one thing on the instrument that is a clock.
+    if (
+      bomb &&
+      (bomb.state === "dropped" || bomb.state === "planted") &&
+      bomb.x !== undefined &&
+      bomb.y !== undefined
+    ) {
+      const [bx, by] = at(bomb.x, bomb.y);
+      const pad = icon("bomb");
+      const cx = Math.max(pad, Math.min(size - pad, bx));
+      const cy = Math.max(pad, Math.min(size - pad, by));
+      const rate =
+        bomb.state === "planted" ? 2 + 6 / Math.max(1, bomb.fuseIn ?? 40) : 0;
+      const pulse =
+        rate > 0
+          ? 0.6 + 0.4 * Math.abs(Math.sin((now / 1000) * Math.PI * rate))
+          : 1;
+      drawBomb(ctx, cx, cy, pad, css(RADAR_COLORS.bomb, pulse));
+    }
 
-        ctx.save();
-        ctx.translate(drawX, drawY);
-        // Draw diamond
-        ctx.beginPath();
-        ctx.moveTo(0, -5);
-        ctx.lineTo(5, 0);
-        ctx.lineTo(0, 5);
-        ctx.lineTo(-5, 0);
-        ctx.closePath();
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-        ctx.restore();
-      }
+    // Tactical pings: diamond blips in callout colour, pinned to the rim when
+    // they are out of range.
+    for (const p of pings ?? []) {
+      const [px0, py0] = project(frame, radius, p.x, p.y);
+      const dist = Math.hypot(px0, py0);
+      const factor = dist > 0 ? Math.min(dist, radius - 5) / dist : 0;
+      const r = icon("ping");
+      ctx.save();
+      ctx.translate(radius + px0 * factor, radius + py0 * factor);
+      ctx.beginPath();
+      ctx.moveTo(0, -r);
+      ctx.lineTo(r, 0);
+      ctx.lineTo(0, r);
+      ctx.lineTo(-r, 0);
+      ctx.closePath();
+      ctx.fillStyle = PING_RADAR_COLORS[p.kind] || "rgb(224, 185, 106)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
     }
     ctx.restore();
 
-    // Us, drawn last and unrotated: a triangle at the centre pointing up, which
-    // is the fixed reference everything else is read against.
+    // Us, drawn last: an arrow pointing up on a rotating radar, turning with us
+    // on a north-up one, and off-centre when the radar is not always centred.
+    const [ax, ay] = at(me.x, me.y);
+    const s = icon("you") / 6;
     ctx.save();
-    ctx.translate(radius, radius);
+    ctx.translate(ax, ay);
+    ctx.rotate(frame.arrowAngle);
     ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(4.5, 5);
-    ctx.lineTo(0, 2.5);
-    ctx.lineTo(-4.5, 5);
+    ctx.moveTo(0, -6 * s);
+    ctx.lineTo(4.5 * s, 5 * s);
+    ctx.lineTo(0, 2.5 * s);
+    ctx.lineTo(-4.5 * s, 5 * s);
     ctx.closePath();
-    ctx.fillStyle = TEAM_YOU;
+    ctx.fillStyle = css(RADAR_COLORS.you);
     ctx.fill();
     ctx.restore();
 
     ctx.beginPath();
     ctx.arc(radius, radius, radius - 1, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(180, 200, 230, 0.28)';
+    ctx.strokeStyle = css(RADAR_COLORS.rim);
     ctx.lineWidth = 1;
     ctx.stroke();
-  }, [plan, me, myId, myTeam, rows, spotted, pings]);
+    // A 2px accent arc across the top of the rim — the HUD's top-border
+    // language, bent round the instrument.
+    ctx.beginPath();
+    ctx.arc(radius, radius, radius - 1.5, -Math.PI * 0.68, -Math.PI * 0.32);
+    ctx.strokeStyle = css(RADAR_COLORS.you, 0.7);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }, [
+    plan,
+    walls,
+    world,
+    me,
+    myId,
+    myTeam,
+    rows,
+    spotted,
+    pings,
+    heard,
+    sounds,
+    sites,
+    bomb,
+    settings,
+    scoresHeld,
+    zoomHeld,
+    ownNoise,
+    size,
+  ]);
 
   if (!me) return null;
   return (
     <canvas
       ref={canvasRef}
       style={{
-        position: 'absolute',
+        position: "absolute",
         top: 12,
         left: 12,
-        width: SIZE,
-        height: SIZE,
-        pointerEvents: 'none',
-        borderRadius: '50%',
+        width: size,
+        height: size,
+        pointerEvents: "none",
+        borderRadius: "50%",
+        transition: "width 120ms ease-out, height 120ms ease-out",
       }}
     />
   );
 }
 
+/** The bomb: a squat case with a fuse, drawn rather than an emoji. */
+function drawBomb(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "rgba(8, 10, 14, 0.9)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(-r, -r * 0.6, r * 2, r * 1.3);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(r * 0.4, -r * 0.6);
+  ctx.lineTo(r * 0.9, -r * 1.2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.restore();
+}
 /**
  * A vector glyph per grenade kind.
  *

@@ -28,6 +28,12 @@
 //! live HUD*: the card is drawn last and its scrim is the only thing stopping
 //! the ammo counter and the kill feed showing through it.
 //!
+//! `radar` draws the radar over a synthetic floor plan with one of every layer
+//! on it — bands, walls, sites, a planted bomb, teammates, a spotted enemy, a
+//! last-known `?`, a gunfire dot mid-arrival, footstep blobs and the own-noise
+//! ring — and `northup` turns rotation off with it. Every one of those layers is
+//! pinned by numbers in `radar.rs`; none of the numbers says whether they read.
+//!
 //! The scene behind it is a **mid-grey gradient with a bright band**, not black.
 //! A HUD checked against black passes with translucent panels that turn out to
 //! be unreadable over a lit wall, which is the failure this is most likely to
@@ -36,6 +42,9 @@
 use hassault_native::damage::Placed;
 use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow, UtilitySlot, UtilityView};
 use hassault_native::protocol::{BuyItem, ModeBomb, ModeFlag, ModeInfo, ModeSelf, ModeShared};
+use hassault_native::protocol::{HeardRow, ModeSite, NoiseEvent, PlayerRow};
+use hassault_native::radar::{self, Blip, Edge, Mark, RadarSettings, Run};
+use hassault_native::hud::RadarView;
 use hassault_native::protocol::{Fx, HitMarker, HurtMarker, SelfState};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 
@@ -428,6 +437,11 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
     ];
 
     let fixture = mode_name.map(mode_fixture);
+    // Read here rather than threaded through `run`: two flags for one fixture.
+    let flags: Vec<String> = std::env::args().skip(3).collect();
+    let show_radar = flags.iter().any(|a| a == "radar");
+    let north_up = flags.iter().any(|a| a == "northup");
+    let radar_map = radar_fixture(north_up);
     let view = HudView {
         hud_scale: 1.0,
         team: 0,
@@ -461,7 +475,7 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         fps: Some(144.0),
         net_graph: 1,
         crosshair: Default::default(),
-        radar: None,
+        radar: show_radar.then(|| radar_map.view()),
         utility: Some(&utility),
         flash: 0.0,
         console: None,
@@ -707,4 +721,122 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         .write_image_data(&pixels)
         .expect("write");
     println!("wrote {path} at {width}x{height}");
+}
+
+/// A small two-level map with a corridor, two sites and something of every
+/// kind on the radar.
+struct RadarFixture {
+    plan: Vec<Run>,
+    edges: Vec<Edge>,
+    blips: Vec<Blip>,
+    marks: Vec<Mark>,
+    sites: Vec<ModeSite>,
+    settings: RadarSettings,
+}
+
+impl RadarFixture {
+    fn view(&self) -> RadarView<'_> {
+        RadarView {
+            plan: &self.plan,
+            edges: &self.edges,
+            x: 40.0,
+            y: 52.0,
+            yaw: 0.4,
+            blips: &self.blips,
+            marks: &self.marks,
+            sites: &self.sites,
+            settings: self.settings,
+            ssize: 96.0,
+            scores: false,
+            zoom: false,
+            own_noise: Some((42.0, 0.55)),
+        }
+    }
+}
+
+fn radar_fixture(north_up: bool) -> RadarFixture {
+    const N: i32 = 96;
+    // Rooms carved out of solid: (x0, y0, x1, y1, floor).
+    let rooms: [(i32, i32, i32, i32, f32); 7] = [
+        (6, 40, 34, 66, 0.0),   // T spawn
+        (34, 48, 62, 54, 0.0),  // mid corridor
+        (62, 30, 88, 60, 4.0),  // site A, raised
+        (40, 12, 46, 48, 0.0),  // connector north
+        (14, 8, 52, 18, 2.0),   // site B
+        (52, 60, 58, 86, 0.0),  // lower tunnel
+        (30, 80, 70, 90, -2.0), // the pit
+    ];
+    let floor = |x: i32, y: i32| -> Option<f32> {
+        rooms
+            .iter()
+            .find(|(x0, y0, x1, y1, _)| x >= *x0 && x < *x1 && y >= *y0 && y < *y1)
+            .map(|r| r.4)
+    };
+    let (lo, hi) = (-2.0, 4.0);
+    let mut plan = Vec::new();
+    for y in 0..N {
+        let mut start: Option<(i32, u8)> = None;
+        for x in 0..=N {
+            let band = (x < N).then(|| floor(x, y)).flatten().map(|f| radar::floor_band(f, lo, hi));
+            match (band, start) {
+                (Some(b), None) => start = Some((x, b)),
+                (Some(b), Some((x0, open))) if b != open => {
+                    plan.push(Run { y: y as f32 + 0.5, x0: x0 as f32, x1: x as f32, band: open });
+                    start = Some((x, b));
+                }
+                (None, Some((x0, open))) => {
+                    plan.push(Run { y: y as f32 + 0.5, x0: x0 as f32, x1: x as f32, band: open });
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+    }
+    let edges = radar::wall_edges(N, |x, y| floor(x, y).is_none());
+    let blips = vec![
+        Blip { x: 28.0, y: 58.0, friendly: true },
+        Blip { x: 44.0, y: 30.0, friendly: true },
+        Blip { x: 70.0, y: 50.0, friendly: false },
+    ];
+    // Built through the real memory, so the preview draws what the app would.
+    let mut memory = radar::Memory::default();
+    let row = |id: &str, x: f32, y: f32| PlayerRow {
+        id: id.into(),
+        team: 1,
+        alive: true,
+        x,
+        y,
+        ..Default::default()
+    };
+    memory.track(&[row("lurker", 56.0, 70.0)], "me", 0, &["lurker".into()], 0.0);
+    memory.track(&[row("lurker", 56.0, 76.0)], "me", 0, &[], 0.5);
+    memory.hear(
+        &[
+            NoiseEvent { kind: "step".into(), bearing: -1.2, foe: true, est: Some(24.0), ..Default::default() },
+            NoiseEvent { kind: "land".into(), bearing: 2.6, foe: true, est: Some(16.0), ..Default::default() },
+        ],
+        (40.0, 52.0),
+        1.0,
+    );
+    let heard = [HeardRow { id: "awper".into(), x: 74.0, y: 36.0, age: 0.2 }];
+    let bomb = ModeBomb {
+        state: "planted".into(),
+        site: "a".into(),
+        x: 80.0,
+        y: 40.0,
+        fuse_in: 18.0,
+        ..Default::default()
+    };
+    let mut marks = Vec::new();
+    memory.marks(1.3, &heard, Some(&bomb), None, true, &mut marks);
+    let sites = vec![
+        ModeSite { id: "a".into(), x: 78.0, y: 42.0, z: 4.0, radius: 7.0 },
+        ModeSite { id: "b".into(), x: 26.0, y: 13.0, z: 2.0, radius: 5.0 },
+    ];
+    let settings = RadarSettings {
+        rotate: !north_up,
+        hud_scale: 1.3,
+        ..RadarSettings::default()
+    };
+    RadarFixture { plan, edges, blips, marks, sites, settings }
 }
