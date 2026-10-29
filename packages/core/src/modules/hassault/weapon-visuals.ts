@@ -48,6 +48,11 @@ export function visualId(weapon: WeaponSpec | string | number | null | undefined
   return asBase(named) ?? 'assault';
 }
 
+/** The wire index of a weapon id in the served table, or -1. */
+export function weaponIndexOf(id: string): number {
+  return table.findIndex((w) => w.id === id);
+}
+
 /** The weapon id at a wire index, or `undefined` before the table arrives. */
 export function weaponIdAt(index: number): string | undefined {
   return table[index]?.id;

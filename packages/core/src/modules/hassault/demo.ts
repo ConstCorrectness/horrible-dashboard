@@ -17,7 +17,9 @@
  * Angles in a frame are the wire's: radians, yaw 0 = +x (`PlayerRow`). The
  * freecam keeps its own degrees, yaw 0 = +y; `freecamFromView` converts.
  */
+import type { WeaponSpec } from './api';
 import type { PlayerRow } from './net';
+import { weaponIdAt, weaponIndexOf } from './weapon-visuals';
 
 export interface DemoHeader {
   magic: 'HADEMO';
@@ -43,7 +45,21 @@ export interface DemoPlayerSnapshot {
   yaw: number;
   pitch: number;
   roll?: number;
+  /** Index into the served weapon table at recording time. */
   weapon: number;
+  /**
+   * The same weapon by id. Preferred on playback: an index is only good for the
+   * table it was taken from, and a roster that grew since would hand the
+   * replay's hands a different gun. Absent in demos older than it.
+   */
+  weaponId?: string;
+  /**
+   * Zoom step, 0 unscoped (`ShotController.scoped`). The recorder's own body
+   * only: the wire does not say whether anybody else is scoped. Absent = 0.
+   */
+  scoped?: number;
+  /** The magnification that step meant when it was recorded; 1 unscoped. */
+  zoom?: number;
   hp: number;
   crouching?: boolean;
   sprinting?: boolean;
@@ -161,14 +177,47 @@ export function snapshotFromRow(row: PlayerRow): DemoPlayerSnapshot {
     yaw: row.yaw,
     pitch: row.pitch,
     weapon: row.weapon,
+    weaponId: weaponIdAt(row.weapon),
     hp: row.hp,
     crouch: row.crouch,
     alive: row.alive,
   };
 }
 
+/**
+ * The weapon a frame's body holds, from `table` (the served loadout): by id
+ * when the frame has one and the table still does, by index otherwise — which
+ * is all a demo recorded before `weaponId` has.
+ */
+export function heldWeapon(
+  s: Pick<DemoPlayerSnapshot, 'weapon' | 'weaponId'>,
+  table: readonly WeaponSpec[],
+): WeaponSpec | undefined {
+  if (s.weaponId) {
+    const byId = table.find((w) => w.id === s.weaponId);
+    if (byId) return byId;
+  }
+  return table[s.weapon];
+}
+
+/**
+ * How far a frame's body was zoomed in: 1 unscoped. The recorded number when
+ * there is one; else the step read against the weapon's zoom levels now.
+ */
+export function heldZoom(
+  s: Pick<DemoPlayerSnapshot, 'weapon' | 'weaponId' | 'scoped' | 'zoom'>,
+  table: readonly WeaponSpec[],
+): number {
+  const step = s.scoped ?? 0;
+  if (step <= 0) return 1;
+  if (s.zoom !== undefined && s.zoom > 0) return s.zoom;
+  return heldWeapon(s, table)?.zoomLevels?.[step - 1] ?? 1;
+}
+
 /** A frame's body, back in the shape the avatar pool draws. */
 export function rowFromSnapshot(s: DemoPlayerSnapshot): PlayerRow {
+  // The prop by id where the table still has it, as `heldWeapon` does.
+  const byId = s.weaponId !== undefined ? weaponIndexOf(s.weaponId) : -1;
   return {
     id: s.id,
     name: s.name,
@@ -183,7 +232,7 @@ export function rowFromSnapshot(s: DemoPlayerSnapshot): PlayerRow {
     rtt: 0,
     hp: s.hp,
     alive: s.alive ?? s.hp > 0,
-    weapon: s.weapon,
+    weapon: byId >= 0 ? byId : s.weapon,
     kills: 0,
     deaths: 0,
     bot: false,
@@ -260,7 +309,15 @@ export class DroneFreecam {
   public angularFriction = 12.0;
   public active = false;
 
-  public setPosition(x: number, y: number, z: number, yaw = 0, pitch = 0, roll = 0, fov = 90): void {
+  public setPosition(
+    x: number,
+    y: number,
+    z: number,
+    yaw = 0,
+    pitch = 0,
+    roll = 0,
+    fov = 90,
+  ): void {
     this.x = x;
     this.y = y;
     this.z = z;
@@ -326,7 +383,7 @@ export class DroneFreecam {
     this.z += this.vz * dt;
 
     // Mouse look
-    this.yaw += (input.yawDelta ?? 0);
+    this.yaw += input.yawDelta ?? 0;
     this.pitch = Math.max(-89.9, Math.min(89.9, this.pitch + (input.pitchDelta ?? 0)));
 
     // Camera roll (Q/E)
@@ -642,6 +699,10 @@ export class DemoPlayer {
         pitch: interpolateRadians(p0.pitch, p1.pitch, alpha),
         roll: interpolateRadians(p0.roll ?? 0, p1.roll ?? 0, alpha),
         weapon: alpha < 0.5 ? p0.weapon : p1.weapon,
+        weaponId: alpha < 0.5 ? p0.weaponId : p1.weaponId,
+        // A step, not a blend: half-way into a scope is not a view anybody had.
+        scoped: alpha < 0.5 ? p0.scoped : p1.scoped,
+        zoom: alpha < 0.5 ? p0.zoom : p1.zoom,
         hp: alpha < 0.5 ? p0.hp : p1.hp,
         crouching: alpha < 0.5 ? p0.crouching : p1.crouching,
         sprinting: alpha < 0.5 ? p0.sprinting : p1.sprinting,

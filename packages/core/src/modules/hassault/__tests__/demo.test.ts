@@ -14,7 +14,12 @@ import {
   DollyPath,
   DemoRecorder,
   DemoPlayer,
+  heldWeapon,
+  heldZoom,
+  type DemoPlayerSnapshot,
 } from '../demo';
+import type { WeaponSpec } from '../api';
+import { setWeaponTable } from '../weapon-visuals';
 
 describe('HADEMO Demo Recording & Replay Suite', () => {
   describe('Spline & Math Utilities', () => {
@@ -215,10 +220,55 @@ describe('HADEMO Demo Recording & Replay Suite', () => {
     it('reads ids as strings and the duration from the frames when the header is short', () => {
       const demo = parseDemo(
         JSON.stringify({
-          header: { magic: 'HADEMO', version: 1, map: 'hd_pit', recordedAt: 0, tickRate: 30, playerNames: {}, durationMs: 0, pov: 7 },
+          header: {
+            magic: 'HADEMO',
+            version: 1,
+            map: 'hd_pit',
+            recordedAt: 0,
+            tickRate: 30,
+            playerNames: {},
+            durationMs: 0,
+            pov: 7,
+          },
           frames: [
-            { tick: 0, timestamp: 0, players: [{ id: 7, name: 'a', team: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, weapon: 2, hp: 100 }], events: [] },
-            { tick: 1, timestamp: 500, players: [{ id: 7, name: 'a', team: 0, x: 1, y: 0, z: 0, yaw: 0, pitch: 0, weapon: 2, hp: 100 }], events: [] },
+            {
+              tick: 0,
+              timestamp: 0,
+              players: [
+                {
+                  id: 7,
+                  name: 'a',
+                  team: 0,
+                  x: 0,
+                  y: 0,
+                  z: 0,
+                  yaw: 0,
+                  pitch: 0,
+                  weapon: 2,
+                  hp: 100,
+                },
+              ],
+              events: [],
+            },
+            {
+              tick: 1,
+              timestamp: 500,
+              players: [
+                {
+                  id: 7,
+                  name: 'a',
+                  team: 0,
+                  x: 1,
+                  y: 0,
+                  z: 0,
+                  yaw: 0,
+                  pitch: 0,
+                  weapon: 2,
+                  hp: 100,
+                },
+              ],
+              events: [],
+            },
           ],
         }),
       );
@@ -244,9 +294,24 @@ describe('HADEMO Demo Recording & Replay Suite', () => {
 
     it('round-trips a drawn body through a frame', () => {
       const row = {
-        id: 'p3', name: 'Rook', team: 1, x: 4, y: 5, z: 6, yaw: 1.2, pitch: -0.3,
-        ground: true, stale: false, rtt: 0, hp: 40, alive: true, weapon: 4,
-        kills: 0, deaths: 0, bot: false, crouch: 0.5,
+        id: 'p3',
+        name: 'Rook',
+        team: 1,
+        x: 4,
+        y: 5,
+        z: 6,
+        yaw: 1.2,
+        pitch: -0.3,
+        ground: true,
+        stale: false,
+        rtt: 0,
+        hp: 40,
+        alive: true,
+        weapon: 4,
+        kills: 0,
+        deaths: 0,
+        bot: false,
+        crouch: 0.5,
       };
       expect(rowFromSnapshot(snapshotFromRow(row))).toEqual(row);
     });
@@ -262,12 +327,48 @@ describe('HADEMO Demo Recording & Replay Suite', () => {
       player.load(
         parseDemo(
           JSON.stringify({
-            header: { magic: 'HADEMO', version: 1, map: 'hd_pit', recordedAt: 0, tickRate: 30, playerNames: {}, durationMs: 1000, pov: 'you' },
+            header: {
+              magic: 'HADEMO',
+              version: 1,
+              map: 'hd_pit',
+              recordedAt: 0,
+              tickRate: 30,
+              playerNames: {},
+              durationMs: 1000,
+              pov: 'you',
+            },
             frames: [
-              { tick: 0, timestamp: 0, players: [
-                { id: 'p1', name: 'b', team: 1, x: 9, y: 9, z: 0, yaw: 0, pitch: 0, weapon: 2, hp: 100 },
-                { id: 'you', name: 'a', team: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, weapon: 4, hp: 100 },
-              ], events: [] },
+              {
+                tick: 0,
+                timestamp: 0,
+                players: [
+                  {
+                    id: 'p1',
+                    name: 'b',
+                    team: 1,
+                    x: 9,
+                    y: 9,
+                    z: 0,
+                    yaw: 0,
+                    pitch: 0,
+                    weapon: 2,
+                    hp: 100,
+                  },
+                  {
+                    id: 'you',
+                    name: 'a',
+                    team: 0,
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    yaw: 0,
+                    pitch: 0,
+                    weapon: 4,
+                    hp: 100,
+                  },
+                ],
+                events: [],
+              },
             ],
           }),
         ),
@@ -297,6 +398,198 @@ describe('HADEMO Demo Recording & Replay Suite', () => {
         expect(cam.x / len).toBeCloseTo(Math.cos(yaw));
         expect(cam.y / len).toBeCloseTo(Math.sin(yaw));
       }
+    });
+  });
+
+  describe('what was in their hands, and whether they were scoped', () => {
+    // Just the fields the replay reads. The served table's order is the
+    // recording's; the "grown" one has a new gun ahead of the sniper.
+    const spec = (id: string, zoomLevels: number[] = []) =>
+      ({ id, zoomLevels }) as unknown as WeaponSpec;
+    const TABLE = [
+      spec('knife'),
+      spec('pistol'),
+      spec('assault'),
+      spec('shotgun'),
+      spec('sniper', [2, 4]),
+    ];
+    const GROWN = [
+      spec('knife'),
+      spec('pistol'),
+      spec('assault'),
+      spec('smg'),
+      spec('shotgun'),
+      spec('sniper', [2, 4]),
+    ];
+    afterEach(() => {
+      setWeaponTable([]);
+      vi.restoreAllMocks();
+    });
+
+    const body = (over: Partial<DemoPlayerSnapshot>): DemoPlayerSnapshot => ({
+      id: 'you',
+      name: 'a',
+      team: 0,
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      weapon: 4,
+      hp: 100,
+      ...over,
+    });
+
+    it('plays a scoped sniper kill back holding the sniper, scoped for the scoped stretch', () => {
+      let now = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      const rec = new DemoRecorder();
+      rec.start('hd_pit', {}, 'you');
+      // Rifle out, then the sniper, scoped to 4x for the shot, then off.
+      const timeline: Partial<DemoPlayerSnapshot>[] = [
+        { weapon: 2, weaponId: 'assault', scoped: 0, zoom: 1 },
+        { weapon: 4, weaponId: 'sniper', scoped: 0, zoom: 1 },
+        { weapon: 4, weaponId: 'sniper', scoped: 2, zoom: 4 },
+        { weapon: 4, weaponId: 'sniper', scoped: 2, zoom: 4 },
+        { weapon: 4, weaponId: 'sniper', scoped: 0, zoom: 1 },
+      ];
+      for (const t of timeline) {
+        rec.recordFrame([body(t)]);
+        now += 100;
+      }
+      const demo = parseDemo(rec.exportJson());
+
+      const player = new DemoPlayer();
+      player.load(demo);
+      const at = (ms: number) => {
+        player.seek(ms);
+        return player.sampleCurrentFrame().players.find((p) => p.id === 'you')!;
+      };
+      expect(heldWeapon(at(0), TABLE)?.id).toBe('assault');
+      expect(heldZoom(at(0), TABLE)).toBe(1);
+      // Inside the scoped stretch, between frames too: a step, never half a scope.
+      for (const ms of [200, 250, 300]) {
+        const p = at(ms);
+        expect(heldWeapon(p, TABLE)?.id).toBe('sniper');
+        expect(p.scoped).toBe(2);
+        expect(heldZoom(p, TABLE)).toBe(4);
+      }
+      expect(at(400).scoped).toBe(0);
+      expect(heldZoom(at(400), TABLE)).toBe(1);
+    });
+
+    it('finds the gun by id when the roster grew since the recording', () => {
+      const p = body({ weapon: 4, weaponId: 'sniper' });
+      // Index 4 is now the shotgun; the id still says sniper.
+      expect(heldWeapon(p, GROWN)?.id).toBe('sniper');
+      // An id this build has never heard of falls back to the index.
+      expect(heldWeapon(body({ weapon: 1, weaponId: 'railgun' }), GROWN)?.id).toBe('pistol');
+      // And the third-person prop is remapped the same way.
+      setWeaponTable(GROWN);
+      expect(rowFromSnapshot(p).weapon).toBe(5);
+    });
+
+    it('works out the magnification from the step when a frame has no zoom', () => {
+      expect(heldZoom(body({ scoped: 1 }), TABLE)).toBe(2);
+      expect(heldZoom(body({ scoped: 2 }), TABLE)).toBe(4);
+      expect(heldZoom(body({ scoped: 0, zoom: 4 }), TABLE)).toBe(1);
+    });
+
+    it('still plays a demo recorded before weaponId and scoped existed', () => {
+      // A frame as the recorder of 073f9053 wrote it: index only, no scope.
+      const old = parseDemo(
+        JSON.stringify({
+          header: {
+            magic: 'HADEMO',
+            version: 1,
+            map: 'hd_pit',
+            recordedAt: 0,
+            tickRate: 30,
+            playerNames: {},
+            durationMs: 100,
+            pov: 'you',
+          },
+          frames: [
+            {
+              tick: 0,
+              timestamp: 0,
+              players: [
+                {
+                  id: 'you',
+                  name: 'a',
+                  team: 0,
+                  x: 0,
+                  y: 0,
+                  z: 0,
+                  yaw: 0,
+                  pitch: 0,
+                  weapon: 4,
+                  hp: 100,
+                  crouch: 0,
+                  alive: true,
+                },
+              ],
+              events: [],
+            },
+            {
+              tick: 1,
+              timestamp: 100,
+              players: [
+                {
+                  id: 'you',
+                  name: 'a',
+                  team: 0,
+                  x: 1,
+                  y: 0,
+                  z: 0,
+                  yaw: 0,
+                  pitch: 0,
+                  weapon: 4,
+                  hp: 100,
+                  crouch: 0,
+                  alive: true,
+                },
+              ],
+              events: [],
+            },
+          ],
+          bookmarks: [],
+        }),
+      );
+      const player = new DemoPlayer();
+      player.load(old);
+      player.seek(50);
+      const p = player.sampleCurrentFrame().players[0];
+      expect(p.weaponId).toBeUndefined();
+      expect(p.scoped).toBeUndefined();
+      expect(heldWeapon(p, TABLE)?.id).toBe('sniper');
+      expect(heldZoom(p, TABLE)).toBe(1);
+      expect(rowFromSnapshot(p).weapon).toBe(4);
+    });
+
+    it("records the remote bodies' weapon by id too", () => {
+      setWeaponTable(TABLE);
+      const snap = snapshotFromRow({
+        id: 'p3',
+        name: 'Rook',
+        team: 1,
+        x: 0,
+        y: 0,
+        z: 0,
+        yaw: 0,
+        pitch: 0,
+        ground: true,
+        stale: false,
+        rtt: 0,
+        hp: 40,
+        alive: true,
+        weapon: 3,
+        kills: 0,
+        deaths: 0,
+        bot: false,
+        crouch: 0,
+      });
+      expect(snap.weaponId).toBe('shotgun');
     });
   });
 });

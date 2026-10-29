@@ -47,10 +47,16 @@ export interface ReplayBarProps {
   onBookmark: (index: number) => void;
   onFreecam: () => void;
   onClose: () => void;
+  /** How far an .mp4 export is, 0 to 1; `null` when none is running. */
+  exporting: number | null;
+  onExport: () => void;
+  onCancelExport: () => void;
 }
 
 export function ReplayBar(props: ReplayBarProps) {
   const ended = !props.playing && props.timeMs >= props.durationMs - 1;
+  // An export records the demo as it plays, so nothing may move it meanwhile.
+  const busy = props.exporting !== null;
   return (
     <div
       style={{
@@ -84,8 +90,38 @@ export function ReplayBar(props: ReplayBarProps) {
         </span>
       </div>
 
+      {busy && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <span style={{ ...label, color: ACCENT }}>Exporting MP4</span>
+          <div
+            role="progressbar"
+            aria-label="Export progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round((props.exporting ?? 0) * 100)}
+            style={{ flex: 1, height: 2, background: 'var(--border, rgba(255,255,255,0.12))' }}
+          >
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                background: ACCENT,
+                // Scaled rather than resized, so the fill never re-lays out the bar.
+                transform: `scaleX(${Math.min(1, props.exporting ?? 0)})`,
+                transformOrigin: 'left center',
+                transition: 'transform 0.1s linear',
+              }}
+            />
+          </div>
+          <span style={{ fontFamily: MONO, fontSize: '0.75rem', color: DIM, minWidth: '3.5em' }}>
+            {Math.floor((props.exporting ?? 0) * 100)}%
+          </span>
+          <button onClick={props.onCancelExport}>Cancel</button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <button onClick={props.onToggle} style={{ minWidth: 76 }}>
+        <button onClick={props.onToggle} disabled={busy} style={{ minWidth: 76 }}>
           {props.playing ? 'Pause' : ended ? 'Replay' : 'Play'}
         </button>
         <input
@@ -96,12 +132,14 @@ export function ReplayBar(props: ReplayBarProps) {
           step={10}
           value={Math.round(props.timeMs)}
           onChange={(e) => props.onSeek(Number(e.target.value))}
+          disabled={busy}
           style={{ flex: 1, accentColor: ACCENT }}
         />
         <select
           value={String(props.speed)}
           onChange={(e) => props.onSpeed(Number(e.target.value))}
           aria-label="Playback speed"
+          disabled={busy}
           style={{ width: 76, padding: '0 0.4rem', fontFamily: MONO }}
         >
           {SPEEDS.map((sp) => (
@@ -118,6 +156,13 @@ export function ReplayBar(props: ReplayBarProps) {
         >
           {props.freecam ? 'Drone on' : 'Drone'}
         </button>
+        <button
+          onClick={props.onExport}
+          disabled={busy}
+          title="Record the demo to an .mp4 from the start, at this speed, as it plays. Keep the pane visible until it is done."
+        >
+          Export MP4
+        </button>
         <button onClick={props.onClose}>Close</button>
       </div>
 
@@ -130,6 +175,7 @@ export function ReplayBar(props: ReplayBarProps) {
               if (e.target.value !== '') props.onBookmark(Number(e.target.value));
             }}
             aria-label="Jump to a frag"
+            disabled={busy}
             style={{ flex: 1, padding: '0 0.4rem', fontFamily: MONO }}
           >
             <option value="">
@@ -148,7 +194,15 @@ export function ReplayBar(props: ReplayBarProps) {
 }
 
 /** Why a demo would not load. Over the pause menu, which is where it was opened. */
-export function ReplayNotice({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+export function ReplayNotice({
+  title = 'Demo not loaded',
+  message,
+  onDismiss,
+}: {
+  title?: string;
+  message: string;
+  onDismiss: () => void;
+}) {
   return (
     <div
       role="alert"
@@ -169,7 +223,7 @@ export function ReplayNotice({ message, onDismiss }: { message: string; onDismis
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={label}>Demo not loaded</div>
+        <div style={label}>{title}</div>
         <div style={{ fontSize: '0.8rem', marginTop: 2 }}>{message}</div>
       </div>
       <button onClick={onDismiss}>Dismiss</button>

@@ -223,12 +223,15 @@ import {
   DemoPlayer,
   DemoRecorder,
   freecamFromView,
+  heldWeapon,
+  heldZoom,
   parseDemo,
   rowFromSnapshot,
   snapshotFromRow,
   viewFromFreecam,
   type DemoBookmark,
 } from './demo';
+import { ExportError, ReplayVideoRecorder, replayVideoName, saveVideo } from './replay-export';
 import { KillFeed } from './panels/KillFeed';
 import { KillCardDeck } from './panels/KillCardDeck';
 import {
@@ -639,13 +642,32 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const [isReplaying, setIsReplaying] = useState(false);
   const isReplayingRef = useRef(false);
   isReplayingRef.current = isReplaying;
+  /**
+   * What the recorder held and how far they were zoomed, this frame, while a
+   * demo is watched from behind their eyes; `null` otherwise (a match, the
+   * range, the drone). The hands, the scope and the FOV read this instead of
+   * `ShotController`, which during a replay is still the *viewer's* gun.
+   */
+  const replayViewRef = useRef<{
+    weapon: WeaponSpec | undefined;
+    scoped: number;
+    zoom: number;
+    alive: boolean;
+  } | null>(null);
   const [replayTime, setReplayTime] = useState(0);
   const [replayDuration, setReplayDuration] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1.0);
   const [replayBookmarks, setReplayBookmarks] = useState<DemoBookmark[]>([]);
   const [cleanView, setCleanView] = useState(false);
+  const cleanViewRef = useRef(cleanView);
+  cleanViewRef.current = cleanView;
   const [freecamActive, setFreecamActive] = useState(false);
+  /** The .mp4 export running, if any. The frame loop feeds it every drawn frame. */
+  const exportRef = useRef<ReplayVideoRecorder | null>(null);
+  /** How far the export is, 0 to 1; `null` when none is running. */
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [exportError, setExportError] = useState('');
 
   useEffect(() => {
     if (!isRecording) return;
@@ -715,9 +737,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         try {
           demo = parseDemo(String(e.target?.result ?? ''));
         } catch (err) {
-          setReplayError(
-            err instanceof DemoError ? err.message : 'This demo could not be read.',
-          );
+          setReplayError(err instanceof DemoError ? err.message : 'This demo could not be read.');
           return;
         }
         setReplayError('');
@@ -772,6 +792,56 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   }, []);
   const toggleFreecamRef = useRef(toggleFreecam);
   toggleFreecamRef.current = toggleFreecam;
+
+  /**
+   * Record the demo to an .mp4: from the top, at the bar's speed, as it plays.
+   * The frame loop hands each drawn frame to the recorder and finishes the file
+   * at the end (`finishExport`).
+   */
+  const startExport = useCallback(() => {
+    if (exportRef.current) return;
+    const canvas = mountRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    let rec: ReplayVideoRecorder;
+    try {
+      rec = new ReplayVideoRecorder(canvas.width, canvas.height);
+    } catch (err) {
+      setExportError(
+        err instanceof ExportError ? err.message : 'The video export could not start.',
+      );
+      return;
+    }
+    setExportError('');
+    const demo = demoPlayerRef.current;
+    demo.seek(0);
+    demo.play();
+    exportRef.current = rec;
+    setExportProgress(0);
+    setReplayPlaying(true);
+    setReplayTime(0);
+  }, []);
+
+  /** Throw an export away: the bar's Cancel, or leaving the demo mid-export. */
+  const cancelExport = useCallback(() => {
+    exportRef.current?.cancel();
+    exportRef.current = null;
+    setExportProgress(null);
+  }, []);
+
+  /** The demo reached its end with an export running: the file, saved. */
+  function finishExport() {
+    const rec = exportRef.current;
+    if (!rec) return;
+    exportRef.current = null;
+    setExportProgress(null);
+    const map = demoPlayerRef.current.demo?.header.map ?? '';
+    rec
+      .stop()
+      .then((blob) => saveVideo(blob, replayVideoName(map)))
+      .catch((err: unknown) =>
+        setExportError(err instanceof ExportError ? err.message : 'The video could not be saved.'),
+      );
+  }
 
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1183,11 +1253,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // Same for the input handlers, which are installed once: a rebind or a new
   // sensitivity has to reach them without tearing down pointer lock to do it.
   const sensitivityRef = useRef(sensitivity);
+  /** The zoom the view is at: the replay's recorder while one is watched, else ours. */
+  function viewMagnification(): number {
+    return replayViewRef.current?.zoom ?? shotsRef.current?.magnification() ?? 1;
+  }
   // Divided by the same magnification the FOV is, so a given mouse movement
   // sweeps the same *distance on screen* whatever the zoom. Without this, 4×
   // multiplies every twitch by four and the scope is unusable at exactly the
   // range it exists for. Recomputed on render, and a zoom change is a render.
-  sensitivityRef.current = sensitivity / (shotsRef.current?.magnification() ?? 1);
+  sensitivityRef.current = sensitivity / viewMagnification();
   const codesRef = useRef(codes);
   codesRef.current = codes;
   const crouchToggleRef = useRef(crouchToggle);
@@ -1338,7 +1412,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // field of view, it does not enlarge anything. `scoped` is in the deps
     // because the magnification is read off the controller, which React does not
     // otherwise watch.
-    sceneRef.current?.setFov(fov / (shotsRef.current?.magnification() ?? 1));
+    sceneRef.current?.setFov(fov / viewMagnification());
   }, [fov, scoped, progress.renderer]);
 
   // The agents on offer. A failure is none offered: everyone wears the team
@@ -2256,7 +2330,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
       const frame = (now: number) => {
         raf = requestAnimationFrame(frame);
-        const dt = Math.max(0, (now - last) / 1000);
+        // Capped while a video is exported: a hidden pane draws nothing, and the
+        // first frame back would otherwise jump the demo by however long it was
+        // hidden — content the file would simply not have.
+        const dt = Math.min(exportRef.current ? 0.05 : Infinity, Math.max(0, (now - last) / 1000));
         last = now;
 
         // Belt and braces for the frame or two between the native client
@@ -2276,6 +2353,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // simulated, and nothing is sent.
         const replaying = isReplayingRef.current;
         let replayRows: PlayerRow[] | null = null;
+        if (!replaying) replayViewRef.current = null;
         if (replaying) {
           const demo = demoPlayerRef.current;
           demo.update(dt);
@@ -2301,16 +2379,29 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             player.pitch = pov.pitch;
             player.crouch = pov.crouch ?? 0;
           }
+          const table = shots?.weapons ?? [];
+          replayViewRef.current =
+            pov && !cam.active
+              ? {
+                  weapon: heldWeapon(pov, table),
+                  scoped: pov.scoped ?? 0,
+                  zoom: heldZoom(pov, table),
+                  alive: pov.alive ?? pov.hp > 0,
+                }
+              : null;
           // Through the freecam every body is drawn, the recorder's included;
           // behind its eyes, everybody else.
-          replayRows = sample.players
-            .filter((p) => cam.active || p !== pov)
-            .map(rowFromSnapshot);
+          replayRows = sample.players.filter((p) => cam.active || p !== pov).map(rowFromSnapshot);
           replayClock -= dt;
           if (replayClock <= 0) {
             replayClock = 0.1;
             setReplayTime(demo.currentTimeMs);
             setReplayPlaying(demo.isPlaying);
+            if (exportRef.current) {
+              setExportProgress(
+                demo.currentTimeMs / Math.max(1, demo.demo?.header.durationMs ?? 1),
+              );
+            }
           }
         }
 
@@ -2661,9 +2752,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // One line out of the controller, and only on a change: the zoom step
         // drives the FOV, the look sensitivity and the scope overlay, all of
         // which are React's.
-        if (shots && shots.scoped !== scopedRef.current) {
-          scopedRef.current = shots.scoped;
-          setScoped(shots.scoped);
+        // In a replay the step is the recorder's, and the drone is never scoped.
+        const zoomStep = replaying ? (replayViewRef.current?.scoped ?? 0) : (shots?.scoped ?? 0);
+        if (zoomStep !== scopedRef.current) {
+          scopedRef.current = zoomStep;
+          setScoped(zoomStep);
         }
 
         if (session) {
@@ -2705,6 +2798,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 yaw: player.yaw,
                 pitch: player.pitch,
                 weapon: shots?.slot ?? 0,
+                weaponId: shots?.weapon?.id,
+                scoped: shots?.scoped ?? 0,
+                zoom: shots?.magnification() ?? 1,
                 hp: you?.hp ?? 100,
                 crouch: player.crouch,
                 alive,
@@ -2933,7 +3029,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (acceptsGameInput(phaseRef.current)) {
           backdrop.setOpacity(0);
           // Smooth ADS camera zoom transition
-          const targetFov = fov / (shotsRef.current?.magnification() ?? 1);
+          const targetFov = fov / viewMagnification();
           if (Math.abs(camera.fov - targetFov) > 0.01) {
             camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 14);
             camera.updateProjectionMatrix();
@@ -3004,7 +3100,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // `_handle_combat` cancels an in-flight reload on a switch. Equipping
           // a grenade would then silently abort a reload.
           const nades = nadesRef.current;
-          const holdingNade = nades?.equipped ?? false;
+          // Behind a demo's eyes: the recorder's gun, not the viewer's.
+          const replayView = replayViewRef.current;
+          const holdingNade = !replaying && (nades?.equipped ?? false);
           if (holdingNade !== nadeHeldRef.current) {
             nadeHeldRef.current = holdingNade;
             shots?.setBlocked(holdingNade);
@@ -3054,8 +3152,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           }
           if (shots) (window as any).__SHOTS = shots;
           // Drawn as the base model it borrows; skinned as itself.
-          const realWeapon = shots?.weapon?.id ?? '';
-          const baseWeapon = shots?.weapon ? visualId(shots.weapon) : '';
+          const handWeapon = replayView ? replayView.weapon : shots?.weapon;
+          const realWeapon = handWeapon?.id ?? '';
+          const baseWeapon = handWeapon ? visualId(handWeapon) : '';
           const heldWeapon = holdingNade ? `nade_${nades?.selectedSpec?.id ?? 'he'}` : baseWeapon;
           if (heldWeapon && heldWeapon !== lastHeldWeaponRef.current) {
             if (lastHeldWeaponRef.current !== '') {
@@ -3145,7 +3244,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             pitch: player.pitch,
             strafe,
             // The drone is nobody's eyes, so nobody's gun is in front of it.
-            visible: alive && !(replaying && demoPlayerRef.current.freecam.active),
+            visible: replaying ? (replayView?.alive ?? false) : alive,
             sinceLanded: Math.max(0, player.t - player.landedAt),
             ads: holdingNade ? 0 : scopedRef.current > 0 ? 1 : 0,
             pinPulled: holdingNade && (nades?.pinPulled ?? false),
@@ -3195,6 +3294,21 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // of the canvas just drawn, and the drawing buffer is gone by the next task.
         flashLayer.frame(dt, renderer.domElement);
         audioRef.current?.setMuffle(flashLayer.state.alpha);
+        // The .mp4 export, fed here for the same reason: the frame is only
+        // readable in the task that drew it. The scope is drawn on, since on
+        // screen it is DOM over the canvas rather than in it.
+        const exporting = exportRef.current;
+        if (exporting) {
+          const demo = demoPlayerRef.current;
+          const live = (demo.isPlaying || demo.ended) && !document.hidden;
+          exporting.setActive(live);
+          if (live) {
+            const view = replayViewRef.current;
+            const zoom = !cleanViewRef.current && view && view.scoped > 0 ? view.zoom : 0;
+            exporting.frame(renderer.domElement, zoom);
+          }
+          if (demo.ended) finishExport();
+        }
 
         fpsAccum += dt;
         fpsFrames += 1;
@@ -4472,6 +4586,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // Close, or Leave in the pause menu Escape opens over it.
     const demo = demoPlayerRef.current;
     demo.pause();
+    cancelExport();
     demo.freecam.active = false;
     setFreecamActive(false);
     setIsReplaying(false);
@@ -4486,8 +4601,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     releaseCapture();
     if (!standalone) unlockEscape();
     props.onExit?.();
-  }, [releaseCapture, props.onExit, standalone]);
-
+  }, [releaseCapture, cancelExport, props.onExit, standalone]);
 
   // If launched with an initial room (e.g. from an invite link in assault-web),
   // join it automatically once the map geometry has loaded.
@@ -4646,7 +4760,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const showKilled = now - flash.killed < FLASH_MS * 2;
   const showHurt = now - flash.hurt < FLASH_MS * 2;
   const crosshairCone = shotsRef.current?.crosshairCone() ?? 0;
-  const magnification = shotsRef.current?.magnification() ?? 1;
+  const magnification = viewMagnification();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -5281,17 +5395,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           !online &&
           !isReplaying &&
           drillStatus &&
-          drillStatus.phase !== 'done' && (
-          <DrillClock status={drillStatus} />
-        )}
+          drillStatus.phase !== 'done' && <DrillClock status={drillStatus} />}
         {phase === 'playing' &&
           net.status === 'idle' &&
           !isReplaying &&
           !drillStatus &&
           !menuOpen &&
           !nativeRunning && (
-          <RangeHint drill={drills.find((d) => d.id === rangeDrill)?.name ?? null} />
-        )}
+            <RangeHint drill={drills.find((d) => d.id === rangeDrill)?.name ?? null} />
+          )}
         {phase === 'playing' && !online && !isReplaying && drillStatus?.phase === 'done' && (
           <DrillCard
             status={drillStatus}
@@ -5360,6 +5472,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           />
         )}
 
+        {/* A demo is watched with the mouse free, so the HUD below never shows;
+            the recorder's scope still has to, or a scoped kill plays back as a
+            hip-fire one at 4x. */}
+        {isReplaying && !locked && !cleanView && scoped > 0 && (
+          <ScopeOverlay magnification={magnification} hit={false} killed={false} />
+        )}
         {locked && !cleanView && (
           <>
             {scoped > 0 ? (
@@ -5637,10 +5755,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }}
             onFreecam={toggleFreecam}
             onClose={exitToMenu}
+            exporting={exportProgress}
+            onExport={startExport}
+            onCancelExport={cancelExport}
           />
         )}
-        {replayError && (
-          <ReplayNotice message={replayError} onDismiss={() => setReplayError('')} />
+        {replayError && <ReplayNotice message={replayError} onDismiss={() => setReplayError('')} />}
+        {exportError && (
+          <ReplayNotice
+            title="Video not exported"
+            message={exportError}
+            onDismiss={() => setExportError('')}
+          />
         )}
       </div>
     </div>

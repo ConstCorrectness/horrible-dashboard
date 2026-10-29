@@ -4386,6 +4386,23 @@ them:
   Nothing is simulated or sent. The mouse stays free, because the bar is the
   thing to use; a click on the world takes it only for the **Drone** camera
   (F3 or C), which steers by it and starts a step behind the recorder.
+- **What was in their hands.** Your own frame also carries `weaponId` and the
+  scope (`scoped`, the zoom step, and `zoom`, the magnification it meant).
+  Behind the recorder's eyes, the hands, the scope overlay and the FOV read
+  those (`heldWeapon`, `heldZoom`, through `replayViewRef`) instead of
+  `ShotController`, which during a replay is still the *viewer's* gun — that
+  is why every replay used to show whatever you last held. The id is preferred
+  to the index, so a roster that grew since the recording does not hand you a
+  different gun; a demo older than these fields falls back to the index and
+  plays unscoped.
+- **Export MP4** on the bar records the demo from the top, at the bar's speed,
+  as it plays (`replay-export.ts`): each drawn frame is composited onto a 2D
+  canvas with the scope drawn on (on screen it is DOM over the canvas, not in
+  it) and recorded by `MediaRecorder` as `video/mp4` (H.264). A shell that
+  cannot record MP4 says so instead of offering a WebM. WebCodecs was not used
+  because it needs a secure context, which a pane is not always in. The recorder
+  pauses with the demo and while the pane is hidden; keep it visible to finish.
+  Video only, no sound.
 - **`parseDemo` refuses rather than loads** a file that is not a demo or has
   no frames, and says so on screen.
 
