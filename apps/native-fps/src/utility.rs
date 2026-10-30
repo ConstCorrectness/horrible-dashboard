@@ -220,7 +220,15 @@ impl GrenadeController {
     }
 
     /// A throw key went down this frame. Edge, not level — see the module docs.
+    ///
+    /// **Only with a grenade in hand.** G used to throw straight from the
+    /// pouch with the rifle still up. A press with nothing equipped is dropped,
+    /// not queued, so equipping afterwards cannot let a stale one out. Mirrors
+    /// `GrenadeController.press` in the browser client.
     pub fn press(&mut self, lob: bool) {
+        if self.equipped.is_none() {
+            return;
+        }
         self.pin_pulled = false;
         self.pull_lob = false;
         self.want_throw = true;
@@ -334,6 +342,12 @@ mod tests {
         }
     }
 
+    /// Take the readied grenade in hand and press throw: what 6-9 then G does.
+    fn press(g: &mut GrenadeController, lob: bool) {
+        g.equip(g.selected());
+        g.press(lob);
+    }
+
     fn loadout() -> GrenadeController {
         GrenadeController::new(vec![
             spec("he", 1),
@@ -348,7 +362,7 @@ mod tests {
         // The bug this is the whole shape of the type for: sixty throws a
         // second, one accepted, an empty pouch and no explanation.
         let mut g = loadout();
-        g.press(false);
+        press(&mut g, false);
         assert!(g.frame(0.0, None).throwing);
         for frame in 1..60 {
             assert_eq!(g.frame(f64::from(frame) * 16.0, None), ThrowIntent::NONE);
@@ -360,14 +374,14 @@ mod tests {
     fn the_cooldown_refuses_a_second_press_and_keeps_the_grenade() {
         let mut g = loadout();
         g.select(1);
-        g.press(false);
+        press(&mut g, false);
         assert!(g.frame(0.0, None).throwing);
-        g.press(false);
+        press(&mut g, false);
         assert_eq!(g.frame(100.0, None), ThrowIntent::NONE);
         // Refused, so it is still in the pouch — a refusal that spent one would
         // be worse than the double throw it is refusing.
         assert_eq!(g.count_of(1), 1);
-        g.press(false);
+        press(&mut g, false);
         assert!(g.frame(THROW_COOLDOWN_MS + 1.0, None).throwing);
         assert_eq!(g.count_of(1), 0);
     }
@@ -375,13 +389,13 @@ mod tests {
     #[test]
     fn an_empty_slot_throws_nothing_and_readies_the_next_one_you_have() {
         let mut g = loadout();
-        g.press(false);
+        press(&mut g, false);
         g.frame(0.0, None);
         // The HE is gone, so the readied slot moves rather than leaving the
         // player holding an empty hand.
         assert_eq!(g.selected(), 1);
         g.select(0);
-        g.press(false);
+        press(&mut g, false);
         assert_eq!(g.frame(5000.0, None), ThrowIntent::NONE);
     }
 
@@ -391,7 +405,7 @@ mod tests {
         // have left the player holding nothing.
         let mut g = loadout();
         g.equip(0);
-        g.press(false);
+        press(&mut g, false);
         g.frame(0.0, None);
         assert_eq!(g.count_of(0), 0);
         g.equip(0);
@@ -404,7 +418,7 @@ mod tests {
     fn the_underhand_is_the_same_throw_with_a_flag() {
         let mut g = loadout();
         g.select(2);
-        g.press(true);
+        press(&mut g, true);
         assert_eq!(
             g.frame(0.0, None),
             ThrowIntent {
@@ -421,7 +435,7 @@ mod tests {
         // prediction is only ever a guess about a round trip.
         let mut g = loadout();
         g.select(1);
-        g.press(false);
+        press(&mut g, false);
         g.frame(0.0, None);
         assert_eq!(g.count_of(1), 1);
 
@@ -455,7 +469,7 @@ mod tests {
             alive: false,
             ..Default::default()
         };
-        g.press(false);
+        press(&mut g, false);
         assert_eq!(g.frame(0.0, Some(&you)), ThrowIntent::NONE);
         assert_eq!(g.count_of(0), 1);
     }
@@ -463,21 +477,41 @@ mod tests {
     #[test]
     fn nothing_served_means_a_throw_key_that_does_nothing_not_a_guess() {
         let mut g = GrenadeController::default();
-        g.press(false);
+        press(&mut g, false);
         assert_eq!(g.frame(0.0, None), ThrowIntent::NONE);
         assert!(g.selected_spec().is_none());
     }
 
     #[test]
-    fn respawning_refills() {
+    fn the_throw_key_does_nothing_with_a_gun_in_hand() {
+        // G is not a second trigger on every weapon.
         let mut g = loadout();
         g.press(false);
+        assert_eq!(g.frame(0.0, None), ThrowIntent::NONE);
+        g.press(true);
+        assert_eq!(g.frame(5000.0, None), ThrowIntent::NONE);
+        assert_eq!(g.count_of(0), 1);
+    }
+
+    #[test]
+    fn a_press_before_equipping_is_dropped_not_queued() {
+        let mut g = loadout();
+        g.press(false);
+        g.equip(0);
+        assert_eq!(g.frame(0.0, None), ThrowIntent::NONE);
+        assert!(g.equipped());
+    }
+
+    #[test]
+    fn respawning_refills() {
+        let mut g = loadout();
+        press(&mut g, false);
         g.frame(0.0, None);
         g.reset();
         assert_eq!(g.count_of(0), 1);
         // And the cooldown goes with it: a respawn is a new life, not the same
         // one holding a stopwatch.
-        g.press(false);
+        press(&mut g, false);
         assert!(g.frame(1.0, None).throwing);
     }
 }

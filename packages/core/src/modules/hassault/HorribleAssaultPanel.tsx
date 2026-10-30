@@ -4013,6 +4013,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // filtered above, which is what makes this one press.
       // Still bound, and still working: a player who has rebound the mouse, or
       // simply learned these, should not lose them because the default moved.
+      // Only with a grenade in hand, though: `press` drops it otherwise.
       if (action === 'throw') nadesRef.current?.press(false, 1.0);
       if (action === 'lob') nadesRef.current?.press(true, 0.42);
       keysRef.current.add(action);

@@ -2099,8 +2099,13 @@ for why the grenade is *equipped* rather than merely readied, and why a global
 right-click toss would have been wrong.
 
 `Digit6`–`Digit9` therefore equip rather than select, and a weapon key puts the
-pouch away. `KeyG` and `KeyH` are unchanged and still throw: a player who has
-learned them should not lose them because the default moved.
+pouch away. `KeyG` and `KeyH` still throw: a player who has learned them should
+not lose them because the default moved. They throw **only the grenade in your
+hand**, though. With a gun up they do nothing, which keeps G from being a second
+trigger on every weapon. A press made before equipping is dropped, not queued,
+so `G` then `6` does not throw the moment the grenade comes up. The gate is in
+`press()` on both clients (`utility.ts`, `apps/native-fps/src/utility.rs`). The
+server still knows nothing about equipping.
 
 Bindings are keyed by `KeyboardEvent.code` (the physical key), not `key` (the
 character it produces) — WASD is a *shape* under the fingers, and reading `key`
@@ -6588,8 +6593,9 @@ the players are not subject to. It carries the same four:
   you throw and is overwritten by `you.nades` on the next snapshot, so a throw the
   server refused gives the grenade back rather than leaving the HUD one short
   until the next respawn.
-- **Selecting only readies.** `6`–`9` pick a grenade, `G` throws it and `H` lobs
-  it underhand — the browser's `DEFAULT_CONTROLS`, key for key. When the moment
+- **Selecting equips; G throws only what is equipped.** `6`–`9` take a grenade
+  in hand, then `G` throws it and `H` lobs it underhand — the browser's
+  `DEFAULT_CONTROLS`, key for key. With a gun up, `G` does nothing. When the moment
   you throw a smoke is a different decision from which smoke you are holding, a
   select-that-throws cannot express waiting.
 - **A `SelfState` with no inventory does not empty the pouch.** Train produces one,
@@ -10099,7 +10105,7 @@ The skin system provides distinct faction styling and collectible operator skins
   (`rating.py`, `ranked_mmr.py`) is frozen; it is read only when the game server
   cannot be.
 - **Nothing binds keys yet.** The native client's controls are fixed (WASD,
-  space, shift, R, 1–5, 6–9 to ready a grenade, G to throw and H to lob, right
+  space, shift, R, 1–5, 6–9 to equip a grenade, G to throw it and H to lob, right
   mouse to scope, Escape for the menu); the pane's
   rebindable `hassault.controls` map is not read. The menu has a Controls page
   with sensitivity on it and nothing else, which is where rebinding will land.

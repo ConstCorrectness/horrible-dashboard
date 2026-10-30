@@ -223,8 +223,14 @@ export class GrenadeController {
 
   /**
    * A throw key went down this frame. Edge, not level — see the class docstring.
+   *
+   * **Only with a grenade in hand.** G used to throw straight from the pouch
+   * with the rifle still up, which made equipping optional and the throw a
+   * second trigger on every gun. A press with nothing equipped is dropped, not
+   * queued: equipping afterwards must not let a stale press out.
    */
   press(lob = false, power?: number): void {
+    if (this.equippedSlot < 0) return;
     this.pinPulledState = false;
     this.pullLobState = false;
     this.pullPowerState = undefined;

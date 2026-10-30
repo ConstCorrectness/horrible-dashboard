@@ -57,10 +57,16 @@ function you(overrides: Partial<SelfState> = {}): SelfState {
   };
 }
 
+/** Take the readied grenade in hand and press throw: what 6-9 then G does. */
+function press(c: GrenadeController, lob = false, power?: number): void {
+  c.equip(c.selected);
+  c.press(lob, power);
+}
+
 describe('throwing is edge-triggered', () => {
   it('one press is one throw, however many frames it spans', () => {
     const c = controller();
-    c.press();
+    press(c);
     expect(c.frame(1000, null).throw).toBe(true);
     // The key is still down as far as the panel is concerned, but nothing was
     // pressed *again*, so nothing else goes out.
@@ -71,31 +77,31 @@ describe('throwing is edge-triggered', () => {
   it('refuses a second throw inside the cooldown', () => {
     const c = controller();
     c.select(1); // flash, two of them
-    c.press();
+    press(c);
     expect(c.frame(1000, null).throw).toBe(true);
-    c.press();
+    press(c);
     expect(c.frame(1000 + THROW_COOLDOWN_MS - 50, null).throw).toBe(false);
-    c.press();
+    press(c);
     expect(c.frame(1000 + THROW_COOLDOWN_MS + 10, null).throw).toBe(true);
   });
 
   it('throws the selected slot', () => {
     const c = controller();
     c.select(2);
-    c.press();
+    press(c);
     expect(c.frame(1000, null).nade).toBe(2);
   });
 
   it('carries the underhand flag through', () => {
     const c = controller();
-    c.press(true);
+    press(c, true);
     expect(c.frame(1000, null).lob).toBe(true);
   });
 
   it('carries throw power scaling through (overhand 1.0, medium 0.72, underhand 0.42)', () => {
     const c = controller();
     c.select(0);
-    c.press(false, 1.0);
+    press(c, false, 1.0);
     const overhand = c.frame(1000, null);
     expect(overhand.throw).toBe(true);
     expect(overhand.lob).toBe(false);
@@ -103,13 +109,13 @@ describe('throwing is edge-triggered', () => {
 
     c.setSpecs(SPECS); // replenish
     c.select(1);
-    c.press(true, 0.72);
+    press(c, true, 0.72);
     const medium = c.frame(2000, null);
     expect(medium.throw).toBe(true);
     expect(medium.lob).toBe(true);
     expect(medium.power).toBe(0.72);
 
-    c.press(true, 0.42);
+    press(c, true, 0.42);
     const underhand = c.frame(3000, null);
     expect(underhand.throw).toBe(true);
     expect(underhand.lob).toBe(true);
@@ -124,14 +130,14 @@ describe('carry counts', () => {
     const c = controller();
     c.select(1);
     expect(c.countOf(1)).toBe(2);
-    c.press();
+    press(c);
     c.frame(1000, null);
     expect(c.countOf(1)).toBe(1);
   });
 
   it('takes the server’s answer over its own', () => {
     const c = controller();
-    c.press();
+    press(c);
     c.frame(1000, null);
     expect(c.countOf(0)).toBe(0);
     // The server says the throw never happened — a cooldown we mispredicted, or
@@ -145,10 +151,10 @@ describe('carry counts', () => {
     // fires at the moment one runs out, so this is the state a player reaches by
     // pressing that grenade's own key afterwards.
     const c = controller();
-    c.press();
+    press(c);
     c.frame(1000, null);
     c.select(0);
-    c.press();
+    press(c);
     expect(c.frame(1000 + THROW_COOLDOWN_MS + 10, null).throw).toBe(false);
   });
 
@@ -157,7 +163,7 @@ describe('carry counts', () => {
     // nothing to do in it.
     const c = controller();
     c.select(0);
-    c.press();
+    press(c);
     c.frame(1000, null);
     expect(c.selected).not.toBe(0);
     expect(c.countOf(c.selected)).toBeGreaterThan(0);
@@ -169,7 +175,7 @@ describe('selection', () => {
     // A better answer to "why did nothing happen" than silently readying a
     // different grenade than the one whose key was pressed.
     const c = controller();
-    c.press();
+    press(c);
     c.frame(1000, null); // spends the HE
     c.select(0);
     expect(c.selected).toBe(0);
@@ -179,7 +185,7 @@ describe('selection', () => {
   it('cycle skips empty slots', () => {
     const c = controller();
     c.select(0);
-    c.press();
+    press(c);
     c.frame(1000, null); // HE gone
     c.select(0);
     c.cycle();
@@ -196,7 +202,7 @@ describe('selection', () => {
 describe('being dead', () => {
   it('throws nothing', () => {
     const c = controller();
-    c.press();
+    press(c);
     expect(c.frame(1000, you({ alive: false })).throw).toBe(false);
   });
 
@@ -204,7 +210,7 @@ describe('being dead', () => {
     // A throw asked for a frame before dying must not come out three seconds
     // later at a spawn point, pointed wherever the camera happens to be.
     const c = controller();
-    c.press();
+    press(c);
     c.frame(1000, you({ alive: false }));
     expect(c.frame(2000, you()).throw).toBe(false);
   });
@@ -213,7 +219,7 @@ describe('being dead', () => {
 describe('reset', () => {
   it('refills, matching reset_loadout on the server', () => {
     const c = controller();
-    c.press();
+    press(c);
     c.frame(1000, null);
     c.reset();
     expect(c.countOf(0)).toBe(1);
@@ -260,6 +266,27 @@ describe('equipping', () => {
     const nades = controller();
     nades.equip(99);
     expect(nades.equipped).toBe(false);
+  });
+
+  it('the throw key does nothing with a gun in hand', () => {
+    // G is not a second trigger on every weapon: a grenade comes out only once
+    // it has been taken in hand with its own key.
+    const nades = controller();
+    nades.press(false);
+    expect(nades.frame(1000, you()).throw).toBe(false);
+    nades.press(true);
+    expect(nades.frame(2000, you()).throw).toBe(false);
+    expect(nades.countOf(0)).toBe(1);
+  });
+
+  it('does not keep a press made before equipping', () => {
+    // Dropped, not queued: G then 6 must not throw the moment the grenade
+    // comes up.
+    const nades = controller();
+    nades.press(false);
+    nades.equip(0);
+    expect(nades.frame(1000, you()).throw).toBe(false);
+    expect(nades.equipped).toBe(true);
   });
 
   it('puts the grenade away the instant it leaves the hand', () => {

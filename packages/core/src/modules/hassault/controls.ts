@@ -165,13 +165,13 @@ export const ACTIONS: readonly ActionDoc[] = [
     action: 'throw',
     label: 'Throw',
     group: 'Utility',
-    note: 'A full throw, where you are looking.',
+    note: 'A full throw of the grenade in your hand, where you are looking. Take one out first (6-9); with a gun up it does nothing.',
   },
   {
     action: 'lob',
     label: 'Underhand throw',
     group: 'Utility',
-    note: 'Short. This is how a smoke goes down at your own feet rather than across the room.',
+    note: 'Short, and only with a grenade in hand. This is how a smoke goes down at your own feet rather than across the room.',
   },
   {
     action: 'voice',
