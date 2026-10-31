@@ -126,11 +126,15 @@ jobs:
 
       # The signature the app checks before installing anything (updater.ts), and
       # the one installs still on the Tauri shell check too.
+      #
+      # The secrets keep their TAURI_SIGNING_* names (what the Tauri bundler read),
+      # but `tauri signer sign` reads TAURI_PRIVATE_KEY / TAURI_PRIVATE_KEY_PASSWORD
+      # — under the old names it fails with "Unable to find the private key".
       - name: Sign the update artifacts
         shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           shopt -s nullglob

@@ -5,6 +5,7 @@
   "private": true,
   "description": "Desktop shell for horrible-dashboard (Electron)",
   "author": "ConstCorrectness",
+  "homepage": "https://github.com/ConstCorrectness/horrible-dashboard",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
