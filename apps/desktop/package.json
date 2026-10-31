@@ -1,6 +1,7 @@
 {
   "name": "@horrible/desktop",
-  "version": "0.4.4",
+  "version": "0.5.0",
+  "desktopName": "horrible-dashboard.desktop",
   "private": true,
   "description": "Desktop shell for horrible-dashboard (Electron)",
   "author": "ConstCorrectness",

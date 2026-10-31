@@ -37,6 +37,8 @@
     "target": ["AppImage", "deb"],
     "category": "Development",
     "icon": "build/icon.png",
+    "syncDesktopName": true,
+    "extraResources": [{ "from": "build/icon.png", "to": "icon.png" }],
     "synopsis": "A local-first AI workbench and dashboard",
     "maintainer": "ConstCorrectness"
   },

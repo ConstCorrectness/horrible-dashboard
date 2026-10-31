@@ -4,7 +4,7 @@
 
 ![logo](./assets/logo.svg)
 
-![Version](https://img.shields.io/badge/version-0.4.4-blue?style=flat)
+![Version](https://img.shields.io/badge/version-0.5.0-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-20232A?style=flat&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-007ACC?style=flat&logo=typescript&logoColor=white)

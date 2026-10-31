@@ -52,6 +52,31 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal');
 }
 
+// --- Desktop identity: before the first window, or the shell can't match it -------
+
+/** electron-builder.json's `appId`; the installer stamps it on its shortcuts. */
+const APP_ID = 'com.horrible.dashboard';
+/** The installed `.desktop` file's name, and `desktopName` in package.json. */
+const LINUX_DESKTOP_ID = 'horrible-dashboard';
+
+if (process.platform === 'win32') {
+  // The taskbar groups windows by AppUserModelID. Unset, Electron's default
+  // (`electron.app.<name>`) differs from the ID on the Start-menu shortcut, so a
+  // pinned icon and the running window show as two buttons, and the running one
+  // can't be pinned back onto the shortcut.
+  app.setAppUserModelId(APP_ID);
+}
+if (process.platform === 'linux') {
+  // Docks match a window to its `.desktop` entry by Wayland app_id (Electron takes
+  // that from package.json's `desktopName`) or by X11 WM_CLASS — which Electron
+  // takes from the app name, and ours is the package name, `@horrible/desktop`. So
+  // the name is set to the entry's; but userData is derived from the name too, and
+  // moving it would orphan every existing install's localStorage. Pin it first.
+  const userData = app.getPath('userData');
+  app.setName(LINUX_DESKTOP_ID);
+  app.setPath('userData', userData);
+}
+
 // `app://` behaves like https: a real origin (localStorage, IndexedDB, CORS-checked
 // fetches to the backend, ES modules, `crypto.subtle`), not `file://`'s opaque `null`
 // one — which the backend's CORS and WebSocket origin checks rightly refuse.
@@ -124,6 +149,18 @@ function serveUi(): void {
   });
 }
 
+/**
+ * The window's own icon. Packaged on Windows and macOS the executable's icon is the
+ * window's; on Linux a binary carries none, so without one an X11 window shows a
+ * generic icon in alt-tab and on any dock that doesn't match it to its `.desktop`.
+ * electron-builder.json copies the PNG into resources for that.
+ */
+function windowIcon(): string | undefined {
+  if (!packaged) return path.join(__dirname, '..', 'build', 'icon.png');
+  if (process.platform === 'linux') return path.join(process.resourcesPath, 'icon.png');
+  return undefined;
+}
+
 function createWindow(): void {
   const window = new BrowserWindow({
     title: 'horrible-dashboard',
@@ -136,7 +173,7 @@ function createWindow(): void {
     // The page's own background, so neither the first frame nor a resize flashes white.
     backgroundColor: '#11111b',
     show: false,
-    icon: packaged ? undefined : path.join(__dirname, '..', 'build', 'icon.png'),
+    icon: windowIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
