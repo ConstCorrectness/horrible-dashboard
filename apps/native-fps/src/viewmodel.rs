@@ -114,8 +114,18 @@ pub const MATERIAL_UNLIT: f32 = -1.0;
 pub struct PropFit {
     /// Added to the model transform to place the prop.
     pub offset: Vec3,
+    /// Turned about its own origin before that: identity for every prop but a
+    /// knife, which turns about its hilt (`arms::knife_hold`).
+    pub hold: glam::Quat,
     /// The prop's own muzzle, in the same space, for the flare.
     pub muzzle: Vec3,
+}
+
+impl PropFit {
+    /// The prop's own space into the model's: the hold, then the offset.
+    pub fn placement(&self) -> Mat4 {
+        Mat4::from_translation(self.offset) * Mat4::from_quat(self.hold)
+    }
 }
 
 /// The palette. **The browser's own hex values**, not a brightened variant of
@@ -1125,7 +1135,7 @@ impl WeaponViewModel {
     fn grip_space(&self) -> Mat4 {
         match (&self.prop, &self.shape) {
             // The anchors are in the prop's own space (`models/grips.json`).
-            (Some(fit), _) => self.transform * Mat4::from_translation(fit.offset),
+            (Some(fit), _) => self.transform * fit.placement(),
             (None, Some(shape)) => {
                 self.transform
                     * Mat4::from_euler(
@@ -1167,7 +1177,8 @@ impl WeaponViewModel {
             radius: grips.support_radius * space.transform_vector3(Vec3::X).length(),
         });
         let arms = self.hands.as_mut()?;
-        Some(arms.build(asset, &primary, support.as_ref(), out))
+        arms.set_fov(self.fov);
+        Some(arms.build(asset, &primary, grips.primary_pole, support.as_ref(), out))
     }
 
     /// The resident prop's parts and markers, from `PropInfo`.
@@ -1225,8 +1236,16 @@ impl WeaponViewModel {
         // Front-centre of the fitted prop. The converter points every barrel
         // down -Z, so the front is the minimum z.
         let centre = (min + max) * 0.5 + offset;
+        // And turned in the hand, which only a knife is: see `knife_hold`.
+        let hold = if self.weapon == "knife" {
+            let h = arms::knife_hold();
+            glam::Quat::from_euler(glam::EulerRot::XYZ, h.x, h.y, h.z)
+        } else {
+            glam::Quat::IDENTITY
+        };
         let fit = PropFit {
             offset,
+            hold,
             muzzle: Vec3::new(centre.x, centre.y, min.z + offset.z),
         };
         self.prop = Some(fit);
@@ -1255,7 +1274,7 @@ impl WeaponViewModel {
             return None;
         }
         let fit = self.prop?;
-        let body = self.transform * Mat4::from_translation(fit.offset);
+        let body = self.transform * fit.placement();
         let spin = self.inspect_sample.spin;
         if spin.abs() < 1e-6 {
             return Some(body);
@@ -1322,10 +1341,7 @@ impl WeaponViewModel {
         // is somewhere else entirely, and a flash left at the box model's muzzle
         // hangs in the air beside the gun.
         let (model, muzzle) = match &self.prop {
-            Some(fit) => (
-                self.transform * Mat4::from_translation(fit.offset),
-                fit.muzzle,
-            ),
+            Some(fit) => (self.transform * fit.placement(), fit.muzzle),
             None => (model, muzzle),
         };
         if flare {

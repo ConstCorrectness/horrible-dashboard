@@ -20,8 +20,11 @@ use hassault_native::renderer::DEPTH_FORMAT;
 use hassault_native::viewmodel::{Frame, Skin, WeaponViewModel};
 
 // Bigger when only a few rows are asked for, for judging a grip up close.
+// PREVIEW_SCALE=<n> multiplies it again.
 fn cell(rows: usize) -> (u32, u32) {
-    if rows <= 2 { (720, 450) } else { (360, 240) }
+    let scale: u32 = std::env::var("PREVIEW_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let (w, h) = if rows <= 2 { (720, 450) } else { (360, 240) };
+    (w * scale, h * scale)
 }
 const MOMENTS: [Option<f32>; 5] = [None, Some(0.2), Some(0.4), Some(0.6), Some(0.8)];
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -128,14 +131,23 @@ async fn run(path: &str, only: &[String]) {
         50.0,
     );
     // PREVIEW_ORBIT=<degrees> swings the eye round the weapon — a diagnostic
-    // view of the arms that the first-person camera hides.
+    // view of the arms that the first-person camera hides. PREVIEW_FOCUS=x,y,z
+    // and PREVIEW_DISTANCE move what it circles and how far out.
     let orbit: f32 = std::env::var("PREVIEW_ORBIT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let view = if orbit == 0.0 {
         glam::Mat4::IDENTITY
     } else {
-        let focus = glam::Vec3::new(0.3, -0.5, -0.9);
+        let focus = std::env::var("PREVIEW_FOCUS")
+            .ok()
+            .and_then(|v| {
+                let n: Vec<f32> = v.split(',').filter_map(|c| c.trim().parse().ok()).collect();
+                (n.len() == 3).then(|| glam::Vec3::new(n[0], n[1], n[2]))
+            })
+            .unwrap_or(glam::Vec3::new(0.3, -0.5, -0.9));
+        let distance: f32 =
+            std::env::var("PREVIEW_DISTANCE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.6);
         let eye = focus
-            + glam::Vec3::new(orbit.to_radians().sin(), 0.35, orbit.to_radians().cos()).normalize() * 2.6;
+            + glam::Vec3::new(orbit.to_radians().sin(), 0.35, orbit.to_radians().cos()).normalize() * distance;
         glam::Mat4::look_at_rh(eye, focus, glam::Vec3::Y)
     };
     let camera = |pose: glam::Mat4| {

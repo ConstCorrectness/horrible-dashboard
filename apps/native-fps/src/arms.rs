@@ -76,6 +76,11 @@ pub struct GripAnchors {
     /// the fingers close on it and no further (`hands.rs`'s `contact_curl`).
     pub primary_radius: f32,
     pub support_radius: f32,
+    /// Which way the trigger arm's elbow points, in camera space: the pole of
+    /// its two-bone solve. Out and down for a weapon held in two hands; a knife
+    /// held up beside the face wants it out to the side, or the forearm stands
+    /// upright and no wrist can hold the blade forward.
+    pub primary_pole: Vec3,
 }
 
 fn curl_from(value: &serde_json::Value) -> Option<[f32; 5]> {
@@ -92,6 +97,8 @@ const DEFAULT_PRIMARY_CURL: [f32; 5] = [0.7, 0.4, 1.0, 1.0, 1.0];
 const DEFAULT_SUPPORT_CURL: [f32; 5] = [0.3, 0.85, 0.85, 0.85, 0.85];
 const DEFAULT_PRIMARY_RADIUS: f32 = 0.07;
 const DEFAULT_SUPPORT_RADIUS: f32 = 0.09;
+/// The trigger elbow's pole, before `grips.json`. `arms.ts`'s `DEFAULT_PRIMARY_POLE`.
+pub const DEFAULT_PRIMARY_POLE: Vec3 = Vec3::new(1.0, -1.0, 0.0);
 
 fn fallback_grips() -> GripAnchors {
     GripAnchors {
@@ -107,6 +114,7 @@ fn fallback_grips() -> GripAnchors {
         support_curl: DEFAULT_SUPPORT_CURL,
         primary_radius: DEFAULT_PRIMARY_RADIUS,
         support_radius: DEFAULT_SUPPORT_RADIUS,
+        primary_pole: DEFAULT_PRIMARY_POLE,
     }
 }
 
@@ -152,6 +160,7 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
         support_curl: curl_from(&defaults["supportCurl"]).unwrap_or(base.support_curl),
         primary_radius: defaults["primaryRadius"].as_f64().map_or(base.primary_radius, |r| r as f32),
         support_radius: defaults["supportRadius"].as_f64().map_or(base.support_radius, |r| r as f32),
+        primary_pole: vec3_from(&defaults["primaryPole"]).unwrap_or(base.primary_pole),
     };
     let Some(listed) = file["weapons"].get(weapon_id) else {
         if weapon_id.starts_with("nade_") || weapon_id.starts_with("grenade_") {
@@ -207,6 +216,9 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
     if let Some(r) = listed["supportRadius"].as_f64() {
         out.support_radius = r as f32;
     }
+    if let Some(v) = vec3_from(&listed["primaryPole"]) {
+        out.primary_pole = v;
+    }
     out
 }
 
@@ -217,6 +229,16 @@ pub fn knife_hilt() -> Vec3 {
         .ok()
         .and_then(|f| vec3_from(&f["knifeHilt"]))
         .unwrap_or(Vec3::new(0.0, 0.02, -0.2))
+}
+
+/// How a knife prop is turned in the hand, as an XYZ Euler rotation about the
+/// box model's origin. `knifeHold` in `grips.json`; the browser sets the same
+/// on the knife's group.
+pub fn knife_hold() -> Vec3 {
+    serde_json::from_str::<serde_json::Value>(GRIPS_JSON)
+        .ok()
+        .and_then(|f| vec3_from(&f["knifeHold"]))
+        .unwrap_or(Vec3::ZERO)
 }
 
 /// Put the elbow somewhere plausible between a shoulder and a hand.

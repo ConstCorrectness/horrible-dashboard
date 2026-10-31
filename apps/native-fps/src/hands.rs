@@ -383,10 +383,48 @@ pub struct ArmSolve {
     pub stretched: bool,
 }
 
+/// The sleeve's widest radius at the shoulder, plus a little: how far below the
+/// frame the arm's root has to stay to be out of it. `generate_arms.py`'s
+/// `arm_sleeve` tops out at 0.17. `hands.ts`'s `SLEEVE_RADIUS`.
+pub const SLEEVE_RADIUS: f32 = 0.18;
+
+/// The tangent of half a vertical field of view: the slope of the frame's
+/// bottom edge in camera space. 75 degrees, the default, until told otherwise.
+pub fn frame_slope(fov: f32) -> f32 {
+    (fov.clamp(0.1, 3.0) * 0.5).tan()
+}
+
+/// Where the upper arm's root goes when the shoulder slid from `shoulder` to
+/// `slid` to reach the hand: as far along that slide as keeps a sleeve's width
+/// below the bottom of the frame, whose edge falls `slope` per unit ahead.
+///
+/// Anchoring the root at the true shoulder hid it, but every cube of slide then
+/// stretched the upper arm by a cube — a rifle's off arm drew more than twice
+/// its length. Anchoring it at the slid shoulder kept the length, and brought
+/// the sleeve's open end into the bottom of the frame on the long rifles. This
+/// is the most of the second the first allows: the arm keeps its length
+/// whenever the frame hides its root, and stretches only by the remainder.
+/// `hands.ts`'s `shoulderAnchor`.
+pub fn shoulder_anchor(shoulder: Vec3, slid: Vec3, slope: f32) -> Vec3 {
+    // How far below the bottom edge a point is, measured in y.
+    let below = |p: Vec3| slope * p.z - p.y;
+    let need = SLEEVE_RADIUS * (1.0 + slope * slope).sqrt();
+    let (from, to) = (below(shoulder), below(slid));
+    if to >= need {
+        return slid;
+    }
+    if from <= need {
+        return shoulder;
+    }
+    shoulder + (slid - shoulder) * ((from - need) / (from - to))
+}
+
 /// One arm's pose, kept per view model.
 pub struct ArmPose {
     pose: Pose,
     skin: Vec<Mat4>,
+    /// `frame_slope` of the view this arm is drawn in.
+    slope: f32,
 }
 
 impl ArmPose {
@@ -394,6 +432,7 @@ impl ArmPose {
         ArmPose {
             pose: Pose::new(&asset.op),
             skin: vec![Mat4::IDENTITY; asset.op.bone_count()],
+            slope: frame_slope(75f32.to_radians()),
         }
     }
 
@@ -426,9 +465,7 @@ impl ArmPose {
             (up, hand_delta, wrist, shoulder, elbow, stretched)
         };
         let mut aim = aim;
-        let true_shoulder = shoulder;
-        let (mut up, mut hand_delta, mut wrist, mut _slid_shoulder, mut elbow, mut stretched) =
-            arm(aim);
+        let (mut up, mut hand_delta, mut wrist, mut slid, mut elbow, mut stretched) = arm(aim);
         for _ in 0..WRIST_PASSES {
             let forearm = (wrist - elbow).normalize_or(aim);
             let limited = limit_wrist_aim(forearm, wanted_aim);
@@ -436,8 +473,9 @@ impl ArmPose {
                 break;
             }
             aim = limited;
-            (up, hand_delta, wrist, _slid_shoulder, elbow, stretched) = arm(aim);
+            (up, hand_delta, wrist, slid, elbow, stretched) = arm(aim);
         }
+        let root = shoulder_anchor(shoulder, slid, self.slope);
 
         let rest_dir =
             |from: &str, to: &str| (rest.world_pos[to] - rest.world_pos[from]).normalize();
@@ -448,7 +486,7 @@ impl ArmPose {
             let up1 = perpendicular(up, dir1);
             frame_rotation(dir0, up0, dir1, up1) * rest.world_rot[from]
         };
-        let upper_world = segment("upper", "fore", true_shoulder, elbow);
+        let upper_world = segment("upper", "fore", root, elbow);
         let wrist_reached = elbow + (wrist - elbow).normalize_or(aim) * rest.lower_len;
         let fore_world = segment("fore", "hand", elbow, wrist_reached);
         let hand_world = hand_delta * rest.world_rot["hand"];
@@ -457,12 +495,12 @@ impl ArmPose {
         self.pose.set_local(
             rest.node["upper"],
             (parent_inv * upper_world).normalize(),
-            Some(parent_inv * (true_shoulder - rest.armature_pos)),
+            Some(parent_inv * (root - rest.armature_pos)),
         );
         self.pose.set_local(
             rest.node["fore"],
             (upper_world.inverse() * fore_world).normalize(),
-            Some(upper_world.inverse() * (elbow - true_shoulder)),
+            Some(upper_world.inverse() * (elbow - root)),
         );
         self.pose.set_local(
             rest.node["hand"],
@@ -501,6 +539,12 @@ impl ArmPose {
         }
     }
 
+    /// The vertical field of view the arm is drawn with, in radians: how far
+    /// forward its root can come before the frame shows it.
+    pub fn set_fov(&mut self, fov: f32) {
+        self.slope = frame_slope(fov);
+    }
+
     /// A bone's position as last solved, in the arm's own space.
     pub fn bone_position(&self, asset: &HandsAsset, name: &str) -> Option<Vec3> {
         let node = *asset.rest.node.get(name)?;
@@ -534,9 +578,9 @@ impl ArmPose {
     }
 }
 
-/// Both arms, solved and skinned: the right onto `primary`, the left onto
-/// `support` (or not drawn, for a one-handed weapon). Returns how many vertices
-/// were written for each arm.
+/// Both arms, solved and skinned: the right onto `primary`, its elbow towards
+/// `primary_pole`, the left onto `support` (or not drawn, for a one-handed
+/// weapon). Returns how many vertices were written for each arm.
 pub struct Arms {
     right: ArmPose,
     left: ArmPose,
@@ -554,16 +598,13 @@ impl Arms {
         &mut self,
         asset: &HandsAsset,
         primary: &HandTarget,
+        primary_pole: Vec3,
         support: Option<&HandTarget>,
         out: &mut Vec<PropVertex>,
     ) -> (usize, usize) {
         out.clear();
-        self.right.solve(
-            asset,
-            crate::arms::SHOULDER_R,
-            primary,
-            Vec3::new(1.0, -1.0, 0.0),
-        );
+        self.right
+            .solve(asset, crate::arms::SHOULDER_R, primary, primary_pole);
         self.right.skin_into(asset, false, out);
         let right = out.len();
         let Some(support) = support else {
@@ -590,6 +631,12 @@ impl Arms {
     pub fn right(&self) -> &ArmPose {
         &self.right
     }
+
+    /// See `ArmPose::set_fov`.
+    pub fn set_fov(&mut self, fov: f32) {
+        self.right.set_fov(fov);
+        self.left.set_fov(fov);
+    }
 }
 
 #[cfg(test)]
@@ -600,6 +647,26 @@ mod tests {
 
     fn asset() -> HandsAsset {
         HandsAsset::from_slice(HANDS_GLB).expect("hands GLB parses")
+    }
+
+    #[test]
+    fn the_arm_root_comes_forward_only_as_far_as_the_frame_hides_it() {
+        let shoulder = crate::arms::SHOULDER_R;
+        let slope = frame_slope(75f32.to_radians());
+        let need = SLEEVE_RADIUS * (1.0 + slope * slope).sqrt();
+        let below = |p: Vec3| slope * p.z - p.y;
+        // A short slide stays out of frame entirely, so the arm keeps its length.
+        let near = Vec3::new(shoulder.x, shoulder.y, -0.3);
+        assert_eq!(shoulder_anchor(shoulder, near, slope), near);
+        // A rifle's off-arm slide goes further than that: the root stops with a
+        // sleeve's width to spare, part of the way along.
+        let far = Vec3::new(shoulder.x, shoulder.y, -1.3);
+        let root = shoulder_anchor(shoulder, far, slope);
+        assert!((below(root) - need).abs() < 1e-5);
+        assert!(root.z < shoulder.z - 0.5 && root.z > far.z, "{root}");
+        // A wider view hides less.
+        let wide = shoulder_anchor(shoulder, far, frame_slope(100f32.to_radians()));
+        assert!(wide.z > root.z);
     }
 
     #[test]
@@ -647,7 +714,13 @@ mod tests {
             radius: 0.0,
         };
         let mut out = Vec::new();
-        let (right, left) = arms.build(&a, &far, Some(&far), &mut out);
+        let (right, left) = arms.build(
+            &a,
+            &far,
+            crate::arms::DEFAULT_PRIMARY_POLE,
+            Some(&far),
+            &mut out,
+        );
         assert_eq!(right, a.vertex_count());
         assert_eq!(left, a.vertex_count());
         assert!(out.iter().all(|v| v
@@ -710,7 +783,12 @@ mod tests {
             radius,
         };
         let tip = |arm: &mut ArmPose, radius: f32| {
-            arm.solve(&a, crate::arms::SHOULDER_R, &target(radius), Vec3::new(1.0, -1.0, 0.0));
+            arm.solve(
+                &a,
+                crate::arms::SHOULDER_R,
+                &target(radius),
+                Vec3::new(1.0, -1.0, 0.0),
+            );
             arm.bone_position(&a, "middle_3").unwrap()
         };
         let bare = tip(&mut arm, 0.0);
@@ -749,7 +827,13 @@ mod tests {
             ..target
         };
         let mut out = Vec::new();
-        let (r, l) = arms.build(&a, &right, Some(&target), &mut out);
+        let (r, l) = arms.build(
+            &a,
+            &right,
+            crate::arms::DEFAULT_PRIMARY_POLE,
+            Some(&target),
+            &mut out,
+        );
         let mean_x =
             |vs: &[PropVertex]| vs.iter().map(|v| v.position[0]).sum::<f32>() / vs.len() as f32;
         assert!(mean_x(&out[..r]) > 0.0, "right arm drawn on the left");

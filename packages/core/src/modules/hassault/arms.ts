@@ -35,6 +35,7 @@ import type * as THREE from 'three';
 
 import {
   findBones,
+  frameSlope,
   loadHandsModel,
   poseArm,
   readRest,
@@ -51,11 +52,13 @@ export type { Curl };
 
 /** What the view model drives: either kind of arms. */
 export interface ArmRigInstance {
+  /** `fov` is the vertical field of view the arms are drawn with, in radians. */
   update(
     anchors: GripAnchors,
     toCamera: (p: Vec3) => Vec3,
     visible: boolean,
     dirToCamera?: (d: Vec3) => Vec3,
+    fov?: number,
   ): void;
   dispose(): void;
 }
@@ -122,6 +125,13 @@ export interface GripAnchors {
    */
   primaryRadius: number;
   supportRadius: number;
+  /**
+   * Which way the trigger arm's elbow points, in camera space: the pole of its
+   * two-bone solve. Out and down for a weapon held in two hands; a knife held
+   * up beside the face wants it out to the side, or the forearm stands upright
+   * and no wrist can hold the blade forward.
+   */
+  primaryPole: Vec3;
 }
 
 type GripDefaults = Omit<GripAnchors, 'support'> & { support: Vec3 };
@@ -194,6 +204,7 @@ export function gripsFor(
     supportCurl: listed.supportCurl ?? fallback.supportCurl,
     primaryRadius: listed.primaryRadius ?? fallback.primaryRadius,
     supportRadius: listed.supportRadius ?? fallback.supportRadius,
+    primaryPole: listed.primaryPole ?? fallback.primaryPole,
   };
 }
 
@@ -514,10 +525,12 @@ export class SkinnedArmRig implements ArmRigInstance {
     toCamera: (p: Vec3) => Vec3,
     visible: boolean,
     dirToCamera?: (d: Vec3) => Vec3,
+    fov?: number,
   ): void {
     this.group.visible = visible;
     if (!visible) return;
     const dir = dirToCamera ?? directionsVia(toCamera);
+    const slope = frameSlope(fov);
     // A handle's thickness is the prop's units; the hand is in camera space.
     const scale = Math.hypot(...dir([1, 0, 0]));
 
@@ -533,8 +546,9 @@ export class SkinnedArmRig implements ArmRigInstance {
         curl: anchors.primaryCurl,
         radius: anchors.primaryRadius * scale,
       },
-      [1, -1, 0],
+      anchors.primaryPole,
       solveTwoBone,
+      slope,
     );
 
     if (anchors.support === null) {
@@ -559,6 +573,7 @@ export class SkinnedArmRig implements ArmRigInstance {
       },
       [1, -1, 0],
       solveTwoBone,
+      slope,
     );
   }
 
@@ -637,8 +652,9 @@ export class ArmRig implements ArmRigInstance {
     toCamera: (p: Vec3) => Vec3,
     visible: boolean,
     dirToCamera?: (d: Vec3) => Vec3,
+    fov?: number,
   ): void {
-    this.active.update(anchors, toCamera, visible, dirToCamera);
+    this.active.update(anchors, toCamera, visible, dirToCamera, fov);
   }
 
   dispose(): void {

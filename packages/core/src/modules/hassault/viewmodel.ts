@@ -1522,23 +1522,27 @@ export class WeaponViewModel {
     built.group.updateMatrix();
     this.pivot.updateMatrix();
     // The anchors are in the prop's own space (`models/grips.json`), so they
-    // go through the prop's fitted offset first — its rest position, not the
-    // spun one, so a twirl turns the knife and not the hand.
+    // go through the prop's fitted transform first — its rest one, not the
+    // spun one, so a twirl turns the knife and not the hand. The rotation is
+    // a knife's hold (`knifeHold`); every other prop is fitted unturned.
     const propOffset = this.prop?.position;
+    const propHold = this.prop?.quaternion;
     const toCamera = (p: Vec3): Vec3 => {
       const v = new this.three.Vector3(p[0], p[1], p[2]);
+      if (propHold) v.applyQuaternion(propHold);
       if (propOffset) v.add(propOffset);
       v.applyMatrix4(built.group.matrix).applyMatrix4(this.pivot.matrix);
       return [v.x, v.y, v.z];
     };
     const dirToCamera = (d: Vec3): Vec3 => {
       const v = new this.three.Vector3(d[0], d[1], d[2]);
+      if (propHold) v.applyQuaternion(propHold);
       v.transformDirection(built.group.matrix).transformDirection(this.pivot.matrix);
       return [v.x, v.y, v.z];
     };
     // Hidden while fully stowed: at `stow` 1 the weapon is out of frame, and two
     // arms reaching for it are two arms pointing at nothing.
-    arms.update(anchors, toCamera, stow < 0.92, dirToCamera);
+    arms.update(anchors, toCamera, stow < 0.92, dirToCamera, this.currentFov());
   }
 
   /**

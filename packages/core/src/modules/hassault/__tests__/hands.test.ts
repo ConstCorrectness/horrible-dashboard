@@ -16,13 +16,17 @@ import {
   contactCurl,
   findBones,
   fingertip,
+  frameSlope,
   limitWristAim,
   MAX_WRIST_BEND,
   poseArm,
   readRest,
+  shoulderAnchor,
+  SLEEVE_RADIUS,
   thumbCurl,
   type Curl,
   type HandTarget,
+  type Vec3,
 } from '../hands';
 
 const GLB = fileURLToPath(
@@ -104,7 +108,10 @@ describe('the hands rig', () => {
     const knuckles = worldIn(root, bones.get('middle_1')!);
     const a = new THREE.Vector3(...aim).normalize();
     const pointing = knuckles.sub(hand).normalize();
-    const forearm = hand.clone().sub(worldIn(root, bones.get('fore')!)).normalize();
+    const forearm = hand
+      .clone()
+      .sub(worldIn(root, bones.get('fore')!))
+      .normalize();
     expect(pointing.angleTo(forearm)).toBeLessThanOrEqual(MAX_WRIST_BEND + 0.05);
     expect(pointing.angleTo(a)).toBeLessThanOrEqual(forearm.angleTo(a) + 1e-3);
 
@@ -120,7 +127,12 @@ describe('the hands rig', () => {
     const root = loadRig();
     const bones = findBones(root);
     const rest = readRest(THREE, root, bones);
-    const far: HandTarget = { grip: [0.6, -0.5, -2.4], aim: [1, 0.2, 0], up: [0, 0, -1], curl: FIST };
+    const far: HandTarget = {
+      grip: [0.6, -0.5, -2.4],
+      aim: [1, 0.2, 0],
+      up: [0, 0, -1],
+      curl: FIST,
+    };
     poseArm(THREE, rest, bones, SHOULDER_R, far, [1, -1, 0], solveTwoBone);
     root.updateMatrixWorld(true);
     for (const bone of bones.values()) {
@@ -227,5 +239,25 @@ describe('the hands rig', () => {
     // Dead behind: any direction at the limit will do, but it must be finite.
     const behind = limitWristAim(THREE, forearm, new THREE.Vector3(0, 0, 1));
     expect(behind.angleTo(forearm)).toBeCloseTo(MAX_WRIST_BEND, 4);
+  });
+
+  it('brings the arm root forward only as far as the frame hides it', () => {
+    const slope = frameSlope();
+    const need = SLEEVE_RADIUS * Math.hypot(1, slope);
+    const below = (p: Vec3) => slope * p[2] - p[1];
+    // A short slide stays out of frame entirely, so the arm keeps its length.
+    const near: Vec3 = [SHOULDER_R[0], SHOULDER_R[1], -0.3];
+    expect(shoulderAnchor(SHOULDER_R, near, slope)).toEqual(near);
+    // A rifle's off-arm slide goes further than that: the root stops with a
+    // sleeve's width to spare, part of the way along.
+    const far: Vec3 = [SHOULDER_R[0], SHOULDER_R[1], -1.3];
+    const root = shoulderAnchor(SHOULDER_R, far, slope);
+    expect(below(root)).toBeCloseTo(need, 5);
+    expect(root[2]).toBeLessThan(SHOULDER_R[2] - 0.5);
+    expect(root[2]).toBeGreaterThan(far[2]);
+    // A wider view hides less.
+    expect(shoulderAnchor(SHOULDER_R, far, frameSlope((100 * Math.PI) / 180))[2]).toBeGreaterThan(
+      root[2],
+    );
   });
 });

@@ -376,6 +376,52 @@ export function slideShoulder(shoulder: Vec3, wrist: Vec3, reach: number): Vec3 
   return [shoulder[0] + d[0] * f, shoulder[1] + d[1] * f, shoulder[2] + d[2] * f];
 }
 
+/**
+ * The sleeve's widest radius at the shoulder, plus a little: how far below the
+ * frame the arm's root has to stay to be out of it. `generate_arms.py`'s
+ * `arm_sleeve` tops out at 0.17. `hands.rs`'s `SLEEVE_RADIUS`.
+ */
+export const SLEEVE_RADIUS = 0.18;
+
+/**
+ * The tangent of half a vertical field of view: the slope of the frame's
+ * bottom edge in camera space. 75 degrees, the default, when none is given.
+ * `hands.rs`'s `frame_slope`.
+ */
+export function frameSlope(fov?: number): number {
+  const f = fov !== undefined && fov > 0 ? fov : (75 * Math.PI) / 180;
+  return Math.tan(Math.min(Math.max(f, 0.1), 3) * 0.5);
+}
+
+/**
+ * Where the upper arm's root goes when the shoulder slid from `shoulder` to
+ * `slid` to reach the hand: as far along that slide as keeps a sleeve's width
+ * below the bottom of the frame, whose edge falls `slope` per unit ahead.
+ *
+ * Anchoring the root at the true shoulder hid it, but every cube of slide then
+ * stretched the upper arm by a cube — a rifle's off arm drew more than twice
+ * its length. Anchoring it at the slid shoulder kept the length, and brought
+ * the sleeve's open end into the bottom of the frame on the long rifles. This
+ * is the most of the second the first allows: the arm keeps its length
+ * whenever the frame hides its root, and stretches only by the remainder.
+ * `hands.rs`'s `shoulder_anchor`.
+ */
+export function shoulderAnchor(shoulder: Vec3, slid: Vec3, slope: number): Vec3 {
+  // How far below the bottom edge a point is, measured in y.
+  const below = (p: Vec3) => slope * p[2] - p[1];
+  const need = SLEEVE_RADIUS * Math.sqrt(1 + slope * slope);
+  const from = below(shoulder);
+  const to = below(slid);
+  if (to >= need) return slid;
+  if (from <= need) return shoulder;
+  const t = (from - need) / (from - to);
+  return [
+    shoulder[0] + (slid[0] - shoulder[0]) * t,
+    shoulder[1] + (slid[1] - shoulder[1]) * t,
+    shoulder[2] + (slid[2] - shoulder[2]) * t,
+  ];
+}
+
 export interface ArmSolve {
   wrist: THREE.Vector3;
   elbow: THREE.Vector3;
@@ -387,7 +433,8 @@ export interface ArmSolve {
  *
  * Everything is in the rig root's space (camera space for the right arm, the
  * mirrored camera space for the left). Writes each moved bone's local transform
- * and returns where the joints ended up, for the tests.
+ * and returns where the joints ended up, for the tests. `slope` is the frame's
+ * (`frameSlope`), which decides how far forward the arm's root may come.
  */
 export function poseArm(
   three: typeof THREE,
@@ -403,6 +450,7 @@ export function poseArm(
     lower: number,
     pole: Vec3,
   ) => { elbow: Vec3; stretched: boolean },
+  slope: number = frameSlope(),
 ): ArmSolve {
   const V = (v: Vec3) => new three.Vector3(v[0], v[1], v[2]);
 
@@ -449,6 +497,7 @@ export function poseArm(
     );
   }
   const elbow = V(solved.elbow);
+  const root = V(shoulderAnchor(shoulder, [s.x, s.y, s.z], slope));
 
   // Each segment aimed along its span and rolled to keep the hand's up — so
   // the forearm turns with the wrist rather than wringing it, and the upper arm,
@@ -462,8 +511,7 @@ export function poseArm(
     const up1 = perpendicular(three, up, dir1);
     return frameRotation(three, dir0, up0, dir1, up1).multiply(rest.world.get(from)!.quat.clone());
   };
-  const trueShoulder = V(shoulder);
-  const upperWorld = segment('upper', 'fore', trueShoulder, elbow);
+  const upperWorld = segment('upper', 'fore', root, elbow);
   // Where the forearm actually ends: the wrist, or short of it when the target
   // was out of reach and the arm is straight.
   const wristReached = elbow
@@ -475,16 +523,16 @@ export function poseArm(
   // World (rig space) to local: each parent's posed world rotation is known,
   // because the chain is walked from the shoulder down.
   // `upper`'s parent is the armature node, which never moves, so its rest
-  // transform is its posed one. Keep `upper` anchored at the off-screen
-  // shoulder and place `fore` at `elbow` so the open shoulder cap never slides
-  // into the viewport on long-reach rifles.
+  // transform is its posed one. `upper` sits at the root `shoulderAnchor`
+  // allows and `fore` at `elbow`, so whatever slide the frame cannot hide is
+  // taken up as stretch rather than as a sleeve end in view.
   const upper = bones.get('upper')!;
   const parentInv = rest.armature.quat.clone().invert();
   upper.quaternion.copy(parentInv.clone().multiply(upperWorld));
-  upper.position.copy(trueShoulder.clone().sub(rest.armature.pos).applyQuaternion(parentInv));
+  upper.position.copy(root.clone().sub(rest.armature.pos).applyQuaternion(parentInv));
   const fore = bones.get('fore')!;
   fore.quaternion.copy(upperWorld.clone().invert().multiply(foreWorld));
-  fore.position.copy(elbow.clone().sub(trueShoulder).applyQuaternion(upperWorld.clone().invert()));
+  fore.position.copy(elbow.clone().sub(root).applyQuaternion(upperWorld.clone().invert()));
   bones.get('hand')!.quaternion.copy(foreWorld.clone().invert().multiply(handWorld));
 
   // The fingers are children of the hand, so a curl is local and needs nothing

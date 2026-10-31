@@ -142,7 +142,8 @@ export function computeLocalBox(three: typeof THREE, target: THREE.Object3D): TH
  * bayonet runs long — so centring each on the box model put every handle
  * somewhere different and none of them in the fist. The generator puts each
  * knife's origin at the hilt, and this puts that origin at `knifeHilt` from
- * `models/grips.json`, which the native `fit_prop` reads too.
+ * `models/grips.json`, which the native `fit_prop` reads too — turned about it
+ * by `knifeHold`, the way a hand holds a knife rather than a rifle.
  */
 export function fitKnifeModel(
   three: typeof THREE,
@@ -158,6 +159,7 @@ export function fitKnifeModel(
   });
   const [x, y, z] = KNIFE_HILT;
   model.position.set(x, y, z);
+  model.rotation.set(KNIFE_HOLD[0], KNIFE_HOLD[1], KNIFE_HOLD[2]);
   const box = computeLocalBox(three, model).translate(model.position);
   // A knife has no muzzle; its tip is the nearest thing, and nothing flashes.
   return { model, muzzle: [x, y, box.isEmpty() ? z : box.min.z] };
@@ -165,6 +167,9 @@ export function fitKnifeModel(
 
 export const KNIFE_HILT = (gripsFile as unknown as { knifeHilt: [number, number, number] })
   .knifeHilt;
+
+export const KNIFE_HOLD = (gripsFile as unknown as { knifeHold: [number, number, number] })
+  .knifeHold;
 
 export function fitWeaponModel(
   three: typeof THREE,
