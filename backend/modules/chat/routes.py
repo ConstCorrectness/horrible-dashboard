@@ -138,6 +138,10 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
             existing.title = body.title
         if "messages" in body.model_fields_set and body.messages is not None:
             existing.messages = body.messages
+        # `None` is a real value here ("follow the Settings default"), so presence
+        # alone decides — unlike title/messages, where None means "not sent".
+        if "mode" in body.model_fields_set:
+            existing.mode = body.mode
         existing.updated = now
         session = existing
     else:
@@ -146,6 +150,7 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
             title=body.title or "New chat",
             agent_id=body.agent_id or "main",
             messages=body.messages or [],
+            mode=body.mode,
             created=now,
             updated=now,
         )

@@ -8,7 +8,9 @@ import { readActiveAgentContext, type ActiveAgentContext } from '../../agent-con
 import { readVisibleAgentContexts } from '../../layout/controller';
 import { getSetting } from '../../settings';
 import { onSocketClose, sendChannel, subscribeChannel } from '../../ws';
+import type { AgentMode } from './modes';
 import { executeTool, paneTitle } from './tool-exec';
+import type { Answers, Question, TodoItem } from './turn-steps';
 
 /** Ambient-context budget. Small on purpose: this rides on EVERY turn, so it is
  * a per-turn tax, not a one-off read. Both are overridable in settings. */
@@ -58,6 +60,24 @@ export interface AgentCallbacks {
   onDelegateStart?: (subTurnId: string, agentId: string) => void;
   /** …and finished it. `ok` is false on a timeout or provider error. */
   onDelegateDone?: (subTurnId: string, agentId: string, ok: boolean) => void;
+  /** A tool call began — any tool, not only the ones the browser runs. */
+  onToolStart?: (call: { callId: string; name: string; args: unknown }) => void;
+  /** …and finished. `denied` marks a call the permission gate refused. */
+  onToolEnd?: (end: {
+    callId: string;
+    ok: boolean;
+    denied: boolean;
+    durationMs?: number;
+    preview?: string;
+  }) => void;
+  /** The permission gate is waiting on the user for this call. */
+  onApproval?: (callId: string) => void;
+  /** The agent asked the user something and is waiting (see `answerAgentQuestion`). */
+  onQuestion?: (q: { questionId: string; questions: Question[] }) => void;
+  /** The agent's checklist, whole, each time it changes. */
+  onTodos?: (items: TodoItem[]) => void;
+  /** A plan-mode turn handed over its plan; the turn ends after this. */
+  onPlan?: (text: string) => void;
   onError?: (message: string) => void;
 }
 
@@ -75,6 +95,18 @@ export interface AskOptions {
    *  stays stateless per turn — so a trace UI (Opik) can group a chat's turns as
    *  one thread. */
   sessionId?: string;
+  /** The chat's mode picker. Omitted = the agent's default, then Settings. */
+  mode?: AgentMode | null;
+}
+
+/** Reply to an `ask_user` question: the picked answers, or null to dismiss it
+ *  (the agent is then told to go with its own judgement). */
+export function answerAgentQuestion(questionId: string, answers: Answers | null): void {
+  sendChannel(
+    'agent',
+    'question_response',
+    answers ? { questionId, answers } : { questionId, dismissed: true },
+  );
 }
 
 /** A fresh turn id, in the shape the backend and every recorder key on. */
@@ -228,6 +260,39 @@ export function askAgent(
           case 'reasoning':
             cb.onReasoning?.(String(data.delta ?? ''));
             break;
+          case 'tool_start':
+            cb.onToolStart?.({
+              callId: String(data.callId ?? ''),
+              name: String(data.name ?? ''),
+              args: data.args ?? null,
+            });
+            break;
+          case 'tool_end':
+            cb.onToolEnd?.({
+              callId: String(data.callId ?? ''),
+              ok: data.ok !== false,
+              denied: data.denied === true,
+              durationMs: typeof data.durationMs === 'number' ? data.durationMs : undefined,
+              preview: typeof data.preview === 'string' ? data.preview : undefined,
+            });
+            break;
+          case 'approval_request':
+            // The prompt itself is ApprovalPrompts' (approvals.ts); the turn only
+            // marks which of its rows is waiting.
+            if (data.callId) cb.onApproval?.(String(data.callId));
+            break;
+          case 'question':
+            cb.onQuestion?.({
+              questionId: String(data.questionId ?? ''),
+              questions: Array.isArray(data.questions) ? (data.questions as Question[]) : [],
+            });
+            break;
+          case 'todos':
+            cb.onTodos?.(Array.isArray(data.items) ? (data.items as TodoItem[]) : []);
+            break;
+          case 'plan':
+            cb.onPlan?.(String(data.text ?? ''));
+            break;
           case 'delegate_token':
             cb.onDelegateToken?.(String(data.agentId ?? ''), String(data.delta ?? ''));
             break;
@@ -274,6 +339,7 @@ export function askAgent(
       context: context ? { ...context, panes } : panes.length ? { panes } : null,
       ...(opts?.agentId && opts.agentId !== 'main' ? { agentId: opts.agentId } : {}),
       ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
     });
   });
 }

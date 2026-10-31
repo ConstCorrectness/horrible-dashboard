@@ -136,3 +136,43 @@ def test_messages_round_trip_turn_ids(client: TestClient) -> None:
     assert [m["turn_id"] for m in saved["messages"]] == ["1-a", "1-a"]
     again = client.get(f"/api/chat/sessions/{made['id']}").json()
     assert again["messages"][1]["sub_turns"][0]["turnId"] == "1-a:dba:ff"
+
+
+def test_activity_timeline_and_mode_round_trip(client: TestClient) -> None:
+    """The chat's timeline (`steps`/`todos`/`plan`) and its mode picker must survive
+    the response model — a field it does not declare is dropped without an error."""
+    made = client.post("/api/chat/sessions", json={"title": "T"}).json()
+    assert made["mode"] is None
+    steps = [
+        {"kind": "thought", "text": "hm", "startedAt": 1, "endedAt": 2},
+        {"kind": "tool", "callId": "c1", "name": "fs.read", "status": "ok"},
+    ]
+    body = {
+        "mode": "plan",
+        "messages": [
+            {"role": "user", "content": "plan it"},
+            {
+                "role": "assistant",
+                "content": "# Plan",
+                "steps": steps,
+                "todos": [{"content": "a", "status": "completed"}],
+                "plan": {"text": "# Plan", "status": "proposed"},
+                "started_at": 1.0,
+                "ended_at": 9.0,
+            },
+        ],
+    }
+    client.put(f"/api/chat/sessions/{made['id']}", json=body)
+    again = client.get(f"/api/chat/sessions/{made['id']}").json()
+    assert again["mode"] == "plan"
+    msg = again["messages"][1]
+    assert msg["steps"] == steps
+    assert msg["todos"][0]["status"] == "completed"
+    assert msg["plan"]["status"] == "proposed"
+    assert msg["ended_at"] == 9.0
+
+    # Saving messages alone leaves the mode alone; sending `mode: null` resets it.
+    client.put(f"/api/chat/sessions/{made['id']}", json={"messages": []})
+    assert client.get(f"/api/chat/sessions/{made['id']}").json()["mode"] == "plan"
+    client.put(f"/api/chat/sessions/{made['id']}", json={"mode": None})
+    assert client.get(f"/api/chat/sessions/{made['id']}").json()["mode"] is None

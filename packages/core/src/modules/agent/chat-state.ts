@@ -25,15 +25,28 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import type { AgentMode } from './modes';
 import type { ChatSessionMeta } from './sessions';
+import type { Step, TodoItem, TurnPlan } from './turn-steps';
 
 export interface ChatTurn {
   role: 'user' | 'assistant' | 'system';
   text: string;
-  /** Streamed reasoning/thinking for an assistant turn (`reasoning_content`). */
+  /** Pre-timeline transcripts only: the turn's reasoning as one blob. New turns
+   *  keep their thoughts in `steps`. */
   reasoning?: string;
-  /** Mutating tools the agent ran during an assistant turn. */
+  /** Pre-timeline transcripts only: "Opened X" notes. See `legacySteps`. */
   actions?: string[];
+  /** The activity timeline — thoughts, tool calls, notes, questions, in order.
+   *  Built by the reducers in turn-steps.ts. */
+  steps?: Step[];
+  /** The agent's latest `update_todos` checklist. */
+  todos?: TodoItem[];
+  /** A plan-mode turn's submitted plan and whether it was approved. */
+  plan?: TurnPlan;
+  /** When the turn was sent and when it finished (ms since epoch). */
+  startedAt?: number;
+  endedAt?: number;
   /** Slash-command echo/output: shown but not persisted or replayed to the model. */
   ephemeral?: boolean;
   /** The orchestrator turn this belongs to (a user turn and its reply share one).
@@ -61,6 +74,9 @@ export interface AgentChatState {
   restore: 'loading' | 'ok' | 'failed';
   /** Sessions have been read at least once for this agent, in this app session. */
   loaded: boolean;
+  /** The active chat's mode picker; null follows the Settings default. Saved on
+   *  the session, so it comes back with the conversation. */
+  mode: AgentMode | null;
 }
 
 const EMPTY: AgentChatState = {
@@ -71,6 +87,7 @@ const EMPTY: AgentChatState = {
   busy: false,
   restore: 'loading',
   loaded: false,
+  mode: null,
 };
 
 const states = new Map<string, AgentChatState>();

@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 # Session ids are generated hex; constrain the path param like workspaces do.
@@ -18,6 +20,17 @@ class ChatMessage(BaseModel):
     turn_id: str = ""
     # Delegated sub-turns started during this (assistant) turn, oldest first.
     sub_turns: list[dict[str, str | bool]] = []
+    # The turn's activity timeline, oldest first: thoughts, tool calls, the prose
+    # between them, questions asked. Opaque to the backend — the chat's
+    # `turn-steps.ts` owns the shape — so it is stored as the client sent it.
+    steps: list[dict[str, Any]] = []
+    # The agent's last `update_todos` checklist for this turn.
+    todos: list[dict[str, Any]] = []
+    # A plan-mode turn's submitted plan: `{text, status}`.
+    plan: dict[str, Any] | None = None
+    # When the turn started and ended (ms since epoch), for the elapsed readout.
+    started_at: float | None = None
+    ended_at: float | None = None
 
 
 class ChatSession(BaseModel):
@@ -29,6 +42,9 @@ class ChatSession(BaseModel):
     title: str
     agent_id: str = "main"
     messages: list[ChatMessage] = []
+    # The chat's mode picker: 'plan' | 'default' | 'autonomous', or None to follow
+    # the Settings default (`agent.permissions.mode`).
+    mode: str | None = None
     created: float
     updated: float
 
@@ -73,6 +89,7 @@ class UpsertSession(BaseModel):
     title: str | None = None
     agent_id: str | None = None
     messages: list[ChatMessage] | None = None
+    mode: str | None = None
 
 
 class ActiveRequest(BaseModel):

@@ -25,8 +25,10 @@ import {
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { dialogs } from '../../dialogs';
-import { IconBranch, IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
+import { IconArrowDown, IconBranch, IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
+import { renderMarkdown } from '../../notebook/markdown';
 import { useSetting } from '../../settings';
+import { ActivityTimeline, LiveLine, WorkedFor } from './ActivityTimeline';
 import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
 import {
@@ -41,7 +43,25 @@ import {
 } from './chat-state';
 import { compactHistory, MAX_HISTORY_TURNS } from './history';
 import { ModelPicker } from './ModelPicker';
-import { askAgent, newTurnId } from './orchestrator-client';
+import { ModePicker } from './ModePicker';
+import { asAgentMode, modeInfo, nextMode, parseModeCommand, type AgentMode } from './modes';
+import { answerAgentQuestion, askAgent, newTurnId } from './orchestrator-client';
+import { PlanCard } from './PlanCard';
+import { TurnTodos } from './TurnTodos';
+import {
+  answerQuestion,
+  applyApproval,
+  applyPlan,
+  applyQuestion,
+  applyReasoning,
+  applyTodos,
+  applyToken,
+  applyToolEnd,
+  applyToolStart,
+  finalizeTurn,
+  legacySteps,
+  type Answers,
+} from './turn-steps';
 import {
   createSession,
   deleteSession,
@@ -91,6 +111,11 @@ function toMessages(turns: ChatTurn[]): ChatMessage[] {
       actions: t.actions,
       ...(t.turnId ? { turn_id: t.turnId } : {}),
       ...(t.subTurns?.length ? { sub_turns: t.subTurns } : {}),
+      ...(t.steps?.length ? { steps: t.steps } : {}),
+      ...(t.todos?.length ? { todos: t.todos } : {}),
+      ...(t.plan ? { plan: t.plan } : {}),
+      ...(t.startedAt ? { started_at: t.startedAt } : {}),
+      ...(t.endedAt ? { ended_at: t.endedAt } : {}),
     }));
 }
 
@@ -102,8 +127,16 @@ function toTurns(messages: ChatMessage[]): ChatTurn[] {
     actions: m.actions,
     ...(m.turn_id ? { turnId: m.turn_id } : {}),
     ...(m.sub_turns?.length ? { subTurns: m.sub_turns } : {}),
+    ...(m.steps?.length ? { steps: m.steps } : {}),
+    ...(m.todos?.length ? { todos: m.todos } : {}),
+    ...(m.plan ? { plan: m.plan } : {}),
+    ...(m.started_at ? { startedAt: m.started_at } : {}),
+    ...(m.ended_at ? { endedAt: m.ended_at } : {}),
   }));
 }
+
+/** Pixels from the bottom that still count as "at the latest". */
+const STICK_SLACK = 48;
 
 /** Open the trace view on one turn, held there. */
 function traceTurn(agentId: string, turnId: string): void {
@@ -193,34 +226,6 @@ async function getWorkspaceFiles(): Promise<string[]> {
   }
 }
 
-interface ReasoningBlockProps {
-  reasoning: string;
-  hasText: boolean;
-}
-
-function ReasoningBlock({ reasoning, hasText }: ReasoningBlockProps) {
-  const [open, setOpen] = useState(!hasText);
-  const [prevHasText, setPrevHasText] = useState(hasText);
-
-  if (hasText !== prevHasText) {
-    setPrevHasText(hasText);
-    if (hasText) {
-      setOpen(false);
-    }
-  }
-
-  return (
-    <details
-      className="agent-reasoning"
-      open={open}
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-    >
-      <summary>Reasoning</summary>
-      <div className="agent-reasoning-body">{reasoning}</div>
-    </details>
-  );
-}
-
 export function ChatWidget({
   agentId: pinnedAgent,
   compact = false,
@@ -249,8 +254,12 @@ export function ChatWidget({
   // The conversation itself lives outside this component — see chat-state.ts. A
   // pane that keeps its transcript in `useState` loses it every time the shell
   // unmounts it, and the agent's own layout tools are one of the things that do.
-  const { sessions, activeId, turns, prompt, busy, restore } = useAgentChat(agentId);
+  const { sessions, activeId, turns, prompt, busy, restore, mode } = useAgentChat(agentId);
   const drawer = useTraceDrawer();
+  // A chat with no mode of its own shows — and the backend applies — the Settings
+  // default. `acceptEdits` there reads as Agent (see modes.ts).
+  const globalMode = asAgentMode(useSetting<string>('agent.permissions.mode')) ?? 'default';
+  const shownMode: AgentMode = mode ?? globalMode;
   const setSessions = (v: ChatSessionMeta[]) => updateChat(agentIdRef.current, { sessions: v });
   const setActiveId = (v: string | null) => updateChat(agentIdRef.current, { activeId: v });
   const setPrompt = (v: string) => updateChat(agentIdRef.current, { prompt: v });
@@ -267,6 +276,12 @@ export function ChatWidget({
   const liveActiveId = (): string | null => chatState(agentIdRef.current).activeId;
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the log follows new output. True while the reader is at the bottom; a
+  // scroll up to re-read something releases it, and "More" (or sending) re-takes it.
+  // A ref, not state: it is read inside the effect that scrolls and must not cause
+  // a render of its own on every scroll event.
+  const stickRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
   // Index of the first turn still inside the replay window, or -1 while the whole
   // conversation still fits. Derived from `turns` with the same bound `send` uses,
   // so the seam drawn in the transcript is the seam the model actually gets.
@@ -345,7 +360,7 @@ export function ChatWidget({
       setSessions(list.sessions);
       if (!list.active) {
         setActiveId(null);
-        setTurns([]);
+        updateChat(agent, { turns: [], mode: null });
       } else if (list.active !== chatState(agent).activeId || chatState(agent).turns.length === 0) {
         // Only refetch a transcript we do not already hold. Overwriting the live
         // one is how a turn in flight gets truncated: the fetch returns the last
@@ -353,7 +368,7 @@ export function ChatWidget({
         // replaces a growing answer with the conversation as it was before the
         // question — indistinguishable from the agent losing its place.
         setActiveId(list.active);
-        setTurns(toTurns((await getSession(list.active)).messages));
+        showSession(await getSession(list.active));
       }
       updateChat(agent, { restore: 'ok', loaded: true });
       return true;
@@ -404,10 +419,46 @@ export function ChatWidget({
     return () => clearInterval(id);
   }, [animateAvatar]);
 
-  // Keep the latest turn in view as the transcript grows.
+  // Keep the latest turn in view as the transcript grows — unless the reader has
+  // scrolled up. Yanking them back down on every streamed token made the reasoning
+  // above impossible to read while a turn ran, which is exactly when it is worth
+  // reading.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stickRef.current) el.scrollTo({ top: el.scrollHeight });
+    else setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > STICK_SLACK);
   }, [turns]);
+
+  const onLogScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_SLACK;
+    stickRef.current = atEnd;
+    setShowJump(!atEnd);
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    setShowJump(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  };
+
+  /** Set this chat's mode, and save it with the conversation when there is one. */
+  const setMode = (next: AgentMode | null) => {
+    updateChat(agentIdRef.current, { mode: next });
+    const id = liveActiveId();
+    if (id) void saveSession(id, { mode: next }).catch(() => {});
+  };
+
+  /** Load a saved conversation into the pane: its turns and its mode. */
+  const showSession = (session: { messages: ChatMessage[]; mode?: AgentMode | null }) =>
+    updateChat(agentIdRef.current, {
+      turns: toTurns(session.messages),
+      mode: asAgentMode(session.mode),
+    });
 
   const ready = typeof status === 'object' && status.configured && status.reachable;
   const slashMatches = prompt.startsWith('/') ? matchSlash(prompt) : [];
@@ -421,7 +472,7 @@ export function ChatWidget({
   };
 
   const newSession = async () => {
-    setTurns([]);
+    updateChat(agentIdRef.current, { turns: [], mode: null });
     try {
       const session = await createSession(undefined, agentIdRef.current);
       setActiveId(session.id);
@@ -436,7 +487,7 @@ export function ChatWidget({
     try {
       await setActiveSession(id);
       setActiveId(id);
-      setTurns(toTurns((await getSession(id)).messages));
+      showSession(await getSession(id));
     } catch {
       /* leave current */
     }
@@ -457,7 +508,8 @@ export function ChatWidget({
       setSessions(list.sessions);
       if (id !== liveActiveId()) return;
       setActiveId(list.active);
-      setTurns(list.active ? toTurns((await getSession(list.active)).messages) : []);
+      if (list.active) showSession(await getSession(list.active));
+      else updateChat(agentIdRef.current, { turns: [], mode: null });
     } catch {
       /* leave current */
     }
@@ -508,7 +560,12 @@ export function ChatWidget({
     const id = liveActiveId();
     if (!id) return;
     try {
-      await saveSession(id, { messages: toMessages(liveTurns()) });
+      // The mode rides along: a chat that picked Plan before its first message had
+      // no session to save it on until `ensureSession` made one.
+      await saveSession(id, {
+        messages: toMessages(liveTurns()),
+        mode: chatState(agentIdRef.current).mode,
+      });
       await refreshSessions();
     } catch {
       /* best-effort */
@@ -604,6 +661,13 @@ export function ChatWidget({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Shift+Tab cycles the mode, as the picker's tooltip says. Only with no
+    // suggestion list open: there, Tab completes the suggestion.
+    if (e.key === 'Tab' && e.shiftKey && !showSuggestions) {
+      e.preventDefault();
+      setMode(nextMode(shownMode));
+      return;
+    }
     if (showSuggestions) {
       const items = getFilteredItems();
       if (items.length > 0) {
@@ -636,14 +700,23 @@ export function ChatWidget({
 
   /** Send `text` as the next turn. `typed` is false for a turn another pane handed
    *  in (`sendInChat`): it must not clear what the user is typing in the box. */
-  const sendText = async (text: string, typed: boolean) => {
-    if (!text || busy) return;
+  const sendText = async (input: string, typed: boolean) => {
+    if (!input || busy) return;
+    let text = input;
+
+    // `/plan add a toggle`: switch mode, then send the rest as an ordinary turn.
+    // Bare `/plan` falls through to the slash command, which says what changed.
+    const modeCmd = parseModeCommand(text);
+    if (modeCmd?.rest) {
+      setMode(modeCmd.mode);
+      text = modeCmd.rest;
+    }
 
     // Slash command: run locally, render as ephemeral system output, no model turn.
     if (text.startsWith('/')) {
       if (typed) setPrompt('');
       setTurns((prev) => [...prev, { role: 'user', text, ephemeral: true }]);
-      const out = await runSlash(text, { newSession, setAgent: pickAgent });
+      const out = await runSlash(text, { newSession, setAgent: pickAgent, setMode });
       setTurns((prev) => [...prev, { role: 'system', text: out, ephemeral: true }]);
       return;
     }
@@ -666,18 +739,21 @@ export function ChatWidget({
     // Our own turn id, stamped on both turns before the first frame arrives, so the
     // trace view can join this message to what the model was shown and did.
     const turnId = newTurnId();
+    // Sending is a request to see the answer: follow it even if the reader had
+    // scrolled up.
+    stickRef.current = true;
     setTurns((prev) => [
       ...prev,
       { role: 'user', text, turnId },
-      { role: 'assistant', text: '', turnId },
+      { role: 'assistant', text: '', turnId, steps: [], startedAt: Date.now() },
     ]);
     setFollowTarget(agentIdRef.current);
 
     const patch = (fn: (t: ChatTurn) => ChatTurn) =>
       setTurns((prev) => prev.map((t, i) => (i === assistantIndex ? fn(t) : t)));
 
-    // Delegated sub-agents stream under the parent turn: note the hand-off once,
-    // then fold their deltas into the reasoning disclosure.
+    // Delegated sub-agents stream under the parent turn, as a thought of their own
+    // headed with the agent's id.
     const delegatesSeen = new Set<string>();
     const turnAgent = agentIdRef.current;
     const abort = new AbortController();
@@ -686,18 +762,29 @@ export function ChatWidget({
       await askAgent(
         text,
         {
-          onToken: (delta) => patch((t) => ({ ...t, text: t.text + delta })),
-          onReasoning: (delta) => patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta })),
+          onToken: (delta) => patch((t) => applyToken(t, delta, Date.now())),
+          onReasoning: (delta) => patch((t) => applyReasoning(t, delta, Date.now())),
+          onToolStart: (call) => patch((t) => applyToolStart(t, call, Date.now())),
+          onToolEnd: (end) => patch((t) => applyToolEnd(t, end)),
+          onApproval: (callId) => patch((t) => applyApproval(t, callId)),
+          onQuestion: (q) => patch((t) => applyQuestion(t, q, Date.now())),
+          onTodos: (items) => patch((t) => applyTodos(t, items)),
+          onPlan: (planText) =>
+            // An earlier plan in this chat is replaced by this one: only the newest
+            // can be approved.
+            setTurns((prev) =>
+              prev.map((t, i) =>
+                i === assistantIndex
+                  ? applyPlan(t, planText, Date.now())
+                  : t.plan?.status === 'proposed'
+                    ? { ...t, plan: { ...t.plan, status: 'superseded' } }
+                    : t,
+              ),
+            ),
           onDelegateToken: (delegateId, delta) => {
-            if (delegateId && !delegatesSeen.has(delegateId)) {
-              delegatesSeen.add(delegateId);
-              patch((t) => ({
-                ...t,
-                actions: [...(t.actions ?? []), `Delegated to ${delegateId}`],
-                reasoning: `${t.reasoning ?? ''}\n[${delegateId}] `,
-              }));
-            }
-            patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta }));
+            const head = delegateId && !delegatesSeen.has(delegateId) ? `[${delegateId}] ` : '';
+            if (head) delegatesSeen.add(delegateId);
+            patch((t) => applyReasoning(t, head + delta, Date.now()));
           },
           onDelegateStart: (subTurnId, delegateId) =>
             patch((t) => ({
@@ -711,7 +798,6 @@ export function ChatWidget({
             })),
           // The final answer is authoritative; fall back to the streamed text if empty.
           onAnswer: (answer) => patch((t) => ({ ...t, text: answer || t.text })),
-          onAction: (note) => patch((t) => ({ ...t, actions: [...(t.actions ?? []), note] })),
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
         history,
@@ -722,14 +808,42 @@ export function ChatWidget({
           signal: abort.signal,
           turnId,
           sessionId: liveActiveId() ?? undefined,
+          mode: chatState(turnAgent).mode,
         },
       );
       if (abort.signal.aborted) patch((t) => ({ ...t, text: t.text || '(stopped)' }));
     } finally {
+      // Nothing may still look like it is running once the turn is over.
+      patch((t) => finalizeTurn(t, Date.now()));
       if (inflight.get(turnAgent) === abort) inflight.delete(turnAgent);
       setBusy(false);
       void persist();
     }
+  };
+
+  /** Reply to the agent's `ask_user` card, and record the reply on the turn. */
+  const answerQuestionCard = (questionId: string, answers: Answers | null) => {
+    answerAgentQuestion(questionId, answers);
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.steps?.some((s) => s.kind === 'question' && s.questionId === questionId)
+          ? answerQuestion(t, questionId, answers)
+          : t,
+      ),
+    );
+  };
+
+  /** Approve a plan: Agent mode, then a turn asking for the plan to be carried
+   *  out. The plan is the previous assistant turn's text, so it is in the history
+   *  that turn replays. */
+  const approvePlan = (index: number) => {
+    setTurns((prev) =>
+      prev.map((t, i) =>
+        i === index && t.plan ? { ...t, plan: { ...t.plan, status: 'approved' } } : t,
+      ),
+    );
+    setMode('default');
+    void sendText('Approved. Carry out the plan above.', false);
   };
 
   // A turn handed in by another pane (`sendInChat`) goes out once this chat can
@@ -836,84 +950,110 @@ export function ChatWidget({
             <Avatar3D size={120} mood={mood} />
           </div>
         )}
-        <div className="agent-chat-log" ref={scrollRef}>
-          {turns.length === 0 && (
-            // An empty transcript says what this agent can do that a chat box can't
-            // — it drives the layout and reads the panes. Three real prompts do that
-            // faster than a sentence describing it, and they are clickable, so the
-            // first turn costs no typing.
-            <div className="agent-chat-starters">
-              <p className="agent-chat-starters-lead">
-                I can see your open panes and rearrange them, read what a widget is showing, and
-                edit an open buffer.
-              </p>
-              <ul className="agent-chat-starter-list">
-                {AGENT_STARTERS.map((s) => (
-                  <li key={s}>
-                    <button
-                      type="button"
-                      className="agent-chat-starter"
-                      onClick={() => {
-                        setPrompt(s);
-                        inputRef.current?.focus();
-                      }}
-                    >
-                      {s}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <p className="agent-chat-starters-foot">
-                Type <code>/help</code> for commands.
-              </p>
-            </div>
+        <div className="agent-chat-log-wrap">
+          <div className="agent-chat-log" ref={scrollRef} onScroll={onLogScroll}>
+            {turns.length === 0 && (
+              // An empty transcript says what this agent can do that a chat box can't
+              // — it drives the layout and reads the panes. Three real prompts do that
+              // faster than a sentence describing it, and they are clickable, so the
+              // first turn costs no typing.
+              <div className="agent-chat-starters">
+                <p className="agent-chat-starters-lead">
+                  I can see your open panes and rearrange them, read what a widget is showing, and
+                  edit an open buffer.
+                </p>
+                <ul className="agent-chat-starter-list">
+                  {AGENT_STARTERS.map((s) => (
+                    <li key={s}>
+                      <button
+                        type="button"
+                        className="agent-chat-starter"
+                        onClick={() => {
+                          setPrompt(s);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        {s}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="agent-chat-starters-foot">
+                  Type <code>/help</code> for commands.
+                </p>
+              </div>
+            )}
+            {turns.map((turn, i) => (
+              <Fragment key={i}>
+                {i === compactionBoundary && (
+                  // Where the agent's memory of this conversation starts. Silent
+                  // compaction is indistinguishable from an agent that forgot, so the
+                  // seam is shown rather than inferred from odd answers.
+                  <p className="agent-compacted">
+                    Earlier messages are no longer sent to the agent
+                  </p>
+                )}
+                {turn.role === 'system' ? (
+                  <pre className="agent-system">{turn.text}</pre>
+                ) : turn.role === 'user' ? (
+                  <div className="agent-msg agent-msg-user">
+                    <div className="agent-bubble">{turn.text}</div>
+                  </div>
+                ) : (
+                  <div className="agent-msg agent-msg-assistant">
+                    {turn.todos && turn.todos.length > 0 && <TurnTodos items={turn.todos} />}
+                    <ActivityTimeline
+                      steps={turn.steps ?? legacySteps(turn)}
+                      live={busy && i === turns.length - 1}
+                      onAnswer={answerQuestionCard}
+                    />
+                    {turn.plan ? (
+                      <PlanCard
+                        plan={turn.plan}
+                        canAct={!busy && ready}
+                        onApprove={() => approvePlan(i)}
+                        onKeepPlanning={() => inputRef.current?.focus()}
+                      />
+                    ) : (
+                      turn.text && (
+                        <div
+                          className="agent-bubble agent-markdown"
+                          // renderMarkdown escapes its input before adding markup.
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.text) }}
+                        />
+                      )
+                    )}
+                    {busy && i === turns.length - 1 ? (
+                      <LiveLine turn={turn} />
+                    ) : (
+                      (turn.steps?.length ?? 0) > 0 && <WorkedFor turn={turn} />
+                    )}
+                    {turn.turnId && (
+                      <button
+                        type="button"
+                        className="agent-trace-btn"
+                        onClick={() => traceTurn(agentId, turn.turnId!)}
+                        title="Show this turn's prompt, rounds and tool calls"
+                        aria-label="Trace this turn"
+                      >
+                        <IconBranch width={12} height={12} aria-hidden="true" />
+                        <span>trace</span>
+                        {turn.subTurns && turn.subTurns.length > 0 && (
+                          <span className="agent-trace-sub">+{turn.subTurns.length}</span>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </Fragment>
+            ))}
+          </div>
+          {showJump && (
+            <button type="button" className="agent-jump" onClick={jumpToLatest}>
+              <IconArrowDown />
+              <span>More</span>
+            </button>
           )}
-          {turns.map((turn, i) => (
-            <Fragment key={i}>
-              {i === compactionBoundary && (
-                // Where the agent's memory of this conversation starts. Silent
-                // compaction is indistinguishable from an agent that forgot, so the
-                // seam is shown rather than inferred from odd answers.
-                <p className="agent-compacted">Earlier messages are no longer sent to the agent</p>
-              )}
-              {turn.role === 'system' ? (
-                <pre className="agent-system">{turn.text}</pre>
-              ) : (
-                <div className={`agent-msg agent-msg-${turn.role}`}>
-                  {turn.reasoning && (
-                    <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
-                  )}
-                  {turn.actions && turn.actions.length > 0 && (
-                    <ul className="agent-actions">
-                      {turn.actions.map((a, j) => (
-                        <li key={j}>✓ {a}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
-                    <div className="agent-bubble">
-                      {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
-                    </div>
-                  )}
-                  {turn.role === 'assistant' && turn.turnId && (
-                    <button
-                      type="button"
-                      className="agent-trace-btn"
-                      onClick={() => traceTurn(agentId, turn.turnId!)}
-                      title="Show this turn's prompt, rounds and tool calls"
-                      aria-label="Trace this turn"
-                    >
-                      <IconBranch width={12} height={12} aria-hidden="true" />
-                      <span>trace</span>
-                      {turn.subTurns && turn.subTurns.length > 0 && (
-                        <span className="agent-trace-sub">+{turn.subTurns.length}</span>
-                      )}
-                    </button>
-                  )}
-                </div>
-              )}
-            </Fragment>
-          ))}
         </div>
         {slashMatches.length > 0 && (
           <ul className="agent-slash-suggest">
@@ -964,13 +1104,18 @@ export function ChatWidget({
           </ul>
         )}
         <AgentReadiness status={status} onRetry={refreshStatus} />
-        <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
+        {busy && (turns.at(-1)?.todos?.length ?? 0) > 0 && (
+          <TurnTodos items={turns.at(-1)!.todos!} compact />
+        )}
+        <form className="agent-chat-input" data-mode={shownMode} onSubmit={(e) => void send(e)}>
+          <ModePicker mode={shownMode} inherited={mode === null} onChange={setMode} />
           <input
             ref={inputRef}
+            type="text"
             value={prompt}
             onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask the agent…  (/ for commands)"
+            placeholder={`${modeInfo(shownMode).placeholder}  (/ for commands)`}
             disabled={busy}
           />
           {busy ? (

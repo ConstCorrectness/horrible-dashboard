@@ -4180,11 +4180,763 @@ kbd {
   outline: none;
   color: var(--text);
   font: inherit;
-  padding: 0.4rem 0.85rem;
+  /* Horizontal only: as an `input[type='text']` its height is `--control-h`, and
+     vertical padding would shrink the text box inside it (controls.css). */
+  padding: 0 0.85rem;
 }
 
 .agent-chat-input button {
   border-radius: 999px;
+}
+
+/* The mode tints the composer's top rule: Plan in the accent, Auto in the warning
+   colour — Auto is the one that acts without asking. */
+.agent-chat-input[data-mode='plan'] {
+  border-top-color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--accent);
+}
+.agent-chat-input[data-mode='autonomous'] {
+  border-top-color: var(--warn);
+  box-shadow: inset 0 1px 0 var(--warn);
+}
+
+/* ------------------------------------------------ agent activity timeline --
+ *
+ * An assistant turn as it happens (ActivityTimeline.tsx). Runs of thoughts and
+ * tool calls fold into notched THOUGHTS groups; the running one carries a 2px
+ * accent top rule. Labels are bold, metadata (args, durations, counts) is mono
+ * and dim — the same split the rest of the app uses for titles and stats.
+ */
+.agent-chat-log-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-msg-assistant {
+  width: 100%;
+  max-width: 100%;
+}
+
+.agent-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-activity {
+  background: color-mix(in srgb, var(--bg-raised) 70%, transparent);
+  border: 1px solid var(--border);
+  border-top-width: 2px;
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+}
+.agent-activity[data-live] {
+  border-top-color: var(--accent);
+}
+
+.agent-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--text-dim);
+}
+.agent-activity-head::-webkit-details-marker {
+  display: none;
+}
+.agent-activity-chev {
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+.agent-activity[open] > .agent-activity-head .agent-activity-chev {
+  transform: rotate(90deg);
+}
+.agent-activity-title {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.agent-activity-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+.agent-activity-flag {
+  display: inline-flex;
+  color: var(--danger);
+}
+
+.agent-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.35rem 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-step-item {
+  animation: agent-step-in var(--dur-fast) var(--ease-standard) both;
+  /* Capped in the component (STAGGER_CAP), so a long reloaded turn still lands
+     in well under half a second. */
+  animation-delay: calc(var(--agent-step-i, 0) * 35ms);
+}
+
+@keyframes agent-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/* A row, not an action button: it carries a class, so the 30px control rule
+   leaves it alone. */
+.agent-step {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 24px;
+  padding: 0.15rem 0.4rem;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+}
+.agent-step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+}
+.agent-step:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.agent-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.agent-step-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.agent-step[data-status='running'] .agent-step-glyph {
+  color: var(--accent);
+}
+.agent-step[data-status='ok'] .agent-step-glyph {
+  color: var(--success);
+}
+.agent-step[data-status='error'] .agent-step-glyph {
+  color: var(--danger);
+}
+.agent-step[data-status='denied'] .agent-step-glyph,
+.agent-step[data-status='approval'] .agent-step-glyph {
+  color: var(--warn);
+}
+
+.agent-step-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.agent-step-group {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.agent-step-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.agent-step-flag {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--warn);
+  white-space: nowrap;
+}
+.agent-step-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.agent-step-args + .agent-step-time {
+  margin-left: 0;
+}
+.agent-step-chev {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+.agent-step-thought .agent-step-chev {
+  margin-left: auto;
+}
+.agent-step-chev[data-open='true'] {
+  transform: rotate(90deg);
+}
+
+.agent-step-detail {
+  margin: 0.15rem 0 0.4rem 1.35rem;
+  padding-left: 0.6rem;
+  border-left: 1px dashed var(--border);
+}
+.agent-step-detail-head {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.agent-step-pre {
+  margin: 0.2rem 0 0.35rem;
+  padding: 0.35rem 0.5rem;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-thought-body {
+  margin: 0.15rem 0 0.4rem 1.35rem;
+  padding-left: 0.6rem;
+  border-left: 1px dashed var(--border);
+  max-height: 260px;
+  overflow: auto;
+  font-size: var(--fs-meta);
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-note {
+  margin: 0;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.agent-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  color: var(--accent);
+  animation: agent-spin 0.8s linear infinite;
+}
+
+@keyframes agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.agent-live {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.agent-live[data-waiting] {
+  color: var(--warn);
+}
+.agent-live-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+.agent-worked {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* "More": back to the latest output, when the reader has scrolled away from it. */
+.agent-jump {
+  position: absolute;
+  bottom: 0.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 26px;
+  padding: 0 0.75rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.agent-jump:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* -- cards: tasks, questions, plans. A 2px top rule, a notch, no glow. -- */
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0.55rem 0.7rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+}
+.agent-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.agent-card-title {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.agent-card-muted {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.agent-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.agent-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.agent-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+.agent-todo[data-status='completed'] .agent-todo-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+.agent-todo[data-status='in_progress'] .agent-todo-text {
+  font-weight: 600;
+}
+.agent-todo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin-top: 0.15em;
+  border: 1.5px solid var(--text-dim);
+  color: var(--bg);
+  --icon-size: 10px;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.agent-todo-mark[data-status='in_progress'] {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 2px var(--bg),
+    inset 0 0 0 6px var(--accent);
+}
+.agent-todo-mark[data-status='completed'] {
+  border-color: var(--success);
+  background: var(--success);
+}
+.agent-todos-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.agent-todos-compact {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-meta);
+}
+.agent-todos-compact .agent-todos-count {
+  margin-left: 0;
+  color: var(--accent);
+}
+.agent-todos-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-q {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.agent-q-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0;
+  margin-bottom: 0.4rem;
+  line-height: 1.4;
+}
+.agent-q-chip {
+  padding: 0 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.agent-q-text {
+  font-weight: 600;
+}
+.agent-q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.agent-q-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.agent-q-option:hover {
+  background: var(--bg-hover);
+}
+.agent-q-option[aria-checked='true'] {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+}
+.agent-q-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 0.1em;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 50%;
+  color: var(--accent);
+  --icon-size: 10px;
+}
+.agent-q-mark[data-multi] {
+  border-radius: 2px;
+}
+.agent-q-option[aria-checked='true'] .agent-q-mark {
+  border-color: var(--accent);
+}
+.agent-q-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.agent-q-label {
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+.agent-q-desc {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.agent-q-other {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.agent-q-other-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.agent-q-other input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.6rem;
+}
+
+.agent-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+}
+.agent-answer {
+  display: flex;
+  gap: 0.6rem;
+  font-size: var(--fs-meta);
+}
+.agent-answer dt {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  min-width: 7rem;
+}
+.agent-answer dd {
+  margin: 0;
+}
+.agent-question[data-settled] {
+  border-top-color: var(--border);
+}
+
+.agent-plan[data-status='approved'] {
+  border-top-color: var(--success);
+}
+.agent-plan[data-status='superseded'] {
+  border-top-color: var(--border);
+  opacity: 0.65;
+}
+.agent-plan-status {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.agent-plan[data-status='approved'] .agent-plan-status {
+  color: var(--success);
+}
+.agent-plan-body {
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* Rendered markdown (answers and plans): normal wrapping, not the bubble's
+   pre-wrap, which would double every line break the renderer already made. */
+.agent-markdown {
+  white-space: normal;
+  line-height: 1.5;
+}
+.agent-markdown > :first-child {
+  margin-top: 0;
+}
+.agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+.agent-markdown p,
+.agent-markdown ul,
+.agent-markdown ol,
+.agent-markdown pre,
+.agent-markdown blockquote,
+.agent-markdown table {
+  margin: 0.45em 0;
+}
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3,
+.agent-markdown h4 {
+  margin: 0.8em 0 0.35em;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.agent-markdown ul,
+.agent-markdown ol {
+  padding-left: 1.3rem;
+}
+.agent-markdown code {
+  padding: 0 0.25em;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.agent-markdown pre {
+  padding: 0.45rem 0.6rem;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.agent-markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+/* -- the composer's mode chip and its menu -- */
+.agent-mode {
+  position: relative;
+  flex: 0 0 auto;
+}
+.agent-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 26px;
+  padding: 0 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.agent-mode-chip:hover {
+  background: var(--bg-hover);
+}
+.agent-mode-chip[data-mode='plan'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.agent-mode-chip[data-mode='autonomous'] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.agent-mode-chev {
+  transform: rotate(-90deg);
+}
+.agent-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 270px;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  /* Opaque under the glass theme's translucent token: the menu opens over the
+     chat log, and live text behind 72% alpha is unreadable. */
+  background-color: var(--bg-primary);
+  background-image: linear-gradient(var(--bg-raised), var(--bg-raised));
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  box-shadow: 0 6px 18px color-mix(in srgb, #000 28%, transparent);
+}
+.agent-mode-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-mode-item:hover,
+.agent-mode-item:focus-visible {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+  outline: none;
+}
+.agent-mode-item-mark {
+  display: inline-flex;
+  width: 13px;
+  flex: 0 0 auto;
+  margin-top: 0.1em;
+  color: var(--accent);
+}
+.agent-mode-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.agent-mode-item-label {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.agent-mode-item[data-mode='plan'] .agent-mode-item-label {
+  color: var(--accent);
+}
+.agent-mode-item[data-mode='autonomous'] .agent-mode-item-label {
+  color: var(--warn);
+}
+.agent-mode-item-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-step-item,
+  .agent-spinner {
+    animation: none;
+  }
+  .agent-step-chev,
+  .agent-activity-chev,
+  .agent-todo-mark,
+  .agent-q-option {
+    transition: none;
+  }
 }
 
 /* ------------------------------------------------ agent empty transcript --

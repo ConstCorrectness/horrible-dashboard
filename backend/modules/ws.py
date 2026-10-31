@@ -90,6 +90,10 @@ class WsConnection:
         # Outstanding permission-approval prompts, keyed by approvalId, resolved
         # when the browser sends an `approval_response`.
         self.pending_approvals: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        # Outstanding `ask_user` questions, keyed by questionId, resolved when the
+        # browser sends a `question_response`. Only a real socket has this table:
+        # the agent treats a connection without it as one with nobody to ask.
+        self.pending_questions: dict[str, asyncio.Future[dict[str, Any]]] = {}
         # Dynamic agent tools the browser pushed for this connection (the
         # capability manifest): serialized AgentToolDecl/agent-command shapes,
         # never including handlers. Merged with the static LAYOUT_TOOLS each turn.

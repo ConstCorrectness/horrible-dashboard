@@ -8,12 +8,9 @@
  */
 import { registry } from '../../registry';
 import { listServers as listMcpServers, summarize as summarizeMcpServers } from '../mcp/api';
-import {
-  listSkills,
-  skillCost,
-  summarize as summarizeSkills,
-} from '../skills/api';
+import { listSkills, skillCost, summarize as summarizeSkills } from '../skills/api';
 import { getAgentRoster } from './api';
+import { MODE_COMMANDS, modeInfo, parseModeCommand, type AgentMode } from './modes';
 import { requestAgentTools } from './orchestrator-client';
 import { getSetting, resetSetting, setSetting } from '../../settings';
 
@@ -23,6 +20,23 @@ export interface SlashContext {
   newSession: () => void | Promise<void>;
   /** Switch the pane to another roster agent (loads that agent's sessions). */
   setAgent?: (id: string) => void;
+  /** Switch this chat's mode (Plan / Agent / Auto). */
+  setMode?: (mode: AgentMode) => void;
+}
+
+/** `/plan`, `/act`, `/auto` with nothing after them. With a prompt after them the
+ *  chat switches and sends instead, before slash commands are consulted. */
+function modeCommand(name: string): SlashCommand {
+  const mode = MODE_COMMANDS[name];
+  const info = modeInfo(mode);
+  return {
+    name,
+    description: `${info.label} mode: ${info.hint.toLowerCase()}. /${name} <prompt> switches and sends.`,
+    run: (_args, ctx) => {
+      ctx.setMode?.(mode);
+      return `${info.label} mode. ${info.hint}.`;
+    },
+  };
 }
 
 export interface SlashCommand {
@@ -74,6 +88,18 @@ export const SLASH_COMMANDS: SlashCommand[] = [
         'Open panes:',
         ...panes.map((p) => `  • ${p.title} (${p.id})${p.hasContext ? ' — agent-readable' : ''}`),
       ].join('\n');
+    },
+  },
+  ...Object.keys(MODE_COMMANDS).map(modeCommand),
+  {
+    name: 'mode',
+    description: 'Switch mode: /mode plan | agent | auto',
+    run: (args, ctx) => {
+      const parsed = parseModeCommand(`/mode ${args}`);
+      if (!parsed) return 'Usage: /mode plan | agent | auto';
+      ctx.setMode?.(parsed.mode);
+      const info = modeInfo(parsed.mode);
+      return `${info.label} mode. ${info.hint}.`;
     },
   },
   {

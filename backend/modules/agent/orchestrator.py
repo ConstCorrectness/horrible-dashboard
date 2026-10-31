@@ -542,6 +542,104 @@ _STATIC_TOOL_META: dict[str, dict[str, Any]] = {
     },
 }
 
+#: The appearance verbs change what the user sees but carry no side-effect meta, so
+#: the permission gate waves them through in every mode — and an approval prompt for
+#: "switch to the dark theme" in Agent mode would be noise. Plan mode is the one
+#: place they must not run: it promises that nothing changes until the plan is
+#: approved. Window and pane arrangement stays allowed there; it is how the agent
+#: *shows* the user what it found, and it is undone with a click.
+PLAN_MODE_BLOCKED = frozenset(t["function"]["name"] for t in DESKTOP_TOOLS)
+
+
+# ---- Interaction tools ------------------------------------------------------------
+#
+# Tools that talk to the person in the chat instead of acting on the app: ask them a
+# multiple-choice question, keep a visible checklist, hand over a plan. Resolved in
+# the loop itself (`_run_interaction_tool`) and never gated — none of them changes
+# anything. Only offered where a chat is watching: a remote turn has no tools at all,
+# and a delegated sub-agent's events carry a sub-turn id the chat ignores, so its
+# question would wait for an answer nobody can see.
+
+_QUESTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "string", "description": "The full question."},
+        "header": {
+            "type": "string",
+            "description": "A 1-3 word label for the question, e.g. 'Approach'.",
+        },
+        "multiSelect": {
+            "type": "boolean",
+            "description": "True when more than one option may be picked.",
+        },
+        "options": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["label"],
+            },
+            "description": "2-4 distinct choices. Put your recommendation first.",
+        },
+    },
+    "required": ["question", "options"],
+}
+
+INTERACTION_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "ask_user",
+        "Ask the user 1-4 multiple-choice questions and wait for the answers. Use it "
+        "only for a choice that is genuinely theirs (an approach, a scope, a "
+        "trade-off) and that you cannot settle from the request or a sensible "
+        "default. The user can always type their own answer instead.",
+        {"questions": {"type": "array", "items": _QUESTION_SCHEMA}},
+        ["questions"],
+    ),
+    _tool(
+        "update_todos",
+        "Show the user a checklist of the steps you are working through. Send the "
+        "whole list every time; keep exactly one item in_progress while you work and "
+        "mark items completed as you finish them. Worth it for tasks of 3+ steps.",
+        {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed"],
+                        },
+                    },
+                    "required": ["content", "status"],
+                },
+            }
+        },
+        ["items"],
+    ),
+]
+
+#: Offered in plan mode only, on top of the interaction tools.
+PLAN_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "submit_plan",
+        "Hand the user your finished plan to approve. Call it once you have "
+        "investigated and settled the open questions. The plan is markdown: the "
+        "context, the changes step by step, the files involved, how to verify. The "
+        "turn ends when you call it.",
+        {"plan": {"type": "string", "description": "The plan, in markdown."}},
+        ["plan"],
+    ),
+]
+
+INTERACTION_TOOL_NAMES = frozenset(
+    t["function"]["name"] for t in INTERACTION_TOOLS + PLAN_TOOLS
+)
+
 
 def _manifest_to_tools(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert the browser-pushed capability manifest (serialized AgentToolDecl /
@@ -1231,6 +1329,7 @@ def _core_tools(spec: AgentSpec | None = None) -> list[dict[str, Any]]:
     if spec is None or spec.can_delegate:
         tools += list(DELEGATE_TOOLS)
     tools += list(META_TOOLS)
+    tools += list(INTERACTION_TOOLS)
     tools += _skill_tools()
     core_plugin = _plugins.provider_tools(grouped=False)
     if spec is not None and spec.tool_groups is not None:
@@ -1523,6 +1622,47 @@ def _note_dropped_tools(messages: list[dict[str, Any]], stats: dict[str, Any]) -
     )
 
 
+def _effective_mode(
+    conn: WsConnection, mode_override: permissions.Mode | None = None
+) -> permissions.Mode:
+    """The permission mode a call runs under. A remote (peer-driven) turn forces its
+    own (`network.remoteAgentMode`) and never has a human to prompt; then the turn's
+    own mode — the chat's picker, else the roster agent's default; then the user's
+    global setting."""
+    return (
+        getattr(conn, "force_mode", None)
+        or mode_override
+        or permission_store.load_mode()
+    )
+
+
+def _shape_for_turn(
+    conn: WsConnection,
+    tools: list[dict[str, Any]],
+    mode: permissions.Mode,
+    *,
+    delegated: bool,
+) -> list[dict[str, Any]]:
+    """Fit a round's tool list to how this turn is being run.
+
+    Plan mode drops every tool that acts. The gate would refuse them anyway, but a
+    model that can see `files.write` reaches for it, is denied, and spends a round
+    learning what the mode already said — so it never sees them, and gets
+    `submit_plan` instead. A delegated sub-agent loses the interaction tools: its
+    events carry a sub-turn id the chat does not render (see INTERACTION_TOOLS)."""
+    if delegated:
+        return [t for t in tools if t["function"]["name"] not in INTERACTION_TOOL_NAMES]
+    if mode is not permissions.Mode.PLAN:
+        return tools
+
+    def acts(name: str) -> bool:
+        meta = _tool_meta(conn, name)
+        return name in PLAN_MODE_BLOCKED or bool(meta and meta.get("sideEffect"))
+
+    kept = [t for t in tools if not acts(t["function"]["name"])]
+    return kept + list(PLAN_TOOLS)
+
+
 def _tools_for(
     conn: WsConnection, prompt: str = "", history: list[Any] | None = None
 ) -> list[dict[str, Any]]:
@@ -1569,6 +1709,12 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         # The chat session the turn belongs to. Only labels the trace (a thread in
         # Opik); the backend stays stateless per turn — `history` is the context.
         session_id = data.get("sessionId")
+        # The chat's mode picker (Plan / Agent / Auto). Absent or unknown means
+        # "no preference" — the roster agent's default, then the global setting.
+        try:
+            mode = permissions.Mode(data["mode"]) if data.get("mode") else None
+        except ValueError:
+            mode = None
         task = asyncio.create_task(
             run_agent_turn(
                 conn,
@@ -1578,6 +1724,7 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
                 context if isinstance(context, dict) else None,
                 agent_id=agent_id,
                 session_id=str(session_id) if session_id else None,
+                mode=mode,
             )
         )
         # A detached task that raises is a chat that never answers and never says
@@ -1604,6 +1751,11 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     elif event == "approval_response":
         approval_id = str(data.get("approvalId", ""))
         fut = conn.pending_approvals.pop(approval_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(data)
+    elif event == "question_response":
+        question_id = str(data.get("questionId", ""))
+        fut = getattr(conn, "pending_questions", {}).pop(question_id, None)
         if fut is not None and not fut.done():
             fut.set_result(data)
 
@@ -1709,8 +1861,14 @@ async def _request_approval(
     name: str,
     specifier: str | None,
     mode: permissions.Mode,
+    *,
+    call_id: str | None = None,
+    args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Prompt the browser to approve a gated call; await the user's decision."""
+    """Prompt the browser to approve a gated call; await the user's decision.
+
+    `call_id` is the provider's id for the call — the one `tool_start` carried — so
+    the chat can mark that exact row as waiting on the user."""
     approval_id = uuid.uuid4().hex[:8]
     fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
     conn.pending_approvals[approval_id] = fut
@@ -1723,6 +1881,8 @@ async def _request_approval(
                 "tool": name,
                 "specifier": specifier,
                 "mode": mode.value,
+                "callId": call_id,
+                "args": args or {},
             },
         )
     )
@@ -1746,19 +1906,16 @@ async def _gate(
     meta = _tool_meta(conn, call.name)
     side_effect = bool(meta and meta.get("sideEffect"))
     if not side_effect:
-        return True
+        # Plan mode's one extra refusal: the appearance verbs carry no meta, so
+        # nothing else would stop them (see PLAN_MODE_BLOCKED).
+        return not (
+            call.name in PLAN_MODE_BLOCKED
+            and _effective_mode(conn, mode_override) is permissions.Mode.PLAN
+        )
     specifier = permissions.render_specifier(
         meta.get("specifierTemplate") if meta else None, call.arguments
     )
-    # A remote (peer-driven) turn forces its own mode (network.remoteAgentMode) and
-    # never has a human to prompt; a roster agent may carry its own default mode
-    # (`agent.<id>.permissionMode` / spec.default_mode); otherwise the user's
-    # session mode applies.
-    mode = (
-        getattr(conn, "force_mode", None)
-        or mode_override
-        or permission_store.load_mode()
-    )
+    mode = _effective_mode(conn, mode_override)
     rules = permission_store.load_rules()
     decision = permissions.evaluate(call.name, specifier, side_effect, mode, rules)
     if decision is permissions.Decision.ALLOW:
@@ -1768,7 +1925,15 @@ async def _gate(
     # ASK: a remote turn has no human behind it — deny rather than block/prompt.
     if getattr(conn, "is_remote", False):
         return False
-    response = await _request_approval(conn, turn_id, call.name, specifier, mode)
+    response = await _request_approval(
+        conn,
+        turn_id,
+        call.name,
+        specifier,
+        mode,
+        call_id=getattr(call, "id", None),
+        args=call.arguments if isinstance(call.arguments, dict) else None,
+    )
     choice = response.get("decision")
     if choice == "allow_always":
         permission_store.add_rule(
@@ -1975,6 +2140,163 @@ def _coerce_group_list(raw: Any) -> list[str]:
 #: fixtures would not have stopped a replayed turn from delegating or reaching a
 #: peer for a second time. This is the one hook that covers all three legs.
 Simulate = Callable[[str, dict[str, Any]], Awaitable[Any]]
+
+#: How much of a tool's result `tool_end` carries. The chat shows it in an expanded
+#: row; the model still gets the whole thing.
+TOOL_PREVIEW_CHARS = 1500
+
+
+def _tool_outcome(result: Any) -> dict[str, Any]:
+    """`ok`/`denied`/`preview` for a `tool_end` frame.
+
+    A tool reports failure as a dict with an `error` key — that is the convention
+    every leg of `_dispatch_call` already returns, so it is the one test here.
+    `denied` singles out the two refusals the loop itself writes (the permission
+    gate, and a tool taken out of the run), which the chat shows as a lock rather
+    than as the tool failing."""
+    error = result.get("error") if isinstance(result, dict) else None
+    denied = isinstance(error, str) and (
+        error == "denied by permission policy"
+        or error.endswith("is not available in this run")
+    )
+    try:
+        text = (
+            result
+            if isinstance(result, str)
+            else json.dumps(result, default=str, ensure_ascii=False)
+        )
+    except (TypeError, ValueError):
+        text = repr(result)
+    if len(text) > TOOL_PREVIEW_CHARS:
+        text = text[:TOOL_PREVIEW_CHARS] + "…"
+    return {"ok": error is None, "denied": denied, "preview": text}
+
+
+def _loose_list(raw: Any) -> list[Any]:
+    """An array argument however the model spelled it — small models routinely hand
+    one back as a JSON string (see `_coerce_group_list`)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    return raw if isinstance(raw, list) else []
+
+
+def _clean_questions(raw: Any) -> list[dict[str, Any]]:
+    """`ask_user`'s questions, reduced to what the chat renders. Malformed entries
+    drop rather than failing the call; a question with fewer than two options is not
+    a choice and drops too."""
+    out: list[dict[str, Any]] = []
+    for q in _loose_list(raw)[:4]:
+        if not isinstance(q, dict) or not str(q.get("question") or "").strip():
+            continue
+        options = [
+            {
+                "label": str(o.get("label") if isinstance(o, dict) else o).strip(),
+                "description": str(o.get("description") or "").strip()
+                if isinstance(o, dict)
+                else "",
+            }
+            for o in _loose_list(q.get("options"))[:6]
+        ]
+        options = [o for o in options if o["label"]]
+        if len(options) < 2:
+            continue
+        out.append(
+            {
+                "question": str(q["question"]).strip(),
+                "header": str(q.get("header") or "").strip()[:24],
+                "multiSelect": bool(q.get("multiSelect")),
+                "options": options,
+            }
+        )
+    return out
+
+
+_TODO_STATUSES = ("pending", "in_progress", "completed")
+
+
+def _clean_todos(raw: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in _loose_list(raw)[:20]:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        status = str(item.get("status") or "pending")
+        if content:
+            out.append(
+                {
+                    "content": content,
+                    "status": status if status in _TODO_STATUSES else "pending",
+                }
+            )
+    return out
+
+
+async def _run_interaction_tool(
+    conn: WsConnection,
+    turn_id: str,
+    agent_id: str,
+    call: Any,
+    mode: permissions.Mode,
+    simulate: Simulate | None = None,
+) -> Any:
+    """Resolve `ask_user` / `update_todos` / `submit_plan` (see INTERACTION_TOOLS).
+
+    `ask_user` is the only one that waits. It has no timeout of its own: a question
+    is answered, dismissed, or the turn is stopped — Stop cancels this await along
+    with the turn. A connection with no `pending_questions` table (a peer, an eval,
+    a replay) has nobody to ask, and the model is told to decide for itself rather
+    than left waiting."""
+    name = call.name
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    ids = {"turnId": turn_id, "agentId": agent_id}
+    if name == "update_todos":
+        items = _clean_todos(args.get("items"))
+        await conn.send_json(_evt("todos", {**ids, "items": items}))
+        return {"ok": True, "items": len(items)}
+    if name == "submit_plan":
+        if mode is not permissions.Mode.PLAN:
+            return {"error": "submit_plan is only for plan mode; just do the work"}
+        plan = str(args.get("plan") or "").strip()
+        if not plan:
+            return {"error": "submit_plan needs the plan text"}
+        await conn.send_json(_evt("plan", {**ids, "text": plan}))
+        return {"ok": True}
+
+    questions = _clean_questions(args.get("questions"))
+    if not questions:
+        return {
+            "error": "ask_user needs 1-4 questions, each with a question and 2-4 "
+            "options that have a label"
+        }
+    if simulate is not None:
+        return await simulate(name, args)
+    pending = getattr(conn, "pending_questions", None)
+    if pending is None or getattr(conn, "is_remote", False):
+        return {
+            "error": "There is no one to ask in this run. Pick the option you think "
+            "best and say what you assumed."
+        }
+    question_id = uuid.uuid4().hex[:8]
+    fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    pending[question_id] = fut
+    try:
+        await conn.send_json(
+            _evt("question", {**ids, "questionId": question_id, "questions": questions})
+        )
+        data = await fut
+    finally:
+        pending.pop(question_id, None)
+    if data.get("dismissed"):
+        return {
+            "dismissed": True,
+            "note": "The user closed the questions without answering. Go with your "
+            "best judgement and say what you assumed.",
+        }
+    answers = data.get("answers")
+    return {"answers": answers if isinstance(answers, dict) else {}}
 
 
 async def _dispatch_call(
@@ -2364,8 +2686,14 @@ async def run_agent_loop(
     # the placeholder gave every chat turn `tool_names: []`, one harness for all.
     # Reused verbatim as round 0's list below, so the budget check logs once.
     entry_stats: dict[str, Any] = {}
+    # Resolved once: a turn's mode does not change mid-turn, and `load_mode` reads
+    # settings. Only the progressive (chat) path reshapes its list by it — a flow
+    # node's fixed list is the flow author's to decide.
+    mode = _effective_mode(conn, mode_override)
+    delegated = parent_turn_id is not None
     if progressive:
         tools = _select_tools(conn, active_groups or set(), spec, entry_stats)
+        tools = _shape_for_turn(conn, tools, mode, delegated=delegated)
         if denied:
             tools = [t for t in tools if t["function"]["name"] not in denied]
     # Record what the agent *does*, beside the `_capture_context` call that records
@@ -2441,6 +2769,7 @@ async def run_agent_loop(
                     _note_dropped_tools(messages, tool_stats)
                 elif progressive:
                     tools = _select_tools(conn, active_groups, spec, tool_stats)
+                    tools = _shape_for_turn(conn, tools, mode, delegated=delegated)
                     if denied:
                         tools = [
                             t for t in tools if t["function"]["name"] not in denied
@@ -2542,6 +2871,7 @@ async def run_agent_loop(
                 if not result.tool_calls:
                     answer = result.content
                     return answer
+                submitted_plan: str | None = None
                 for call in result.tool_calls:
                     started = time.monotonic()
                     # Two clocks on purpose: `monotonic` measures the duration (it
@@ -2549,6 +2879,23 @@ async def run_agent_loop(
                     # bar's left edge at. `rec.action` runs after the await, so
                     # letting the store default `ts` would record the call's *end*.
                     started_wall = time.time()
+                    # The chat's activity timeline: one row per call, opened here
+                    # and closed by `tool_end` below. Every leg is covered — meta,
+                    # backend, plugin and browser tools alike — which the browser's
+                    # own `tool_call` relay never could.
+                    await conn.send_json(
+                        _evt(
+                            "tool_start",
+                            {
+                                "turnId": turn_id,
+                                "agentId": agent_id,
+                                "callId": call.id,
+                                "name": call.name,
+                                "args": call.arguments,
+                                "round": round_no,
+                            },
+                        )
+                    )
                     # Every call gets a span, refused ones included: "the model
                     # reached for a tool it was denied" is what a trace is read for.
                     with otel_tracing.tool_span(
@@ -2567,6 +2914,16 @@ async def run_agent_loop(
                             tool_result = {
                                 "error": f"tool {call.name} is not available in this run"
                             }
+                        elif call.name in INTERACTION_TOOL_NAMES and not delegated:
+                            tool_result = await _run_interaction_tool(
+                                conn, turn_id, agent_id, call, mode, simulate
+                            )
+                            if (
+                                call.name == "submit_plan"
+                                and isinstance(tool_result, dict)
+                                and tool_result.get("ok")
+                            ):
+                                submitted_plan = str(call.arguments.get("plan", ""))
                         elif progressive:
                             tool_result = await _dispatch_call(
                                 conn,
@@ -2589,6 +2946,18 @@ async def run_agent_loop(
                                 conn, turn_id, call.name, call.arguments
                             )
                         tool_span.finish(tool_result)
+                    await conn.send_json(
+                        _evt(
+                            "tool_end",
+                            {
+                                "turnId": turn_id,
+                                "agentId": agent_id,
+                                "callId": call.id,
+                                **_tool_outcome(tool_result),
+                                "durationMs": int((time.monotonic() - started) * 1000),
+                            },
+                        )
+                    )
                     if rec:
                         # The call and its result as ONE step — pairing them later by
                         # name and ordinal breaks the moment a round calls one twice.
@@ -2601,6 +2970,14 @@ async def run_agent_loop(
                             ts=started_wall,
                         )
                     messages.append(P.tool_result_message(info, call, tool_result))
+                if submitted_plan is not None:
+                    # The plan *is* the turn's answer: the chat renders it as an
+                    # approval card, and saving it as the assistant's text is what
+                    # carries it into the next turn's history once approved. Ending
+                    # here, rather than giving the model another round, is what
+                    # stops it narrating the plan a second time or starting on it.
+                    answer = submitted_plan
+                    return answer
                 # Discovery is not work: a round whose every call was a meta tool
                 # shaped the catalog and did nothing else, so it is free until the
                 # allowance runs out.
@@ -2654,6 +3031,7 @@ async def run_agent_turn(
     agent_id: str = "main",
     session_id: str | None = None,
     source: str | None = None,
+    mode: permissions.Mode | None = None,
 ) -> None:
     """Drive one user turn as `agent_id` (see `_drive_agent_turn`).
 
@@ -2674,7 +3052,21 @@ async def run_agent_turn(
             agent_id=agent_id,
             session_id=session_id,
             source=source,
+            mode=mode,
         )
+
+
+#: Appended to the system prompt on a plan-mode turn. The tool list already lacks
+#: everything that acts (`_shape_for_turn`); this says why, and what to do instead.
+PLAN_MODE_PROMPT = (
+    "\n\nPLAN MODE is on: the user wants a plan before anything changes. Investigate "
+    "with the read-only tools you have — read files, search, look at panes. Tools "
+    "that change things are not available, so do not try to work around that. If a "
+    "real decision is the user's to make, ask it with ask_user. When you know enough, "
+    "call submit_plan with a concise markdown plan: the context, the changes step by "
+    "step, the files involved, and how to check the result. Do not write the plan as "
+    "your reply — submit_plan is how it reaches the user."
+)
 
 
 def _kb_nudge(spec: AgentSpec, remote: bool) -> str:
@@ -2717,6 +3109,7 @@ async def _drive_agent_turn(
     agent_id: str = "main",
     session_id: str | None = None,
     source: str | None = None,
+    mode: permissions.Mode | None = None,
 ) -> None:
     """Drive one user turn: assemble the conversation, run the shared tool-calling
     loop, and send the authoritative answer. The provider dialect (Ollama vs
@@ -2796,7 +3189,12 @@ async def _drive_agent_turn(
         # otherwise it would burn a load_tools round on "split this pane".
         if "layout" in _preload_groups(conn, prompt, history, spec):
             active_groups.add("layout")
-    mode_override = None if remote else roster.resolve_mode(spec)
+    # The chat's own picker wins over the roster agent's default: it is the person
+    # choosing for this conversation, now. A remote turn takes neither (`force_mode`).
+    mode_override = None if remote else (mode or roster.resolve_mode(spec))
+    planning = (
+        not remote and _effective_mode(conn, mode_override) is permissions.Mode.PLAN
+    )
     editor_msg = _active_editor_message(context)
     workspace_msg = _workspace_context_message(context)
     # Guides for groups the turn starts with — the model never calls load_tools for
@@ -2812,7 +3210,9 @@ async def _drive_agent_turn(
                 "system",
                 {
                     "role": "system",
-                    "content": spec.system_prompt + _kb_nudge(spec, remote),
+                    "content": spec.system_prompt
+                    + _kb_nudge(spec, remote)
+                    + (PLAN_MODE_PROMPT if planning else ""),
                 },
             ),
             ("skills", skills_msg),

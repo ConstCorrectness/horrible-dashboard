@@ -34,7 +34,9 @@ exists today:
   [avatar](../architecture/layout-shell.mdx) (`Avatar3D`, now in `packages/core`)
   cycling through its mood animations; the **`agent.avatarAnimation`** setting
   (default on) turns it off for a plain text pane. The transcript persists as named
-  **sessions** and supports **slash commands** (both below).
+  **sessions** and supports **slash commands** (both below). A running turn draws
+  an **activity timeline** and each chat has a **mode** — Plan, Agent or Auto (see
+  [Activity timeline & modes](#activity-timeline--modes)).
 - **Inline autosuggest source** (`POST /api/agent/complete`): a short non-streaming
   fill-in completion the [editor](./editor.mdx)'s opt-in ghost-text autosuggest calls.
 
@@ -176,8 +178,64 @@ ephemeral system output that is never persisted or replayed to the model
 catalog, fetched via the `list_tools`→`tools` WS round-trip), `/help`, `/panes`
 (open panes), `/clear` (new session), `/agent` (list the roster agents or switch
 the pane to one: `/agent dba`), `/llm` (query, set, or reset orchestrator LLM
-hyperparameter overrides), and honest placeholders `/mcp` and `/skills`
+hyperparameter overrides), `/plan`, `/act`, `/auto` and `/mode <name>` (switch the
+chat's mode — with text after them they switch *and* send it, so
+`/plan add a dark-mode toggle` is one step; Agent mode is `/act` because `/agent`
+is the roster command), and honest placeholders `/mcp` and `/skills`
 (those subsystems don't exist yet). Typing `/` shows a suggestion list.
+
+## Activity timeline & modes
+
+A turn renders as an ordered list of **steps** (`turn-steps.ts`, pure reducers
+fed by the WS events; drawn by `ActivityTimeline.tsx`):
+
+- **Thoughts groups** — consecutive reasoning and tool calls fold into one
+  collapsible `THOUGHTS` group (open while the turn runs), headed by its call
+  count and duration. Each call is a row: status glyph, a label from
+  `tool-labels.ts`, a one-line argument summary, and its duration; clicking it
+  shows the arguments and a result preview. A row waiting on the permission
+  gate shows a lock.
+- **Notes** — prose the model writes before a tool call becomes a paragraph
+  between groups; the `answer` event stays the authoritative final text, which
+  renders as markdown.
+- **Live line** — "Reasoning…", "Running *Read file*…", "Waiting for your
+  answer" or "Needs approval", with an elapsed counter (a `setInterval`, so it
+  ticks in a backgrounded pane); afterwards "Worked for 1m 12s".
+- **More ↓** — the log follows new output only while you are at the bottom;
+  scroll up and a jump button appears instead.
+
+Three backend tools feed cards instead of rows (`CARD_TOOLS`; a row is shown only
+if the call fails):
+
+| Tool | What the chat draws |
+| --- | --- |
+| `update_todos({items})` | A `TASKS` checklist pinned to the turn (and compact above the composer while busy). |
+| `ask_user({questions})` | `QuestionCard`: up to 4 questions, 2–6 options each, multi-select, an "Other" box, Skip. The turn waits for the answer (`question_response`); a cancelled turn resolves it as dismissed. Nobody to ask (a remote peer's turn) → an error result, never a hang. |
+| `submit_plan({plan})` | `PlanCard` — Plan mode only. Ends the turn; **Approve & run** switches the chat to Agent and sends "Approved. Carry out the plan above." |
+
+The interaction tools are always-on core tools; a delegated sub-agent does not
+get them.
+
+**Modes** (`modes.ts`, `ModePicker.tsx`) map onto the
+[permission modes](../architecture/agent-tools.mdx#modes): **Plan** = `plan`,
+**Agent** = `default`, **Auto** = `autonomous`. The chip at the left of the
+composer picks one (Shift+Tab cycles); the composer's top border and placeholder
+follow it. The mode is **per chat** — saved on the session (`mode`), sent with
+every `ask` — and a chat that never chose one follows
+`agent.permissions.mode` from Settings (`acceptEdits` shows as Agent).
+Precedence on the backend: `conn.force_mode` (remote peers) > the chat's mode >
+the roster agent's `permissionMode` > the global setting.
+
+In Plan mode the backend drops every side-effecting tool, and every
+`DESKTOP_TOOLS` verb (`PLAN_MODE_BLOCKED`), from the offered set (`_gate` still
+refuses them if called), adds `submit_plan`, and appends a plan-mode addendum to
+the system prompt. Pane open/close stays available: it is how the agent *shows*
+things.
+
+Saved turns carry `steps`, `todos`, `plan {text, status}`, `started_at` and
+`ended_at` (`ChatMessage` in `backend/modules/chat/models.py`), so a reloaded
+chat redraws its timeline. Chats saved before the timeline render from their old
+`reasoning` / `actions` fields (`legacySteps`).
 
 ## The orchestrator
 
@@ -410,10 +468,10 @@ are stable, not creative.
 | Direction     | event               | data                                             |
 | ------------- | ------------------- | ------------------------------------------------ |
 | client→server | `manifest`          | `{tools: SerializedTool[]}`                      |
-| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?, sessionId?}` |
+| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?, sessionId?, mode?}` |
 | server→client | `tool_call`         | `{turnId, callId, name, args}`                   |
 | client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`          |
-| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`    |
+| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode, callId, args}` |
 | client→server | `approval_response` | `{approvalId, decision, rule?}`                  |
 | client→server | `list_tools`        | `{}` — request the live tool catalog             |
 | client→server | `cancel`            | `{turnId}` — Stop; only the asking socket may    |
@@ -423,6 +481,12 @@ are stable, not creative.
 | server→client | `delegate_token`    | `{turnId, agentId, delta}` — sub-agent's stream  |
 | server→client | `delegate_start`    | `{turnId, subTurnId, agentId}` — a sub-turn began |
 | server→client | `delegate_done`     | `{turnId, subTurnId, agentId, ok}` — …and ended  |
+| server→client | `tool_start`        | `{turnId, agentId, callId, name, args, round}` — every call, before dispatch |
+| server→client | `tool_end`          | `{turnId, agentId, callId, ok, denied, preview, durationMs}` |
+| server→client | `question`          | `{turnId, questionId, questions}` — `ask_user` |
+| client→server | `question_response` | `{questionId, answers \| null}` — null = skipped |
+| server→client | `todos`             | `{turnId, items}` — `update_todos`               |
+| server→client | `plan`              | `{turnId, text}` — `submit_plan`                 |
 | server→client | `answer`            | `{turnId, agentId, text}` — final, authoritative |
 | server→client | `done` / `error`    | `{turnId, agentId, …}`                           |
 

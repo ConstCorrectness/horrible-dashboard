@@ -620,10 +620,41 @@ export function IconLibrary(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Held back: refused, or waiting on someone's permission. */
+export function IconLock(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="3.5" y="7.25" width="9" height="6.25" rx="1.25" />
+      <path d="M5.5 7.25V5.5a2.5 2.5 0 0 1 5 0v1.75" />
+    </Glyph>
+  );
+}
+
+/** Down to the latest. The arrow lands on a rule so it reads as "to the end". */
+export function IconArrowDown(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M8 2.5V11M4.25 7.25 8 11l3.75-3.75" />
+      <path d="M4 13.5h8" />
+    </Glyph>
+  );
+}
+
+/** A thought: a rounded bubble trailing two dots. */
+export function IconThought(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M4.5 9.5A3.25 3.25 0 0 1 5 3.1a3.5 3.5 0 0 1 6.3.4 2.9 2.9 0 0 1 .2 5.9Z" />
+      <path d="M4.75 12h.01M2.75 14h.01" />
+    </Glyph>
+  );
+}
+
 /** Icons addressable by name, for declarations that can only carry a string
  *  (a `SectionDecl.glyph`). */
-export const NAMED_GLYPHS: Readonly<Record<string, (props: SVGProps<SVGSVGElement>) => ReactElement>> =
-  {
+export const NAMED_GLYPHS: Readonly<
+  Record<string, (props: SVGProps<SVGSVGElement>) => ReactElement>
+> = {
   home: IconHome,
   layers: IconLayers,
   timeline: IconTimeline,

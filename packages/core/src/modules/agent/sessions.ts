@@ -6,6 +6,8 @@
  * See docs/modules/agent-chat.md.
  */
 import { apiDelete, apiGet, apiPost, apiPut } from '../../api';
+import type { AgentMode } from './modes';
+import type { Step, TodoItem, TurnPlan } from './turn-steps';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -15,6 +17,12 @@ export interface ChatMessage {
   /** The orchestrator turn id; see `ChatTurn.turnId`. */
   turn_id?: string;
   sub_turns?: { turnId: string; agentId: string; ok?: boolean }[];
+  /** The activity timeline; stored opaquely by the backend. See turn-steps.ts. */
+  steps?: Step[];
+  todos?: TodoItem[];
+  plan?: TurnPlan | null;
+  started_at?: number | null;
+  ended_at?: number | null;
 }
 
 export interface ChatSession {
@@ -22,6 +30,8 @@ export interface ChatSession {
   title: string;
   agent_id: string;
   messages: ChatMessage[];
+  /** The chat's mode picker; null follows the Settings default. */
+  mode?: AgentMode | null;
   created: number;
   updated: number;
 }
@@ -58,7 +68,7 @@ export function createSession(title?: string, agentId?: string): Promise<ChatSes
 /** Partial upsert: pass only `messages` to save a turn without touching the title. */
 export function saveSession(
   id: string,
-  patch: { title?: string; messages?: ChatMessage[] },
+  patch: { title?: string; messages?: ChatMessage[]; mode?: AgentMode | null },
 ): Promise<ChatSession> {
   return apiPut<ChatSession>(`/chat/sessions/${encodeURIComponent(id)}`, patch);
 }

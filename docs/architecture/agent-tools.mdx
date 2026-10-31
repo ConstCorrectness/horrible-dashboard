@@ -372,6 +372,11 @@ A `defaultMode` setting (overridable per session), mirroring Claude Code:
 | `acceptEdits`| Auto-allow editor saves and safe FS creation (`files.create`, mkdir-equivalents); still `ask` on `files.delete`/`files.rename`/`terminal.exec`. |
 | `autonomous` | Allow everything except explicit `ask`/`deny` rules — the `bypassPermissions` analog.    |
 
+The chat pane exposes `plan` / `default` / `autonomous` as **Plan / Agent / Auto**,
+chosen per chat and sent with each `ask`; in `plan` the side-effecting tools and
+the `DESKTOP_TOOLS` verbs are also left out of the offered set, not just denied.
+See [activity timeline & modes](../modules/agent-chat.mdx#activity-timeline--modes).
+
 **Circuit breakers** apply even in `autonomous`: destructive roots
 (`files.delete` at a workspace root, `terminal.exec(rm -rf /*)` and equivalents)
 always prompt, as a guard against model error.
