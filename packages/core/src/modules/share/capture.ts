@@ -33,11 +33,7 @@
 
 import { hasCapability } from '../../capabilities';
 
-export type CaptureSupport =
-  | 'available'
-  | 'unavailable'
-  | 'insecure-context'
-  | 'unsupported-shell';
+export type CaptureSupport = 'available' | 'unavailable' | 'insecure-context' | 'unsupported-shell';
 
 export interface CaptureProbe {
   support: CaptureSupport;
@@ -112,22 +108,39 @@ export class CaptureError extends Error {
  * mandatory would make the whole capture fail on Firefox and Safari. What viewers
  * hear is the mixer's `Viewers` bus, which works the same way everywhere; this is
  * a bonus track when the engine offers one.
+ *
+ * "Not required" has to hold when the audio leg *fails*, too, not only when it is
+ * absent. The desktop shell answers with WASAPI loopback of the default output,
+ * and that open fails when something holds the output exclusively — Voicemeeter
+ * driving a Bluetooth headset did. Chromium then rejects the whole request with
+ * `NotReadableError: Device in use` although the screen was fine. So a
+ * `NotReadableError` is retried once without audio. In Electron the retry is
+ * silent; in a browser it may show the picker a second time, which beats no share.
  */
 export async function startCapture(): Promise<MediaStream> {
   const probe = probeCapture();
   if (probe.support !== 'available') throw new CaptureError(probe.reason, false);
 
   const media = navigator.mediaDevices as MediaDevices & DisplayMediaCapable;
-  try {
-    const stream = await media.getDisplayMedia!({
+  const request = (audio: boolean) =>
+    media.getDisplayMedia!({
       video: {
         frameRate: FRAME_RATE,
         // No width/height: constraining a display capture makes the browser
         // scale it, and a dashboard is text. Scaled text is the difference
         // between a readable share and a pointless one.
       },
-      audio: true,
+      audio,
     });
+  try {
+    let stream: MediaStream;
+    try {
+      stream = await request(true);
+    } catch (err) {
+      if ((err as { name?: string })?.name !== 'NotReadableError') throw err;
+      console.warn('[share] capture with system audio failed; retrying video only', err);
+      stream = await request(false);
+    }
     hintText(stream);
     return stream;
   } catch (err) {

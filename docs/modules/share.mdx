@@ -332,6 +332,12 @@ the shell answers `getDisplayMedia` (`setDisplayMediaRequestHandler` in
 Windows; macOS 15+ shows the system picker instead, and on Wayland the desktop
 portal's picker appears.
 
+System audio is a bonus, never a requirement. The Windows loopback fails when another
+app (Voicemeeter, for example) holds the default output exclusively, and Chromium then
+rejects the **whole** capture with `NotReadableError: Device in use`. So `startCapture`
+retries once without audio on `NotReadableError`. Viewers still hear the mixer's
+`Viewers` bus.
+
 The probe reports **four** states, the hardware module's rule: available,
 unavailable, `insecure-context`, or `unsupported-shell`. The `insecure-context`
 state is real and distinct — a page served over plain HTTP off localhost has no

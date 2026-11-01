@@ -21,7 +21,7 @@ import {
 
 /** A shell that knows it cannot capture, though its webview exposes the API. */
 const WITHHOLDING_SHELL = DESKTOP_CAPABILITIES.filter((c) => c !== 'media.displayCapture');
-import { probeCapture } from '../capture';
+import { probeCapture, startCapture } from '../capture';
 
 function withDisplayMedia(present: boolean): void {
   const media = { getDisplayMedia: present ? async () => new MediaStream() : undefined };
@@ -76,5 +76,60 @@ describe('probeCapture', () => {
       setup();
       expect(probeCapture().reason.length).toBeGreaterThan(20);
     }
+  });
+});
+
+/**
+ * The audio leg is a bonus, so its failure must not cost the screen. Found live: the
+ * desktop shell's WASAPI loopback could not open an output Voicemeeter held, and
+ * Chromium rejected the whole capture with `NotReadableError: Device in use`.
+ */
+describe('startCapture', () => {
+  const stream = { getVideoTracks: () => [], getTracks: () => [] } as unknown as MediaStream;
+  const domError = (name: string, message = name) => Object.assign(new Error(message), { name });
+
+  function withGetDisplayMedia(impl: (c?: MediaStreamConstraints) => Promise<MediaStream>) {
+    const calls: (MediaStreamConstraints | undefined)[] = [];
+    const getDisplayMedia = (c?: MediaStreamConstraints) => {
+      calls.push(c);
+      return impl(c);
+    };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getDisplayMedia },
+      configurable: true,
+    });
+    return calls;
+  }
+
+  beforeEach(() => {
+    initCapabilities(BROWSER_CAPABILITIES);
+    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+  });
+
+  it('retries video-only when the audio device cannot be opened', async () => {
+    const calls = withGetDisplayMedia(async (c) => {
+      if (c?.audio) throw domError('NotReadableError', 'Device in use');
+      return stream;
+    });
+    await expect(startCapture()).resolves.toBe(stream);
+    expect(calls.map((c) => c?.audio)).toEqual([true, false]);
+  });
+
+  it('does not retry a dismissed picker', async () => {
+    const calls = withGetDisplayMedia(async () => {
+      throw domError('NotAllowedError');
+    });
+    await expect(startCapture()).rejects.toMatchObject({ cancelled: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports the retry failing as a real failure', async () => {
+    withGetDisplayMedia(async () => {
+      throw domError('NotReadableError', 'Could not start video source');
+    });
+    await expect(startCapture()).rejects.toMatchObject({
+      cancelled: false,
+      message: 'Screen capture failed: Could not start video source',
+    });
   });
 });
