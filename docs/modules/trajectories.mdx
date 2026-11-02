@@ -654,7 +654,7 @@ One pane, `trajectories.hub` (`role: document`, singleton), eight sections:
 | **Runs** | `r` | Run index + timeline + step-by-step detail, with grading, deletion and search |
 | **Live** | `l` | Runs happening right now, socket-fed |
 | **Lineage** | `g` | Every agent's harness revisions and their runs as one zoomable tree, with a linked runs-over-time inset. See [Lineage](#lineage) |
-| **Agent** | `a` | The agent chat's turns from the inside: prompt by source, round-by-round diff, steps, sub-agents. See [Following the agent chat](#following-the-agent-chat) |
+| **Agent** | `a` | The agent chat's turns from the inside: each provider call's literal request, hoverable, with what came back. See [Following the agent chat](#following-the-agent-chat) |
 | **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
 | **Harness** | `h` | The A/B comparison and the harness inspector |
 | **Shared** | `s` | Runs from elsewhere. *Friends*: a friend's shared datasets and runs, pull a finished one. *Public*: digests on the agent commons index, withdraw your own |
@@ -753,38 +753,60 @@ Past 500 runs it shows the newest 500 and says so. The design keeps it fast:
 ### Following the agent chat
 
 The **Agent** section (`panels/FollowSection.tsx`) follows the agent chat pane you
-used last. It shows each turn as the model saw it and as the agent ran it. It adds
-no store. It joins three records that already existed on the chat's own `turnId`:
+used last. It answers one question: what exactly did the model receive? The unit is
+**one provider call**, read from interpretability's
+[literal requests](interpretability.mdx#literal-requests-ctx_requests): live over the
+`interpretability` channel's `request` frames, and back-filled with
+`GET /interpretability/turns/{id}/requests` (`interpretability/requests.ts`). The chat
+transcript (`agent/chat-state.ts`) supplies which turns exist and the sub-agents each
+one delegated to.
 
-| Record | Gives |
-| --- | --- |
-| The chat transcript (`agent/chat-state.ts`) | which turns exist, their ids, and the sub-agents each one delegated to |
-| Interpretability's `TurnSnapshot` (live ring, else `GET /interpretability/turns/{id}`) | what the model was *shown* each round, block by block, with where each block came from |
-| The trajectory run (live channel, else `GET /runs/by-turn/{turn_id}`) | what the agent *did* each round |
+It shows **roles only**. The labels the recorder infers ("Skill catalog", "Workspace
+index", "Force-tool nudge") are provenance, drawn as tinted spans *inside* a message,
+never as a role of their own. Trajectory steps are not in this view. They are in a
+run's detail in **Runs**, where the request link below joins the two.
 
-The layout has four regions:
+The layout has three regions:
 
 - **Turn rail.** The conversation's turns, newest first. Each turn's delegated
-  sub-turns sit indented under it and open to the sub-agent's own prompt and rounds.
-  The view moves to the newest turn as it starts. Clicking a turn holds the view there
-  until the next turn starts. The pin holds it indefinitely.
-- **Context bar.** The selected round's tokens split by source family, with rolling
-  counts.
-- **Context.** The round's blocks in order. Each has a source-coloured rule and its
-  full text; harness text is kept up to 64k characters, see
-  [interpretability](interpretability.mdx). Blocks that are new in the selected round
-  are outlined. The tool schemas offered that round are listed last, grouped.
-- **Rounds.** One band per round. Chips show what the round added to or removed from
-  the context, found by block hash rather than by position: a result, a loaded skill,
-  a loaded tool group, a replaced note. Below the chips are that round's steps, drawn
-  with the same `StepRow` as a run's detail. Clicking a band shows the context as of
-  that round.
+  sub-turns sit indented under it. The view moves to the newest turn as it starts.
+  Clicking a turn holds the view there until the next turn starts. The pin holds it
+  indefinitely.
+- **Request** (`panels/RequestInspector.tsx`). The selected call's JSON, one block
+  per message. A message the wire joined, such as the leading system message, carries
+  a tag for each part it was joined from. A message whose role changed on the way out
+  says `was system`. `tools[]` comes first, marked as a separate field of the request
+  and not a message. A minimap down the left edge sizes each message by its tokens and
+  shows the unused context window below the last message. Hovering a cell or a message
+  opens a popover: role and index, where it came from, tokens, whether it is new since
+  the previous call, which call or result it pairs with, and a 12-line preview.
+  Hovering a tool result also lights up the `tool_calls` message that asked for it.
+  The header shows the estimated total next to the provider's reported
+  `prompt_tokens`; the difference between them is the chat template. A turn recorded
+  before capture existed is rebuilt from its snapshot under a **reconstructed · not
+  literal** banner.
+- **Calls.** One card per call: `R0`, `R1`, `R2 · retry`. Selecting a card opens the
+  response: its reasoning (folded), its text, each tool call it made, and the results
+  that answered those calls in the next request. Clicking a result opens that request
+  with the message scrolled into view.
 
-Colour is by **family**, and two of the families are shared. A skill body pulled in
+Tints are by **family**, and two of the families are shared. A skill body pulled in
 with `use_skill` is drawn in the skill catalog's colour. A group guide pulled in with
 `load_tools` is drawn in the tool guides' colour, and so are the tool schemas. That
 way, injected text reads as the same thing as the catalog entry that offered it. The
 colours are `--traj-src-*` tokens in `panels/follow.css`.
+
+**Deep links.** The view opens on a specific call from three places, all through
+`focusFollowTarget` in `agent/chat-state.ts`:
+
+| From | Lands on |
+| --- | --- |
+| A chat reply's **trace** chip | the turn's newest call |
+| **request** on an action step in a run's detail | the call in that round whose response asked for that tool, so the retry wins over the call it replaced |
+| **request** on a round's `POST` in the run's network lane | the call in that round that started closest before the wire event |
+
+The step and network links go through `panels/open-request.ts`, which also reveals
+this section.
 
 The chat gets turn ids by generating them itself (`newTurnId()`, passed to
 `askAgent`). It stamps the id on both the user turn and its reply before the first
@@ -807,12 +829,14 @@ so the chat does not load the trace UI until the drawer first opens. The open st
 lives in `agent/chat-state.ts` (`setTraceDrawer`), and the component takes
 `mode="pane" | "drawer"` to choose its header actions.
 
-Without trajectory capture, a turn still shows its context, since that comes from
-interpretability, but it has no steps. The Rounds header then carries a
-"capture off · turn on" chip.
+The view does not need trajectory capture, because requests come from
+interpretability.
 
-The joining logic is pure and unit-tested in `panels/follow-model.ts`: the family
-map, the hash diff (multiset-aware), step bucketing and the turn rail.
+The logic is pure and unit-tested. `panels/follow-model.ts` holds the family map and
+the turn rail. `panels/request-model.ts` holds tool-call pairing (by
+`tool_call_id`, falling back to `tool_name` and then order for Ollama), new-versus-carried
+by hash (multiset-aware), the minimap layout, the popover, and resolving a deep link to
+a call.
 
 ### The timeline
 

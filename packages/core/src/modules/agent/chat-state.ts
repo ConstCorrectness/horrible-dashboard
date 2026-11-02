@@ -139,6 +139,24 @@ export interface FollowTarget {
   agentId: string;
   /** A turn to hold on instead of advancing to the newest one. */
   pinnedTurnId: string | null;
+  /** Open one provider call of the pinned turn. Set by a deep link (a trajectory
+   *  step, a wire row); a new `nonce` re-applies it after the user moved away. */
+  focus?: FollowFocus | null;
+}
+
+/**
+ * Which call of a turn to open, described by whatever the linking view knows: a
+ * request id when it has one, else the round plus the tool it called (a trajectory
+ * step) or the moment it happened (a wire event). The Follow view resolves it
+ * against the turn's calls — see `resolveFocus` in request-model.ts.
+ */
+export interface FollowFocus {
+  requestId?: string | null;
+  round?: number | null;
+  toolName?: string | null;
+  /** Epoch seconds. */
+  ts?: number | null;
+  nonce: number;
 }
 
 let follow: FollowTarget | null = null;
@@ -159,6 +177,16 @@ export function setFollowTarget(agentId: string, pinnedTurnId?: string | null): 
         : null;
   if (follow?.agentId === agentId && follow.pinnedTurnId === pinned) return;
   follow = { agentId, pinnedTurnId: pinned };
+  for (const l of followListeners) l();
+}
+
+/** Pin a turn and open one of its provider calls. */
+export function focusFollowTarget(
+  agentId: string,
+  turnId: string,
+  focus: Omit<FollowFocus, 'nonce'>,
+): void {
+  follow = { agentId, pinnedTurnId: turnId, focus: { ...focus, nonce: Date.now() } };
   for (const l of followListeners) l();
 }
 

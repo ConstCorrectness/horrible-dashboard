@@ -41,7 +41,13 @@ function bytes(value: number | null): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EventRow({ event }: { event: RunIoEvent }) {
+function EventRow({
+  event,
+  onRequest,
+}: {
+  event: RunIoEvent;
+  onRequest?: (event: RunIoEvent) => void;
+}) {
   const [open, setOpen] = useState(false);
   const detail = event.detail;
   return (
@@ -55,6 +61,17 @@ function EventRow({ event }: { event: RunIoEvent }) {
         {event.round != null ? <span style={mono}>r{event.round}</span> : null}
         <span style={mono}>{ms(event.duration_ms)}</span>
         <span style={mono}>{bytes(event.response_bytes)}</span>
+        {/* Only a request made inside a round can be a provider call. */}
+        {onRequest && event.round != null && event.method === 'POST' ? (
+          <Button
+            intent="ghost"
+            size="sm"
+            onClick={() => onRequest(event)}
+            title="Open the provider call this round made, in Agent"
+          >
+            request
+          </Button>
+        ) : null}
         {detail ? (
           <Button intent="ghost" size="sm" onClick={() => setOpen(!open)}>
             {open ? 'hide' : 'headers'}
@@ -86,7 +103,15 @@ function EventRow({ event }: { event: RunIoEvent }) {
   );
 }
 
-export function IoLane({ runId, hasTurn }: { runId: string; hasTurn: boolean }) {
+export function IoLane({
+  runId,
+  hasTurn,
+  onRequest,
+}: {
+  runId: string;
+  hasTurn: boolean;
+  onRequest?: (event: RunIoEvent) => void;
+}) {
   const [events, setEvents] = useState<RunIoEvent[] | null>(null);
   const [joinable, setJoinable] = useState(true);
   const [error, setError] = useState('');
@@ -158,7 +183,7 @@ export function IoLane({ runId, hasTurn }: { runId: string; hasTurn: boolean }) 
         </div>
       ) : (
         events.map((event) => (
-          <EventRow key={`${event.boot_id}:${event.ev_id}`} event={event} />
+          <EventRow key={`${event.boot_id}:${event.ev_id}`} event={event} onRequest={onRequest} />
         ))
       )}
     </div>

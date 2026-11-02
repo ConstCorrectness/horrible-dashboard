@@ -50,7 +50,15 @@ MAX_BLOCK_CHARS = 4000
 # shares one copy in memory.
 MAX_PROMPT_BLOCK_CHARS = 65536
 _PROMPT_KINDS = frozenset(
-    {"system", "skills", "guides", "workspace", "editor", "skill_loaded", "tools_loaded"}
+    {
+        "system",
+        "skills",
+        "guides",
+        "workspace",
+        "editor",
+        "skill_loaded",
+        "tools_loaded",
+    }
 )
 
 # The marker `_active_editor_message` wraps the focused buffer in. Content-sniffing
@@ -75,6 +83,10 @@ _prompt_end: dict[str, int] = {}
 # message of the assembled prefix. When present it replaces `_classify_prompt`'s
 # guesswork (which, for one, could not tell the workspace index from a tool guide).
 _prompt_sources: dict[str, list[str]] = {}
+# Per-turn socket and tokenizer, held for `requests.py`: its hook runs inside the
+# provider call, which has neither, and the round capture just before it has both.
+_turn_conn: dict[str, Any] = {}
+_turn_counter: dict[str, Counter] = {}
 
 
 def _skills_marker() -> str:
@@ -239,10 +251,15 @@ def _block_hash(role: Any, text: str) -> str:
     return digest.hexdigest()[:16]
 
 
-def _blocks(
-    messages: list[dict[str, Any]], turn_id: str, counter: Counter
-) -> list[ContextBlock]:
-    """Turn the raw provider message list into labelled, counted blocks."""
+def kinds_for(
+    messages: list[dict[str, Any]], turn_id: str
+) -> tuple[list[str], list[str | None]]:
+    """Where each message of a turn's running list came from: `(kinds, tool names)`.
+
+    The one attribution both views share — the round blocks below and the context
+    inspector's literal requests (`requests.py`) — so the two can never disagree
+    about whether message 3 was the skill catalog.
+    """
     sources = _prompt_sources.get(turn_id)
     boundary = _prompt_end.get(turn_id)
     if boundary is None:
@@ -261,22 +278,39 @@ def _blocks(
         kind, name = _loop_kind(msg, call_names)
         kinds.append(kind)
         tool_names.append(name)
+    return kinds, tool_names
 
+
+def label_for(kind: str) -> str:
+    return _LABELS.get(kind, kind.replace("_", " ").title())
+
+
+def message_text(msg: dict[str, Any]) -> str:
+    """What a message costs in context: its content, plus its serialized tool calls.
+    An assistant message carrying calls has little or no content; its real cost is
+    the calls."""
+    text = _as_text(msg.get("content"))
+    calls = msg.get("tool_calls")
+    if calls:
+        text = (text + "\n" if text else "") + _as_text(calls)
+    return text
+
+
+def _blocks(
+    messages: list[dict[str, Any]], turn_id: str, counter: Counter
+) -> list[ContextBlock]:
+    """Turn the raw provider message list into labelled, counted blocks."""
+    kinds, tool_names = kinds_for(messages, turn_id)
     blocks: list[ContextBlock] = []
     for msg, kind, tool_name in zip(messages, kinds, tool_names):
-        text = _as_text(msg.get("content"))
-        # An assistant message carrying tool calls has little or no content; its
-        # real context cost is the serialized calls, so count those too.
-        calls = msg.get("tool_calls")
-        if calls:
-            text = (text + "\n" if text else "") + _as_text(calls)
+        text = message_text(msg)
         limit = MAX_PROMPT_BLOCK_CHARS if kind in _PROMPT_KINDS else MAX_BLOCK_CHARS
         preview, clipped, full = _clip(text, limit)
         blocks.append(
             ContextBlock(
                 kind=kind,
                 role=str(msg.get("role") or ""),
-                label=_LABELS.get(kind, kind.replace("_", " ").title()),
+                label=label_for(kind),
                 content=preview,
                 tokens=counter.count(text),
                 clipped=clipped,
@@ -332,6 +366,8 @@ async def capture_round(
     """Record one round and push it to the pane. Never raises."""
     try:
         counter = await Counter.create(model, tokenizer_repo)
+        _turn_conn[turn_id] = conn
+        _turn_counter[turn_id] = counter
         blocks = _blocks(messages, turn_id, counter)
         entries = _tool_entries(tools, counter)
         message_tokens = sum(b.tokens for b in blocks)
@@ -457,6 +493,11 @@ def finish_turn(turn_id: str, model_context_length: int | None = None) -> None:
     """Drop per-turn capture state; optionally stamp the model's true window."""
     _prompt_end.pop(turn_id, None)
     _prompt_sources.pop(turn_id, None)
+    _turn_conn.pop(turn_id, None)
+    _turn_counter.pop(turn_id, None)
+    from backend.modules.interpretability import requests
+
+    requests.forget_turn(turn_id)
     if model_context_length is None:
         return
     for turn in _turns:
@@ -490,7 +531,17 @@ def get_turn(turn_id: str) -> TurnSnapshot | None:
     return next((t for t in _turns if t.turnId == turn_id), None)
 
 
+def turn_conn(turn_id: str) -> Any:
+    return _turn_conn.get(turn_id)
+
+
+def turn_counter(turn_id: str) -> Counter | None:
+    return _turn_counter.get(turn_id)
+
+
 def clear() -> None:
     _turns.clear()
     _prompt_end.clear()
     _prompt_sources.clear()
+    _turn_conn.clear()
+    _turn_counter.clear()

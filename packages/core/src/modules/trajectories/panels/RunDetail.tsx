@@ -20,6 +20,7 @@ import { CheckIcon, CircleIcon, ScaleIcon, TrashIcon, XIcon } from '../icons';
 import { CommonsPublish } from './CommonsPublish';
 import { IoLane } from './IoLane';
 import { McpStepDetail } from './McpStepDetail';
+import { openRequest } from './open-request';
 import { Timeline } from './Timeline';
 import { TraceView } from './TraceView';
 import {
@@ -43,6 +44,7 @@ export function StepRow({
   selected,
   mcpCall,
   depth = 0,
+  onRequest,
 }: {
   runId: string;
   step: TrajectoryStep;
@@ -51,6 +53,8 @@ export function StepRow({
   depth?: number;
   /** Present when this step was an MCP tool call with a recorded summary. */
   mcpCall?: McpCallSummary;
+  /** Opens the provider call that asked for this step. Absent for a run with no turn. */
+  onRequest?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const failed = step.ok === false;
@@ -80,6 +84,16 @@ export function StepRow({
         <span style={{ flex: 1 }} />
         {step.gated ? <Chip kind="warn">gated</Chip> : null}
         <span style={mono}>{ms(step.duration_ms)}</span>
+        {onRequest && step.kind === 'action' ? (
+          <Button
+            intent="ghost"
+            size="sm"
+            onClick={onRequest}
+            title="Open the provider call that asked for this, in Agent"
+          >
+            request
+          </Button>
+        ) : null}
         {step.args != null || step.result != null ? (
           <Button intent="ghost" size="sm" onClick={() => setOpen(!open)}>
             {open ? 'hide' : 'data'}
@@ -328,7 +342,16 @@ export function RunDetail({
 
       {/* What went over the wire during the turn — read from disk, so it survives
           long after the 500-event live ring has forgotten it. */}
-      <IoLane runId={run.id} hasTurn={Boolean(run.turn_id)} />
+      <IoLane
+        runId={run.id}
+        hasTurn={Boolean(run.turn_id)}
+        onRequest={(event) =>
+          openRequest(run.agent_id, event.turn_id, {
+            round: event.round ?? undefined,
+            ts: event.ts,
+          })
+        }
+      />
 
       <div style={{ ...heading, marginBottom: 'var(--space-3)' }}>
         Steps ({run.step_list.length})
@@ -342,6 +365,15 @@ export function RunDetail({
           index={index}
           selected={selectedSeq === step.seq}
           mcpCall={mcpCalls[String(step.seq)]}
+          onRequest={
+            run.turn_id
+              ? () =>
+                  openRequest(run.agent_id, run.turn_id!, {
+                    round: step.round,
+                    toolName: step.name ?? undefined,
+                  })
+              : undefined
+          }
         />
       ))}
     </div>

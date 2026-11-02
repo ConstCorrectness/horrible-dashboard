@@ -785,11 +785,35 @@ def normalize_system_messages(
     anyway: the flattened form is semantically identical, and a per-dialect branch
     would mean the strictness of a template decided whether the nudge was delivered.
     """
+    return normalize_system_messages_mapped(messages)[0]
+
+
+#: Where one stretch of a sent message came from: `(input index, start, end)`, the
+#: character range it occupies in the sent message's `content`. A message that was
+#: passed through untouched has one segment covering all of it.
+Segment = tuple[int, int, int]
+
+
+def normalize_system_messages_mapped(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[list[Segment]]]:
+    """`normalize_system_messages`, plus where every sent message came from.
+
+    The flattening is what makes the wire honest and the attribution impossible:
+    after it, the skill catalog is characters 4012–9876 of one system message rather
+    than a message of its own. The context inspector needs both — the literal request
+    *and* "this stretch was the skill catalog" — so the join records its seams here,
+    at the one place that knows them, instead of being re-derived later by searching
+    the joined text for each part (which a part repeated verbatim would defeat).
+    """
     leading: list[str] = []
+    leading_src: list[int] = []
     rest: list[dict[str, Any]] = []
-    for msg in messages:
+    rest_src: list[int] = []
+    for i, msg in enumerate(messages):
         if msg.get("role") != "system":
             rest.append(msg)
+            rest_src.append(i)
             continue
         content = msg.get("content") or ""
         # `not rest` is what makes this "leading": once any non-system message has
@@ -797,12 +821,79 @@ def normalize_system_messages(
         if not rest:
             if content:
                 leading.append(content)
+                leading_src.append(i)
         else:
             rest.append({**msg, "role": "user"})
+            rest_src.append(i)
     merged: list[dict[str, Any]] = []
+    spans: list[list[Segment]] = []
     if leading:
         merged.append({"role": "system", "content": "\n\n".join(leading)})
-    return merged + rest
+        segments: list[Segment] = []
+        offset = 0
+        for src, part in zip(leading_src, leading):
+            segments.append((src, offset, offset + len(part)))
+            offset += len(part) + 2  # the "\n\n" between parts belongs to neither
+        spans.append(segments)
+    for src, msg in zip(rest_src, rest):
+        content = msg.get("content")
+        spans.append([(src, 0, len(content) if isinstance(content, str) else 0)])
+    return merged + rest, spans
+
+
+# The context inspector's three hooks (`interpretability/requests.py`). Imported
+# lazily — interpretability imports this module — and every one swallows, for the
+# rule `orchestrator._capture_context` states: an observer that can break the thing
+# it observes is a bug.
+
+
+async def _request_begin(
+    original: list[dict[str, Any]],
+    sent: list[dict[str, Any]],
+    spans: list[list[Segment]],
+    tools: list[dict[str, Any]],
+    info: ProviderInfo,
+    model: str,
+    params: dict[str, Any],
+) -> Any:
+    try:
+        from backend.modules.interpretability import requests as ctx_requests
+
+        return await ctx_requests.begin(
+            original=original,
+            sent=sent,
+            spans=spans,
+            tools=tools,
+            dialect=info.dialect,
+            provider=info.kind,
+            model=model,
+            params={k: v for k, v in params.items() if v is not None},
+        )
+    except Exception:
+        return None
+
+
+def _note_payload(payload: dict[str, Any]) -> None:
+    """Record the request body a dialect is about to send, as it will be sent."""
+    try:
+        from backend.modules.interpretability import requests as ctx_requests
+
+        ctx_requests.note_payload(payload)
+    except Exception:
+        pass
+
+
+async def _request_end(
+    capture: Any, result: ChatResult | None, error: BaseException | None
+) -> None:
+    if capture is None:
+        return
+    try:
+        from backend.modules.interpretability import requests as ctx_requests
+
+        await ctx_requests.finish(capture, result=result, error=error)
+    except Exception:
+        pass
 
 
 #: Catalogs are fetched on every `/agent/status`, which the home page and the
@@ -1171,7 +1262,39 @@ async def chat(
     ``finish_reason: "length"`` -- a silent non-answer, not an error. ``None``
     leaves the model's own default alone.
     """
-    messages = normalize_system_messages(messages)
+    sent, spans = normalize_system_messages_mapped(messages)
+    capture = await _request_begin(
+        messages,
+        sent,
+        spans,
+        tools,
+        info,
+        model,
+        {"temperature": temperature, "max_tokens": max_tokens, "think": think},
+    )
+    try:
+        result = await _chat_dispatch(
+            client, info, endpoint, model, sent, tools, temperature, max_tokens, think
+        )
+    except BaseException as exc:
+        await _request_end(capture, None, exc)
+        raise
+    await _request_end(capture, result, None)
+    return result
+
+
+async def _chat_dispatch(
+    client: httpx.AsyncClient,
+    info: ProviderInfo,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    temperature: float | None,
+    max_tokens: int | None,
+    think: bool | None,
+) -> ChatResult:
+    """`chat` by dialect, on an already-normalized message list."""
     if info.dialect == "browser":
         from backend.modules.agent import browser_provider
 
@@ -1190,6 +1313,14 @@ async def chat(
         # Always sanitized: litellm fronts hosted vendors, and every one of them
         # enforces some name grammar. A no-op for names that are already legal.
         sent_tools, sent_messages, restore = sanitize_tool_names(tools, messages)
+        _note_payload(
+            {
+                "model": qualify_model(info, model),
+                "messages": sent_messages,
+                "tools": sent_tools,
+                **call_kwargs,
+            }
+        )
         response = await litellm.acompletion(
             model=qualify_model(info, model),
             messages=sent_messages,
@@ -1223,6 +1354,7 @@ async def chat(
             payload["options"] = options
         if think is not None:
             payload["think"] = think
+        _note_payload(payload)
         res = await client.post(
             f"{endpoint}/api/chat",
             json=payload,
@@ -1254,6 +1386,7 @@ async def chat(
             elif info.kind in {"llamacpp", "peer", "vllm"}:
                 # llama-server and vLLM pass these through to the Jinja template.
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
+        _note_payload(payload)
         res = await client.post(
             f"{endpoint}/v1/chat/completions",
             json=payload,
@@ -1299,7 +1432,59 @@ async def chat_stream(
     structured tool calls instead of narrating them). ``tool_choice`` (``"required"``/
     ``"auto"``/a specific function) forces a call on the OpenAI dialect; Ollama has no
     reliable equivalent, so it's ignored there."""
-    messages = normalize_system_messages(messages)
+    sent, spans = normalize_system_messages_mapped(messages)
+    capture = await _request_begin(
+        messages,
+        sent,
+        spans,
+        tools,
+        info,
+        model,
+        {
+            "temperature": temperature,
+            "tool_choice": tool_choice,
+            "num_ctx": context_size,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+        },
+    )
+    try:
+        result = await _chat_stream_dispatch(
+            client,
+            info,
+            endpoint,
+            model,
+            sent,
+            tools,
+            on_delta,
+            temperature,
+            tool_choice,
+            context_size,
+            max_tokens,
+            top_p,
+        )
+    except BaseException as exc:
+        await _request_end(capture, None, exc)
+        raise
+    await _request_end(capture, result, None)
+    return result
+
+
+async def _chat_stream_dispatch(
+    client: httpx.AsyncClient,
+    info: ProviderInfo,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_delta: DeltaSink,
+    temperature: float | None,
+    tool_choice: str | None,
+    context_size: int | None,
+    max_tokens: int | None,
+    top_p: float | None,
+) -> ChatResult:
+    """`chat_stream` by dialect, on an already-normalized message list."""
     if info.dialect == "browser":
         from backend.modules.agent import browser_provider
 
@@ -1483,6 +1668,9 @@ async def _ollama_chat_stream(
 
         logger = logging.getLogger("backend.agent.providers")
         payload = {**base, "think": True} if think else base
+        # Noted per attempt: the `think` retry below re-sends without the flag,
+        # and the request on record must be the one the server accepted.
+        _note_payload(payload)
         logger.info(f"Ollama Request Payload: {json.dumps(payload)}")
         extractor = ThinkingExtractor(on_delta)
         tool_calls_raw: list[dict[str, Any]] = []
@@ -1592,6 +1780,9 @@ async def _openai_chat_stream(
     # remembers the ones that rejected it.
     if _wants_stream_usage(url):
         payload["stream_options"] = {"include_usage": True}
+    # Noted before the send and again by the recursive call below if the server
+    # refuses `stream_options`, so the last word is the payload it accepted.
+    _note_payload(payload)
     extractor = ThinkingExtractor(on_delta)
     usage = Usage()
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
@@ -1741,6 +1932,15 @@ async def _litellm_chat_stream(
 
     # One first-chunk budget covers the connect *and* the wait for the first chunk,
     # so a queued request can't spend it twice.
+    _note_payload(
+        {
+            "model": qualify_model(info, model),
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            **kwargs,
+        }
+    )
     t0 = time.monotonic()
     label = f"{info.label} ({model})"
     try:

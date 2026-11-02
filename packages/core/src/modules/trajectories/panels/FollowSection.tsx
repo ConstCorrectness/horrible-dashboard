@@ -2,66 +2,47 @@
  * Follow: the agent chat's turns, watched from the inside.
  *
  * Locks onto the chat pane used most recently (or one turn of it, pinned from a
- * reply's trace button) and shows, for the selected turn:
+ * reply's trace button) and shows, for the selected turn, every **provider call**
+ * it made, as the provider received it:
  *
- * - **Context bar**: the round's tokens by where they came from.
- * - **Prompt**: the context as of the selected round, block by block, coloured by
- *   source. A loaded skill wears the skill catalog's colour and a loaded tool group
- *   the tool guides' colour, so injected text is recognisably what offered it.
- *   Blocks new in the selected round are outlined.
- * - **Rounds**: one band per round, with what the round added to or removed from
- *   the context, and the tool calls it made.
+ * - **Request** (left): the literal request of the selected call — a minimap of the
+ *   window by tokens beside the raw messages. Roles are the wire's four; where a
+ *   stretch of text came from (the skill catalog, a tool guide, a nudge) is a tint
+ *   inside the message, never a role of its own. See RequestInspector.
+ * - **Calls** (right): `R0`, `R1`, `R1 · retry`… each with what it got back — the
+ *   answer, the tools it asked for, the reasoning — and, for the selected one, the
+ *   tool results that answered it in the next call.
  *
- * Observation only: no explanatory copy. The data is three records joined on the
- * chat's turn id (see follow-model.ts), all of which already existed; this section
- * is the join.
+ * What the agent *did*, step by step, is the Trajectories run view's job; this view
+ * keeps to one vocabulary, the request's.
  */
 import { useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { PaneInstanceContext } from '../../../agent-context';
-import { apiGet } from '../../../api';
 import { IconClose, IconExternal, IconMinus, IconPin, IconPinOff } from '../../../glyphs';
 import { focusInstance, openPane, revealSection } from '../../../layout/controller';
 import { listPanes } from '../../../layout/model';
 import { layoutStore } from '../../../layout/store';
-import { Chip, EmptyState, PaneHeader } from '../../../Primitives';
-import { RollingCounter } from '../../../viz/RollingCounter';
+import { EmptyState, PaneHeader } from '../../../Primitives';
 import {
   chatState,
   setFollowTarget,
   setTraceDrawer,
   subscribeChats,
   useFollowTarget,
+  type FollowFocus,
 } from '../../agent/chat-state';
 import {
-  interpretabilityStore,
-  type ContextBlock,
-  type RoundSnapshot,
-  type TurnSnapshot,
-} from '../../interpretability/store';
-import {
-  getRunByTurn,
-  listDatasets,
-  updateDataset,
-  type TrajectoryDetail,
-  type TrajectoryStep,
-} from '../api';
-import { getTrajectoriesLive, initTrajectoriesLive, subscribeTrajectoriesLive } from '../ws';
-import {
-  diffChips,
-  diffRounds,
-  FAMILY_LABEL,
-  FAMILY_ORDER,
-  familyOf,
-  selectTurn,
-  stepsByRound,
-  tokensByFamily,
-  toolGroups,
-  turnRows,
-  type SourceFamily,
-  type TurnRow,
-} from './follow-model';
-import { StepRow } from './RunDetail';
+  getRequestDetail,
+  getTurnRequests,
+  loadTurnRequests,
+  subscribeRequests,
+  type RequestDetail,
+  type RequestSummary,
+} from '../../interpretability/requests';
+import { selectTurn, turnRows, type TurnRow } from './follow-model';
+import { RequestInspector } from './RequestInspector';
+import { answersIn, reasoningOf, requestLabel, resolveFocus, toolCallsOf } from './request-model';
 import { mono } from './common';
 import './follow.css';
 
@@ -196,7 +177,13 @@ export function FollowSection({ mode = 'pane' }: { mode?: 'pane' | 'drawer' }) {
               if (pinned) setPinned(id);
             }}
           />
-          {turnId ? <TurnView key={turnId} turnId={turnId} /> : null}
+          {turnId ? (
+            <TurnView
+              key={turnId}
+              turnId={turnId}
+              focus={pinned === turnId ? (target?.focus ?? null) : null}
+            />
+          ) : null}
         </div>
       )}
     </div>
@@ -239,122 +226,125 @@ function TurnRail({
   );
 }
 
-/** Interpretability's record of a turn: the live ring when it has it, else fetched
- *  (a turn scrubbed back to has usually left the ring). */
-function useContextTurn(turnId: string): TurnSnapshot | null {
-  const turns = useSyncExternalStore(
-    interpretabilityStore.subscribe,
-    interpretabilityStore.getSnapshot,
+/** A turn's provider calls: live from the socket, back-filled on open. */
+function useTurnRequests(turnId: string): RequestSummary[] | undefined {
+  const calls = useSyncExternalStore(subscribeRequests, () =>
+    getTurnRequests(turnId),
   );
-  const live = turns.find((t) => t.turnId === turnId) ?? null;
-  const [fetched, setFetched] = useState<TurnSnapshot | null>(null);
   useEffect(() => {
-    if (live) return;
+    void loadTurnRequests(turnId);
+  }, [turnId]);
+  return calls;
+}
+
+/** One call's bodies, re-read when its status changes (pending → ok). */
+function useRequestDetail(
+  call: RequestSummary | undefined,
+): RequestDetail | null {
+  const [detail, setDetail] = useState<RequestDetail | null>(null);
+  const id = call?.id;
+  const status = call?.status;
+  useEffect(() => {
+    if (!id) return;
     let cancelled = false;
-    apiGet<TurnSnapshot>(`/interpretability/turns/${encodeURIComponent(turnId)}`)
-      .then((t) => !cancelled && setFetched(t))
-      .catch(() => !cancelled && setFetched(null));
+    getRequestDetail(id)
+      .then((d) => !cancelled && setDetail(d))
+      .catch(() => !cancelled && setDetail(null));
     return () => {
       cancelled = true;
     };
-  }, [turnId, live]);
-  return live ?? fetched;
+  }, [id, status]);
+  return detail && detail.id === id ? detail : null;
 }
 
-/** The trajectory run for a turn: the live channel while it streams, else fetched.
- *  Null when capture was off for that turn. */
-function useRun(turnId: string): { run: TrajectoryDetail | null; missing: boolean } {
-  useEffect(() => initTrajectoriesLive(), []);
-  const live = useSyncExternalStore(subscribeTrajectoriesLive, getTrajectoriesLive);
-  const liveRun = [...live.runs.values()].find((r) => r.run.turn_id === turnId) ?? null;
-  const [fetched, setFetched] = useState<TrajectoryDetail | null>(null);
-  const [missing, setMissing] = useState(false);
-  const sealed = liveRun ? !liveRun.live : null;
+function TurnView({
+  turnId,
+  focus,
+}: {
+  turnId: string;
+  focus: FollowFocus | null;
+}) {
+  const calls = useTurnRequests(turnId);
+  const list = useMemo(() => calls ?? [], [calls]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [jump, setJump] = useState<{ index: number; nonce: number } | null>(
+    null,
+  );
+
+  // A deep link picks its call once the turn's calls are known, and again for
+  // every new nonce: the user may have clicked elsewhere in between.
+  const nonce = focus?.nonce;
+  const known = list.length;
   useEffect(() => {
-    let cancelled = false;
-    getRunByTurn(turnId)
-      .then((r) => {
-        if (cancelled) return;
-        setFetched(r);
-        setMissing(false);
-      })
-      .catch(() => !cancelled && setMissing(true));
-    return () => {
-      cancelled = true;
-    };
-    // Re-read when the live copy seals: the stored run has full payloads, the
-    // live one has anything over the wire cap replaced by its size.
-  }, [turnId, sealed]);
-  if (liveRun?.live) {
-    const run = {
-      ...(fetched ?? {}),
-      ...liveRun.run,
-      step_list: liveRun.steps,
-      labels: fetched?.labels ?? [],
-      harness_detail: fetched?.harness_detail ?? null,
-    } as TrajectoryDetail;
-    return { run, missing: false };
-  }
-  return { run: fetched, missing: missing && !liveRun };
-}
+    if (!focus || !known) return;
+    const id = resolveFocus(list, focus);
+    if (id) setPicked(id);
+  }, [nonce, known]);
 
-function TurnView({ turnId }: { turnId: string }) {
-  const turn = useContextTurn(turnId);
-  const { run, missing } = useRun(turnId);
-  const rounds = turn?.rounds ?? [];
-  const [picked, setPicked] = useState<number | null>(null);
-  const roundIdx = picked ?? Math.max(0, rounds.length - 1);
-  const round = rounds[roundIdx];
-  const steps = useMemo(() => stepsByRound(run?.step_list ?? []), [run?.step_list]);
+  const at = picked ? list.findIndex((c) => c.id === picked) : -1;
+  // No pick follows the newest call, so a running turn stays on its live edge.
+  const selIdx = at >= 0 ? at : list.length - 1;
+  const selected = list[selIdx];
+  const detail = useRequestDetail(selected);
+  const prev = useRequestDetail(list[selIdx - 1]);
+  const next = useRequestDetail(list[selIdx + 1]);
 
-  if (!turn || !round) {
+  if (calls === undefined) {
     return (
       <div className="traj-follow-main">
-        <EmptyState title="Waiting for round 0">
-          {turn?.kind === 'peer' ? 'Ran on another node.' : null}
+        <EmptyState title="Loading calls" />
+      </div>
+    );
+  }
+  if (!list.length) {
+    return (
+      <div className="traj-follow-main">
+        <EmptyState title="No provider calls recorded">
+          A turn that ran on another node, or one that never reached a model.
         </EmptyState>
       </div>
     );
   }
-  const diff = diffRounds(rounds[roundIdx - 1], round);
-  const added = new Set(diff.added);
+
+  const pick = (id: string) =>
+    setPicked(id === list[list.length - 1].id ? null : id);
 
   return (
     <div className="traj-follow-main">
-      <ContextBar round={round} />
       <div className="traj-follow-cols">
-        <section className="traj-follow-prompt" aria-label="Context">
-          <h3 className="traj-follow-h">
-            Context <span className="traj-follow-h-meta">R{round.round}</span>
-          </h3>
-          {round.blocks.map((b, i) => (
-            <Segment
-              key={`${b.hash ?? b.kind}-${i}`}
-              block={b}
-              isNew={roundIdx > 0 && added.has(i)}
-            />
-          ))}
-          <ToolsOffered round={round} />
+        <section className="traj-follow-inspector" aria-label="Request">
+          {detail ? (
+            <RequestInspector detail={detail} prev={prev} focus={jump} />
+          ) : (
+            <EmptyState title="Loading request" />
+          )}
         </section>
-        <section className="traj-follow-rounds" aria-label="Rounds">
+        <section className="traj-follow-rounds" aria-label="Calls">
           <h3 className="traj-follow-h">
-            Rounds
-            <span className="traj-follow-h-meta" title={turn.model || undefined}>
-              {rounds.length}
-              {turn.model ? ` · ${turn.model}` : ''}
+            Calls
+            <span
+              className="traj-follow-h-meta"
+              title={selected?.model || undefined}
+            >
+              {list.length}
+              {selected?.model ? ` · ${selected.model}` : ""}
             </span>
-            {missing ? <CaptureOff /> : null}
           </h3>
-          {rounds.map((r, i) => (
-            <RoundBand
-              key={r.round}
-              round={r}
-              prev={rounds[i - 1]}
+          {list.map((call, i) => (
+            <CallCard
+              key={call.id}
+              call={call}
               index={i}
-              selected={i === roundIdx}
-              onPick={() => setPicked(i === rounds.length - 1 ? null : i)}
-              runId={run?.id ?? ''}
-              steps={steps.get(r.round) ?? []}
+              selected={i === selIdx}
+              detail={i === selIdx ? detail : null}
+              next={i === selIdx ? next : null}
+              onPick={() => pick(call.id)}
+              onJump={(index) => {
+                const target = list[i + 1];
+                if (!target) return;
+                pick(target.id);
+                setJump({ index, nonce: Date.now() });
+              }}
             />
           ))}
         </section>
@@ -363,185 +353,126 @@ function TurnView({ turnId }: { turnId: string }) {
   );
 }
 
-function ContextBar({ round }: { round: RoundSnapshot }) {
-  const by = tokensByFamily(round);
-  const total = [...by.values()].reduce((n, v) => n + v, 0) || 1;
-  const present = FAMILY_ORDER.filter((f) => (by.get(f) ?? 0) > 0);
-  return (
-    <div className="traj-follow-bar">
-      <div className="traj-follow-bar-track" role="img" aria-label="Context tokens by source">
-        {present.map((f) => (
-          <span
-            key={f}
-            className="traj-follow-bar-seg"
-            data-family={f}
-            style={{ width: `${((by.get(f) ?? 0) / total) * 100}%` }}
-          />
-        ))}
-      </div>
-      <div className="traj-follow-legend">
-        {present.map((f) => (
-          <span key={f} className="traj-follow-legend-item" data-family={f}>
-            <span className="traj-follow-swatch" />
-            {FAMILY_LABEL[f]}
-            <RollingCounter value={by.get(f) ?? 0} format={fmt} className="traj-follow-num" />
-          </span>
-        ))}
-        <span className="traj-follow-legend-total">
-          <RollingCounter value={round.totalTokens} format={fmt} className="traj-follow-num" /> tok
-        </span>
-      </div>
-    </div>
-  );
-}
+const fmtMs = (v: number | null) =>
+  v == null ? "" : v < 1000 ? `${v}ms` : `${(v / 1000).toFixed(1)}s`;
 
-function Segment({ block, isNew }: { block: ContextBlock; isNew: boolean }) {
-  const family: SourceFamily = familyOf(block.kind);
-  // The harness's own text starts open; conversation and results start folded.
-  const [open, setOpen] = useState(
-    family === 'system' || family === 'skills' || family === 'tools' || isNew,
-  );
-  return (
-    <div className="traj-follow-seg" data-family={family} data-new={isNew || undefined}>
-      <button
-        type="button"
-        className="traj-follow-seg-head"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="traj-follow-seg-label">{block.label}</span>
-        {block.toolName ? <span style={mono}>{block.toolName}</span> : null}
-        <span style={{ flex: 1 }} />
-        {isNew ? <span className="traj-follow-new">new</span> : null}
-        {block.clipped ? <span style={mono}>clipped</span> : null}
-        <span style={mono}>{fmt(block.tokens)}</span>
-      </button>
-      {open ? (
-        <pre className="traj-follow-seg-body">
-          {block.content}
-          {block.clipped ? `\n… ${block.fullChars - block.content.length} more chars` : ''}
-        </pre>
-      ) : null}
-    </div>
-  );
-}
-
-function ToolsOffered({ round }: { round: RoundSnapshot }) {
-  const [open, setOpen] = useState(false);
-  if (!round.tools.length) return null;
-  const groups = toolGroups(round.tools);
-  return (
-    <div className="traj-follow-seg" data-family="tools">
-      <button
-        type="button"
-        className="traj-follow-seg-head"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="traj-follow-seg-label">Tool schemas</span>
-        <span style={mono}>
-          {round.tools.length}
-          {round.toolsTruncated ? ` of ${round.toolsSelected}` : ''} · {groups.length} groups
-        </span>
-        <span style={{ flex: 1 }} />
-        <span style={mono}>{fmt(round.toolTokens)}</span>
-      </button>
-      {open ? (
-        <div className="traj-follow-tools">
-          {groups.map((g) => (
-            <div key={g.group} className="traj-follow-tool-group">
-              <div className="traj-follow-tool-group-head">
-                <span>{g.group}</span>
-                <span style={mono}>{fmt(g.tokens)}</span>
-              </div>
-              {g.tools.map((t) => (
-                <div key={t.name} className="traj-follow-tool">
-                  <span>{t.name}</span>
-                  <span style={mono}>{fmt(t.tokens)}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RoundBand({
-  round,
-  prev,
+/** One provider call and what came back. The selected card opens up: the full
+ *  answer, its reasoning folded, each tool it asked for, and the results that
+ *  answered those calls in the next request — click one to jump there. */
+function CallCard({
+  call,
   index,
   selected,
+  detail,
+  next,
   onPick,
-  runId,
-  steps,
+  onJump,
 }: {
-  round: RoundSnapshot;
-  prev: RoundSnapshot | undefined;
+  call: RequestSummary;
   index: number;
   selected: boolean;
+  detail: RequestDetail | null;
+  next: RequestDetail | null;
   onPick: () => void;
-  runId: string;
-  steps: TrajectoryStep[];
+  onJump: (messageIndex: number) => void;
 }) {
-  const chips = diffChips(round, diffRounds(prev, round), !prev);
-  const delta = prev ? round.totalTokens - prev.totalTokens : round.totalTokens;
+  const response = detail?.response ?? null;
+  const reasoning = reasoningOf(response);
+  const content = typeof response?.content === "string" ? response.content : "";
+  const asked = toolCallsOf(response);
+  const answers = answersIn(response, next);
   return (
     <div
-      className="traj-follow-band traj-in"
+      className="traj-call traj-in"
       aria-current={selected}
-      style={{ ['--traj-i' as string]: Math.min(index, 8) }}
+      style={{ ["--traj-i" as string]: Math.min(index, 8) }}
     >
-      <button type="button" className="traj-follow-band-head" onClick={onPick}>
-        <span className="traj-follow-band-r">R{round.round}</span>
+      <button type="button" className="traj-call-head" onClick={onPick}>
+        <span className="traj-call-r" data-status={call.status}>
+          {requestLabel(call)}
+        </span>
         <span style={mono}>
-          {fmt(round.totalTokens)} tok{prev ? ` · ${delta >= 0 ? '+' : ''}${fmt(delta)}` : ''}
+          {fmt(call.estTokens)} est
+          {call.promptTokens != null
+            ? ` · ${fmt(call.promptTokens)} reported`
+            : ""}
         </span>
         <span style={{ flex: 1 }} />
-        <span style={mono}>{round.tools.length} tools</span>
+        {call.reconstructed ? <span style={mono}>rebuilt</span> : null}
+        <span style={mono}>
+          {call.status === "pending" ? "in flight" : fmtMs(call.durationMs)}
+        </span>
       </button>
-      {chips.length ? (
-        <div className="traj-follow-chips">
-          {chips.map((c, i) => (
-            <span key={i} className="traj-follow-chip" data-family={c.family}>
-              <b>{c.sign}</b> {c.label}
-              {c.tokens ? <span style={mono}> {fmt(c.tokens)}</span> : null}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {steps.map((step, i) => (
-        <StepRow key={step.seq} runId={runId} step={step} index={i} selected={false} />
-      ))}
+      <div className="traj-call-body">
+        {call.error ? (
+          <div style={{ ...mono, color: "var(--danger)" }}>{call.error}</div>
+        ) : null}
+        {!selected ? (
+          call.toolNames.length ? (
+            <div className="traj-call-chips">
+              {call.toolNames.map((name, k) => (
+                <span key={k} className="traj-call-chip">
+                  {name}
+                </span>
+              ))}
+            </div>
+          ) : call.responsePreview ? (
+            <div className="traj-call-text traj-call-preview">
+              {call.responsePreview}
+            </div>
+          ) : null
+        ) : (
+          <>
+            {reasoning ? (
+              <details className="traj-call-reasoning">
+                <summary style={mono}>
+                  reasoning · {fmt(reasoning.length)} chars
+                </summary>
+                <pre className="traj-call-text">{reasoning}</pre>
+              </details>
+            ) : null}
+            {content ? (
+              <>
+                <div className="traj-call-k">Response · assistant</div>
+                <pre className="traj-call-text">{content}</pre>
+              </>
+            ) : null}
+            {asked.length ? (
+              <>
+                <div className="traj-call-k">Tool calls</div>
+                {asked.map((c, k) => (
+                  <div key={k} className="traj-call-asked">
+                    <span className="traj-call-chip">{c.name}</span>
+                    <span style={mono}>{c.id || "no id"}</span>
+                  </div>
+                ))}
+              </>
+            ) : null}
+            {answers.length && next ? (
+              <>
+                <div className="traj-call-k">
+                  Answered in {requestLabel(next)}
+                </div>
+                {answers.map((m) => (
+                  <button
+                    type="button"
+                    key={m.index}
+                    className="traj-call-tool"
+                    onClick={() => onJump(m.index)}
+                    title="Open this result in the next call"
+                  >
+                    <span style={mono}>#{m.index}</span>
+                    <span>{m.segments[0]?.toolName ?? "tool"}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={mono}>{fmt(m.tokens)} tok</span>
+                  </button>
+                ))}
+              </>
+            ) : null}
+            {!detail ? <div style={mono}>loading…</div> : null}
+          </>
+        )}
+      </div>
     </div>
-  );
-}
-
-/** Steps need trajectory capture; context doesn't. Say which is missing, and fix it
- *  in place. */
-function CaptureOff() {
-  const [busy, setBusy] = useState(false);
-  const turnOn = async () => {
-    setBusy(true);
-    try {
-      const datasets = await listDatasets();
-      const target = datasets.find((d) => d.id === 'dashboard-agent') ?? datasets[0];
-      if (target) await updateDataset(target.id, { capture: true });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Chip kind="warn">
-      <button
-        type="button"
-        className="traj-follow-capture"
-        disabled={busy}
-        onClick={() => void turnOn()}
-      >
-        capture off · turn on
-      </button>
-    </Chip>
   );
 }

@@ -86,6 +86,49 @@ def init_turn_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_turns_agent ON agent_turns(agent_id)"
         )
+        # The context inspector's literal requests (see requests.py). Bodies are
+        # content-addressed because every round resends the whole conversation: a
+        # ten-round turn stored as ten full requests would hold its system prompt
+        # ten times and grow with the square of its length.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ctx_bodies (
+                hash TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                body TEXT NOT NULL,
+                chars INTEGER NOT NULL DEFAULT 0,
+                tokens INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ctx_requests (
+                id TEXT PRIMARY KEY,
+                turn_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                attempt INTEGER NOT NULL DEFAULT 0,
+                ts REAL NOT NULL DEFAULT 0,
+                dialect TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                exact INTEGER NOT NULL DEFAULT 0,
+                params TEXT NOT NULL DEFAULT '{}',
+                tools_hash TEXT NOT NULL DEFAULT '',
+                message_hashes TEXT NOT NULL DEFAULT '[]',
+                spans TEXT NOT NULL DEFAULT '[]',
+                response TEXT,
+                usage TEXT,
+                duration_ms INTEGER,
+                error TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ctx_requests_turn "
+            "ON ctx_requests(turn_id, round, attempt)"
+        )
 
 
 def _totals(turn: TurnSnapshot) -> tuple[int, int]:
@@ -140,7 +183,9 @@ def save_turn(turn: TurnSnapshot) -> None:
 
 
 def prune(keep: int = MAX_STORED_TURNS) -> int:
-    """Drop the oldest turns beyond `keep`. Returns how many were removed."""
+    """Drop the oldest turns beyond `keep`, with their literal requests and any
+    request body no surviving request still points at. Returns how many turns were
+    removed."""
     try:
         init_turn_db()
         with get_db_conn() as conn:
@@ -153,10 +198,155 @@ def prune(keep: int = MAX_STORED_TURNS) -> int:
                 """,
                 (keep,),
             )
-            return cursor.rowcount or 0
+            removed = cursor.rowcount or 0
+            # Keyed off the surviving turns rather than the deleted ones: a request
+            # whose turn row never landed (capture failed half-way) would otherwise
+            # outlive everything.
+            conn.execute(
+                "DELETE FROM ctx_requests "
+                "WHERE turn_id NOT IN (SELECT turn_id FROM agent_turns)"
+            )
+            _collect_bodies(conn)
+            return removed
     except Exception:
         logger.exception("interpretability: prune failed")
         return 0
+
+
+def _collect_bodies(conn: sqlite3.Connection) -> None:
+    """Delete every body no request references.
+
+    Message hashes live in a JSON array column, so "referenced" is answered by
+    walking it with `json_each` — one statement, no Python-side set of every hash.
+    """
+    conn.execute(
+        """
+        DELETE FROM ctx_bodies WHERE hash NOT IN (
+            SELECT value FROM ctx_requests, json_each(ctx_requests.message_hashes)
+            UNION
+            SELECT tools_hash FROM ctx_requests
+        )
+        """
+    )
+
+
+# ── literal requests ─────────────────────────────────────────────────────────
+
+
+def body_tokens(hashes: list[str]) -> dict[str, int]:
+    """Token counts of the `hashes` already stored. A body found here needs no
+    tokenizing again — the expensive part of capturing a long system prompt."""
+    if not hashes:
+        return {}
+    try:
+        init_turn_db()
+        with get_db_conn() as conn:
+            marks = ",".join("?" * len(hashes))
+            rows = conn.execute(
+                f"SELECT hash, tokens FROM ctx_bodies WHERE hash IN ({marks})", hashes
+            ).fetchall()
+        return {r["hash"]: r["tokens"] for r in rows}
+    except Exception:
+        logger.exception("interpretability: body_tokens failed")
+        return {}
+
+
+def save_request(
+    row: dict[str, Any], bodies: list[tuple[str, str, str, int, int]]
+) -> None:
+    """Insert or replace one request and any bodies not stored yet.
+
+    `bodies` rows are `(hash, kind, body_json, chars, tokens)`. Never raises.
+    """
+    try:
+        init_turn_db()
+        with get_db_conn() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO ctx_bodies (hash, kind, body, chars, tokens) "
+                "VALUES (?, ?, ?, ?, ?)",
+                bodies,
+            )
+            columns = ", ".join(row)
+            marks = ", ".join("?" * len(row))
+            conn.execute(
+                f"INSERT OR REPLACE INTO ctx_requests ({columns}) VALUES ({marks})",
+                list(row.values()),
+            )
+    except Exception:
+        logger.exception(
+            "interpretability: failed to persist request %s", row.get("id")
+        )
+
+
+def list_requests(turn_id: str) -> list[dict[str, Any]]:
+    """A turn's requests in call order, with each one's token estimate summed from
+    its bodies."""
+    try:
+        init_turn_db()
+        with get_db_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ctx_requests WHERE turn_id = ? "
+                "ORDER BY round, attempt, ts",
+                (turn_id,),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                row = dict(r)
+                hashes = json.loads(row["message_hashes"]) + [row["tools_hash"]]
+                distinct = sorted({h for h in hashes if h})
+                tokens = (
+                    {
+                        b["hash"]: b["tokens"]
+                        for b in conn.execute(
+                            f"SELECT hash, tokens FROM ctx_bodies WHERE hash IN "
+                            f"({','.join('?' * len(distinct))})",
+                            distinct,
+                        ).fetchall()
+                    }
+                    if distinct
+                    else {}
+                )
+                # Summed per *occurrence*, not per distinct body: two identical
+                # tool results in one request are both in the context.
+                row["est_tokens"] = sum(tokens.get(h, 0) for h in hashes if h)
+                out.append(row)
+            return out
+    except Exception:
+        logger.exception("interpretability: list_requests failed for %s", turn_id)
+        return []
+
+
+def get_request(
+    request_id: str,
+) -> tuple[dict[str, Any], dict[str, sqlite3.Row]] | None:
+    """One request row plus every body it references, keyed by hash."""
+    try:
+        init_turn_db()
+        with get_db_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM ctx_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            hashes = sorted(
+                {*json.loads(row["message_hashes"]), row["tools_hash"]} - {""}
+            )
+            bodies = (
+                {
+                    b["hash"]: b
+                    for b in conn.execute(
+                        f"SELECT * FROM ctx_bodies WHERE hash IN "
+                        f"({','.join('?' * len(hashes))})",
+                        hashes,
+                    ).fetchall()
+                }
+                if hashes
+                else {}
+            )
+            return dict(row), bodies
+    except Exception:
+        logger.exception("interpretability: get_request failed for %s", request_id)
+        return None
 
 
 def _summary_row(r: sqlite3.Row) -> dict[str, Any]:
@@ -313,5 +503,7 @@ def clear() -> None:
         init_turn_db()
         with get_db_conn() as conn:
             conn.execute("DELETE FROM agent_turns")
+            conn.execute("DELETE FROM ctx_requests")
+            conn.execute("DELETE FROM ctx_bodies")
     except Exception:
         logger.exception("interpretability: clear failed")

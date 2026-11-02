@@ -160,67 +160,30 @@
   flex-direction: column;
 }
 
-/* Context bar */
-.traj-follow-bar {
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border);
-  border-top: 2px solid var(--accent);
-  background: var(--bg-secondary);
-}
-.traj-follow-bar-track {
-  display: flex;
-  height: 10px;
-  background: var(--bg-primary);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
-}
-.traj-follow-bar-seg {
-  background: var(--src);
-}
-.traj-follow-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-5);
-  margin-top: var(--space-3);
-  font-size: var(--fs-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-display);
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-.traj-follow-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.traj-follow-swatch {
-  width: 8px;
-  height: 8px;
-  background: var(--src);
-}
 .traj-follow-num {
   font-family: var(--font-mono);
   font-weight: 400;
   letter-spacing: 0;
   color: var(--text-primary);
 }
-.traj-follow-legend-total {
-  margin-left: auto;
-}
 
-/* Two columns: context | rounds */
+/* Two columns: the request | its calls */
 .traj-follow-cols {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
 }
-.traj-follow-prompt,
+.traj-follow-inspector {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .traj-follow-rounds {
   overflow: auto;
   padding: var(--space-4) var(--space-5);
   min-width: 0;
-}
-.traj-follow-rounds {
   border-left: 1px solid var(--border);
 }
 .traj-follow-h {
@@ -246,18 +209,326 @@
   letter-spacing: 0;
   text-transform: none;
 }
-
-/* A context block: the house 2px top edge in its source colour, and a tint. */
-.traj-follow-seg {
-  border-top: 2px solid var(--src);
-  background: color-mix(in srgb, var(--src) 7%, var(--bg-secondary));
-  margin-bottom: var(--space-2);
+.traj-follow-new {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--accent);
 }
-.traj-follow-seg[data-new] {
-  outline: 1px solid var(--accent);
+/* ── The request inspector ───────────────────────────────────────────────────
+ * Minimap | raw request, under a header strip. The minimap is a flex column whose
+ * cells grow by tokens, so the browser does the proportional layout; every cell has
+ * a floor so a three-token message is still something you can hover. */
+
+.traj-follow [data-family='free'] {
+  --src: transparent;
+}
+
+.traj-insp {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.traj-insp-head {
+  padding: var(--space-3) var(--space-5);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.traj-insp-head-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.traj-insp-req {
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.traj-insp-status[data-status='error'] {
+  color: var(--danger);
+}
+.traj-insp-status[data-status='pending'] {
+  color: var(--accent);
+}
+.traj-insp-counts {
+  margin-top: var(--space-2);
+  gap: var(--space-2) var(--space-5);
+}
+.traj-insp-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.traj-insp-k {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.traj-insp-dim {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-insp-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.traj-insp-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--warn, #e2c08d);
+  background: color-mix(in srgb, var(--warn, #e2c08d) 8%, var(--bg-secondary));
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-insp-banner strong {
+  font-size: var(--fs-label);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--warn, #e2c08d);
+}
+
+.traj-insp-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.traj-insp-map {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-2) 6px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.traj-insp-cell {
+  flex-basis: 0;
+  min-height: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--src) 70%, transparent);
+  cursor: pointer;
+}
+.traj-insp-cell[data-family='free'] {
+  min-height: 0;
+  cursor: default;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--border) 60%, transparent) 0 1px,
+    transparent 1px 5px
+  );
+}
+.traj-insp-cell[data-new] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.traj-insp-cell:hover,
+.traj-insp-cell[data-hot] {
+  background: var(--src);
+  outline: 1px solid var(--text-primary);
   outline-offset: -1px;
 }
-.traj-follow-seg-head {
+.traj-insp-viewport {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  pointer-events: none;
+}
+
+.traj-insp-raw {
+  position: relative;
+  overflow: auto;
+  padding: var(--space-3) var(--space-5);
+  min-width: 0;
+}
+
+.traj-insp-msg {
+  border-top: 2px solid var(--src);
+  background: color-mix(in srgb, var(--src) 5%, var(--bg-secondary));
+  margin-bottom: var(--space-2);
+  transition: box-shadow 0.15s ease;
+}
+.traj-insp-msg[data-new] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.traj-insp-msg[data-hot] {
+  box-shadow: inset 0 0 0 1px var(--src);
+}
+@keyframes traj-insp-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg-secondary));
+  }
+}
+.traj-insp-msg[data-flash] {
+  animation: traj-insp-flash 1.3s ease-out;
+}
+.traj-insp-msg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+}
+button.traj-insp-msg-head {
+  cursor: pointer;
+}
+.traj-insp-role {
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--src);
+}
+.traj-insp-was {
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--warn, #e2c08d);
+  border: 1px solid currentColor;
+}
+.traj-insp-src {
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-insp-pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-insp-str {
+  color: var(--text-primary);
+}
+/* A part of a joined message: a left rule in its source colour and a label. */
+.traj-insp-piece {
+  display: block;
+  margin: var(--space-1) 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--src);
+  background: color-mix(in srgb, var(--src) 7%, transparent);
+}
+.traj-insp-piece-tag {
+  display: block;
+  font-family: var(--font-sans, inherit);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--src);
+}
+.traj-insp-more {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.traj-insp-pop {
+  position: absolute;
+  left: 52px;
+  z-index: 5;
+  width: min(440px, calc(100% - 64px));
+  max-height: 280px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-primary);
+  box-shadow: 0 6px 18px color-mix(in srgb, #000 30%, transparent);
+  pointer-events: none;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+}
+.traj-insp-pop-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+}
+.traj-insp-pop-status {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+.traj-insp-pop-status[data-status='new'] {
+  color: var(--accent);
+}
+.traj-insp-pop-note {
+  padding: 0 var(--space-3) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-insp-pop-prov {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: 0 var(--space-3) var(--space-2);
+}
+.traj-insp-pop-src {
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--src);
+  font-size: var(--fs-meta);
+}
+.traj-insp-pop-pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+
+/* ── Calls column: one card per provider call ───────────────────────────────── */
+
+.traj-call {
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+.traj-call[aria-current='true'] {
+  border-color: var(--accent);
+}
+.traj-call-head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -270,113 +541,87 @@
   text-align: left;
   cursor: pointer;
 }
-.traj-follow-seg-label {
+.traj-call-r {
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+}
+.traj-call[aria-current='true'] .traj-call-r {
+  color: var(--accent);
+}
+.traj-call-r[data-status='error'] {
+  color: var(--danger);
+}
+.traj-call-body {
+  padding: 0 var(--space-3) var(--space-3);
+  font-size: var(--fs-meta);
+}
+.traj-call-k {
+  margin-top: var(--space-2);
   font-size: var(--fs-label);
   font-weight: 700;
   letter-spacing: var(--tracking-display);
   text-transform: uppercase;
-  color: var(--src);
+  color: var(--text-secondary);
 }
-.traj-follow-new {
-  font-family: var(--font-mono);
-  font-size: var(--fs-meta);
-  color: var(--accent);
-}
-.traj-follow-seg-body {
-  margin: 0;
-  padding: var(--space-2) var(--space-3) var(--space-3);
-  max-height: 340px;
-  overflow: auto;
+.traj-call-text {
+  margin: var(--space-1) 0 0;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  max-height: 220px;
+  overflow: auto;
 }
-
-.traj-follow-tools {
-  padding: 0 var(--space-3) var(--space-3);
-}
-.traj-follow-tool-group-head,
-.traj-follow-tool {
+.traj-call-tool {
   display: flex;
-  justify-content: space-between;
   gap: var(--space-3);
-  font-size: var(--fs-meta);
-}
-.traj-follow-tool-group-head {
-  margin-top: var(--space-2);
-  font-weight: 700;
-  letter-spacing: var(--tracking-display);
-  text-transform: uppercase;
-  color: var(--src);
-}
-.traj-follow-tool {
-  padding-left: var(--space-4);
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
-/* Round bands, with a clipped corner */
-.traj-follow-band {
-  margin-bottom: var(--space-4);
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
-}
-.traj-follow-band[aria-current='true'] {
-  border-color: var(--accent);
-}
-.traj-follow-band-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  align-items: baseline;
   width: 100%;
-  min-height: 26px;
-  padding: 0 var(--space-3);
+  padding: 2px 0;
   border: 0;
   background: none;
   color: var(--text-primary);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.traj-follow-band-r {
-  font-weight: 800;
-  letter-spacing: var(--tracking-display);
-}
-.traj-follow-band[aria-current='true'] .traj-follow-band-r {
+.traj-call-tool:hover {
   color: var(--accent);
 }
-.traj-follow-band > .traj-in {
-  margin: 0 var(--space-3) var(--space-3);
+.traj-call-chip {
+  padding: 1px var(--space-3);
+  background: color-mix(in srgb, var(--traj-src-tools) 16%, transparent);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
 }
-.traj-follow-chips {
+.traj-call-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-3);
 }
-.traj-follow-chip {
-  padding: 1px var(--space-3);
-  background: color-mix(in srgb, var(--src) 14%, transparent);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
-  font-size: var(--fs-meta);
-  color: var(--text-primary);
+.traj-call-preview {
+  max-height: 54px;
+  overflow: hidden;
 }
-.traj-follow-chip b {
-  color: var(--src);
+.traj-call-asked {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: 2px 0;
 }
-
-.traj-follow-capture {
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
+.traj-call-reasoning summary {
   cursor: pointer;
-  padding: 0;
+  color: var(--text-secondary);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .traj-follow-pulse {
+    animation: none;
+  }
+  .traj-insp-msg[data-flash] {
     animation: none;
   }
 }
@@ -398,5 +643,8 @@
   .traj-follow-rounds {
     border-left: 0;
     border-top: 1px solid var(--border);
+  }
+  .traj-follow-inspector {
+    min-height: 420px;
   }
 }

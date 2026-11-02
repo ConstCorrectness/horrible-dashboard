@@ -23,6 +23,8 @@ from backend.modules.interpretability.models import (
     ModelArchitecture,
     ModelInfoResponse,
     ModelTensorsResponse,
+    RequestDetail,
+    RequestListResponse,
     TensorEntry,
     TurnHistoryResponse,
     TurnListResponse,
@@ -133,6 +135,30 @@ def get_turn(turn_id: str) -> TurnSnapshot:
     if turn is None:
         raise HTTPException(status_code=404, detail=f"No captured turn {turn_id!r}")
     return turn
+
+
+@router.get("/turns/{turn_id}/requests", response_model=RequestListResponse)
+def turn_requests(turn_id: str) -> RequestListResponse:
+    """Every provider call the turn made, in order, without bodies.
+
+    A turn recorded before literal capture existed comes back rebuilt from its
+    snapshot, with `reconstructed: true` on every entry.
+    """
+    from backend.modules.interpretability import requests
+
+    return RequestListResponse(requests=requests.list_for_turn(turn_id))
+
+
+@router.get("/requests/{request_id}", response_model=RequestDetail)
+def get_request(request_id: str) -> RequestDetail:
+    """One provider call in full: the messages as sent, the tool schemas, the body
+    params, provenance segments and the response."""
+    from backend.modules.interpretability import requests
+
+    found = requests.get(request_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No request {request_id!r}")
+    return found
 
 
 @router.delete("/turns", response_model=TurnListResponse)

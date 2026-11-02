@@ -6,6 +6,8 @@ the rest of the app's `/ws` events are camelCase.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -137,6 +139,100 @@ class TurnSummary(BaseModel):
     rounds: int = 0
     totalTokens: int = 0
     peerId: str | None = None
+
+
+# ── The context inspector: literal provider requests ─────────────────────────
+#
+# A `RoundSnapshot` is the context as the *harness* assembled it — one block per
+# message the orchestrator built, labelled by where it came from, clipped for
+# transport. A request below is the context as the *provider received it*: after
+# `normalize_system_messages` joined the system tier into one message and turned a
+# mid-conversation nudge into a `user` one, unclipped. Provenance survives as
+# segments inside each sent message, so "this was the skill catalog" is an
+# annotation on the literal request rather than a role the model never saw.
+
+
+class RequestSegment(BaseModel):
+    """One stretch of a sent message and where it came from."""
+
+    #: Index into the orchestrator's message list (pre-normalization).
+    src: int
+    #: Character range inside the sent message's `content`.
+    start: int
+    end: int
+    kind: str
+    label: str
+    toolName: str | None = None
+    #: Reconstructed requests only: this stretch was clipped in the stored snapshot,
+    #: so the text shown is a prefix of what was sent.
+    clipped: bool = False
+
+
+class RequestMessage(BaseModel):
+    index: int
+    role: str
+    #: Content address of the message body — equal across requests exactly when
+    #: the message is byte-identical, which is what "carried over" means.
+    hash: str
+    body: dict[str, Any]
+    tokens: int
+    chars: int
+    segments: list[RequestSegment] = Field(default_factory=list)
+    #: The role the orchestrator gave it, when the wire changed it (a nudge
+    #: assembled as `system` and sent as `user`).
+    fromRole: str | None = None
+
+
+class RequestSummary(BaseModel):
+    """One provider call, without its bodies."""
+
+    id: str
+    turnId: str
+    round: int
+    #: 0 for the round's first call; 1 for the forced-tool retry; higher for a
+    #: rate-limit retry of either.
+    attempt: int = 0
+    ts: float = 0.0
+    dialect: str = ""
+    provider: str = ""
+    model: str = ""
+    #: "pending" while the call is in flight, then "ok" or "error".
+    status: str = "pending"
+    messageCount: int = 0
+    #: Tokenizer estimate of messages + tool schemas (see `exact`).
+    estTokens: int = 0
+    exact: bool = False
+    #: What the provider reported. Null means it did not say — never zero.
+    promptTokens: int | None = None
+    completionTokens: int | None = None
+    toolCalls: int = 0
+    #: The response at a glance, so a list of calls can say what each one did
+    #: without fetching every body: the called tools' names and the answer's start.
+    toolNames: list[str] = Field(default_factory=list)
+    responsePreview: str = ""
+    durationMs: int | None = None
+    error: str | None = None
+    #: Rebuilt from a clipped `RoundSnapshot` for a turn recorded before literal
+    #: capture existed. Not byte-exact; `notes` says how.
+    reconstructed: bool = False
+
+
+class RequestDetail(RequestSummary):
+    messages: list[RequestMessage] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    toolsHash: str = ""
+    toolsTokens: int = 0
+    #: Everything in the request body other than `messages` and `tools`, as sent.
+    params: dict[str, Any] = Field(default_factory=dict)
+    #: The assistant message the call returned, `reasoning_content` included.
+    response: dict[str, Any] | None = None
+    #: The model's real window, when the turn learned it.
+    contextLength: int | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class RequestListResponse(BaseModel):
+    requests: list[RequestSummary] = Field(default_factory=list)
 
 
 class TurnHistoryResponse(BaseModel):

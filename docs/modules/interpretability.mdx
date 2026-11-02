@@ -816,6 +816,8 @@ not tiles you glance at.
 | GET | `/api/interpretability/turns` | Recent captured turns from the ring, newest first |
 | GET | `/api/interpretability/turns/history` | Turn *summaries* from the durable table (`limit`, `agent_id`, `since`, `roots_only`) |
 | GET | `/api/interpretability/turns/{turn_id}` | One turn in full — ring first, then the table |
+| GET | `/api/interpretability/turns/{turn_id}/requests` | The turn's provider calls as summaries — literal, else rebuilt from the snapshot. See [Literal requests](#literal-requests-ctx_requests) |
+| GET | `/api/interpretability/requests/{request_id}` | One provider call in full: messages, provenance segments, `tools`, params, response, usage |
 | DELETE | `/api/interpretability/turns` | Clear the ring |
 | GET | `/api/interpretability/model` | Model metadata + true context length |
 | GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
@@ -902,6 +904,50 @@ One subtlety worth knowing when querying it: `total_tokens` is the **last** roun
 total, not the sum across rounds. Rounds are cumulative — each resends the whole
 conversation plus whatever the loop appended — so summing them would multiply-count the
 same context and report a turn as costing several times what it did.
+
+`agent_turns` is pruned to 5000 rows by `store.prune()`, which runs from
+`requests.forget_turn` every 200 finished turns. Before literal capture landed, nothing
+called it.
+
+## Literal requests (`ctx_requests`)
+
+A `RoundSnapshot` is a human-readable account of a round: blocks labelled by where they
+came from, clipped, with `tool_calls` folded into text. It is **not** what the provider
+received. Just before a request goes out, `normalize_system_messages` joins every
+leading system message into one and turns a later system message (the forced-tool
+nudge, the workspace index) into `user`. The forced-tool retry is a second provider
+call inside the same round, and a snapshot has no place for it.
+
+`requests.py` records the request itself. `providers.chat_stream` and `providers.chat`
+call `begin()` right after normalizing, and `finish()` once the call returns or raises.
+Each dialect path calls `note_payload()` with the body it actually sent, so the OpenAI
+path's retry without `stream_options` after a 400 records the request the server
+accepted. Nothing is recorded outside a turn: the hook reads `(turn_id, round)` from
+`telemetry/turn.py`.
+
+- **One row per provider call.** `attempt` counts calls within a round, so a forced
+  retry is `R2 · retry`. A failed call is recorded with `status: error`, and the error
+  still propagates.
+- **Provenance survives the flattening.** `normalize_system_messages_mapped` returns,
+  for each message it sends, the input messages it was built from and their character
+  offsets. The recorder's labels (`kinds_for`) ride on those offsets as `segments`, so
+  "Skill catalog" is a span inside the one system message rather than a role. A message
+  whose role changed carries `fromRole`.
+- **Bodies are content-addressed.** Each message and each `tools` array is a row in
+  `ctx_bodies`, keyed by a sha1 of its canonical JSON. A request stores only the list
+  of hashes, so ten rounds that re-send the same history store it once. Tokens are
+  counted once per body; the totals are estimates, beside the provider's reported
+  `prompt_tokens`.
+- **Stored verbatim.** Credentials travel in headers, not bodies. The one exception,
+  litellm's `api_key` keyword, is kept out of `params`.
+- **Same retention as `agent_turns`.** `prune()` deletes requests whose turn has gone,
+  then removes any body that no request references.
+
+Each request pushes an `interpretability` `/ws` frame with event `request`, once when it
+is sent and again when it finishes. A turn recorded before this existed has no rows. For
+those turns both routes rebuild one request per round from the snapshot, using
+`agentpedia.rebuild`, mark it `reconstructed: true` and list what the rebuild could not
+know. The rebuild's id is `r:{turn_id}:{round}`.
 
 ## Limits
 
