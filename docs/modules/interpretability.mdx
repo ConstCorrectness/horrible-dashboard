@@ -762,14 +762,48 @@ Counts come from the model's real tokenizer via `tokenizers` (Rust, ~5 MB) — n
 `tokenizer.json` fetched through the already-present `huggingface-hub` is all that
 `Tokenizer` needs.
 
-Resolution order for the tokenizer repo:
+Which repo (`tokenizer.resolve_repo`, shared with the architecture diagram's
+`config.json` fetch). The `tokenizerSource` reported on each turn names the step
+that answered:
 
-1. the `interpretability.modelRepo` setting, if set;
-2. the [Hugging Face connector's](./connectors.mdx) token, for gated repos
-   (Gemma's is gated — anonymous fetches 401);
-3. anonymous, which works for ungated families.
+1. `setting`: the `interpretability.modelRepo` setting, if set. It wins outright.
+2. `weights`: the running GGUF's own identity (`repo_from_weights`), from the
+   strongest claim available:
+   - `general.source.repo_url`, the file naming its own repo;
+   - a `general.base_model` whose repo name equals the file's own
+     `basename`-`size_label`-`finetune` (a plain re-quantization);
+   - for a file LM Studio serves, the Hub repo it was downloaded from. LM Studio's
+     models directory is laid out `<owner>/<repo>/<file>.gguf`, and a GGUF repo has
+     no `config.json`, so its card's `base_model` is followed (at most three hops,
+     never through a merge's multi-base list or a link the card calls a fine-tune)
+     to the checkpoint that has one;
+   - the file's own name under its `base_model`'s owner, if the Hub has that repo.
 
-If all three fail, counts fall back to a chars/4 estimate and the snapshot is
+   The result is memoized per model, misses included, because capture runs every
+   round.
+3. `model`: the model id, if it is shaped like `owner/name`.
+4. `family`: a same-family default. The pane shows this as "approx".
+
+**A GGUF's `general.base_model` is its parent, not itself.** An instruction-tuned
+Gemma's GGUF names `google/gemma-3-1b-pt` there, the checkpoint it was fine-tuned
+*from*. So `base_model` alone is never taken as the weights' repo; the file's name
+parts decide, the same match the [interp suite's](./interp-suite.mdx)
+compatibility check makes for SAEs.
+
+Step 2 runs before step 3 because **an LM Studio model id is only repo-shaped**.
+`google/gemma-4-12b-qat` is LM Studio's catalog key and 401s on the Hub. Taking
+it as the repo is what used to produce "Could not read config.json" and a chars/4
+estimate for a model whose real checkpoint
+(`google/gemma-4-12B-it-qat-q4_0-unquantized`) is public. When `config.json` still
+can't be read, the error names which step chose the repo.
+
+Auth order for the fetch:
+
+1. the [Hugging Face connector's](./connectors.mdx) token, for gated repos
+   (Gemma's are gated, and anonymous fetches 401);
+2. anonymous, which works for ungated families.
+
+If no tokenizer can be had, counts fall back to a chars/4 estimate and the snapshot is
 marked `exact: false`. **The pane renders that as an "estimated" chip** — an
 estimate displayed as a precise number is exactly the failure this module exists
 to prevent.

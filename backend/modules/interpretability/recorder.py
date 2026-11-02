@@ -322,6 +322,16 @@ def _blocks(
     return blocks
 
 
+def _dialect_of(provider: str) -> str:
+    """The provider's dialect, which says whose model store the weights are in.
+    Looked up directly rather than via `provider_for`, whose fallback to the default
+    provider would claim an unknown kind is Ollama."""
+    from backend.modules.agent.providers import PROVIDERS
+
+    info = PROVIDERS.get(provider)
+    return info.dialect if info else ""
+
+
 def _tool_entries(tools: list[dict[str, Any]], counter: Counter) -> list[ToolEntry]:
     """Per-tool schema cost. Tool JSON is usually the largest single share of an
     agent's context and the least visible, which is the main thing this pane fixes."""
@@ -365,7 +375,7 @@ async def capture_round(
 ) -> None:
     """Record one round and push it to the pane. Never raises."""
     try:
-        counter = await Counter.create(model, tokenizer_repo)
+        counter = await Counter.create(model, tokenizer_repo, _dialect_of(provider))
         _turn_conn[turn_id] = conn
         _turn_counter[turn_id] = counter
         blocks = _blocks(messages, turn_id, counter)

@@ -8,12 +8,14 @@ users on a gated/unknown model actually get).
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.modules.interpretability import recorder, tokenizer
+from backend.modules.interpretability import gguf, recorder, tokenizer
 from backend.modules.interpretability.tokenizer import Counter
 
 
@@ -31,7 +33,16 @@ class FakeConn:
 
 
 @pytest.fixture(autouse=True)
-def clean():
+def clean(monkeypatch: pytest.MonkeyPatch):
+    # Hermetic: never read this machine's Ollama/LM Studio stores, settings or
+    # Hugging Face token. Tests of the provenance chain re-patch what they need.
+    monkeypatch.setattr(gguf, "resolve_model_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(tokenizer, "_gguf_override", lambda: "")
+
+    async def _no_token() -> None:
+        return None
+
+    monkeypatch.setattr(tokenizer, "hf_token", _no_token)
     recorder.clear()
     tokenizer.reset_cache()
     yield
@@ -337,8 +348,9 @@ async def test_delegated_turn_carries_the_specialists_own_scope(estimating):
 
 
 def test_repo_resolution_order_and_provenance():
-    # An LM Studio model id is already an HF repo id — the one case where the
-    # tokenizer provably matches the running weights.
+    # An id shaped like a repo is taken as one — the last guess before a family
+    # match. (LM Studio's ids are only repo-*shaped*; `resolve_repo` tries the
+    # weights' provenance before this.)
     assert tokenizer.repo_for_model("google/gemma-4-12b-qat") == (
         "google/gemma-4-12b-qat",
         "model",
@@ -366,6 +378,244 @@ def test_family_tokenizer_is_not_reported_as_exact():
 
     pinned = Counter(object(), "my/mirror", "setting")
     assert pinned.exact is True
+
+
+def _weights_at(
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+    metadata: dict[str, Any] | None = None,
+    lmstudio: bool = True,
+) -> None:
+    """Pretend the running model's GGUF is `path`, carrying `metadata`."""
+    monkeypatch.setattr(gguf, "resolve_model_path", lambda *_a, **_k: str(path))
+    monkeypatch.setattr(
+        gguf, "resolve_lmstudio_model", lambda _m: str(path) if lmstudio else None
+    )
+    monkeypatch.setattr(
+        gguf, "read_header_cached", lambda _p: SimpleNamespace(metadata=metadata or {})
+    )
+
+
+def _hub(monkeypatch: pytest.MonkeyPatch, repos: dict[str, dict[str, Any]]) -> list:
+    """A fake Hub: repo id → {"files": [...], "base_model": ..., "relation": ...}.
+    Lookups are case-insensitive, like the Hub's. Returns the list of repos
+    queried, so a test can assert how far the walk went."""
+    import huggingface_hub
+
+    asked: list[str] = []
+    by_lower = {k.lower(): k for k in repos}
+
+    def model_info(repo: str, token: str | None = None) -> SimpleNamespace:
+        asked.append(repo)
+        if repo.lower() not in by_lower:
+            raise huggingface_hub.errors.RepositoryNotFoundError(repo)
+        key = by_lower[repo.lower()]
+        spec = repos[key]
+        card: dict[str, Any] = {}
+        if "base_model" in spec:
+            card["base_model"] = spec["base_model"]
+        if "relation" in spec:
+            card["base_model_relation"] = spec["relation"]
+        return SimpleNamespace(
+            id=spec.get("id", key),
+            siblings=[SimpleNamespace(rfilename=f) for f in spec.get("files", [])],
+            card_data=card or None,
+        )
+
+    monkeypatch.setattr(huggingface_hub, "model_info", model_info)
+    return asked
+
+
+# What llama.cpp's converter writes for an instruction-tuned Gemma: its own name in
+# the name parts, and the checkpoint it was fine-tuned FROM as `base_model`.
+_GEMMA_IT = {
+    "general.basename": "gemma-3",
+    "general.size_label": "1B",
+    "general.finetune": "it",
+    "general.base_model.count": 1,
+    "general.base_model.0.repo_url": "https://huggingface.co/google/gemma-3-1b-pt",
+}
+
+
+@pytest.mark.anyio
+async def test_lmstudio_id_resolves_through_its_download_repo(monkeypatch, tmp_path):
+    """The reported bug: `google/gemma-4-12b-qat` is LM Studio's catalog key, not a
+    Hub repo, so reading config.json from it 401s. The file LM Studio serves sits
+    under the repo it was downloaded from, whose card names the real checkpoint."""
+    path = tmp_path / "lmstudio-community" / "gemma-4-12B-it-QAT-GGUF" / "m.gguf"
+    _weights_at(monkeypatch, path)
+    asked = _hub(
+        monkeypatch,
+        {
+            "lmstudio-community/gemma-4-12B-it-QAT-GGUF": {
+                "files": ["m.gguf", "mmproj-m.gguf"],
+                "base_model": "google/gemma-4-12b-it-qat-q4_0-unquantized",
+            },
+            # The Hub's canonical casing, not the card's.
+            "google/gemma-4-12B-it-qat-q4_0-unquantized": {
+                "files": ["config.json", "tokenizer.json"],
+            },
+        },
+    )
+    assert await tokenizer.resolve_repo("google/gemma-4-12b-qat", "", "openai") == (
+        "google/gemma-4-12B-it-qat-q4_0-unquantized",
+        "weights",
+    )
+    # Memoized: the capture path resolves every round, the Hub must not see that.
+    await tokenizer.resolve_repo("google/gemma-4-12b-qat", "", "openai")
+    assert len(asked) == 2
+
+
+@pytest.mark.anyio
+async def test_gguf_base_model_is_its_parent_not_itself(monkeypatch, tmp_path):
+    """The trap the first version of this fell into: `general.base_model` of an IT
+    GGUF names the PT model it was tuned from. The file's own name parts say what
+    it is, and the parent only lends its owner to find that repo."""
+    _weights_at(monkeypatch, tmp_path / "models" / "blobs" / "sha256-x", _GEMMA_IT)
+    asked = _hub(
+        monkeypatch,
+        {
+            "google/gemma-3-1b-pt": {"files": ["config.json"]},
+            "google/gemma-3-1b-it": {"files": ["config.json"]},
+        },
+    )
+    assert await tokenizer.resolve_repo("gemma3:1b", "", "ollama") == (
+        "google/gemma-3-1b-it",
+        "weights",
+    )
+    assert "google/gemma-3-1b-pt" not in asked
+
+
+@pytest.mark.anyio
+async def test_parent_alone_is_never_taken_for_the_weights(monkeypatch, tmp_path):
+    """No Hub repo matches the file's own name: the parent is still not an answer,
+    so it falls back to the family default (labelled approx) instead."""
+    _weights_at(monkeypatch, tmp_path / "models" / "blobs" / "sha256-x", _GEMMA_IT)
+    _hub(monkeypatch, {"google/gemma-3-1b-pt": {"files": ["config.json"]}})
+    assert await tokenizer.resolve_repo("gemma3:1b", "", "ollama") == (
+        "google/gemma-2-2b-it",
+        "family",
+    )
+
+
+@pytest.mark.anyio
+async def test_base_model_naming_the_file_itself_needs_no_hub(monkeypatch, tmp_path):
+    """A plain re-quantization lists the checkpoint it was made from — itself. The
+    name parts match the base's repo name, so that base is the weights' repo."""
+    _weights_at(
+        monkeypatch,
+        tmp_path / "a" / "b" / "m.gguf",
+        {
+            "general.basename": "Qwen3",
+            "general.size_label": "8B",
+            "general.base_model.count": 1,
+            "general.base_model.0.repo_url": "https://huggingface.co/Qwen/Qwen3-8B",
+        },
+    )
+    asked = _hub(monkeypatch, {})
+    assert await tokenizer.resolve_repo("qwen3:8b", "", "ollama") == (
+        "Qwen/Qwen3-8B",
+        "weights",
+    )
+    assert asked == []
+
+
+@pytest.mark.anyio
+async def test_gguf_source_repo_wins_without_the_hub(monkeypatch, tmp_path):
+    _weights_at(
+        monkeypatch,
+        tmp_path / "a" / "b" / "m.gguf",
+        {**_GEMMA_IT, "general.source.repo_url": "https://huggingface.co/google/x-it"},
+    )
+    asked = _hub(monkeypatch, {})
+    assert await tokenizer.resolve_repo("gemma3:1b", "", "ollama") == (
+        "google/x-it",
+        "weights",
+    )
+    assert asked == []
+
+
+@pytest.mark.anyio
+async def test_setting_still_wins_over_the_weights(monkeypatch, tmp_path):
+    _weights_at(
+        monkeypatch,
+        tmp_path / "a" / "b" / "m.gguf",
+        {"general.source.repo_url": "https://huggingface.co/google/gemma-4-12B"},
+    )
+    assert await tokenizer.resolve_repo("x/y", "my/mirror") == ("my/mirror", "setting")
+
+
+@pytest.mark.anyio
+async def test_ollama_blob_directories_are_not_taken_for_a_repo(monkeypatch, tmp_path):
+    """An Ollama blob lives at `models/blobs/sha256-…` — repo-shaped parents that
+    mean nothing. With nothing in the header it falls back to the family default."""
+    _weights_at(monkeypatch, tmp_path / "models" / "blobs" / "sha256-x", lmstudio=False)
+    asked = _hub(monkeypatch, {})
+    assert await tokenizer.resolve_repo("gemma4:e2b", "", "ollama") == (
+        "google/gemma-2-2b-it",
+        "family",
+    )
+    assert asked == []
+
+
+@pytest.mark.anyio
+async def test_unresolvable_provenance_falls_back_to_the_model_id(
+    monkeypatch, tmp_path
+):
+    """A download repo that doesn't exist, whose card names several bases (a merge
+    — picking one would be a guess), or whose card calls its base a fine-tune
+    parent, yields no provenance rather than a guess."""
+    path = tmp_path / "someone" / "merged-GGUF" / "m.gguf"
+    _weights_at(monkeypatch, path)
+    _hub(monkeypatch, {"someone/merged-GGUF": {"base_model": ["a/one", "b/two"]}})
+    assert await tokenizer.resolve_repo("qwen/qwen3-8b", "", "openai") == (
+        "qwen/qwen3-8b",
+        "model",
+    )
+
+    tokenizer.reset_cache()
+    _hub(
+        monkeypatch,
+        {
+            "someone/merged-GGUF": {"base_model": "a/one", "relation": "finetune"},
+            "a/one": {"files": ["config.json"]},
+        },
+    )
+    assert (await tokenizer.resolve_repo("qwen/qwen3-8b", "", "openai"))[1] == "model"
+
+    tokenizer.reset_cache()
+    _hub(monkeypatch, {})
+    assert (await tokenizer.resolve_repo("qwen/qwen3-8b", "", "openai"))[1] == "model"
+
+
+@pytest.mark.anyio
+async def test_provenance_lookup_never_raises(monkeypatch):
+    """An observer's convenience: a broken store walk must fall through, and the
+    miss is memoized so the next round doesn't pay for it again."""
+    calls: list[str] = []
+
+    def boom(model: str, *_a: Any, **_k: Any) -> None:
+        calls.append(model)
+        raise RuntimeError("index unreadable")
+
+    monkeypatch.setattr(gguf, "resolve_model_path", boom)
+    assert await tokenizer.resolve_repo("gemma4:e2b", "", "ollama") == (
+        "google/gemma-2-2b-it",
+        "family",
+    )
+    await tokenizer.resolve_repo("gemma4:e2b", "", "ollama")
+    assert calls == ["gemma4:e2b"]
+
+
+def test_weights_provenance_counts_as_exact():
+    assert Counter(object(), "google/gemma-4-12B", "weights").exact is True
+
+
+def test_dialect_comes_from_the_provider_kind_only():
+    # An unknown kind must not inherit the default provider's (Ollama's) store.
+    assert recorder._dialect_of("ollama") == "ollama"
+    assert recorder._dialect_of("lmstudio") == "openai"
+    assert recorder._dialect_of("no-such-kind") == ""
 
 
 def test_source_never_claims_provenance_without_a_tokenizer():
@@ -439,6 +689,45 @@ def test_model_route_reports_error_without_a_provider(client: TestClient, monkey
     monkeypatch.setattr(agent_routes, "_load_config", lambda: None)
     body = client.get("/api/interpretability/model").json()
     assert body["error"] and body["contextLength"] is None
+
+
+def test_architecture_error_says_where_the_repo_came_from(
+    client: TestClient, monkeypatch, tmp_path
+):
+    """An LM Studio id that resolves through the weights, to a repo whose config
+    can't be read: the error names the repo AND which step chose it, so it doesn't
+    read as if the repo were known to be right and merely locked."""
+    from backend.modules.agent import orchestrator
+    from backend.modules.agent import routes as agent_routes
+    from backend.modules.interpretability import architecture as arch
+    from backend.modules.interpretability import routes as interp_routes
+
+    model = "google/gemma-4-12b-qat"
+    monkeypatch.setattr(
+        agent_routes,
+        "_load_config",
+        lambda: SimpleNamespace(provider="lmstudio", model=model),
+    )
+    monkeypatch.setattr(orchestrator, "_tokenizer_repo", lambda: "")
+
+    async def _no_header() -> tuple[str, None, str]:
+        return model, None, "no header"
+
+    async def _no_config(_repo: str) -> None:
+        return None
+
+    monkeypatch.setattr(interp_routes, "_loaded_header", _no_header)
+    monkeypatch.setattr(arch, "fetch_hf_config", _no_config)
+    _weights_at(monkeypatch, tmp_path / "lmstudio-community" / "g-GGUF" / "m.gguf")
+    _hub(
+        monkeypatch,
+        {
+            "lmstudio-community/g-GGUF": {"base_model": "google/g-it"},
+            "google/g-it": {"files": ["config.json"]},
+        },
+    )
+    error = client.get("/api/interpretability/architecture").json()["error"]
+    assert "'google/g-it'" in error and "GGUF's own identity" in error
 
 
 # ── The durable history surface ──────────────────────────────────────────────

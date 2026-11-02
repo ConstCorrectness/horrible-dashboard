@@ -33,7 +33,7 @@ from backend.modules.interpretability.models import (
 )
 from backend.modules.interpretability.tokenizer import (
     context_length_from_show,
-    repo_for_model,
+    resolve_repo,
 )
 
 logger = logging.getLogger(__name__)
@@ -305,9 +305,10 @@ async def model_architecture() -> ModelArchitecture:
     2. **The GGUF header itself**, for any server whose weights file we can find
        (LM Studio's index, our own llama.cpp, `interpretability.ggufPath`). The
        same keys as path 1, read from the file rather than asked of a server.
-    3. **A Hugging Face `config.json`** — the repo resolved from the model id or
-       pinned via `interpretability.modelRepo`. Describes the architecture, though
-       strictly it describes the *repo*, which is why `source` is reported.
+    3. **A Hugging Face `config.json`** — the repo `tokenizer.resolve_repo` picks:
+       pinned via `interpretability.modelRepo`, else the GGUF's own identity, else
+       the model id. Describes the architecture, though strictly it describes the
+       *repo*, which is why `source` is reported.
 
     OpenAI-dialect servers (LM Studio, vLLM) expose no architecture endpoint at
     all; path 2 is why they no longer fall straight through to path 3.
@@ -374,7 +375,7 @@ async def model_architecture() -> ModelArchitecture:
                         )
             return primary
 
-    repo, _source = repo_for_model(model, _tokenizer_repo())
+    repo, source = await resolve_repo(model, _tokenizer_repo(), info.dialect)
     if not repo:
         return ModelArchitecture(
             model=model,
@@ -386,11 +387,20 @@ async def model_architecture() -> ModelArchitecture:
         )
     cfg = await arch.fetch_hf_config(repo)
     if cfg is None:
+        # Say where the repo came from: "the model id, taken as a repo id" is the
+        # guess most likely to be wrong, and without this the message reads as if
+        # the repo were known to be right and merely locked.
+        how = {
+            "setting": "pinned by interpretability.modelRepo",
+            "weights": "named by the running GGUF's own identity",
+            "model": "the model id, taken as a repo id — which it may not be",
+            "family": "a same-family default",
+        }.get(source, source)
         return ModelArchitecture(
             model=model,
             error=(
-                f"Could not read config.json from '{repo}'. If the repo is gated, "
-                "connect Hugging Face; if it's the wrong repo, set "
+                f"Could not read config.json from '{repo}' ({how}). If the repo is "
+                "gated, connect Hugging Face; if it's the wrong repo, set "
                 "interpretability.modelRepo."
             ),
         )
