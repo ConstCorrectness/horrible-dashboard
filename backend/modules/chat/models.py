@@ -31,6 +31,9 @@ class ChatMessage(BaseModel):
     # When the turn started and ended (ms since epoch), for the elapsed readout.
     started_at: float | None = None
     ended_at: float | None = None
+    # The turn failed and `content` is the error banner the chat showed, not a
+    # reply — the chat keeps it out of the history it replays to the model.
+    error: bool = False
 
 
 class ChatSession(BaseModel):

@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { compactHistory, MAX_HISTORY_TURNS, MAX_TURN_CHARS } from '../history';
+import type { ChatTurn } from '../chat-state';
+import { compactHistory, MAX_HISTORY_TURNS, MAX_TURN_CHARS, replayableTurns } from '../history';
 import type { AgentTurn } from '../orchestrator-client';
 
 function conversation(n: number): AgentTurn[] {
@@ -66,5 +67,47 @@ describe('compactHistory', () => {
     const { history, omitted } = compactHistory(conversation(10), 4);
     expect(omitted).toBe(6);
     expect(history).toHaveLength(5);
+  });
+});
+
+describe('replayableTurns', () => {
+  // Seen live in the context inspector: the request after a failed turn carried
+  // `#2 assistant` = the 261-char `⚠ NotFoundError: litellm…` banner, so the model
+  // read a provider error dump as its own previous reply.
+  const banner = '⚠ NotFoundError: litellm.NotFoundError: OpenrouterException - No endpoints found';
+
+  it("drops a failed turn's error banner but keeps the prompt it answered", () => {
+    const turns: ChatTurn[] = [
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: 'hi there' },
+      { role: 'user', text: 'summarise the editor' },
+      { role: 'assistant', text: banner, error: true },
+    ];
+    expect(replayableTurns(turns)).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi there' },
+      { role: 'user', content: 'summarise the editor' },
+    ]);
+  });
+
+  it('drops banners saved before turns carried the flag', () => {
+    const turns: ChatTurn[] = [
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: '⚠ HTTPStatusError: 402 Payment Required' },
+    ];
+    expect(replayableTurns(turns)).toEqual([{ role: 'user', content: 'hello' }]);
+  });
+
+  it('still drops slash output and system lines, and keeps ordinary replies', () => {
+    const turns: ChatTurn[] = [
+      { role: 'user', text: '/help', ephemeral: true },
+      { role: 'system', text: 'commands…', ephemeral: true },
+      { role: 'user', text: 'is ⚠ a warning sign?' },
+      { role: 'assistant', text: 'Yes — ⚠ is the warning sign.' },
+    ];
+    expect(replayableTurns(turns).map((t) => t.content)).toEqual([
+      'is ⚠ a warning sign?',
+      'Yes — ⚠ is the warning sign.',
+    ]);
   });
 });

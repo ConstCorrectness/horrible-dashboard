@@ -170,9 +170,29 @@ def test_activity_timeline_and_mode_round_trip(client: TestClient) -> None:
     assert msg["todos"][0]["status"] == "completed"
     assert msg["plan"]["status"] == "proposed"
     assert msg["ended_at"] == 9.0
+    assert msg["error"] is False
 
     # Saving messages alone leaves the mode alone; sending `mode: null` resets it.
     client.put(f"/api/chat/sessions/{made['id']}", json={"messages": []})
     assert client.get(f"/api/chat/sessions/{made['id']}").json()["mode"] == "plan"
     client.put(f"/api/chat/sessions/{made['id']}", json={"mode": None})
     assert client.get(f"/api/chat/sessions/{made['id']}").json()["mode"] is None
+
+
+def test_error_flag_round_trips(client: TestClient) -> None:
+    """A failed turn's `error` flag must survive the response model: it is what
+    keeps the error banner out of the history the chat replays after a reload."""
+    made = client.post("/api/chat/sessions", json={"title": "T"}).json()
+    body = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "⚠ NotFoundError: no endpoints",
+                "error": True,
+            },
+        ],
+    }
+    client.put(f"/api/chat/sessions/{made['id']}", json=body)
+    again = client.get(f"/api/chat/sessions/{made['id']}").json()
+    assert [m["error"] for m in again["messages"]] == [False, True]

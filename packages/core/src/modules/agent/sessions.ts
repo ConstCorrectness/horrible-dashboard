@@ -23,6 +23,8 @@ export interface ChatMessage {
   plan?: TurnPlan | null;
   started_at?: number | null;
   ended_at?: number | null;
+  /** See `ChatTurn.error`. */
+  error?: boolean;
 }
 
 export interface ChatSession {
