@@ -57,7 +57,7 @@ export interface TurnSnapshot {
   /** False when counts aren't authoritative — estimated, or a family stand-in. */
   exact: boolean;
   tokenizerRepo: string | null;
-  /** "model" | "setting" | "family" | "none" — how the tokenizer was chosen. */
+  /** "setting" | "weights" | "model" | "family" | "none" — how the tokenizer was chosen. */
   tokenizerSource: string;
   requestedNumCtx: number | null;
   modelContextLength: number | null;

@@ -10,7 +10,11 @@ has no torch and must not grow one (see backend/modules/training/envs.py). A bar
 `tokenizer.json` is all a `Tokenizer` needs, and `huggingface-hub` is already a core
 dep to fetch it.
 
-**Gemma's tokenizer repo is gated** — anonymous downloads 401. Resolution order:
+Which repo: the `interpretability.modelRepo` setting, else the repo the running
+GGUF's own provenance names (`repo_from_weights`), else the model id if it's shaped
+like a repo, else a same-family default — see `resolve_repo`.
+
+**Gemma's tokenizer repo is gated** — anonymous downloads 401. Auth order:
   1. the `interpretability.tokenizerRepo` setting, if set (an ungated mirror works)
   2. the Hugging Face connector's token, if that connector is connected
   3. anonymous (fine for ungated repos: Qwen, Mistral, Llama mirrors, …)
@@ -22,6 +26,7 @@ precise number is the failure mode this module exists to prevent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -40,15 +45,19 @@ _REPO_BY_FAMILY: tuple[tuple[str, str], ...] = (
     ("deepseek", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
 )
 
-# An HF repo id: "owner/name", no Ollama tag separator. LM Studio reports models
-# under exactly this form ("google/gemma-4-12b-qat"), so its model id IS the repo —
-# the one case where we can be sure the tokenizer matches the running weights.
+# An HF repo id: "owner/name", no Ollama tag separator. LM Studio reports models in
+# this *shape* ("google/gemma-4-12b-qat"), but the shape is all it shares with a
+# repo: that id is LM Studio's own catalog key and 401s on the Hub. So an id-shaped
+# model is only tried after the weights' provenance (`repo_from_weights`).
 _REPO_ID = re.compile(r"^[\w.-]+/[\w.-]+$")
 
-# How a tokenizer was chosen, in descending order of trust. This rides all the way
-# out to the pane because it changes what the numbers mean:
-#   model  — derived from the model's own id; the tokenizer matches the weights
-#   setting— the user pinned it; assumed deliberate
+# How a tokenizer was chosen. This rides all the way out to the pane because it
+# changes what the numbers mean:
+#   setting— the user pinned it; assumed deliberate, and wins outright
+#   weights— followed from the running GGUF's own identity (its source repo, its
+#            name parts, or the Hub repo LM Studio downloaded it from); the
+#            tokenizer matches the weights
+#   model  — the model's own id, taken as a repo id
 #   family — a same-family default, possibly the WRONG GENERATION (Gemma 2 and 3
 #            don't share a vocab), so counts are close but not authoritative
 #   none   — no tokenizer at all; chars/4
@@ -60,6 +69,14 @@ _CACHE: dict[str, Any] = {}
 # Repos we already failed to load. Without this every single round would re-attempt
 # a network fetch that we know 401s, and the capture path runs inside the turn.
 _FAILED: set[str] = set()
+# Weights provenance, keyed by (model, dialect, ggufPath override). One resolution
+# is a GGUF header read plus a few Hub round trips, and the capture path runs every
+# round — a miss is memoized too, for the same reason `_FAILED` is.
+_PROVENANCE: dict[tuple[str, str, str], str | None] = {}
+# How many `base_model` links to follow before giving up. A quantization repo names
+# the checkpoint it was made from, which is normally one hop; the cap is only there
+# so a card cycle can't loop.
+_MAX_HOPS = 3
 
 
 def repo_for_model(
@@ -85,6 +102,169 @@ def repo_for_model(
         if family in name:
             return repo, "family"
     return None, "none"
+
+
+async def resolve_repo(
+    model: str, configured: str = "", dialect: str = ""
+) -> tuple[str | None, TokenizerSource]:
+    """`repo_for_model`, with the running weights' own provenance tried before the
+    model id. The setting still wins outright; `dialect` only decides whether the
+    weights are looked for in Ollama's store or LM Studio's."""
+    if configured.strip():
+        return configured.strip(), "setting"
+    repo = await repo_from_weights(model, dialect)
+    if repo:
+        return repo, "weights"
+    return repo_for_model(model)
+
+
+async def repo_from_weights(model: str, dialect: str = "") -> str | None:
+    """The Hub repo the running model's GGUF says it is, or None.
+
+    Never raises: like every lookup here, this is an observer's convenience and may
+    not be what breaks a turn."""
+    if not model:
+        return None
+    override = _gguf_override()
+    key = (model, dialect, override)
+    if key in _PROVENANCE:
+        return _PROVENANCE[key]
+    try:
+        token = await hf_token()
+        repo = await asyncio.to_thread(
+            _weights_provenance, model, dialect, override, token
+        )
+    except Exception as exc:
+        logger.info("interpretability: no provenance for %s (%s)", model, exc)
+        repo = None
+    _PROVENANCE[key] = repo
+    return repo
+
+
+def _gguf_override() -> str:
+    try:
+        from backend.modules.settings.routes import _read
+
+        value = _read().get("interpretability.ggufPath")
+    except Exception:
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def _weights_provenance(
+    model: str, dialect: str, override: str, token: str | None
+) -> str | None:
+    """The repo of the weights themselves, from the strongest claim available:
+
+    1. **`general.source.repo_url`** — the GGUF naming its own repo.
+    2. **A `general.base_model` whose name is the file's own.** `base_model` names
+       the model a GGUF was fine-tuned *from* (an `-it` file names its `-pt`
+       parent), so it is only taken when its name part equals the file's own
+       `basename`-`size_label`-`finetune` — the match `interp.compat` makes for
+       SAEs. A plain re-quantization lists the checkpoint it was made from: itself.
+    3. **The repo LM Studio downloaded the file from.** Its models directory is laid
+       out `<owner>/<repo>/<file>.gguf`, mirroring the Hub. A GGUF repo has no
+       `config.json`, so its card's `base_model` is followed to the checkpoint that
+       does — on a Hub card, unlike in the header, a quantization repo's
+       `base_model` is the model it quantized.
+    4. **The file's own name under its parent's owner** (parent
+       `google/gemma-3-1b-pt`, name `gemma-3-1b-it` → `google/gemma-3-1b-it`), only
+       if the Hub has that repo with a `config.json`.
+
+    Source 3 is only read for a file LM Studio's index resolved: an Ollama blob's
+    parents are `models/blobs`, which is repo-*shaped* and means nothing.
+    """
+    from pathlib import Path
+
+    from backend.modules.interp import compat
+    from backend.modules.interpretability import gguf
+
+    path = gguf.resolve_model_path(model, dialect, override)
+    if not path:
+        return None
+    try:
+        metadata = gguf.read_header_cached(path).metadata
+    except (gguf.GgufError, OSError):
+        metadata = {}
+    target = compat.gguf_target(metadata, path)
+    own = _hub_repo(target["repo"])
+    if own:
+        return own
+    name = str(target["name"] or "").lower()
+    parents = [r for r in map(_hub_repo, target["parents"]) if r]
+    for parent in parents:
+        if name and parent.split("/", 1)[1].lower() == name:
+            return parent
+    if dialect != "ollama" and path == gguf.resolve_lmstudio_model(model):
+        folder = Path(path).parent
+        candidate = f"{folder.parent.name}/{folder.name}"
+        if _REPO_ID.match(candidate):
+            repo = _follow_base_model(candidate, token)
+            if repo:
+                return repo
+    if name:
+        for owner in dict.fromkeys(p.split("/", 1)[0] for p in parents):
+            info = _model_info(f"{owner}/{name}", token)
+            if info is not None and _has_config(info):
+                return info.id
+    return None
+
+
+def _hub_repo(value: Any) -> str | None:
+    """`https://huggingface.co/google/gemma-3-1b-it` → `google/gemma-3-1b-it`, or
+    None. `compat._repo` without the lowercasing: this one is handed to the Hub."""
+    if not isinstance(value, str) or not value:
+        return None
+    if "huggingface.co/" in value:
+        value = value.split("huggingface.co/", 1)[1]
+    repo = "/".join([p for p in value.strip("/").split("/") if p][:2])
+    return repo if _REPO_ID.match(repo) else None
+
+
+def _model_info(repo: str, token: str | None) -> Any | None:
+    """The Hub's record for `repo`, or None — a 404 here is an answer, not an error."""
+    try:
+        from huggingface_hub import model_info
+
+        return model_info(repo, token=token)
+    except Exception as exc:
+        logger.info("interpretability: no Hub record for %s (%s)", repo, exc)
+        return None
+
+
+def _has_config(info: Any) -> bool:
+    return any(s.rfilename == "config.json" for s in info.siblings or [])
+
+
+def _follow_base_model(repo: str, token: str | None) -> str | None:
+    """Walk `base_model` links from `repo` to the first repo with a `config.json`.
+
+    Stops at an ambiguous link (a merge lists several bases; picking one would be a
+    guess), at a card that calls the link anything but a quantization (a fine-tune's
+    base is its parent — the header's trap again), and at anything that isn't an
+    `owner/name` id."""
+    seen: set[str] = set()
+    for _ in range(_MAX_HOPS):
+        if repo in seen:
+            return None
+        seen.add(repo)
+        info = _model_info(repo, token)
+        if info is None:
+            return None
+        if _has_config(info):
+            # `info.id` is the canonical casing; the directory may differ.
+            return info.id
+        card = info.card_data or {}
+        relation = card.get("base_model_relation")
+        if relation and relation != "quantized":
+            return None
+        base = card.get("base_model")
+        if isinstance(base, list):
+            base = base[0] if len(base) == 1 else None
+        if not isinstance(base, str) or not _REPO_ID.match(base):
+            return None
+        repo = base
+    return None
 
 
 async def hf_token() -> str | None:
@@ -145,17 +325,19 @@ class Counter:
     ) -> None:
         self._tok = tokenizer
         self.repo = repo
-        # How the repo was chosen — "model" / "setting" / "family" / "none". Falls
-        # back to "none" whenever the load failed, so `source` never claims a
-        # provenance for a tokenizer we don't actually have.
+        # How the repo was chosen — "setting" / "weights" / "model" / "family" /
+        # "none". Falls back to "none" whenever the load failed, so `source` never
+        # claims a provenance for a tokenizer we don't actually have.
         self.source: TokenizerSource = source if tokenizer is not None else "none"
         # Exact means: we have a tokenizer AND it belongs to this model. A
         # same-family stand-in is not exact (see repo_for_model).
-        self.exact = tokenizer is not None and source in ("model", "setting")
+        self.exact = tokenizer is not None and source in ("setting", "weights", "model")
 
     @classmethod
-    async def create(cls, model: str, configured_repo: str = "") -> Counter:
-        repo, source = repo_for_model(model, configured_repo)
+    async def create(
+        cls, model: str, configured_repo: str = "", dialect: str = ""
+    ) -> Counter:
+        repo, source = await resolve_repo(model, configured_repo, dialect)
         return cls(await _load(repo) if repo else None, repo, source)
 
     def count(self, text: str) -> int:
@@ -185,6 +367,7 @@ def reset_cache() -> None:
     connected Hugging Face, retry a repo that previously 401'd."""
     _CACHE.clear()
     _FAILED.clear()
+    _PROVENANCE.clear()
 
 
 # Ollama reports context length under a few different keys depending on family
