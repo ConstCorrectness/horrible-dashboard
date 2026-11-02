@@ -41,7 +41,7 @@ import {
   useAgentChat,
   type ChatTurn,
 } from './chat-state';
-import { compactHistory, MAX_HISTORY_TURNS } from './history';
+import { compactHistory, isReplayed, MAX_HISTORY_TURNS, replayableTurns } from './history';
 import { ModelPicker } from './ModelPicker';
 import { ModePicker } from './ModePicker';
 import { asAgentMode, modeInfo, nextMode, parseModeCommand, type AgentMode } from './modes';
@@ -116,6 +116,7 @@ function toMessages(turns: ChatTurn[]): ChatMessage[] {
       ...(t.plan ? { plan: t.plan } : {}),
       ...(t.startedAt ? { started_at: t.startedAt } : {}),
       ...(t.endedAt ? { ended_at: t.endedAt } : {}),
+      ...(t.error ? { error: true } : {}),
     }));
 }
 
@@ -132,6 +133,7 @@ function toTurns(messages: ChatMessage[]): ChatTurn[] {
     ...(m.plan ? { plan: m.plan } : {}),
     ...(m.started_at ? { startedAt: m.started_at } : {}),
     ...(m.ended_at ? { endedAt: m.ended_at } : {}),
+    ...(m.error ? { error: true } : {}),
   }));
 }
 
@@ -286,9 +288,9 @@ export function ChatWidget({
   // conversation still fits. Derived from `turns` with the same bound `send` uses,
   // so the seam drawn in the transcript is the seam the model actually gets.
   const compactionBoundary = (() => {
-    const persisted = turns.filter((t) => t.role !== 'system' && !t.ephemeral);
-    const omitted = persisted.length - MAX_HISTORY_TURNS;
-    return omitted > 0 ? turns.indexOf(persisted[omitted]) : -1;
+    const replayed = turns.filter(isReplayed);
+    const omitted = replayed.length - MAX_HISTORY_TURNS;
+    return omitted > 0 ? turns.indexOf(replayed[omitted]) : -1;
   })();
   // The avatar (default on) cycles through its mood animations; the setting turns
   // it off for a plain text pane (see agentModule settings).
@@ -726,15 +728,11 @@ export function ChatWidget({
     setBusy(true);
     await ensureSession(text);
 
-    // History is the prior real turns (text only), **compacted** — replaying the
-    // whole transcript let the provider silently truncate from the front, taking
-    // the system prompt and group guides with it. A new user turn and an empty
-    // assistant turn we stream into are appended after.
-    const { history } = compactHistory(
-      liveTurns()
-        .filter((t) => t.role !== 'system' && !t.ephemeral)
-        .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text })),
-    );
+    // History is the prior real turns (text only, no error banners), **compacted** —
+    // replaying the whole transcript let the provider silently truncate from the
+    // front, taking the system prompt and group guides with it. A new user turn and
+    // an empty assistant turn we stream into are appended after.
+    const { history } = compactHistory(replayableTurns(liveTurns()));
     const assistantIndex = liveTurns().length + 1;
     // Our own turn id, stamped on both turns before the first frame arrives, so the
     // trace view can join this message to what the model was shown and did.
@@ -798,7 +796,7 @@ export function ChatWidget({
             })),
           // The final answer is authoritative; fall back to the streamed text if empty.
           onAnswer: (answer) => patch((t) => ({ ...t, text: answer || t.text })),
-          onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
+          onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}`, error: true })),
         },
         history,
         // `ensureSession` ran above, so the session exists: its id groups this

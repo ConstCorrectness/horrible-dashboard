@@ -18,9 +18,38 @@
  * unambiguously an annotation — and it tells the model what to do about it
  * (ask), instead of leaving a hole it will confidently fill in.
  *
+ * A failed turn's error banner (`⚠ NotFoundError: …`) is not replayed either.
+ * It sits in the transcript as an assistant turn, so sent as-is the model reads a
+ * provider error dump as its own previous reply. The user turn it answered stays:
+ * "try again" has to have something to refer to.
+ *
  * Pure and separate from the widget so it is testable without a DOM.
  */
+import type { ChatTurn } from './chat-state';
 import type { AgentTurn } from './orchestrator-client';
+
+/** Error banners saved before turns carried `error` start with the widget's own
+ *  marker. A real reply opening with "⚠ " would be dropped too; that is the
+ *  cheaper mistake. */
+const LEGACY_ERROR_PREFIX = '⚠ ';
+
+function isFailedReply(t: ChatTurn): boolean {
+  return t.role === 'assistant' && (t.error === true || t.text.startsWith(LEGACY_ERROR_PREFIX));
+}
+
+/** Whether a transcript turn is replayed to the model: real user/assistant
+ *  exchanges only — no slash output, no system lines, no error banners. The
+ *  compaction seam the transcript draws counts with this too. */
+export function isReplayed(t: ChatTurn): boolean {
+  return t.role !== 'system' && !t.ephemeral && !isFailedReply(t);
+}
+
+/** The transcript as the model should see it, uncompacted. */
+export function replayableTurns(turns: ChatTurn[]): AgentTurn[] {
+  return turns
+    .filter(isReplayed)
+    .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text }));
+}
 
 /** Exchanges kept verbatim (12 messages ≈ 6 back-and-forths). */
 export const MAX_HISTORY_TURNS = 12;

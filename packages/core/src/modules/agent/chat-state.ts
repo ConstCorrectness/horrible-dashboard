@@ -49,6 +49,9 @@ export interface ChatTurn {
   endedAt?: number;
   /** Slash-command echo/output: shown but not persisted or replayed to the model. */
   ephemeral?: boolean;
+  /** The turn failed and `text` is the error banner, not a reply: shown in the
+   *  chat, persisted, but never replayed to the model as something it said. */
+  error?: boolean;
   /** The orchestrator turn this belongs to (a user turn and its reply share one).
    *  The join key into interpretability and trajectories. */
   turnId?: string;
