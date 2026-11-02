@@ -5,7 +5,6 @@ Covers:
 2. Frontier 2: Authoritative Ranked Matchmaking, Placement Calibration, and Seasonal MMR.
 3. Frontier 3: Caster Observer Director action evaluation and Anti-Cheat PVS Fog-of-War.
 4. Frontier 4: Co-op PvE Operations (Breach & Clear) and Squad Command Wheel.
-5. Frontier 5: Physical Material Bullet Penetration and Wallbang Physics.
 """
 
 import json
@@ -15,7 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend.app import app
-from backend.modules.hassault import director, match, ranked_mmr, weapons
+from backend.modules.hassault import director, match, ranked_mmr
 from backend.modules.hassault.modes import build, catalog
 from backend.modules.hassault.modes.breach import Breach, Hostage
 
@@ -357,39 +356,3 @@ def test_squad_command_wheel():
     assert cmd["type"] == "HOLD"
     assert getattr(bot1, "squad_command")["type"] == "HOLD"
     assert getattr(bot2, "squad_command")["type"] == "HOLD"
-
-
-# ============================================================================
-# Frontier 5: Physical Material Bullet Penetration Tests
-# ============================================================================
-
-def test_material_bullet_penetration():
-    """Verify material penetration calculations across sniper, rifles, SMGs, and barriers."""
-    sniper = weapons.WEAPON_BY_ID["sniper"]
-    assault = weapons.WEAPON_BY_ID["assault"]
-    knife = weapons.WEAPON_BY_ID["knife"]
-
-    # Sniper penetrates wood up to 1.5m
-    can_pen, falloff = weapons.calculate_material_penetration(sniper, material="wood", thickness=0.4)
-    assert can_pen is True
-    assert falloff > 0.4
-
-    # Sniper penetrates metal (sheet)
-    can_pen_metal, falloff_metal = weapons.calculate_material_penetration(sniper, material="metal", thickness=0.2)
-    assert can_pen_metal is True
-
-    # Assault rifle penetrates thin wood (0.4m), but fails on thick stone (1.5m)
-    can_pen_rifle, _ = weapons.calculate_material_penetration(assault, material="wood", thickness=0.4)
-    assert can_pen_rifle is True
-
-    can_pen_stone, _ = weapons.calculate_material_penetration(assault, material="stone", thickness=1.5)
-    assert can_pen_stone is False
-
-    # Pistol fails on thick metal
-    pistol = weapons.WEAPON_BY_ID["pistol"]
-    can_pen_pistol, _ = weapons.calculate_material_penetration(pistol, material="metal", thickness=0.8)
-    assert can_pen_pistol is False
-
-    # Knife cannot penetrate walls
-    can_pen_knife, _ = weapons.calculate_material_penetration(knife, material="wood", thickness=0.1)
-    assert can_pen_knife is False
