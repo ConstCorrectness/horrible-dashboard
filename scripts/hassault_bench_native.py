@@ -26,13 +26,19 @@ BINARY = ROOT / "apps/native-fps/target/release/hassault-native.exe"
 
 
 def run_one(
-    binary: Path, server: str, game_map: str, tier: str, timeout: float
+    binary: Path,
+    server: str,
+    game_map: str,
+    tier: str,
+    timeout: float,
+    extra: list[str] = (),
 ) -> dict | None:
     cmd = [
         str(binary),
         f"--server={server}",
         f"--bench={game_map}",
         f"--set=hassault.video.quality={tier}",
+        *(f"--set={kv}" for kv in extra),
     ]
     try:
         done = subprocess.run(
@@ -78,6 +84,14 @@ def main() -> int:
     parser.add_argument("--tiers", default="medium,high")
     parser.add_argument("--maps", default="", help="comma-separated; default all")
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="a settings row for every run, over the tier's preset "
+        "(e.g. hassault.video.powerPreference=low for the integrated GPU)",
+    )
     parser.add_argument("--out", type=Path, default=Path("hassault-bench-native.jsonl"))
     args = parser.parse_args()
 
@@ -98,7 +112,9 @@ def main() -> int:
         for game_map in maps:
             for tier in tiers:
                 print(f"bench {game_map} {tier}", file=sys.stderr)
-                result = run_one(args.binary, args.server, game_map, tier, args.timeout)
+                result = run_one(
+                    args.binary, args.server, game_map, tier, args.timeout, args.set
+                )
                 if result is not None:
                     results.append(result)
                     out.write(json.dumps(result) + "\n")

@@ -15,7 +15,11 @@
 //! Started with `--bench=<map>` (`main.rs`); the result is printed as one JSON
 //! line on stdout, prefixed `BENCH `, and the client exits.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::profile::{Phase, PhaseTimes};
 
 const PATHS_JSON: &str =
     include_str!("../../../packages/core/src/modules/hassault/bench-paths.json");
@@ -112,6 +116,8 @@ pub struct Sample {
     pub cpu_ms: f64,
     pub draw_calls: u32,
     pub triangles: u64,
+    /// `cpu_ms`, split by phase (`profile.rs`).
+    pub phases: PhaseTimes,
 }
 
 #[derive(Serialize, Debug)]
@@ -148,6 +154,14 @@ pub struct BenchResult {
     pub draw_calls_max: u32,
     pub draw_calls_mean: f64,
     pub triangles_max: u64,
+    /// Mean milliseconds per CPU phase, native only. Means rather than
+    /// percentiles because means add up: the phases sum to the mean `cpu_ms`,
+    /// so the table says what share of the frame each one is.
+    pub cpu_phases_mean: BTreeMap<&'static str, f64>,
+    /// The 99th percentile per CPU phase: where a frame-time tail lives, which
+    /// the means cannot say. These do **not** add up — each is its own phase's
+    /// worst frames, not the worst frames' phases.
+    pub cpu_phases_p99: BTreeMap<&'static str, f64>,
     pub framings: Vec<FramingStats>,
 }
 
@@ -249,6 +263,21 @@ impl BenchRun {
                 round2(calls.iter().map(|&c| c as f64).sum::<f64>() / calls.len() as f64)
             },
             triangles_max: self.samples.iter().map(|s| s.triangles).max().unwrap_or(0),
+            cpu_phases_mean: Phase::ALL
+                .iter()
+                .map(|&phase| {
+                    let sum: f64 = self.samples.iter().map(|s| s.phases.get(phase)).sum();
+                    let n = self.samples.len().max(1) as f64;
+                    (phase.name(), (sum / n * 1000.0).round() / 1000.0)
+                })
+                .collect(),
+            cpu_phases_p99: Phase::ALL
+                .iter()
+                .map(|&phase| {
+                    let v: Vec<f64> = self.samples.iter().map(|s| s.phases.get(phase)).collect();
+                    (phase.name(), (percentile(&v, 99.0) * 1000.0).round() / 1000.0)
+                })
+                .collect(),
             framings: self
                 .framings
                 .iter()
@@ -342,11 +371,18 @@ mod tests {
                 cpu_ms: 2.0,
                 draw_calls: 40,
                 triangles: 1000,
+                phases: {
+                    let mut p = PhaseTimes::default();
+                    p.add(Phase::Encode, 0.5);
+                    p
+                },
             });
         }
         let r = run.result();
         assert_eq!(r.max, 10.0);
         assert_eq!(r.cpu_p99, 2.0);
+        assert_eq!(r.cpu_phases_mean["encode"], 0.5);
+        assert_eq!(r.cpu_phases_mean.len(), crate::profile::PHASE_COUNT);
         assert!(r.framings.iter().all(|f| f.frames > 0));
         assert!((r.seconds - total).abs() < 0.1);
     }

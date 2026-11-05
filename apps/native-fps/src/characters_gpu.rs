@@ -38,7 +38,8 @@ impl SkinVertex {
         4 => Float32x4,
     ];
 
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
+    /// Shared with the first-person hands' pipeline (`props_gpu.rs`).
+    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<SkinVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,

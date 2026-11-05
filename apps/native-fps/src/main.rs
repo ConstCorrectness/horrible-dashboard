@@ -467,11 +467,35 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         // Uncapped, at full render scale, windowed at a fixed size (`app.rs`
         // `BENCH_SIZE`), so a row in the table carries its own conditions.
         // None of it is written back.
-        let quality = settings.video.quality;
-        settings.video.apply_preset(quality);
-        settings.video.vsync = false;
-        settings.video.fps_limit = 0;
-        settings.video.render_scale = 1.0;
+        //
+        // Rebuilt from the tier and the `--set` rows **alone**, in
+        // `from_values`' order — preset first, then rows — so an explicit row
+        // still wins (`--set=hassault.video.msaa=1` is how one row's cost is
+        // isolated), and nothing this machine happens to have stored leaks in.
+        let mut bag = serde_json::Map::new();
+        bag.insert(
+            hassault_native::settings::KEY_QUALITY.to_string(),
+            serde_json::Value::String(settings.video.quality.key().to_string()),
+        );
+        for (key, value) in &args.overrides {
+            bag.insert(key.clone(), value.clone());
+        }
+        settings.video = Settings::from_values(&serde_json::Value::Object(bag)).video;
+        // Uncapped, unsynced, native resolution, windowed — unless the run
+        // asks otherwise: a scaled run is how a fill-bound GPU is told from a
+        // vertex-bound one, and a capped or synced run is how the frame
+        // limiter and the present queue are measured.
+        use hassault_native::settings as keys;
+        let asked = |key: &str| args.overrides.iter().any(|(k, _)| k == key);
+        if !asked(keys::KEY_VSYNC) {
+            settings.video.vsync = false;
+        }
+        if !asked(keys::KEY_FPS_LIMIT) {
+            settings.video.fps_limit = 0;
+        }
+        if !asked(keys::KEY_RENDER_SCALE) {
+            settings.video.render_scale = 1.0;
+        }
         settings.video.fullscreen = false;
     }
     let writer = SettingsWriter::new(&args.server);

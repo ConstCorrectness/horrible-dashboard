@@ -70,6 +70,9 @@ struct VertexOut {
     // Baked ambient occlusion, 1 for none. Content, the same at every
     // quality level: see `Vertex::ao`.
     @location(7) ao: f32,
+    // The point lights that can reach this vertex's cell: `point_mask` in
+    // `lighting.wgsl.inc`. Flat, because it is the draw's, not the vertex's.
+    @location(8) @interpolate(flat) point_mask: vec2<u32>,
 };
 
 // How wide the moving front is, in units of overall progress. `reveal::BAND`.
@@ -104,9 +107,23 @@ fn reveal_build(p: vec3<f32>) -> f32 {
     return clamp(radial * 0.70 + height * 0.16 + jitter * 0.14, 0.0, 1.0);
 }
 
+/// Every light: the preview examples, which draw the map as one buffer.
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
+    return world_vertex(in, vec2<u32>(0xffffffffu, 0xffffffffu));
+}
+
+/// The game's world pipeline. `point_mask` is per instance, and each cell of
+/// the world is drawn as its own instance (`world_chunks`); instance 0 is
+/// `ALL_LIGHTS`, which is what bodies and the view model draw as.
+@vertex
+fn vs_world(in: VertexIn, @location(8) point_mask: vec2<u32>) -> VertexOut {
+    return world_vertex(in, point_mask);
+}
+
+fn world_vertex(in: VertexIn, point_mask: vec2<u32>) -> VertexOut {
     var out: VertexOut;
+    out.point_mask = point_mask;
     // Once the build is over, every vertex is settled by definition and the
     // ordering function is dead weight — a hash, a length and a floor per
     // vertex per frame, for the whole match, to compute a number that is always
@@ -343,7 +360,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     // A pass that does not receive the shadow is fully lit, not fully dark —
-    // and it skips the nine compares rather than throwing them away.
+    // and it skips the compares rather than throwing them away.
     var occlusion = 1.0;
     if (camera.params.w > 0.5) {
         occlusion = sun_shadow(
@@ -356,6 +373,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             shadow.params.z,
         );
     }
+    point_mask = in.point_mask;
     let lit = tonemap(shade(albedo, shade_normal, in.world_position, detail, occlusion));
     var out_color = vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);
     // The frontier glow, added over the final lit colour so cubes land hot and

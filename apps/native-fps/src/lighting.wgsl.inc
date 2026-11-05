@@ -90,20 +90,50 @@ fn point_attenuation(distance: f32, range: f32) -> f32 {
     return falloff * window * window;
 }
 
-/// The irradiance the map's point lights put on a surface.
+/// Which of the point-light slots this fragment may be reached by, as 64 bits.
+///
+/// Every slot unless the caller narrows it. The world's fragment shader sets it
+/// from its cell's mask (`world_chunks::light_masks`) before shading, so a
+/// fragment only works through the lights whose sphere reaches its cell; every
+/// other shader leaves it as is and takes them all.
+var<private> point_mask: vec2<u32> = vec2<u32>(0xffffffffu, 0xffffffffu);
+
+/// One point light's irradiance on a surface.
+fn point_light(i: u32, n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
+    let light = lights.point[i];
+    let to_light = light.position_range.xyz - world_position;
+    let distance = length(to_light);
+    if (distance >= light.position_range.w) {
+        return vec3<f32>(0.0);
+    }
+    let l = to_light / max(distance, 1e-4);
+    let ndotl = max(dot(n, l), 0.0);
+    return light.color.rgb * point_attenuation(distance, light.position_range.w) * ndotl;
+}
+
+/// The irradiance the map's point lights put on a surface: the slots in use
+/// this frame, narrowed by `point_mask`, one set bit at a time.
 fn point_irradiance(n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     let count = u32(lights.eye.w);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let light = lights.point[i];
-        let to_light = light.position_range.xyz - world_position;
-        let distance = length(to_light);
-        if (distance >= light.position_range.w) {
-            continue;
-        }
-        let l = to_light / max(distance, 1e-4);
-        let ndotl = max(dot(n, l), 0.0);
-        sum = sum + light.color.rgb * point_attenuation(distance, light.position_range.w) * ndotl;
+    // Slots at and past `count` are not this frame's. Built with `select`
+    // rather than a shift by `count`: a shift by 32 or more is not "all ones"
+    // in WGSL, it is taken modulo the width.
+    let low_used = select((1u << min(count, 31u)) - 1u, 0xffffffffu, count >= 32u);
+    let high_used = select(
+        select(0u, (1u << (min(count, 63u) - 32u)) - 1u, count > 32u),
+        0xffffffffu,
+        count >= 64u,
+    );
+    var low = point_mask.x & low_used;
+    var high = point_mask.y & high_used;
+    while (low != 0u) {
+        sum = sum + point_light(firstTrailingBit(low), n, world_position);
+        low = low & (low - 1u);
+    }
+    while (high != 0u) {
+        sum = sum + point_light(32u + firstTrailingBit(high), n, world_position);
+        high = high & (high - 1u);
     }
     return sum;
 }
@@ -140,8 +170,8 @@ const POISSON_16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
 
 /// How much of the sun reaches a point, 0 fully shadowed to 1 fully lit.
 ///
-/// 16-tap Poisson disk PCF over a comparison sampler: provides cinematic soft
-/// contact shadows with smooth penumbra transitions without grid artifacts.
+/// Up to 16 taps of a Poisson disk over a comparison sampler: soft edges without
+/// a grid pattern. Only a fragment on an edge takes them all — see below.
 fn sun_shadow(
     map: texture_depth_2d,
     map_sampler: sampler_comparison,
@@ -163,17 +193,71 @@ fn sun_shadow(
     let slope = clamp(1.0 - ndotl, 0.0, 1.0);
     let depth = ndc.z - (bias + bias * 4.0 * slope);
 
-    // The first `taps` points of the disk. The Poisson set is ordered so any
-    // prefix still spreads round the centre, which is what lets a lower shadow
-    // quality take fewer of them rather than a different kernel.
-    let count = clamp(i32(taps), 1, 16);
-    var sum = 0.0;
+    // The first 4, 8 or 16 points of the disk — the shadow levels' tap counts
+    // (`ShadowLevel::quality`); anything between rounds down to one of them.
+    // The Poisson set is ordered so any prefix still spreads round the centre,
+    // which is what lets a lower shadow quality take fewer of them rather than
+    // a different kernel.
+    //
+    // **Every index below is a literal.** This was a loop over `POISSON_16[i]`,
+    // and a runtime index into a `const` array makes the compiler materialise
+    // the whole array per invocation — which on an Intel iGPU is scratch
+    // memory. Measured there, Low's 4-tap loop cost more than Medium's 8 taps
+    // written out by hand.
     let radius = texel * 1.5;
-    for (var i = 0; i < count; i = i + 1) {
-        let offset = POISSON_16[i] * radius;
-        sum = sum + textureSampleCompare(map, map_sampler, uv + offset, depth);
+    if (taps < 8.0) {
+        return 0.25 * (shadow_tap(map, map_sampler, uv, POISSON_16[0] * radius, depth)
+            + shadow_tap(map, map_sampler, uv, POISSON_16[1] * radius, depth)
+            + shadow_tap(map, map_sampler, uv, POISSON_16[2] * radius, depth)
+            + shadow_tap(map, map_sampler, uv, POISSON_16[3] * radius, depth));
     }
-    return sum / f32(count);
+
+    // Early out. The penumbra is 1.5 texels wide, so nearly every fragment on
+    // screen is wholly lit or wholly shadowed and all of its taps agree. Four
+    // of the disk's outermost points — one per quadrant, all inside the first
+    // eight — are taken first, and if they agree that is the answer; only a
+    // fragment on a shadow edge pays for the rest. Measured: the 16-tap loop
+    // was half the frame's GPU time at High, and it was almost all spent
+    // re-confirming a 0 or a 1.
+    var sum = shadow_tap(map, map_sampler, uv, POISSON_16[0] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[1] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[4] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[7] * radius, depth);
+    // Exact compares are sound: a compare tap that is wholly in front of or
+    // behind the stored depth returns exactly 1 or 0, and anything filtered
+    // between is an edge.
+    if (sum == 0.0 || sum == 4.0) {
+        return sum * 0.25;
+    }
+    sum = sum + shadow_tap(map, map_sampler, uv, POISSON_16[2] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[3] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[5] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[6] * radius, depth);
+    if (taps < 16.0) {
+        return sum * 0.125;
+    }
+    sum = sum + shadow_tap(map, map_sampler, uv, POISSON_16[8] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[9] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[10] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[11] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[12] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[13] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[14] * radius, depth)
+        + shadow_tap(map, map_sampler, uv, POISSON_16[15] * radius, depth);
+    return sum * 0.0625;
+}
+
+/// One compare tap. `Level` rather than the implicit-LOD compare: the map has
+/// one mip, so it samples the same texel, and it carries no derivative — which
+/// matters now that the taps sit behind branches that differ per fragment.
+fn shadow_tap(
+    map: texture_depth_2d,
+    map_sampler: sampler_comparison,
+    uv: vec2<f32>,
+    offset: vec2<f32>,
+    depth: f32,
+) -> f32 {
+    return textureSampleCompareLevel(map, map_sampler, uv + offset, depth);
 }
 
 /// Lambert shading with the three lights above. `albedo` must already be linear.

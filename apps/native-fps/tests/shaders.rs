@@ -125,6 +125,7 @@ fn every_entry_point_a_pipeline_names_exists() {
         .collect();
     for wanted in [
         "vs_main",
+        "vs_world",
         "fs_main",
         "vs_volume",
         "fs_volume",

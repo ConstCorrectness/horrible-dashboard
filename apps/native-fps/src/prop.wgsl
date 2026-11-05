@@ -66,6 +66,51 @@ fn vs_prop(in: VertexIn) -> VertexOut {
     return out;
 }
 
+// The first-person hands: one arm's mesh, skinned here.
+//
+// `hands.rs` poses the arms and sends one matrix per bone per arm — the right
+// arm's, then the left's with the x-mirror already folded in — so both arms are
+// this one mesh, drawn twice with `instance_index` picking whose bones. Before
+// this the CPU skinned and re-uploaded 129k vertices a frame, which was most of
+// the frame. Blended exactly as `hands::skin_cpu` does, the reference the tests
+// hold this to.
+@group(2) @binding(0) var<storage, read> hand_bones: array<mat4x4<f32>>;
+
+struct HandIn {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) joints: vec4<u32>,
+    @location(4) weights: vec4<f32>,
+};
+
+@vertex
+fn vs_hand(in: HandIn, @builtin(instance_index) arm: u32) -> VertexOut {
+    // Bound as exactly two arms' worth, so half the array is one arm.
+    let per_arm = arrayLength(&hand_bones) / 2u;
+    let base = arm * per_arm;
+    let skin = hand_bones[base + in.joints.x] * in.weights.x
+        + hand_bones[base + in.joints.y] * in.weights.y
+        + hand_bones[base + in.joints.z] * in.weights.z
+        + hand_bones[base + in.joints.w] * in.weights.w;
+    let position = (skin * vec4<f32>(in.position, 1.0)).xyz;
+    let skinned_normal = (skin * vec4<f32>(in.normal, 0.0)).xyz;
+    // `normalize_or(Y)` in `skin_cpu`: a degenerate blend must not be NaN.
+    var normal = vec3<f32>(0.0, 1.0, 0.0);
+    if dot(skinned_normal, skinned_normal) > 1e-12 {
+        normal = normalize(skinned_normal);
+    }
+
+    var out: VertexOut;
+    let clip = camera.view_proj * vec4<f32>(position, 1.0);
+    out.clip_position = clip;
+    out.view_depth = clip.w;
+    out.normal = (camera.light_transform * vec4<f32>(normal, 0.0)).xyz;
+    out.world_position = (camera.light_transform * vec4<f32>(position, 1.0)).xyz;
+    out.uv = in.uv;
+    return out;
+}
+
 @fragment
 fn fs_prop(in: VertexOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(base_color_texture, base_color_sampler, in.uv);

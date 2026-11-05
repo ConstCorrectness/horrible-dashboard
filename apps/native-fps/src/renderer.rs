@@ -306,6 +306,15 @@ pub struct Renderer {
     camera_bind_group: wgpu::BindGroup,
     world_buffer: wgpu::Buffer,
     world_verts: u32,
+    /// The world buffer's cells, and this frame's visible ranges of it nearest
+    /// first. See `world_chunks`.
+    world_chunks: Vec<crate::world_chunks::Chunk>,
+    world_order: Vec<(f32, u32)>,
+    world_visible: Vec<u32>,
+    /// Per instance: which point lights reach each cell. Slot 0 is every light,
+    /// for what is drawn with this pipeline but is not a cell.
+    world_masks: Vec<[u32; 2]>,
+    world_mask_buffer: wgpu::Buffer,
     body_buffer: wgpu::Buffer,
     body_verts: u32,
     /// Smoke and fire: drawn in the main pass, after everything opaque, with
@@ -387,6 +396,9 @@ pub struct Renderer {
     detail_bind_group_3d: wgpu::BindGroup,
     shadow: crate::shadow::ShadowMap,
     pbr: crate::textures3d::PbrResources,
+    /// A texture-quality rebuild in flight on a worker thread; swapped into
+    /// `pbr` by the first frame after it lands. See `set_video`.
+    pbr_pending: Option<std::sync::mpsc::Receiver<(wgpu::BindGroup, wgpu::Texture)>>,
     video: Video,
     /// Where the world is drawn: a texture at `render_scale` of the window, and
     /// multisampled at the quality level's count. The swapchain never sees the
@@ -417,6 +429,8 @@ pub struct Renderer {
     gpu_timer: Option<crate::gpu_timer::GpuTimer>,
     /// What the last presented frame drew. See `FrameCost`.
     last_cost: FrameCost,
+    /// `render`'s own CPU time, by phase. See `profile.rs`.
+    last_phases: crate::profile::PhaseTimes,
 }
 
 /// What one frame asked the GPU to draw: the browser's
@@ -616,7 +630,9 @@ impl Renderer {
         let detail_bind_group = crate::detail::bind_group(&device, &queue, &detail_layout);
         let detail_bind_group_3d = crate::detail::bind_group_3d(&device, &queue, &detail_layout);
 
-        let vertices = mesh_vertices(mesh);
+        let mut vertices = mesh_vertices(mesh);
+        let world_chunks = crate::world_chunks::partition(&mut vertices, crate::world_chunks::CELL);
+        let world_mask_buffer = mask_buffer(&device, world_chunks.len());
         let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("world"),
             contents: bytemuck::cast_slice(&vertices),
@@ -889,6 +905,11 @@ impl Renderer {
             camera_bind_group,
             world_buffer,
             world_verts: vertices.len() as u32,
+            world_chunks,
+            world_order: Vec::new(),
+            world_visible: Vec::new(),
+            world_masks: Vec::new(),
+            world_mask_buffer,
             body_buffer,
             body_verts: 0,
             reveal: crate::reveal::Reveal::done(),
@@ -925,6 +946,7 @@ impl Renderer {
             detail_bind_group_3d,
             shadow,
             pbr,
+            pbr_pending: None,
             video,
             scene,
             post,
@@ -940,12 +962,19 @@ impl Renderer {
             characters_t: None,
             gpu_timer,
             last_cost: FrameCost::default(),
+            last_phases: crate::profile::PhaseTimes::default(),
         })
     }
 
     /// What the last presented frame drew.
     pub fn last_cost(&self) -> FrameCost {
         self.last_cost
+    }
+
+    /// Where the last `render` call spent its CPU time: uniform writes as
+    /// `Upload`, then `Acquire`, `Encode`, `Submit` and `Present`.
+    pub fn last_phases(&self) -> crate::profile::PhaseTimes {
+        self.last_phases
     }
 
     /// GPU frame times that have finished since the last call, in milliseconds.
@@ -1066,7 +1095,9 @@ impl Renderer {
     /// old ones' shadows: a room you just carved would sit in the dark of the
     /// rock that used to be there, and nothing would say why.
     pub fn set_world(&mut self, mesh: &MeshData) {
-        let vertices = mesh_vertices(mesh);
+        let mut vertices = mesh_vertices(mesh);
+        self.world_chunks = crate::world_chunks::partition(&mut vertices, crate::world_chunks::CELL);
+        self.world_mask_buffer = mask_buffer(&self.device, self.world_chunks.len());
         self.world_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1196,7 +1227,7 @@ impl Renderer {
         self.props.has_hands()
     }
 
-    /// Upload the hands' materials. Once.
+    /// Upload the hands' mesh and materials. Once.
     pub fn set_hands(&mut self, asset: &crate::hands::HandsAsset) {
         self.props.set_hands(
             &self.device,
@@ -1204,17 +1235,18 @@ impl Renderer {
             asset.materials(),
             asset.textures(),
             asset.primitives(),
-            asset.vertex_count(),
+            asset.vertices(),
+            asset.bone_count(),
         );
     }
 
-    /// This frame's skinned arms, in camera space; `right` then `left`
-    /// vertices. Empty hides them.
-    pub fn write_hands(&mut self, vertices: &[crate::prop::PropVertex], right: usize, left: usize) {
-        if vertices.is_empty() {
+    /// This frame's arms as bone matrices (`hands::Arms::pose`); `arms` 0
+    /// hides them.
+    pub fn write_hand_bones(&mut self, bones: &[glam::Mat4], arms: usize) {
+        if arms == 0 {
             self.props.hide_hands();
         } else {
-            self.props.write_hands(&self.queue, vertices, right, left);
+            self.props.write_hand_bones(&self.queue, bones, arms);
         }
     }
 
@@ -1267,6 +1299,22 @@ impl Renderer {
         }
     }
 
+    /// Swap in a texture-quality rebuild if its worker has finished. A worker
+    /// that died (a panic in generation) leaves the old textures in place,
+    /// which is a stale setting rather than a black map.
+    fn take_rebuilt_textures(&mut self) {
+        let Some(rx) = &self.pbr_pending else { return };
+        match rx.try_recv() {
+            Ok((bind_group, texture)) => {
+                self.pbr.bind_group = bind_group;
+                self.pbr._pbr_texture = texture;
+                self.pbr_pending = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pbr_pending = None,
+        }
+    }
+
     /// Draw one frame.
     ///
     /// `Ok(false)` means the surface needs reconfiguring before the next attempt
@@ -1275,6 +1323,9 @@ impl Renderer {
     /// rather than as an error type, which is the more honest shape: "the frame
     /// did not happen" is not the same event as "the GPU is gone".
     pub fn render(&mut self, camera: &Camera) -> Result<bool, String> {
+        use crate::profile::{Laps, Phase};
+        let mut laps = Laps::new();
+        self.take_rebuilt_textures();
         let vp = camera.view_projection(self.config.width, self.config.height);
         // The map's own density, thickened at the lower quality levels. 3D maps
         // used to get none at all; they now get the thin haze their atmosphere
@@ -1282,18 +1333,39 @@ impl Renderer {
         let fog = self.lighting.atmosphere.fog_density;
         // Every point light, the rig and the eye, for every pass this frame.
         let eye = camera.eye();
+        crate::world_chunks::visible(
+            &self.world_chunks,
+            vp,
+            eye,
+            &mut self.world_order,
+            &mut self.world_visible,
+        );
+        let lights = self.lighting.uniform(
+            eye,
+            if self.video.quality.detail() < 1.0 {
+                0
+            } else {
+                self.video.map_lights as usize
+            },
+            self.video.brightness,
+        );
+        self.queue
+            .write_buffer(&self.lights_buffer, 0, bytemuck::cast_slice(&[lights]));
+        // Which of those lights each visible cell can be reached by.
+        let used = lights.eye[3] as usize;
+        crate::world_chunks::light_masks(
+            &self.world_chunks,
+            &self.world_visible,
+            lights.point[..used].iter().map(|l| {
+                let [x, y, z, range] = l.position_range;
+                (glam::Vec3::new(x, y, z), range)
+            }),
+            &mut self.world_masks,
+        );
         self.queue.write_buffer(
-            &self.lights_buffer,
+            &self.world_mask_buffer,
             0,
-            bytemuck::cast_slice(&[self.lighting.uniform(
-                eye,
-                if self.video.quality.detail() < 1.0 {
-                    0
-                } else {
-                    self.video.map_lights as usize
-                },
-                self.video.brightness,
-            )]),
+            bytemuck::cast_slice(&self.world_masks),
         );
         let draw_sky = self.is_3d && self.video.sky;
         if draw_sky {
@@ -1383,8 +1455,11 @@ impl Renderer {
             .attached_to(camera.camera_to_world())]),
         );
 
+        laps.lap(Phase::Upload);
         use wgpu::CurrentSurfaceTexture as Cst;
-        let frame = match self.surface.get_current_texture() {
+        let acquired = self.surface.get_current_texture();
+        laps.lap(Phase::Acquire);
+        let frame = match acquired {
             Cst::Success(frame) => frame,
             // Acquired, but the surface has moved on. Draw it anyway — a
             // slightly stale frame beats a dropped one — and reconfigure after.
@@ -1500,8 +1575,15 @@ impl Renderer {
             pass.set_bind_group(2, &self.shadow.bind_group, &[]);
             pass.set_bind_group(3, &self.pbr.bind_group, &[]);
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
-            pass.draw(0..self.world_verts, 0..1);
-            count(&mut cost, 1, self.world_verts as u64);
+            // Instance-rate: each draw's first instance picks its light mask,
+            // and it stays bound for the bodies after, which draw as instance 0.
+            pass.set_vertex_buffer(1, self.world_mask_buffer.slice(..));
+            // The cells in view, nearest first — see `world_chunks`.
+            for &i in &self.world_visible {
+                let range = self.world_chunks[i as usize].vertices.clone();
+                count(&mut cost, 1, range.len() as u64);
+                pass.draw(range, i + 1..i + 2);
+            }
             if self.body_verts > 0 {
                 // Bodies, grenades and hitbox wireframes: the same pipeline, a
                 // camera whose build-in is finished. A player standing in a map
@@ -1602,6 +1684,9 @@ impl Renderer {
                 pass.set_bind_group(2, &self.shadow.bind_group, &[]);
                 pass.set_bind_group(3, &self.pbr.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
+                // Instance 0: every light. The pipeline takes the mask buffer,
+                // so it has to be bound even for a draw that is not a cell.
+                pass.set_vertex_buffer(1, self.world_mask_buffer.slice(..));
                 pass.draw(0..self.viewmodel_verts, 0..1);
                 count(&mut cost, 1, self.viewmodel_verts as u64);
             }
@@ -1667,13 +1752,18 @@ impl Renderer {
         if let Some(timer) = self.gpu_timer.as_mut() {
             timer.end(&mut encoder);
         }
-        self.queue.submit(Some(encoder.finish()));
+        let commands = encoder.finish();
+        laps.lap(Phase::Encode);
+        self.queue.submit(Some(commands));
         if let Some(timer) = self.gpu_timer.as_mut() {
             timer.submitted();
         }
+        laps.lap(Phase::Submit);
         // Presented through the queue in wgpu 30, not off the texture.
         self.queue.present(frame);
+        laps.lap(Phase::Present);
         self.last_cost = cost;
+        self.last_phases = laps.times;
         Ok(true)
     }
 
@@ -1731,15 +1821,30 @@ impl Renderer {
         if textures_changed {
             // Into the existing layout, so every pipeline built against it
             // stays valid; only the bind group and its textures are new.
-            let (bind_group, pbr_texture, _) = crate::textures3d::bind_group_with(
-                &self.device,
-                &self.queue,
-                &self.pbr.layout,
-                video.textures.size(),
-                video.anisotropy,
-            );
-            self.pbr.bind_group = bind_group;
-            self.pbr._pbr_texture = pbr_texture;
+            //
+            // **On a worker thread.** Generating and mipmapping every layer
+            // was measured at 0.5 s at Low and 1.9 s at High, all of it on the
+            // frame thread: the game froze for two seconds when the setting
+            // changed. The old textures keep drawing until the new ones land
+            // (`take_rebuilt_textures`). A newer change replaces the receiver,
+            // which drops the older build's result on the floor when it ends.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let device = self.device.clone();
+            let queue = self.queue.clone();
+            let layout = self.pbr.layout.clone();
+            let (size, anisotropy) = (video.textures.size(), video.anisotropy);
+            let build = move || {
+                let (bind_group, texture, _) =
+                    crate::textures3d::bind_group_with(&device, &queue, &layout, size, anisotropy);
+                let _ = tx.send((bind_group, texture));
+            };
+            match std::thread::Builder::new()
+                .name("hassault-textures".into())
+                .spawn(build)
+            {
+                Ok(_) => self.pbr_pending = Some(rx),
+                Err(e) => eprintln!("hassault: texture rebuild thread did not start: {e}"),
+            }
         }
         if latency_changed {
             self.config.desired_maximum_frame_latency = video.frame_latency.clamp(1, 3);
@@ -1829,6 +1934,18 @@ impl Renderer {
     }
 }
 
+/// The per-instance light masks for `cells` cells of the world plus instance 0,
+/// which starts (and stays) every light, so anything drawn before the first
+/// frame's masks are written is lit, not dark.
+fn mask_buffer(device: &wgpu::Device, cells: usize) -> wgpu::Buffer {
+    let masks = vec![crate::world_chunks::ALL_LIGHTS; cells + 1];
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("world-light-masks"),
+        contents: bytemuck::cast_slice(&masks),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
 /// The world/bodies/view-model pipeline.
 ///
 /// A function rather than an inline block because the **sample count is a
@@ -1847,8 +1964,16 @@ fn world_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
-            buffers: &[Some(Vertex::layout())],
+            entry_point: Some("vs_world"),
+            buffers: &[
+                Some(Vertex::layout()),
+                // The per-cell light mask, one per instance: `vs_world`.
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 8,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![8 => Uint32x2],
+                }),
+            ],
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {

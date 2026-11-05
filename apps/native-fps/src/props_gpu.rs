@@ -15,10 +15,10 @@
 
 use std::collections::HashMap;
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
-use crate::character::{MaterialDef, Primitive, TextureImage};
+use crate::character::{MaterialDef, Primitive, SkinVertex, TextureImage};
 use crate::prop::{Prop, PropPart, PropVertex};
 
 /// How many separately posed parts a prop may have, body included. Each costs
@@ -63,18 +63,21 @@ struct Draw {
     part: usize,
 }
 
-/// The first-person hands: materials uploaded once, vertices rewritten every
-/// frame after `hands.rs` skins them.
+/// The first-person hands: one arm's mesh and its materials uploaded once,
+/// and only the bones rewritten each frame — `vs_hand` skins them. See
+/// `hands.rs` for why.
 struct HandsGpu {
+    /// One arm, rest pose, with joints and weights.
     vertices: wgpu::Buffer,
-    capacity: usize,
-    /// One arm's primitives. Drawn twice: the left arm's copy is the same
-    /// ranges offset by `per_arm`.
+    /// Two arms' bone matrices: the right's, then the left's (mirrored).
+    bones: wgpu::Buffer,
+    bone_group: wgpu::BindGroup,
+    bone_count: usize,
+    /// One arm's primitives, each drawn with one instance per arm.
     draws: Vec<Draw>,
-    per_arm: u32,
     materials: Vec<wgpu::BindGroup>,
-    right: u32,
-    left: u32,
+    /// Arms drawn this frame: 0 hides them, 1 is the right only, 2 both.
+    arms: u32,
 }
 
 /// One uploaded weapon, ready to draw.
@@ -91,8 +94,11 @@ pub struct PropGpu {
 /// The pipeline and the resident prop.
 pub struct Props {
     pipeline: wgpu::RenderPipeline,
+    /// The same shading as `pipeline`, skinned in `vs_hand` from a bone buffer.
+    hands_pipeline: wgpu::RenderPipeline,
     shader: wgpu::ShaderModule,
     material_layout: wgpu::BindGroupLayout,
+    bone_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// Every prop that has been uploaded, by weapon id.
     uploaded: HashMap<String, PropGpu>,
@@ -163,6 +169,20 @@ impl Props {
             ..Default::default()
         });
 
+        let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hands-bone-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
         let pipeline = build_pipeline(
             device,
             &shader,
@@ -171,11 +191,22 @@ impl Props {
             format,
             samples,
         );
+        let hands_pipeline = build_hands_pipeline(
+            device,
+            &shader,
+            camera_layout,
+            &material_layout,
+            &bone_layout,
+            format,
+            samples,
+        );
 
         Props {
             pipeline,
+            hands_pipeline,
             shader,
             material_layout,
+            bone_layout,
             sampler,
             uploaded: HashMap::new(),
             current: None,
@@ -258,8 +289,9 @@ impl Props {
         );
     }
 
-    /// Upload the hands' materials and a vertex buffer big enough for both
-    /// arms. Once: the geometry changes every frame, the materials never do.
+    /// Upload the hands: one arm's mesh, its materials, and a bone buffer for
+    /// two arms. Once — after this only `write_hand_bones` runs, each frame.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_hands(
         &mut self,
         device: &wgpu::Device,
@@ -267,7 +299,8 @@ impl Props {
         materials: &[MaterialDef],
         textures: &[TextureImage],
         primitives: &[Primitive],
-        per_arm: usize,
+        vertices: &[SkinVertex],
+        bone_count: usize,
     ) {
         let views: Vec<wgpu::TextureView> =
             textures.iter().map(|image| upload_texture(device, queue, image)).collect();
@@ -276,16 +309,33 @@ impl Props {
             .iter()
             .map(|material| self.material_group(device, material, &views, &fallback))
             .collect();
-        let capacity = per_arm * 2;
-        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hands-vertices"),
-            size: (capacity * std::mem::size_of::<PropVertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let bone_count = bone_count.max(1);
+        // Sized for exactly two arms: `vs_hand` reads half the bound array as
+        // one arm, so a bigger buffer would misplace the left arm's bones.
+        let bones = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hands-bones"),
+            size: (2 * bone_count * std::mem::size_of::<Mat4>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        let bone_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hands-bone-group"),
+            layout: &self.bone_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: bones.as_entire_binding(),
+            }],
         });
         self.hands = Some(HandsGpu {
             vertices,
-            capacity,
+            bones,
+            bone_group,
+            bone_count,
             draws: primitives
                 .iter()
                 .map(|p| Draw {
@@ -295,10 +345,8 @@ impl Props {
                     part: 0,
                 })
                 .collect(),
-            per_arm: per_arm as u32,
             materials: groups,
-            right: 0,
-            left: 0,
+            arms: 0,
         });
     }
 
@@ -306,30 +354,29 @@ impl Props {
         self.hands.is_some()
     }
 
-    /// This frame's skinned arms: `right` vertices, then `left` (0 for a
-    /// one-handed weapon), in camera space.
-    pub fn write_hands(&mut self, queue: &wgpu::Queue, vertices: &[PropVertex], right: usize, left: usize) {
+    /// This frame's arms, as `hands::Arms::pose` wrote them: `arms` arms of
+    /// bone matrices, camera space, the left's already mirrored.
+    pub fn write_hand_bones(&mut self, queue: &wgpu::Queue, bones: &[Mat4], arms: usize) {
         let Some(hands) = self.hands.as_mut() else {
             return;
         };
-        let n = vertices.len().min(hands.capacity);
-        if n > 0 {
-            queue.write_buffer(&hands.vertices, 0, bytemuck::cast_slice(&vertices[..n]));
+        let arms = arms.min(2).min(bones.len() / hands.bone_count);
+        if arms > 0 {
+            let n = arms * hands.bone_count;
+            queue.write_buffer(&hands.bones, 0, bytemuck::cast_slice(&bones[..n]));
         }
-        hands.right = right.min(n) as u32;
-        hands.left = left.min(n.saturating_sub(right)) as u32;
+        hands.arms = arms as u32;
     }
 
     /// Stop drawing the hands this frame: dead, stowed, in the menu.
     pub fn hide_hands(&mut self) {
         if let Some(hands) = self.hands.as_mut() {
-            hands.right = 0;
-            hands.left = 0;
+            hands.arms = 0;
         }
     }
 
     pub fn hands_visible(&self) -> bool {
-        self.hands.as_ref().is_some_and(|h| h.right > 0)
+        self.hands.as_ref().is_some_and(|h| h.arms > 0)
     }
 
     /// What `draw_hands` and `draw` will issue together: `(draw calls,
@@ -337,19 +384,15 @@ impl Props {
     pub fn draw_cost(&self) -> (u32, u64) {
         let mut calls = 0u32;
         let mut verts = 0u64;
-        if let Some(hands) = self.hands.as_ref().filter(|h| h.right > 0) {
-            for count in [hands.right, hands.left] {
-                if count == 0 {
-                    continue;
-                }
-                for draw in hands
-                    .draws
-                    .iter()
-                    .filter(|d| hands.materials.get(d.material).is_some())
-                {
-                    calls += 1;
-                    verts += draw.vertex_count as u64;
-                }
+        if let Some(hands) = self.hands.as_ref().filter(|h| h.arms > 0) {
+            // One instanced call per primitive, drawing every arm.
+            for draw in hands
+                .draws
+                .iter()
+                .filter(|d| hands.materials.get(d.material).is_some())
+            {
+                calls += 1;
+                verts += draw.vertex_count as u64 * hands.arms as u64;
             }
         }
         if let Some(prop) = self.current.as_ref().and_then(|id| self.uploaded.get(id)) {
@@ -366,26 +409,25 @@ impl Props {
     }
 
     /// Draw the hands with `camera`, whose pose must be the identity: the
-    /// vertices are already in camera space.
+    /// bones already put them in camera space. One call per primitive, with an
+    /// instance per arm — `vs_hand` picks the arm's bones by instance.
     pub fn draw_hands(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) {
-        let Some(hands) = self.hands.as_ref().filter(|h| h.right > 0) else {
+        let Some(hands) = self.hands.as_ref().filter(|h| h.arms > 0) else {
             return;
         };
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.hands_pipeline);
         pass.set_bind_group(0, camera, &[]);
+        pass.set_bind_group(2, &hands.bone_group, &[]);
         pass.set_vertex_buffer(0, hands.vertices.slice(..));
-        for (offset, count) in [(0, hands.right), (hands.per_arm, hands.left)] {
-            if count == 0 {
+        for draw in &hands.draws {
+            let Some(material) = hands.materials.get(draw.material) else {
                 continue;
-            }
-            for draw in &hands.draws {
-                let Some(material) = hands.materials.get(draw.material) else {
-                    continue;
-                };
-                pass.set_bind_group(1, material, &[]);
-                let start = offset + draw.first_vertex;
-                pass.draw(start..start + draw.vertex_count, 0..1);
-            }
+            };
+            pass.set_bind_group(1, material, &[]);
+            pass.draw(
+                draw.first_vertex..draw.first_vertex + draw.vertex_count,
+                0..hands.arms,
+            );
         }
     }
 
@@ -441,6 +483,15 @@ impl Props {
             &self.shader,
             camera_layout,
             &self.material_layout,
+            format,
+            samples,
+        );
+        self.hands_pipeline = build_hands_pipeline(
+            device,
+            &self.shader,
+            camera_layout,
+            &self.material_layout,
+            &self.bone_layout,
             format,
             samples,
         );
@@ -554,13 +605,45 @@ fn build_pipeline(
         bind_group_layouts: &[Some(camera_layout), Some(material_layout)],
         immediate_size: 0,
     });
+    textured_pipeline(device, shader, &layout, "vs_prop", PropVertex::layout(), format, samples)
+}
+
+/// The hands: `vs_hand` over the skinned vertex layout, with the bone group.
+fn build_hands_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    camera_layout: &wgpu::BindGroupLayout,
+    material_layout: &wgpu::BindGroupLayout,
+    bone_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("hands-pipeline-layout"),
+        bind_group_layouts: &[Some(camera_layout), Some(material_layout), Some(bone_layout)],
+        immediate_size: 0,
+    });
+    textured_pipeline(device, shader, &layout, "vs_hand", SkinVertex::layout(), format, samples)
+}
+
+/// Everything but the vertex stage is the same for the props and the hands:
+/// one fragment shader, no culling, depth-tested.
+fn textured_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_entry: &str,
+    vertex_layout: wgpu::VertexBufferLayout<'static>,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("prop-pipeline"),
-        layout: Some(&layout),
+        label: Some(vertex_entry),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_prop"),
-            buffers: &[Some(PropVertex::layout())],
+            entry_point: Some(vertex_entry),
+            buffers: &[Some(vertex_layout)],
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {

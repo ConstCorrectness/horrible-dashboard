@@ -15,12 +15,21 @@
 //! out of the file, never to hardcoded axes, except the two flex axes that say
 //! which way a finger folds — which the generator carries as the same vectors.
 //!
-//! ## Skinned on the CPU, drawn by the prop pipeline
+//! ## Posed on the CPU, skinned on the GPU
 //!
-//! Twenty bones and ten thousand vertices: skinned here into camera space and
-//! drawn with the weapon props' textured, lit shader, so a glove and the gun in
-//! it are shaded by one model. The left arm is the right one mirrored in x —
-//! solved as a right arm in mirrored space, as the browser does. The prop
+//! The solve — IK, wrist limit, finger curls — is a few dozen quaternions and
+//! stays here. The *skinning* does not: the arm mesh is 64,608 vertices, and
+//! skinning both arms on the CPU and re-uploading them was 1.8 ms of a 2.7 ms
+//! frame (G2's phase profile). The mesh is uploaded once (`props_gpu.rs`), and
+//! each frame sends one matrix per bone per arm to `prop.wgsl`'s `vs_hand`,
+//! drawn with the weapon props' textured, lit shading, so a glove and the gun
+//! in it are shaded by one model.
+//!
+//! The left arm is the right one mirrored in x — solved as a right arm in
+//! mirrored space, as the browser does — and the mirror is folded into its
+//! bone matrices (`MIRROR_X`), so the GPU draws both arms from one mesh with
+//! `instance_index` picking the arm. `skin_cpu` is the same arithmetic on the
+//! CPU, kept as the reference the tests and the preview read. The prop
 //! pipeline does not cull, so the mirror needs no winding fix.
 
 use std::collections::HashMap;
@@ -29,7 +38,7 @@ use std::sync::OnceLock;
 use glam::{Mat3, Mat4, Quat, Vec3};
 
 use crate::arms::solve_two_bone;
-use crate::character::{MaterialDef, Operator, Pose, Primitive, TextureImage};
+use crate::character::{MaterialDef, Operator, Pose, Primitive, SkinVertex, TextureImage};
 use crate::prop::PropVertex;
 
 pub const HANDS_GLB: &[u8] = include_bytes!("../../web/public/hassault-hands.glb");
@@ -191,9 +200,15 @@ impl HandsAsset {
         &self.op.primitives
     }
 
-    /// Vertices per arm: the left arm's copy starts at this offset.
-    pub fn vertex_count(&self) -> usize {
-        self.op.vertices.len()
+    /// One arm's mesh in the rest pose, with its joints and weights: uploaded
+    /// once, and skinned by `vs_hand`.
+    pub fn vertices(&self) -> &[SkinVertex] {
+        &self.op.vertices
+    }
+
+    /// Bone matrices per arm, as `Arms::pose` writes them.
+    pub fn bone_count(&self) -> usize {
+        self.op.bone_count()
     }
 
     pub fn upper_len(&self) -> f32 {
@@ -551,36 +566,53 @@ impl ArmPose {
         Some(self.pose.global(node).w_axis.truncate())
     }
 
-    /// Skin the arm into `out`, mirrored in x for the left arm.
-    pub fn skin_into(&self, asset: &HandsAsset, mirror: bool, out: &mut Vec<PropVertex>) {
-        let sx = if mirror { -1.0 } else { 1.0 };
-        for v in &asset.op.vertices {
-            let p = Vec3::from_array(v.position);
-            let n = Vec3::from_array(v.normal);
-            let mut sp = Vec3::ZERO;
-            let mut sn = Vec3::ZERO;
-            for k in 0..4 {
-                let w = v.weights[k];
-                if w <= 0.0 {
-                    continue;
-                }
-                let m = self.skin[v.joints[k] as usize];
-                sp += m.transform_point3(p) * w;
-                sn += m.transform_vector3(n) * w;
-            }
-            let sn = sn.normalize_or(Vec3::Y);
-            out.push(PropVertex {
-                position: [sp.x * sx, sp.y, sp.z],
-                normal: [sn.x * sx, sn.y, sn.z],
-                uv: v.uv,
-            });
-        }
+    /// The skinning matrices of the last solve, one per bone.
+    pub fn skin_matrices(&self) -> &[Mat4] {
+        &self.skin
     }
 }
 
-/// Both arms, solved and skinned: the right onto `primary`, its elbow towards
+/// The reflection that turns the solved right arm into the left: x negated.
+///
+/// Folded into the left arm's bone matrices rather than applied to its
+/// vertices, so the GPU draws both arms from one mesh. A reflection is
+/// orthogonal, so the same matrix carries the normals — no inverse transpose.
+pub fn mirror_x() -> Mat4 {
+    Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0))
+}
+
+/// Skin one arm on the CPU with `bones` — exactly what `vs_hand` does on the
+/// GPU, blend for blend. The reference for the tests and the offline preview;
+/// the game draws the GPU path.
+pub fn skin_cpu(asset: &HandsAsset, bones: &[Mat4], out: &mut Vec<PropVertex>) {
+    for v in &asset.op.vertices {
+        let p = Vec3::from_array(v.position);
+        let n = Vec3::from_array(v.normal);
+        let mut sp = Vec3::ZERO;
+        let mut sn = Vec3::ZERO;
+        for k in 0..4 {
+            let w = v.weights[k];
+            if w <= 0.0 {
+                continue;
+            }
+            let Some(m) = bones.get(v.joints[k] as usize) else {
+                continue;
+            };
+            sp += m.transform_point3(p) * w;
+            sn += m.transform_vector3(n) * w;
+        }
+        let sn = sn.normalize_or(Vec3::Y);
+        out.push(PropVertex {
+            position: sp.to_array(),
+            normal: sn.to_array(),
+            uv: v.uv,
+        });
+    }
+}
+
+/// Both arms, solved: the right onto `primary`, its elbow towards
 /// `primary_pole`, the left onto `support` (or not drawn, for a one-handed
-/// weapon). Returns how many vertices were written for each arm.
+/// weapon).
 pub struct Arms {
     right: ArmPose,
     left: ArmPose,
@@ -594,21 +626,23 @@ impl Arms {
         }
     }
 
-    pub fn build(
+    /// Solve both arms and write their bone matrices into `bones`: the right
+    /// arm's `bone_count`, then the left's with `mirror_x` folded in. Returns
+    /// how many arms there are — 1 for a one-handed weapon, 2 otherwise.
+    pub fn pose(
         &mut self,
         asset: &HandsAsset,
         primary: &HandTarget,
         primary_pole: Vec3,
         support: Option<&HandTarget>,
-        out: &mut Vec<PropVertex>,
-    ) -> (usize, usize) {
-        out.clear();
+        bones: &mut Vec<Mat4>,
+    ) -> usize {
+        bones.clear();
         self.right
             .solve(asset, crate::arms::SHOULDER_R, primary, primary_pole);
-        self.right.skin_into(asset, false, out);
-        let right = out.len();
+        bones.extend_from_slice(self.right.skin_matrices());
         let Some(support) = support else {
-            return (right, 0);
+            return 1;
         };
         let m = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
         let mirrored = HandTarget {
@@ -624,7 +658,31 @@ impl Arms {
             &mirrored,
             Vec3::new(1.0, -1.0, 0.0),
         );
-        self.left.skin_into(asset, true, out);
+        let mirror = mirror_x();
+        bones.extend(self.left.skin_matrices().iter().map(|m| mirror * *m));
+        2
+    }
+
+    /// `pose`, then skinned on the CPU by `skin_cpu`: `out` gets the right arm's
+    /// vertices, then the left's. Returns how many each arm wrote. The
+    /// reference path — the game skins on the GPU.
+    pub fn build(
+        &mut self,
+        asset: &HandsAsset,
+        primary: &HandTarget,
+        primary_pole: Vec3,
+        support: Option<&HandTarget>,
+        out: &mut Vec<PropVertex>,
+    ) -> (usize, usize) {
+        let mut bones = Vec::new();
+        let arms = self.pose(asset, primary, primary_pole, support, &mut bones);
+        out.clear();
+        let n = asset.bone_count();
+        skin_cpu(asset, &bones[..n], out);
+        let right = out.len();
+        if arms == 2 {
+            skin_cpu(asset, &bones[n..], out);
+        }
         (right, out.len() - right)
     }
 
@@ -721,8 +779,8 @@ mod tests {
             Some(&far),
             &mut out,
         );
-        assert_eq!(right, a.vertex_count());
-        assert_eq!(left, a.vertex_count());
+        assert_eq!(right, a.vertices().len());
+        assert_eq!(left, a.vertices().len());
         assert!(out.iter().all(|v| v
             .position
             .iter()
@@ -841,5 +899,65 @@ mod tests {
             mean_x(&out[r..r + l]) < mean_x(&out[..r]),
             "left arm not left of the right one"
         );
+    }
+
+    /// The GPU draws the left arm from the right arm's mesh with `mirror_x`
+    /// folded into its bones. That has to be the same arm as skinning it and
+    /// then mirroring the vertices — which is what this client did on the CPU
+    /// before the skinning moved — normals included.
+    #[test]
+    fn mirroring_the_bones_is_mirroring_the_skinned_arm() {
+        let a = asset();
+        let mut arms = Arms::new(&a);
+        let target = HandTarget {
+            grip: Vec3::new(-0.2, -0.3, -0.7),
+            aim: Vec3::X,
+            up: Vec3::NEG_Z,
+            curl: FIST,
+            radius: 0.02,
+        };
+        let primary = HandTarget {
+            grip: Vec3::new(0.3, -0.35, -0.55),
+            ..target
+        };
+        let mut bones = Vec::new();
+        let count = arms.pose(
+            &a,
+            &primary,
+            crate::arms::DEFAULT_PRIMARY_POLE,
+            Some(&target),
+            &mut bones,
+        );
+        let n = a.bone_count();
+        assert_eq!(count, 2);
+        assert_eq!(bones.len(), 2 * n);
+
+        let mut folded = Vec::new();
+        skin_cpu(&a, &bones[n..], &mut folded);
+        // Undo the fold, skin, then mirror the vertices instead.
+        let mirror = mirror_x();
+        let unfolded: Vec<Mat4> = bones[n..].iter().map(|m| mirror * *m).collect();
+        let mut plain = Vec::new();
+        skin_cpu(&a, &unfolded, &mut plain);
+        assert_eq!(folded.len(), plain.len());
+        for (f, p) in folded.iter().zip(&plain) {
+            assert!((f.position[0] + p.position[0]).abs() < 1e-4);
+            assert!((f.position[1] - p.position[1]).abs() < 1e-4);
+            assert!((f.normal[0] + p.normal[0]).abs() < 1e-4);
+            assert!((f.normal[2] - p.normal[2]).abs() < 1e-4);
+        }
+
+        // One-handed: one arm's bones and nothing after them.
+        assert_eq!(
+            arms.pose(
+                &a,
+                &primary,
+                crate::arms::DEFAULT_PRIMARY_POLE,
+                None,
+                &mut bones
+            ),
+            1
+        );
+        assert_eq!(bones.len(), n);
     }
 }

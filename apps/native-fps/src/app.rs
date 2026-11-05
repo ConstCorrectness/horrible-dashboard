@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -157,7 +157,8 @@ pub struct App {
     prop_weapon: String,
     prop_fitted: bool,
     /// Reused every frame for the skinned hands, so they allocate once.
-    hand_verts: Vec<hassault_native::prop::PropVertex>,
+    /// This frame's arm bones, for `vs_hand`. See `hands.rs`.
+    hand_bones: Vec<glam::Mat4>,
     mesh: MeshData,
     world: World,
     pub world3d: Option<World3D>,
@@ -212,6 +213,8 @@ pub struct App {
     /// ordinary correction.
     was_dead: bool,
     last_frame: Instant,
+    /// The FPS cap's cadence. See `pacing`.
+    pacer: hassault_native::pacing::FramePacer,
     /// Real seconds elapsed since the last input command was produced.
     ///
     /// The whole point of the accumulator: an iteration too short to be worth a
@@ -248,6 +251,9 @@ pub struct App {
     /// near zero unless the GPU is the bottleneck, which is what the GPU column
     /// is for.
     work_start: Instant,
+    /// This frame's CPU time by phase, lapped from `work_start` on. See
+    /// `profile.rs`.
+    laps: hassault_native::profile::Laps,
     last_present: Option<Instant>,
     /// `--bench=<map>`: the camera path being flown. See `bench.rs`.
     bench: Option<BenchRun>,
@@ -576,7 +582,7 @@ impl App {
             prop_loads: prop::preload(),
             prop_weapon: String::new(),
             prop_fitted: false,
-            hand_verts: Vec::new(),
+            hand_bones: Vec::new(),
             window: None,
             renderer: None,
             mesh,
@@ -613,6 +619,7 @@ impl App {
                 }
             },
             last_frame: Instant::now(),
+            pacer: Default::default(),
             input_accum: 0.0,
             last_display_weapon: String::new(),
             frames: 0,
@@ -627,6 +634,7 @@ impl App {
             last_cost: FrameCost::default(),
             perf_readout: NetGraphStats::default(),
             work_start: Instant::now(),
+            laps: hassault_native::profile::Laps::new(),
             last_present: None,
             bench: None,
             reveal: Reveal::default(),
@@ -937,6 +945,7 @@ impl App {
                 cpu_ms,
                 draw_calls: cost.draws,
                 triangles: cost.triangles,
+                phases: self.laps.times,
             });
         }
         if !run.done() {
@@ -991,20 +1000,13 @@ impl App {
     /// it was. What it buys is a machine that is not pinned at 100% to draw
     /// frames nobody's monitor will show — see `Video::fps_limit`.
     ///
-    /// `spin_sleep` is not used and the accuracy is not chased. The OS timer's
-    /// granularity means a 240 cap lands somewhere near 240, and a cap that is
-    /// approximate is doing its whole job; a busy-wait that hit it exactly would
-    /// burn the core the cap exists to leave alone.
+    /// It used to be a bare sleep of "what is left", and that was measured to
+    /// be not approximate but *wrong*: the OS wakes late by a fairly constant
+    /// amount, so a 144 cap ran at 137 — under the display it was set to
+    /// match. `pacing::FramePacer` keeps a cadence and spins only the last
+    /// fraction of a millisecond.
     fn wait_for_frame(&mut self) {
-        let limit = self.settings.video.fps_limit;
-        if limit == 0 {
-            return;
-        }
-        let budget = Duration::from_secs_f32(1.0 / limit as f32);
-        let spent = self.last_frame.elapsed();
-        if let Some(left) = budget.checked_sub(spent) {
-            std::thread::sleep(left);
-        }
+        self.pacer.wait(self.settings.video.fps_limit);
     }
 
     /// Advance the HUD and the weapon in the hands by one frame.
@@ -1212,10 +1214,10 @@ impl App {
                 if !renderer.has_hands() {
                     renderer.set_hands(asset);
                 }
-                match self.viewmodel.hands_vertices(&mut self.hand_verts) {
-                    Some((right, left)) => renderer.write_hands(&self.hand_verts, right, left),
-                    None => renderer.write_hands(&[], 0, 0),
-                }
+                // Bones, not vertices: the skinning is `vs_hand`'s. Doing it
+                // here was 1.8 ms a frame — see `hands.rs`.
+                let arms = self.viewmodel.hands_bones(&mut self.hand_bones).unwrap_or(0);
+                renderer.write_hand_bones(&self.hand_bones, arms);
             }
         }
         self.footsteps(dt);
@@ -4501,6 +4503,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.laps.lap(hassault_native::profile::Phase::Loop);
                 // Built before the renderer is borrowed: `self.hud.build` and
                 // `self.viewmodel.vertices` both read the rest of `self`, and
                 // holding `&mut self.renderer` across them borrows it twice.
@@ -4595,6 +4598,7 @@ impl ApplicationHandler for App {
                     editor.overlay(&self.world, &mut self.volume_verts);
                 }
                 self.viewmodel.vertices(&mut self.weapon_verts);
+                self.laps.lap(hassault_native::profile::Phase::Build);
                 // Built here rather than in the painter: sorting is a game-mode
                 // question and the painter has no business having an opinion.
                 // `None` when the key is not held, which is a different fact
@@ -4896,6 +4900,7 @@ impl ApplicationHandler for App {
                         None
                     };
 
+                self.laps.lap(hassault_native::profile::Phase::Hud);
                 let Some(renderer) = &mut self.renderer else {
                     return;
                 };
@@ -4909,6 +4914,7 @@ impl ApplicationHandler for App {
                 }
                 renderer.set_viewmodel(&self.weapon_verts);
                 renderer.set_overlay(&self.overlay);
+                self.laps.lap(hassault_native::profile::Phase::Upload);
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already
                 // handled inside; there is nothing to report and nothing to stop.
@@ -4929,6 +4935,7 @@ impl ApplicationHandler for App {
                     }
                 };
                 if presented {
+                    self.laps.absorb(&renderer.last_phases());
                     let cost = renderer.last_cost();
                     let gpu_timed = renderer.gpu_timed();
                     let size = renderer.size();
@@ -4941,9 +4948,9 @@ impl ApplicationHandler for App {
                         event_loop.exit();
                     }
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                // No `request_redraw` here: `about_to_wait` asks for the next
+                // frame on every pass of the loop (`ControlFlow::Poll`), and
+                // winit folds a second request into the first anyway.
             }
             _ => {}
         }
@@ -4969,6 +4976,7 @@ impl ApplicationHandler for App {
         // added latency on the one thing in this loop that came from the server.
         self.wait_for_frame();
         self.work_start = Instant::now();
+        self.laps.start();
         self.pump_network(event_loop);
         if let Some(socket) = self.socket.as_ref() {
             let (bytes_in, bytes_out) = socket.traffic();
@@ -4976,6 +4984,7 @@ impl ApplicationHandler for App {
         }
         self.poll_clipboard();
         self.poll_store();
+        self.laps.lap(hassault_native::profile::Phase::Net);
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
@@ -5022,6 +5031,7 @@ impl ApplicationHandler for App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_flash(self.flash.afterimage(), capture);
         }
+        self.laps.lap(hassault_native::profile::Phase::Sim);
 
         let elapsed = now.duration_since(self.fps_since).as_secs_f32();
         if elapsed >= 0.5 {

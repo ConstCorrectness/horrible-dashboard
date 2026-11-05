@@ -97,7 +97,15 @@ async fn run(path: &str, only: &[String]) {
     let lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
     let mut props = Props::new(&device, &camera_layout, FORMAT, 1);
     let hands = hassault_native::hands::asset().expect("hands GLB parses");
-    props.set_hands(&device, &queue, hands.materials(), hands.textures(), hands.primitives(), hands.vertex_count());
+    props.set_hands(
+        &device,
+        &queue,
+        hands.materials(),
+        hands.textures(),
+        hands.primitives(),
+        hands.vertices(),
+        hands.bone_count(),
+    );
 
     let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
     let color = device.create_texture(&wgpu::TextureDescriptor {
@@ -175,7 +183,7 @@ async fn run(path: &str, only: &[String]) {
     };
 
     let mut cleared = false;
-    let mut hand_verts = Vec::new();
+    let mut hand_bones = Vec::new();
     for (row, (label, weapon, skin, prop_id)) in rows.iter().enumerate() {
         let prop = Prop::from_slice(weapon_glb(prop_id).unwrap_or_else(|| panic!("no {prop_id}")))
             .unwrap_or_else(|e| panic!("{prop_id}: {e}"));
@@ -210,8 +218,8 @@ async fn run(path: &str, only: &[String]) {
             for part in vm.prop_part_models().into_iter().take(MAX_PROP_PARTS - 1) {
                 cameras.push(camera(part));
             }
-            match vm.hands_vertices(&mut hand_verts) {
-                Some((r, l)) => props.write_hands(&queue, &hand_verts, r, l),
+            match vm.hands_bones(&mut hand_bones) {
+                Some(arms) => props.write_hand_bones(&queue, &hand_bones, arms),
                 None => props.hide_hands(),
             }
             let hands_camera = camera(glam::Mat4::IDENTITY);

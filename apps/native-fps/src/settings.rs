@@ -110,7 +110,8 @@ impl Quality {
         }
     }
 
-    fn key(self) -> &'static str {
+    /// The settings-bag spelling, which `parse` reads back.
+    pub fn key(self) -> &'static str {
         match self {
             Quality::Low => "low",
             Quality::Medium => "medium",

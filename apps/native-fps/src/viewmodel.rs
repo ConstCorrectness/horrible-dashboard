@@ -1155,6 +1155,27 @@ impl WeaponViewModel {
     pub fn hands_vertices(&mut self, out: &mut Vec<PropVertex>) -> Option<(usize, usize)> {
         out.clear();
         let asset = hands::asset()?;
+        let (primary, pole, support) = self.hand_targets()?;
+        let arms = self.hands.as_mut()?;
+        arms.set_fov(self.fov);
+        Some(arms.build(asset, &primary, pole, support.as_ref(), out))
+    }
+
+    /// The arms as bone matrices for the GPU (`vs_hand`): the right arm's, then
+    /// the left's, mirrored. Returns how many arms, or `None` when no hands are
+    /// drawn. What the game uses; `hands_vertices` is the CPU reference.
+    pub fn hands_bones(&mut self, out: &mut Vec<Mat4>) -> Option<usize> {
+        out.clear();
+        let asset = hands::asset()?;
+        let (primary, pole, support) = self.hand_targets()?;
+        let arms = self.hands.as_mut()?;
+        arms.set_fov(self.fov);
+        Some(arms.pose(asset, &primary, pole, support.as_ref(), out))
+    }
+
+    /// Where each fist goes this frame, in the arms' own space, and the right
+    /// elbow's pole. `None` while there are no hands to draw.
+    fn hand_targets(&self) -> Option<(HandTarget, Vec3, Option<HandTarget>)> {
         if !self.visible || self.shape.is_none() || self.stow >= 0.92 {
             return None;
         }
@@ -1176,9 +1197,7 @@ impl WeaponViewModel {
             curl: grips.support_curl,
             radius: grips.support_radius * space.transform_vector3(Vec3::X).length(),
         });
-        let arms = self.hands.as_mut()?;
-        arms.set_fov(self.fov);
-        Some(arms.build(asset, &primary, grips.primary_pole, support.as_ref(), out))
+        Some((primary, grips.primary_pole, support))
     }
 
     /// The resident prop's parts and markers, from `PropInfo`.
@@ -2591,6 +2610,26 @@ mod tests {
         settle(&mut vm);
         let (_, left) = vm.hands_vertices(&mut out).expect("hands drawn");
         assert_eq!(left, 0);
+    }
+
+    /// What the game draws: bones for `vs_hand`, two arms' worth for a rifle and
+    /// one for a knife, and finite — a NaN bone is an arm that vanishes.
+    #[test]
+    fn the_hands_are_posed_as_bones_for_the_gpu() {
+        let Some(asset) = hands::asset() else {
+            return;
+        };
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let mut bones = Vec::new();
+        assert_eq!(vm.hands_bones(&mut bones), Some(2));
+        assert_eq!(bones.len(), 2 * asset.bone_count());
+        assert!(bones.iter().all(|m| m.is_finite()));
+        vm.set_weapon("knife", None);
+        settle(&mut vm);
+        assert_eq!(vm.hands_bones(&mut bones), Some(1));
+        assert_eq!(bones.len(), asset.bone_count());
     }
 
     #[test]

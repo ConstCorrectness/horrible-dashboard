@@ -2258,9 +2258,14 @@ The cylinder-and-box arms above are now the **fallback**. What both clients draw
 `hassault-hands.glb`: a sleeved forearm and a gloved hand with jointed fingers,
 built by `tools/blender/generate_arms.py` — ours end to end, which is why the
 unlicensed "FPS Female Arms" GLB beside it is not what ships. The browser poses it
-in `hands.ts`; the native client in `hands.rs`, which skins it on the CPU and draws
-it with the weapon props' textured, lit pipeline, so the glove and the gun in it
-are shaded by one model.
+in `hands.ts`; the native client in `hands.rs`, which poses it on the CPU and skins
+it on the GPU (`vs_hand` in `prop.wgsl`), drawing it with the weapon props'
+textured, lit pipeline so the glove and the gun in it are shaded by one model. The
+arm mesh is uploaded once; each frame sends only the bones, both arms' worth, and
+both arms are that one mesh drawn as two instances, the left with the x-mirror
+folded into its bones. Skinning the 129k vertices on the CPU and re-uploading them
+was most of the native frame (1.8 of 2.4 ms). `hands::skin_cpu` is kept as the
+reference the tests hold the shader's blend to.
 
 - **The fist goes on the grip.** An anchor in `grips.json` is the centre of the
   closed fist (the rig's `grip` bone) plus `*Aim` (wrist to knuckles) and `*Up`
@@ -7940,15 +7945,24 @@ read — presenting it as a performance option would be the placebo the rest of 
 page keeps refusing to ship.
 
 **Frame cap** (`hassault.video.fpsLimit`, one of 0/60/120/144/240/360, uncapped by
-default) sleeps out the remainder of a frame's slice. Unlike vsync it queues no
+default) waits out the remainder of a frame's slice. Unlike vsync it queues no
 frame and adds no latency; it is for a laptop that would otherwise run its fan
 flat out drawing frames no display will show and then thermally throttle *below*
 the cap anyway. The sleep happens **before the frame clock is read**, so it lands
 inside `dt` rather than between two frames — sleeping after it would leave the
 simulation stepping at the uncapped rate while the screen ran at the capped one,
-the same class of bug as ticking a player by wall clock. The accuracy is
-deliberately not chased: a cap that is approximate is doing its whole job, and a
-busy-wait that hit 240 exactly would burn the core the cap exists to leave alone.
+the same class of bug as ticking a player by wall clock.
+
+The native cap (`pacing.rs`) keeps a **cadence of deadlines** and sleeps to just
+short of each, then yields the last fraction of a millisecond. It used to sleep
+"whatever is left" each frame, and the OS wakes a sleeper late by a nearly constant
+amount: measured, a 240 cap ran at 217 and a 144 cap at 137, below the refresh
+rate of the display it was set to match. Deadlines that advance by the budget pay
+one late wake back on the next frame; the sleep aims short by the overshoot it has
+been seeing (an average, capped at 2 ms, so a busy machine does not turn the cap
+into a spin); and a frame that ran more than a slice long restarts the cadence
+rather than earning a burst of catch-up frames. Now 240 runs at 241 and 144 at
+144.0, with p99 within 0.6 ms of the slice.
 
 A saved cap is **snapped to the offered list** rather than clamped, because a cap
 of 37 is not wrong so much as meaningless — honouring it would leave the menu
@@ -10127,9 +10141,27 @@ neighbours.
   vsync and the frame cap off, prints one `BENCH {json}` line on stdout and
   exits. Pick the tier with `--set=hassault.video.quality=high`.
   `scripts/hassault_bench_native.py --server <node>` runs every map at Medium
-  and High and prints the table below.
+  and High and prints the table below; `--tiers low,medium --set
+  hassault.video.powerPreference=low` runs it on the integrated GPU.
 
-Both print the same JSON shape (`BenchResult` in `bench.ts` / `bench.rs`).
+  The run's video settings are the tier's preset **and then** any `--set` rows,
+  and nothing from the machine's stored settings, so one row's cost can be
+  isolated: `--set=hassault.video.shadows=false` against the same run without
+  it. Vsync, the frame cap and the render scale are forced off/off/100% unless
+  a `--set` names them (`renderScale=0.5` is how a fill-bound GPU is told from
+  a vertex-bound one).
+
+Both print the same JSON shape (`BenchResult` in `bench.ts` / `bench.rs`). The
+native result also carries `cpuPhasesMean` and `cpuPhasesP99`, milliseconds per
+phase of the frame (`profile.rs`): `net`, `sim`, `loop`, `build`, `hud`,
+`upload`, `acquire` (waiting for a swapchain image, which is where a GPU-bound
+frame shows up on the CPU), `encode`, `submit`, `present`. The means add up to
+the CPU time; the p99s do not, and are for finding which phase a tail is in.
+
+Uncapped and windowed, the native p99 is mostly the compositor: at 900+ fps
+`acquire` waits for a free swapchain image in a few percent of frames, and that
+wait is the tail. Read `gpuP99` for the rendering tail, and bench with a cap
+(`--set=hassault.video.fpsLimit=240`) to see the frame pacing a player gets.
 
 ### Baseline
 
@@ -10186,6 +10218,79 @@ What the baseline says:
 | hd_office | native | medium | 1920x1080 | 393 | 2.50 | 3.54 | 2.44 / 3.47 | 0.61 / 0.79 | 463 | 304k |
 | hd_office | browser | high | 1920x1080 | 88 | 8.90 | 29.60 | 8.60 / 14.60 | 7.19 / 12.55 | 720 | 592k |
 | hd_office | native | high | 1920x1080 | 392 | 2.50 | 3.31 | 2.44 / 3.21 | 1.15 / 2.80 | 463 | 304k |
+
+### After G2: native performance
+
+2026-11-05, same machine and method as the baseline. The RTX 4080 Laptop rows
+are directly comparable with the native rows above. The integrated-GPU rows
+(Intel RaptorLake-S Mobile Graphics, `--set hassault.video.powerPreference=low`)
+are new: they are the plan's real floor, Low holding 60 fps.
+
+| Change | Measured on Dust II |
+|---|---|
+| The hands are skinned on the GPU instead of the CPU (`vs_hand`, see [skinned hands](#skinned-hands-knives-in-cube-units-and-one-inspect-per-weapon)) | `sim` 1.88 → 0.19 ms of CPU; the client stopped being CPU-bound |
+| The sun's shadow takes 4 probe taps first and only takes the rest on a shadow edge | dGPU High: shadows 0.73 → 0.05 ms of GPU |
+| The shadow taps use literal indices instead of a loop over a `const` array, which Intel GPUs spill to scratch memory | iGPU: Low's 4-tap shadow had cost more than Medium's 8 |
+| The world is cut into 24-cube cells (`world_chunks.rs`), frustum-culled and drawn **nearest first**, so early depth rejects hidden surfaces before they are shaded | iGPU Low: GPU 10.7 → 7.3 ms. Culling trims ~10% of triangles; the win is overdraw |
+| Each cell carries a 64-bit mask of the point lights whose sphere reaches its box, so a fragment loops over those lights and not every selected one. Exact: a light that misses the box contributes zero to every pixel in it | iGPU Medium: map lights ~2 → ~0.8 ms |
+| The frame cap keeps a cadence and spins the last fraction of a millisecond (`pacing.rs`) | a 144 cap ran at 137 and now runs at 144.0 |
+| A texture-quality change rebuilds on a worker thread and swaps in when ready | a 1.9 s freeze of the game when the setting changed, now none |
+
+What the numbers say:
+
+- **Every map holds Low on the integrated GPU:** 94–122 fps at p50. The worst p99 is Nuke at 17.1 ms, just under 60 fps for its worst 1% of frames.
+- **The discrete GPU is no longer the limit anywhere.** 600–825 fps, GPU p50 0.27–0.56 ms at both tiers. The uncapped p99 there is mostly the compositor (`acquire`, see [the bench](#the-bench)), not rendering: GPU p99 stays under 1.1 ms.
+- **Draws went up, from 463 to 545–781,** because each visible cell is its own draw. They are on one pipeline with no rebinding, and CPU `encode` stayed near 0.2 ms.
+
+Discrete GPU (RTX 4080 Laptop):
+
+| Map | Client | Tier | Res | fps | p50 ms | p99 ms | CPU p50/p99 ms | GPU p50/p99 ms | Draws (max) | Tris (max) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hd_aim | native | medium | 1920x1080 | 781 | 1.13 | 5.50 | 1.09 / 5.44 | 0.33 / 0.69 | 546 | 159k |
+| hd_aim | native | high | 1920x1080 | 603 | 1.30 | 7.41 | 1.26 / 7.37 | 0.45 / 0.84 | 546 | 159k |
+| hd_assault | native | medium | 1920x1129 | 785 | 1.22 | 2.83 | 1.19 / 2.76 | 0.36 / 0.48 | 599 | 321k |
+| hd_assault | native | high | 1920x1080 | 606 | 1.29 | 4.91 | 1.26 / 4.88 | 0.46 / 0.88 | 600 | 321k |
+| hd_bank | native | medium | 1920x1080 | 700 | 1.20 | 5.07 | 1.16 / 5.04 | 0.40 / 0.97 | 637 | 410k |
+| hd_bank | native | high | 1920x1080 | 654 | 1.33 | 4.99 | 1.29 / 4.94 | 0.55 / 1.08 | 637 | 410k |
+| hd_dust2 | native | medium | 1920x1080 | 825 | 1.14 | 2.63 | 1.10 / 2.42 | 0.27 / 0.35 | 720 | 252k |
+| hd_dust2 | native | high | 1920x1080 | 744 | 1.26 | 4.17 | 1.22 / 4.12 | 0.36 / 0.45 | 720 | 253k |
+| hd_facility | native | medium | 1920x1080 | 704 | 1.08 | 5.13 | 1.04 / 5.09 | 0.27 / 0.45 | 705 | 228k |
+| hd_facility | native | high | 1920x1080 | 627 | 1.25 | 7.71 | 1.20 / 7.63 | 0.36 / 0.88 | 704 | 228k |
+| hd_inferno | native | medium | 1920x1129 | 807 | 1.19 | 2.96 | 1.13 / 2.67 | 0.31 / 0.39 | 747 | 320k |
+| hd_inferno | native | high | 1920x1080 | 726 | 1.28 | 2.55 | 1.21 / 2.45 | 0.38 / 0.45 | 751 | 325k |
+| hd_junkflea | native | medium | 1920x1129 | 778 | 1.26 | 2.54 | 1.19 / 2.25 | 0.37 / 0.50 | 656 | 290k |
+| hd_junkflea | native | high | 1920x1129 | 723 | 1.46 | 2.10 | 1.42 / 2.06 | 0.56 / 1.05 | 656 | 290k |
+| hd_mirage | native | medium | 1920x1080 | 764 | 1.07 | 5.21 | 1.02 / 5.18 | 0.27 / 0.34 | 723 | 292k |
+| hd_mirage | native | high | 1920x1080 | 773 | 1.30 | 2.19 | 1.25 / 2.08 | 0.38 / 0.50 | 723 | 292k |
+| hd_nuke | native | medium | 1920x1080 | 697 | 1.18 | 5.20 | 1.14 / 5.16 | 0.36 / 0.87 | 781 | 313k |
+| hd_nuke | native | high | 1920x1080 | 715 | 1.30 | 2.37 | 1.26 / 2.34 | 0.43 / 0.63 | 781 | 313k |
+| hd_office | native | medium | 1920x1080 | 697 | 1.15 | 5.16 | 1.12 / 5.13 | 0.34 / 0.69 | 676 | 254k |
+| hd_office | native | high | 1920x1080 | 616 | 1.26 | 5.35 | 1.23 / 5.30 | 0.43 / 0.85 | 676 | 254k |
+
+Integrated GPU (Intel RaptorLake-S Mobile Graphics):
+
+| Map | Client | Tier | Res | fps | p50 ms | p99 ms | CPU p50/p99 ms | GPU p50/p99 ms | Draws (max) | Tris (max) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hd_aim | native | low | 1920x1080 | 103 | 9.56 | 12.76 | 9.42 / 12.64 | 6.88 / 9.70 | 545 | 159k |
+| hd_aim | native | medium | 1920x1080 | 68 | 14.42 | 20.25 | 14.24 / 19.99 | 11.64 / 15.76 | 546 | 159k |
+| hd_assault | native | low | 1920x1080 | 110 | 9.06 | 11.34 | 8.94 / 11.24 | 6.50 / 8.86 | 599 | 321k |
+| hd_assault | native | medium | 1920x1080 | 82 | 12.26 | 15.96 | 12.07 / 15.72 | 9.70 / 13.49 | 600 | 321k |
+| hd_bank | native | low | 1920x1080 | 105 | 9.29 | 13.01 | 9.11 / 12.80 | 6.75 / 10.61 | 636 | 410k |
+| hd_bank | native | medium | 1920x1080 | 76 | 13.11 | 16.78 | 12.97 / 16.52 | 10.52 / 14.43 | 637 | 410k |
+| hd_dust2 | native | low | 1920x1080 | 119 | 8.28 | 10.28 | 8.14 / 10.19 | 5.80 / 7.94 | 719 | 252k |
+| hd_dust2 | native | medium | 1920x1080 | 93 | 10.71 | 13.30 | 10.50 / 13.07 | 8.07 / 10.75 | 720 | 251k |
+| hd_facility | native | low | 1920x1080 | 122 | 7.99 | 11.21 | 7.83 / 10.92 | 5.36 / 8.61 | 703 | 228k |
+| hd_facility | native | medium | 1920x1080 | 89 | 11.02 | 16.13 | 10.86 / 15.92 | 8.57 / 13.82 | 704 | 228k |
+| hd_inferno | native | low | 1920x1080 | 104 | 9.08 | 14.82 | 8.84 / 14.69 | 6.19 / 10.78 | 750 | 325k |
+| hd_inferno | native | medium | 1920x1129 | 87 | 11.00 | 17.65 | 10.72 / 17.28 | 7.84 / 12.59 | 747 | 320k |
+| hd_junkflea | native | low | 1920x1080 | 114 | 8.83 | 10.66 | 8.70 / 10.55 | 6.17 / 8.11 | 658 | 290k |
+| hd_junkflea | native | medium | 1920x1080 | 89 | 11.34 | 13.50 | 11.21 / 13.39 | 8.89 / 11.09 | 659 | 290k |
+| hd_mirage | native | low | 1920x1129 | 117 | 8.53 | 10.05 | 8.41 / 9.95 | 5.69 / 7.18 | 717 | 292k |
+| hd_mirage | native | medium | 1920x1080 | 92 | 10.55 | 16.00 | 10.33 / 15.74 | 7.81 / 12.21 | 723 | 292k |
+| hd_nuke | native | low | 1920x1080 | 94 | 10.05 | 17.14 | 9.82 / 16.89 | 6.94 / 12.71 | 780 | 313k |
+| hd_nuke | native | medium | 1920x1080 | 80 | 12.47 | 17.79 | 12.35 / 17.74 | 9.89 / 15.39 | 781 | 313k |
+| hd_office | native | low | 1920x1080 | 109 | 9.22 | 11.80 | 9.10 / 11.74 | 6.53 / 9.23 | 675 | 254k |
+| hd_office | native | medium | 1920x1080 | 77 | 13.15 | 17.38 | 13.04 / 17.26 | 10.61 / 14.98 | 676 | 254k |
 
 ---
 
