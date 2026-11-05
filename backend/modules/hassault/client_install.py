@@ -1,7 +1,7 @@
 """Fetching and installing prebuilt `hassault-native` clients.
 
-**Why a download and not a bundled binary.** `hassault.nativeClient` is on by
-default, so the native window is the way in — but it only ever existed for people
+**Why a download and not a bundled binary.** In the dashboard the native window
+is the only way in — the pane is a launcher — but it only ever existed for people
 with a Rust toolchain: `launch_native` probes `apps/native-fps/target/**` and
 otherwise tells you to run `cargo build`, which is not an instruction a player can
 follow. Bundling it into the installer is the obvious alternative and does not work

@@ -212,7 +212,9 @@ that silently doesn't work is worse than offering the tap.
 ## System-key capture
 
 A pane can ask for the chords the OS itself owns by declaring `systemKeys` on its
-`capture` — `hassault.play` is the only one that does. Asking is not getting: the
+`capture` — `hassault.play` is the only one that does (in the dashboard only while
+flying a replay's drone camera, since the pane is a launcher; on the web client,
+for play). Asking is not getting: the
 full `navigator.keyboard.lock()` runs only when **all** of these hold.
 
 | Gate | Why |

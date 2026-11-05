@@ -133,7 +133,6 @@ import {
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
   HUD_SCALE_KEY,
-  NATIVE_CLIENT_KEY,
   PUSH_TO_TALK_KEY,
   GRENADE_ARC_KEY,
   grenadeArcAllowed,
@@ -883,9 +882,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const agentChoice = useMemo(() => parseAgents(agentsRaw), [agentsRaw]);
   const [agents, setAgents] = useState<AgentSpec[]>([]);
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
-  /** Whether Play, Train and Host open the native window rather than this pane. */
-  const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
-  const nativeClient = props.forceWebGl ? false : nativeSetting;
+  /**
+   * Whether every way into a match opens the native window rather than this page.
+   *
+   * Not a setting any more. In the dashboard the pane is a **launcher**: the game
+   * is played in the native client, or in the browser client (`apps/assault-web`,
+   * which is this same component with `forceWebGl`). Playing inside a dashboard
+   * pane was a third client in all but name — a 3D match in a docked, focus-sharing
+   * webview that could not own the keyboard — and it is gone. Every `nativeClient`
+   * branch below therefore reads "in the dashboard" on one side and "on the web
+   * page" on the other.
+   */
+  const nativeClient = !props.forceWebGl;
   // The practice aids. In a server room the host's `room_settings` decide.
   // Anywhere else (Training, a match on our own node) the console's `server.*`
   // cvars do — and on the desktop the node settings too, which the native
@@ -3750,6 +3758,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * the canvas and from the pause menu's Resume alike. */
   const grabInput = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
+    // In the dashboard nothing is played here, so the only thing the mouse can be
+    // wanted for is flying a replay's drone camera. A pane that took pointer lock
+    // and the shell's keyboard for anything else would be the in-pane client
+    // coming back through a side door.
+    if (!standalone && !isReplayingRef.current) return;
     setLocked(true);
     lockedRef.current = true;
     lastMousePosRef.current = null;
@@ -4432,11 +4445,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * Open the map designer, seeded from the selected map or (`blank`) from solid
    * rock.
    *
-   * Native-only: there is no in-pane fallback, unlike Train and Host — the
-   * visual half of the editor (`apps/native-fps/src/editor.rs`) exists only in
-   * the native client (real lighting, raw mouse input; see
-   * docs/modules/hassault.mdx#the-map-designer). `MainMenu` disables the row
-   * when `nativeClient` is off rather than this silently doing nothing.
+   * Native-only: the visual half of the editor (`apps/native-fps/src/editor.rs`)
+   * exists only in the native client (real lighting, raw mouse input; see
+   * docs/modules/hassault.mdx#the-map-designer), so the web page has no designer
+   * and `MainMenu` disables the row there rather than this silently doing nothing.
    */
   const editMap = useCallback(
     (blank: boolean) => {
@@ -4542,9 +4554,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * The one path for every way of arriving at one: an invitation a friend pushed, a
    * row picked out of the server browser, and the main menu's own list. `host` empty
    * means it is a match on this node, which is the same thing `join` understands.
+   *
+   * In the dashboard it hands the room to the native client, like every other way
+   * in. This was the one path that still played in the pane whatever the setting
+   * said — an accepted invite or a server-browser row skipped the branch Train and
+   * Host made.
    */
   const joinRoom = useCallback(
     (room: string, map: string, host: string, mode?: string) => {
+      if (nativeClient) {
+        void launchNative({ mode: 'join', room_id: room, map_name: map, host });
+        return;
+      }
       const session = sessionRef.current;
       if (!session) return;
       // Load their map before joining: the snapshots are positions in *that*
@@ -4554,7 +4575,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       session.join(map, playerName, room, host, undefined, mode);
       deploy();
     },
-    [playerName, deploy],
+    [playerName, deploy, nativeClient, launchNative],
   );
 
   /**
@@ -4569,19 +4590,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     [joinRoom],
   );
 
-  /**
-   * Enter a match the lobby started, in whichever client this node plays in —
-   * the same branch `quickPlay` makes.
-   */
+  /** Enter a match the lobby started; `joinRoom` picks the client. */
   const enterLobbyMatch = useCallback(
-    (room: string, map: string, matchHost: string) => {
-      if (nativeClient) {
-        void launchNative({ mode: 'join', room_id: room, map_name: map, host: matchHost });
-      } else {
-        joinRoom(room, map, matchHost);
-      }
-    },
-    [nativeClient, launchNative, joinRoom],
+    (room: string, map: string, matchHost: string) => joinRoom(room, map, matchHost),
+    [joinRoom],
   );
 
   // Lobby voice: the engine is a module singleton (voice belongs to the lobby,
@@ -4669,24 +4681,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       } catch {
         /* No browse, no candidates — hosting is still a perfectly good answer. */
       }
-      if (best) {
-        if (nativeClient) {
-          void launchNative({
-            mode: 'join',
-            room_id: best.id,
-            map_name: best.map,
-            host: best.host,
-          });
-        } else {
-          joinRoom(best.id, best.map, best.host);
-        }
-      } else {
-        // `host` branches on `nativeClient` itself, so quick play does not need
-        // to: one place decides what hosting means.
-        host(bots);
-      }
+      // `joinRoom` and `host` each branch on `nativeClient` themselves, so quick
+      // play does not need to: one place decides what joining and hosting mean.
+      if (best) joinRoom(best.id, best.map, best.host);
+      else host(bots);
     },
-    [maps, net.room, joinRoom, host, nativeClient, launchNative],
+    [maps, net.room, joinRoom, host],
   );
 
   /**

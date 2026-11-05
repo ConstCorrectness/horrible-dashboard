@@ -754,8 +754,10 @@ null. It is a momentary way of looking at a pane, not a property of the workspac
 restoring a layout into a chrome-less full-screen pane is a state the user has to
 guess their way out of.
 
-A view opts in with **`fullscreen: true`** (`PanelDecl`/`WidgetDecl`) — `hassault.play`,
-`karaoke.stage`, `games.arcade`, `browser.view`, `visualizer.pane`. Only those get the
+A view opts in with **`fullscreen: true`** (`PanelDecl`/`WidgetDecl`) — `karaoke.stage`,
+`games.arcade`, `browser.view`, `visualizer.pane`. (`hassault.play` was one until it
+became a launcher: the match is played in the native window, which owns its own
+fullscreen.) Only those get the
 fullscreen titlebar button (ahead of minimize), and only those escalate to **OS-window fullscreen** on a native
 shell. Escalating every presented pane would turn an ordinary "show me this bigger"
 into something that swallows the display; and the escalation remembers whether the app

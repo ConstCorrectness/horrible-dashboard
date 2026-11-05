@@ -188,7 +188,6 @@ SCHEMA: tuple[SettingSpec, ...] = (
     # Ours: the faint blobs for enemy footsteps. Gunfire dots are not optional.
     _flag("hassault.radar.soundPings", True, "account", native=True),
     # ---- this machine ----
-    _flag("hassault.nativeClient", True, "machine"),
     _text(
         "hassault.graphics", "auto", "machine", enum=("auto", "low", "medium", "high")
     ),

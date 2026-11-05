@@ -1109,11 +1109,11 @@ selected map — and both go through the same `launchNative`/`useNativeLaunch`
 path Train and Host already use: `POST /hassault/launch_native` with
 `mode: "edit"` (and `blank` for New), which the route turns into
 `--mode=edit [--new]` on the native client's command line — the same flags this
-section's `--mode=edit --map=hd_pit` / `--new` describe by hand. Unlike Train
-and Host, **the row has no in-pane fallback**: there is no browser-side visual
-editor, only the structured `edit.*` console commands (which do work in
-`hassault.console` either way), so the row is disabled whenever
-`hassault.nativeClient` is off rather than silently doing nothing.
+section's `--mode=edit --map=hd_pit` / `--new` describe by hand. There is no
+browser-side visual editor, only the structured `edit.*` console commands (which
+work in `hassault.console` either way), so on the web client
+(`apps/assault-web`), which has no native client to open, the row is disabled
+rather than silently doing nothing.
 
 The structured half is typed into the console, and costs nothing on either client
 because `console.py` already owns the registry and serves it: a command declared
@@ -7487,18 +7487,28 @@ Two smaller rules in the client half (`packages/core/src/modules/hassault/native
 
 ### Playing in the native client
 
-**The native client is where the game is played.** `hassault.nativeClient` is on
-by default and routes **Play, Train and Host** to the native window — Train
-included, since a learner wants the same mouse and the same frame pacing as a
-match. The pane keeps everything that is not being in the world: sign-in, the map
-picker, the server browser, friends and invites, settings and controls, the
-post-match card, and watching.
+**In the dashboard, the `hassault.play` pane is a launcher.** Every way into a
+match — **Quick play, Ranked, Duel, Train, Host**, a server-browser row, an
+accepted invite, a lobby's Start — opens the native window. Train included,
+since a learner wants the same mouse and the same frame pacing as a match. The
+pane keeps everything that is not being in the world: sign-in, the map picker,
+the server browser, friends and invites, the armoury, settings and controls, the
+match companion while the client runs, the post-match card, and watching replays.
 
-Turning the setting off plays in the pane instead. That path is kept rather than
-deleted for two reasons: it is the fallback while no native client has been
-resolved, and the pane is one of the **three implementations of the movement
-rules** that `physics-vectors.json` pins — a client nobody can run is a client
-that drifts.
+The Play section opens with a launcher row: which client a launch would run
+(`describeClientSource`), **Install native client** when none resolves, and
+**Open in browser**, which opens the browser client at the game server's origin
+(`webClientUrl`: `wss://…` → `https://…/`, from `/games/status`'s `server_url`)
+and says so when `openExternal` reports the browser did not open.
+
+There used to be a third way: a `hassault.nativeClient` setting that, turned
+off, played the match **inside the pane**. It is gone (G1). A 3D match in a
+docked webview shared its keyboard with the shell, took the OS window fullscreen
+to get a field of view, and was in practice a third client to keep working. The
+browser client lives on as `apps/assault-web` — the same component with
+`forceWebGl`, still one of the **three implementations of the movement rules**
+that `physics-vectors.json` pins — and in the dashboard the pane never takes
+pointer lock or the keyboard, except to fly a replay's drone camera.
 
 #### Where the binary comes from: three tiers
 
@@ -7509,8 +7519,8 @@ that drifts.
    version into `$HORRIBLE_DATA_DIR/hassault/bin/<version>/` — the **Install**
    button in the game's main menu, or `POST /api/hassault/client/install`.
 
-Tier 3 exists because `hassault.nativeClient` is on by default, which made the
-way into the game a Rust toolchain: the launch route's only answer to a missing
+Tier 3 exists because the native window is the only way to play from the
+dashboard, which made the way into the game a Rust toolchain: the launch route's only answer to a missing
 binary was `cargo build --release`, which is not an instruction a player can
 follow. It is a **download** rather than something bundled in the installer for
 the same reason llama.cpp builds are: it is versioned and launched by the backend
@@ -8988,11 +8998,9 @@ what lets `workspace-bus.test.ts` run each channel in isolation.
   video rows actually costs. Declared rows rather than a file beside
   the binary, so the pane's Settings page and the in-game menu write the same
   values.
-  `hassault.nativeClient` — whether Play, Train and Host open the native window
-  instead of playing in the pane, **on by default**, and
-  `hassault.nativeBinaryPath` — where that binary is, when it is not in the usual
-  build output. Both are declared rows: the path was read by the launch route and
-  named in its own error message long before it was editable anywhere.
+  `hassault.nativeBinaryPath` — where the native binary is, when it is not in
+  the usual build output. A declared row: the path was read by the launch route
+  and named in its own error message long before it was editable anywhere.
   `hassault.autoBuildNative` (**on**) — compile the client before launching it
   when it is older than its own source; see
   [the launch path](#playing-in-the-native-client) for why launching it anyway is
@@ -9235,7 +9243,11 @@ hAssault supports two client execution targets that speak the exact same backend
 
 1. **In-Browser Client (`packages/core/src/modules/hassault/*`)**:
    - Built with TypeScript, React 19, and Three.js (WebGL).
-   - Embedded directly in the Horrible Dashboard window.
+   - Served as a web page by `apps/assault-web` (see
+     [the standalone web client](#the-standalone-web-client)). The dashboard's
+     `hassault.play` pane renders the same component as a **launcher** — the
+     menu over the live map — and plays nothing in it; see
+     [Playing in the native client](#playing-in-the-native-client).
    - Features the full HTML/React Developer Console (`~`), NetGraph HUD, and articulated character rigs.
 
 2. **Native Desktop FPS Client (`apps/native-fps/*`)**:

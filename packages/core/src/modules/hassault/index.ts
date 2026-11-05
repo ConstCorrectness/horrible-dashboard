@@ -58,8 +58,11 @@ registerNotificationAction('hassault.joinInvite', {
  * HorribleAssault, frontend side: a WebGL first-person renderer for AssaultCube
  * maps, built from the cube grid the backend serves.
  *
- * The pane is a `document` — it wants the centre area and a lot of pixels, and it
- * grabs pointer lock, which would be hostile in a narrow dock.
+ * In the dashboard the play pane is a **launcher** — the main menu over the live
+ * map, the armoury, and the match companion while the native client runs. The
+ * same component is the browser client in `apps/assault-web` (`forceWebGl`),
+ * which is where it is played in a page. It is a `document` for the backdrop's
+ * sake: the menu renders over the map it is about to launch.
  *
  * See docs/modules/hassault.mdx.
  */
@@ -80,11 +83,10 @@ export const hassaultModule: ModuleManifest = {
       title: 'HorribleAssault',
       component: HorribleAssaultPanel,
       role: 'document',
-      // A first-person shooter has no use for a taskbar in its peripheral
-      // vision, and on the desktop build presenting it takes the OS window
-      // fullscreen too — which is what makes pointer lock and a full field of
-      // view behave the way the game assumes.
-      fullscreen: true,
+      // Not `fullscreen`: the pane is a launcher now. The match is played in the
+      // native window or the browser client, each of which owns its own
+      // fullscreen; presenting a menu over the whole display would only be
+      // something to find the way back out of.
       icon: '⌖',
       singleton: true,
       regions: [
@@ -251,14 +253,6 @@ export const hassaultModule: ModuleManifest = {
         'Off (the default) keeps your mic open while you are in lobby voice, muted only by the Mute button. On keeps it closed except while the Push to talk key is held (V unless rebound in Controls). Either way the audio goes browser to browser, never through a server.',
       type: 'boolean',
       default: false,
-    },
-    {
-      key: 'hassault.nativeClient',
-      title: 'Play in the native client',
-      description:
-        'On by default, and the way in: Play, Train and Host open the native window — GPU-rendered, raw mouse input, no frame cap, its own HUD, scoreboard, weapon and sound. This pane is then setup and spectating. Turning it off plays in the pane instead, which is the same game and a slower one; it is kept because the pane is also the third implementation the physics conformance fixture pins.',
-      type: 'boolean',
-      default: true,
     },
     {
       key: 'hassault.graphics',

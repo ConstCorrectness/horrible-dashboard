@@ -30,6 +30,9 @@ import type {
   SessionInfo,
 } from './api';
 import { installNativeClient, nativeClientStatus } from './api';
+import { openExternal } from '../../external';
+import { useAccount } from '../../useAccount';
+import { webClientUrl } from './web-client';
 import { useNativeLaunch } from './native-launch';
 import type { DrillStats, DrillSummary } from './training-drill';
 import type { WeaponSpec } from './api';
@@ -119,8 +122,8 @@ export interface MainMenuProps {
   onHost: (bots: number) => void;
   /**
    * Open the map designer — the native client only, seeded from `mapName`, or
-   * from solid rock when `blank`. Disabled in the UI when `nativeClient` is
-   * off: unlike Train and Host, there is no in-pane fallback to fall back to.
+   * from solid rock when `blank`. Disabled on the web page, which has no native
+   * client to open.
    */
   onEditMap: (blank: boolean) => void;
   /** Join the best match anyone is running, or host one when there is none. */
@@ -159,11 +162,9 @@ export interface MainMenuProps {
    */
   loadoutError: string;
   /**
-   * Whether Play, Train and Host open the native window instead of playing here.
-   *
-   * Shown rather than silent: the two clients do not look alike — the native one
-   * has no HUD, no weapon model and no sound — so a button that quietly opened a
-   * different window would read as the game having broken.
+   * Whether Play, Train and Host open the native window — true in the dashboard,
+   * where this menu is a launcher, and false on the web page (`apps/assault-web`),
+   * which plays in the page itself.
    */
   nativeClient: boolean;
   /** What the last native launch said, success or reason. */
@@ -271,7 +272,7 @@ export function MainMenu(props: MainMenuProps) {
           {section === 'settings' && (
             <>
               <SettingsPanel />
-              <NativeClientRow {...props} />
+              {props.nativeClient && <NativeClientRow {...props} />}
             </>
           )}
           {section === 'crosshair' && <CrosshairPanel />}
@@ -289,36 +290,13 @@ export function MainMenu(props: MainMenuProps) {
 // ---- the native client ------------------------------------------------------
 
 /**
- * The native client, an honest description of it, and how to get one.
+ * Which client a launch would run, and installing the prebuilt one.
  *
- * It used to sit in **Play**, next to Train and Host, advertising "native C++ /
- * Vulkan, 1,000Hz+ raw input, sub-tick UDP networking directly to this match
- * server", while being a software framebuffer walking a hardcoded 16x16 grid with
- * no map loading and no networking at all. The copy that replaced it then
- * *understated* it for just as long — "no HUD, no weapon model and no sound" long
- * after `hud.rs`, `viewmodel.rs` and `audio.rs` were written, which reads as a
- * prototype not worth launching. A row that once overstated has to be corrected in
- * both directions, not permanently pessimistic.
- *
- * The other half of this row is **where the binary comes from**, which used to be
- * "wherever `cargo build` put it" and nowhere else. `hassault.nativeClient` is on
- * by default, so that made the way in a Rust toolchain — an instruction a player
- * cannot follow. The three tiers are resolved by the backend and reported by
- * `/client/status`; nothing here re-derives them, because a second copy of that
- * ordering would eventually offer to download a client over a local build that is
- * about to win anyway.
- *
- * See docs/modules/hassault.mdx.
+ * Shared by the Settings row and the Play section's launcher row, so the two
+ * never disagree about whether a client is there.
  */
-function NativeClientRow(props: MainMenuProps) {
-  // The launch is a job on the node, not this component's promise. A build takes
-  // minutes and this row is unmounted the moment its tab loses focus, so
-  // awaiting it here meant the launch appeared to stop when it had not — see
-  // `native-launch.ts`.
-  const launcher = useNativeLaunch();
-  const launching = launcher.busy;
+function useClientInstall() {
   const [installStatus, setInstallStatus] = useState<string | null>(null);
-  const status = installStatus ?? launcher.message;
   const [client, setClient] = useState<NativeClientStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<ClientInstallEvent | null>(null);
@@ -358,6 +336,51 @@ function NativeClientRow(props: MainMenuProps) {
       ? Math.round(((progress.completed ?? 0) / progress.total) * 100)
       : null;
 
+  return { client, install, installing, progress, pct, installStatus, setInstallStatus };
+}
+
+/** The install's progress, in a word or two. */
+function progressLabel(progress: ClientInstallEvent, pct: number | null): string {
+  return progress.status === 'downloading'
+    ? `Downloading${pct === null ? '' : ` ${pct}%`}`
+    : progress.status === 'verifying'
+      ? 'Verifying'
+      : 'Resolving';
+}
+
+/**
+ * The native client, an honest description of it, and how to get one.
+ *
+ * It used to sit in **Play**, next to Train and Host, advertising "native C++ /
+ * Vulkan, 1,000Hz+ raw input, sub-tick UDP networking directly to this match
+ * server", while being a software framebuffer walking a hardcoded 16x16 grid with
+ * no map loading and no networking at all. The copy that replaced it then
+ * *understated* it for just as long — "no HUD, no weapon model and no sound" long
+ * after `hud.rs`, `viewmodel.rs` and `audio.rs` were written, which reads as a
+ * prototype not worth launching. A row that once overstated has to be corrected in
+ * both directions, not permanently pessimistic.
+ *
+ * The other half of this row is **where the binary comes from**, which used to be
+ * "wherever `cargo build` put it" and nowhere else. The native window is the only
+ * way to play from the dashboard, so that made the way in a Rust toolchain — an
+ * instruction a player cannot follow. The three tiers are resolved by the backend and reported by
+ * `/client/status`; nothing here re-derives them, because a second copy of that
+ * ordering would eventually offer to download a client over a local build that is
+ * about to win anyway.
+ *
+ * See docs/modules/hassault.mdx.
+ */
+function NativeClientRow(props: MainMenuProps) {
+  // The launch is a job on the node, not this component's promise. A build takes
+  // minutes and this row is unmounted the moment its tab loses focus, so
+  // awaiting it here meant the launch appeared to stop when it had not — see
+  // `native-launch.ts`.
+  const launcher = useNativeLaunch();
+  const launching = launcher.busy;
+  const { client, install, installing, progress, pct, installStatus, setInstallStatus } =
+    useClientInstall();
+  const status = installStatus ?? launcher.message;
+
   return (
     <div style={{ marginTop: '1rem' }}>
       <h4 style={panel.heading}>Native client</h4>
@@ -373,11 +396,7 @@ function NativeClientRow(props: MainMenuProps) {
           </span>
           {progress && (
             <span style={{ ...panel.dim, marginTop: '0.2rem' }}>
-              {progress.status === 'downloading'
-                ? `Downloading${pct === null ? '' : ` ${pct}%`}`
-                : progress.status === 'verifying'
-                  ? 'Verifying'
-                  : 'Resolving'}
+              {progressLabel(progress, pct)}
             </span>
           )}
           {status && (
@@ -417,9 +436,8 @@ function NativeClientRow(props: MainMenuProps) {
                 // The room we are actually in, or none — the client asks the node
                 // for a match on this map. `'session_host'` used to go here, which
                 // named no room that has ever existed.
-                // Explicitly a join, because this row is "open it once and see",
-                // not "change how I play". Train and Host reach the same route
-                // with their own mode when the setting above is on.
+                // Explicitly a join, because this row is "open it once and see".
+                // Train and Host reach the same route with their own mode.
                 mode: 'join',
                 room_id: props.room,
                 map_name: props.mapName,
@@ -467,6 +485,71 @@ function describeClientSource(client: NativeClientStatus | null): string {
   }
 }
 
+/**
+ * Where Play, Train and Host send you, and the other way to play.
+ *
+ * Replaces the notice that said the game was playing "in this pane — the
+ * fallback client". There is no fallback any more: in the dashboard this menu is
+ * a launcher, so what a player without a working native client needs is right
+ * here — a way to get one, and the browser client, which is the same game
+ * against the same server.
+ *
+ * Opening the browser checks `openExternal`'s answer: a blocked pop-up or a shell
+ * without the command fails silently otherwise, and the button would look broken.
+ */
+function LauncherRow() {
+  const { client, install, installing, progress, pct, installStatus } = useClientInstall();
+  const { server } = useAccount();
+  const web = webClientUrl(server);
+  const [openFailed, setOpenFailed] = useState(false);
+  const missing = client?.source === 'none';
+
+  return (
+    <div style={launcherRow}>
+      <div style={panel.rowMain}>
+        <span style={launcherTitle}>Plays in the native window</span>
+        <span style={{ ...panel.dim, fontFamily: MONO }}>{describeClientSource(client)}</span>
+        {progress && (
+          <span style={{ ...panel.dim, fontFamily: MONO }}>{progressLabel(progress, pct)}</span>
+        )}
+        {installStatus && (
+          <span
+            style={{
+              ...panel.dim,
+              color: installStatus.startsWith('Installed') ? 'var(--success)' : 'var(--danger)',
+            }}
+          >
+            {installStatus}
+          </span>
+        )}
+        {openFailed && web && (
+          <span style={{ ...panel.dim, color: 'var(--danger)' }}>
+            The browser did not open. The address is{' '}
+            <span style={{ fontFamily: MONO }}>{web}</span>
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        {missing && (
+          <button onClick={install} disabled={installing}>
+            {installing ? 'Installing…' : 'Install native client'}
+          </button>
+        )}
+        <button
+          onClick={() => {
+            if (!web) return;
+            void openExternal(web).then((opened) => setOpenFailed(!opened));
+          }}
+          disabled={!web}
+          title={web ?? 'No game server address yet'}
+        >
+          Open in browser
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---- play -------------------------------------------------------------------
 
 /** Bot counts offered. Not a number input: nobody wants to type "3". */
@@ -501,12 +584,7 @@ function PlaySection(props: MainMenuProps) {
 
   return (
     <div>
-      {!props.nativeClient && (
-        <div style={panel.notice}>
-          Playing <strong>in this pane</strong> — the fallback client. The native window is where
-          the game is played; switch back in Settings once it is built.
-        </div>
-      )}
+      {props.nativeClient && <LauncherRow />}
       <h4 style={panel.heading}>Map</h4>
       <select
         value={props.mapName}
@@ -703,7 +781,7 @@ function PlaySection(props: MainMenuProps) {
           <span style={panel.dim}>
             {props.nativeClient
               ? 'Fly the map, drag rooms into shape. Native client only.'
-              : 'Needs the native client — turn it on in Settings.'}
+              : 'In the native client, which the desktop app opens.'}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -759,6 +837,25 @@ function PlaySection(props: MainMenuProps) {
 // ---- styles -----------------------------------------------------------------
 
 const MONO = 'var(--font-mono, "JetBrains Mono", Consolas, monospace)';
+
+/** The launcher row: an accent edge on top, not a box — it is a standing fact
+ * about every button below it, not one more action among them. */
+const launcherRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.8rem',
+  padding: '0.5rem 0.6rem',
+  borderTop: '2px solid var(--accent)',
+  background: 'rgba(110,168,254,0.05)',
+  marginBottom: '0.4rem',
+};
+
+const launcherTitle: CSSProperties = {
+  fontSize: '0.72rem',
+  fontWeight: 700,
+  letterSpacing: '0.14em',
+  textTransform: 'uppercase',
+};
 const HAIR = 'rgba(150,160,190,.22)';
 
 const sheet: CSSProperties = {

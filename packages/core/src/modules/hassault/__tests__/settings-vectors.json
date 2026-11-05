@@ -236,12 +236,6 @@
    "native": true
   },
   {
-   "key": "hassault.nativeClient",
-   "type": "boolean",
-   "default": true,
-   "scope": "machine"
-  },
-  {
    "key": "hassault.graphics",
    "type": "string",
    "default": "auto",

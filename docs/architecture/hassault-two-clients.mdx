@@ -9,7 +9,7 @@ HorribleAssault has **two clients**, and they are not two views of one renderer:
 
 | | |
 | --- | --- |
-| **Browser** | `packages/core/src/modules/hassault/**` — TypeScript + three.js, inside the dashboard pane |
+| **Browser** | `packages/core/src/modules/hassault/**` — TypeScript + three.js, served as a page by `apps/assault-web` (the dashboard pane is a launcher for the native client and plays nothing) |
 | **Native** | `apps/native-fps/**` — Rust + `wgpu`, a standalone OS window |
 
 Both talk to the same backend over the same `hassault` `/ws` channel, read the

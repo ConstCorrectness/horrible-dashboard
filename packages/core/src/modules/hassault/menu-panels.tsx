@@ -99,17 +99,6 @@ export const CROUCH_TOGGLE_KEY = 'hassault.crouchToggle';
 export const PUSH_TO_TALK_KEY = 'hassault.voice.pushToTalk';
 
 /**
- * Whether Play, Train and Host open the native window instead of playing here.
- *
- * A setting rather than a per-press choice: which client you play in is a
- * standing preference, and putting it on every button would put a decision in
- * front of somebody who wanted to press Play. On by default: the native client
- * has its own HUD, weapon model, sound and scoreboard now, and it is the one
- * with raw mouse input and no frame cap.
- */
-export const NATIVE_CLIENT_KEY = 'hassault.nativeClient';
-
-/**
  * Draw the served hitbox around every body.
  *
  * Shared with the native client (`settings::KEY_SHOW_HITBOXES`), which is the
@@ -451,9 +440,8 @@ export function GraphicsRows() {
 }
 
 /**
- * `standalone` is the browser build, which shows none of the last three rows:
- * there is no native client to choose, and hitboxes and the grenade arc are the
- * room's call there — a hitbox overlay one side sees and the other doesn't is an
+ * `standalone` is the browser build, which shows neither of the last two rows:
+ * hitboxes and the grenade arc are the room's call there — a hitbox overlay one side sees and the other doesn't is an
  * unequal match — so they are host commands in the console
  * (`server.show_hitboxes`, `server.grenade_trajectory`). On the desktop they stay
  * node settings, shared with the native client.
@@ -464,7 +452,6 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
   const brightness = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
-  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
   const grenadeArc = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
 
@@ -542,35 +529,6 @@ export function SettingsPanel({ standalone = false }: { standalone?: boolean } =
 
       {!standalone && (
         <>
-          <div style={styles.row}>
-            <div style={styles.rowMain}>
-              <span>Client</span>
-              <span style={styles.dim}>
-                The native client is where the game is played: its own window, raw mouse input, no
-                frame cap. This pane is then setup and spectating. It has to be built first (`cargo
-                build --release --manifest-path apps/native-fps/Cargo.toml`); playing in the pane is
-                the fallback while it is not.
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: '0.25rem' }}>
-              {[
-                { on: false, label: 'This pane' },
-                { on: true, label: 'Native' },
-              ].map((option) => (
-                <button
-                  key={option.label}
-                  onClick={() => void setSetting(NATIVE_CLIENT_KEY, option.on)}
-                  style={{
-                    ...styles.choice,
-                    ...(nativeClient === option.on ? styles.choiceActive : null),
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div style={styles.row}>
             <div style={styles.rowMain}>
               <span>Show hitboxes</span>
