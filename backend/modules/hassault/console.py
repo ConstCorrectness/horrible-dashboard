@@ -39,7 +39,7 @@ from backend.modules.hassault import (
 )
 from backend.modules.hassault.cgz import ENTITY_NAMES, CgzError
 from backend.modules.hassault.physics import World as SimWorld
-from backend.modules.hassault.match import MAX_PLAYERS, match_server
+from backend.modules.hassault.match import MAX_PLAYERS, SNAPSHOT_HZ, match_server
 
 logger = logging.getLogger(__name__)
 
@@ -720,9 +720,25 @@ class ConsoleRegistry:
             "server.tick",
             "server",
             self._cmd_server_tick,
-            description="Report where the match tick's 50 ms budget is going",
+            description="Report where the match tick's budget (1 / SNAPSHOT_HZ) is going",
             signature="server.tick(room: str = '')",
             example="server.tick()",
+        )
+
+        # bench: answered by the game client, which owns the camera and the
+        # renderer. Served here so it completes and shows in `help`; the browser's
+        # executor and the native console intercept it before it would arrive.
+        self._register_command(
+            "bench",
+            "client",
+            self._cmd_bench,
+            description=(
+                "Fly the shared benchmark camera path over the loaded map and report "
+                "frame-time, CPU and GPU percentiles and draw calls"
+            ),
+            signature="bench(map: str = '')",
+            flags=["client"],
+            example="bench('hd_dust2')",
         )
 
         # server.map
@@ -1248,6 +1264,16 @@ class ConsoleRegistry:
         ctx.print(f"[server] Match room '{room_id}' closed.")
         return {"stopped": room_id}
 
+    async def _cmd_bench(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        """Only reached by a client that does not run `bench` itself."""
+        ctx.print(
+            "[bench] runs in the game client: open the console in a loaded map "
+            "(browser) or start the native client with --bench <map>"
+        )
+        return None
+
     async def _cmd_server_tick(
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
@@ -1283,7 +1309,7 @@ class ConsoleRegistry:
         if sent["samples"]:
             ctx.print(
                 f"[server]   wire: {sent['mean'] / 1024:.1f} KiB per tick "
-                f"across all recipients ({sent['mean'] * 20 / 1024:.0f} KiB/s)"
+                f"across all recipients ({sent['mean'] * SNAPSHOT_HZ / 1024:.0f} KiB/s)"
             )
         else:
             # Only the pre-serialised path weighs itself; the dict path would

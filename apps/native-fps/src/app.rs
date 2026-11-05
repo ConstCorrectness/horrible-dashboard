@@ -58,7 +58,11 @@ use hassault_native::held;
 use hassault_native::hud::{
     self, ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow, UtilitySlot, UtilityView,
 };
-use hassault_native::interp::{PingTracker, SnapshotBuffer};
+use hassault_native::bench::{BenchRun, FrameRing, Sample, FRAME_RING};
+use hassault_native::hud::NetGraphStats;
+use hassault_native::interp::{PingTracker, SnapshotBuffer, INTERP_DELAY_MS};
+use hassault_native::net_stats::NetStats;
+use hassault_native::renderer::FrameCost;
 use hassault_native::items::ItemField;
 use hassault_native::menu::{self, Action, Menu};
 use hassault_native::nades::{self, NadePool};
@@ -129,6 +133,10 @@ const INPUT_INTERVAL: f32 = 1.0 / INPUT_HZ;
 /// `STRIDE_DISTANCE`. Your own steps are made locally — the server does not send
 /// them back, because a footstep that arrives 50 ms late is not a footstep.
 const STRIDE_DISTANCE: f32 = 4.2;
+
+/// The window a `--bench` run opens: the 1080p the performance target is
+/// stated at (144 fps at 1080p on a mid-range GPU).
+const BENCH_SIZE: (u32, u32) = (1920, 1080);
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -223,6 +231,26 @@ pub struct App {
     /// numbers for the same thing, which is precisely the shape of divergence
     /// this client already had against the browser pane.
     net_graph_default: u32,
+    /// The wire, measured: what NetGraph 2 and 3 print. See `net_stats.rs`.
+    net_stats: NetStats,
+    /// Recent frame intervals, CPU frame times and GPU frame times, for the
+    /// NetGraph's percentiles. Pushed every presented frame; read every half
+    /// second, when `perf_readout` is refreshed with the fps.
+    frame_ring: FrameRing,
+    cpu_ring: FrameRing,
+    gpu_ring: FrameRing,
+    gpu_timed: bool,
+    last_cost: FrameCost,
+    perf_readout: NetGraphStats,
+    /// When this frame's work began: after the frame cap's sleep, so the cap
+    /// is not counted as cost. CPU time runs from here to `render` returning,
+    /// which includes acquiring the swapchain image; with vsync off that is
+    /// near zero unless the GPU is the bottleneck, which is what the GPU column
+    /// is for.
+    work_start: Instant,
+    last_present: Option<Instant>,
+    /// `--bench=<map>`: the camera path being flown. See `bench.rs`.
+    bench: Option<BenchRun>,
     /// The **throwing** half, which this client had none of: `nades` below drew
     /// everybody else's grenades while nothing here could produce one. What is
     /// readied, what is left, and the edge that puts `throw` on a command — see
@@ -591,6 +619,16 @@ impl App {
             fps_since: Instant::now(),
             fps: 0.0,
             net_graph_default: 1,
+            net_stats: NetStats::default(),
+            frame_ring: FrameRing::new(FRAME_RING),
+            cpu_ring: FrameRing::new(FRAME_RING),
+            gpu_ring: FrameRing::new(FRAME_RING),
+            gpu_timed: false,
+            last_cost: FrameCost::default(),
+            perf_readout: NetGraphStats::default(),
+            work_start: Instant::now(),
+            last_present: None,
+            bench: None,
             reveal: Reveal::default(),
             utility: GrenadeController::new(tacticals),
             elapsed: 0.0,
@@ -857,6 +895,75 @@ impl App {
     /// a wall clock does when NTP corrects it. A jump there would move every
     /// interpolated body on screen at once, and would put a `viewT` on the wire
     /// pointing at a moment the server's position history never covered.
+    /// Fly `run`'s camera path and print its result when it ends. Train only:
+    /// the path moves the camera, and in a match the camera is what the shots
+    /// are aimed with.
+    pub fn start_bench(&mut self, run: BenchRun) {
+        self.bench = Some(run);
+    }
+
+    /// One presented frame's cost, into the NetGraph's rings and the bench.
+    /// Returns the bench's result line once the path is over.
+    fn note_frame(
+        &mut self,
+        cost: FrameCost,
+        gpu_timed: bool,
+        gpu: &[f64],
+        size: (u32, u32),
+    ) -> Option<String> {
+        let now = Instant::now();
+        let cpu_ms = now.duration_since(self.work_start).as_secs_f64() * 1000.0;
+        let frame_ms = self
+            .last_present
+            .map(|t| now.duration_since(t).as_secs_f64() * 1000.0);
+        self.last_present = Some(now);
+        self.cpu_ring.push(cpu_ms);
+        if let Some(ms) = frame_ms {
+            self.frame_ring.push(ms);
+        }
+        for &ms in gpu {
+            self.gpu_ring.push(ms);
+        }
+        self.gpu_timed = gpu_timed;
+        self.last_cost = cost;
+        let run = self.bench.as_mut()?;
+        run.size = size;
+        for &ms in gpu {
+            run.record_gpu(ms);
+        }
+        if let Some(frame_ms) = frame_ms {
+            run.record(Sample {
+                frame_ms,
+                cpu_ms,
+                draw_calls: cost.draws,
+                triangles: cost.triangles,
+            });
+        }
+        if !run.done() {
+            return None;
+        }
+        let line = serde_json::to_string(&run.result()).unwrap_or_default();
+        self.bench = None;
+        Some(line)
+    }
+
+    /// What NetGraph 2 and 3 print, refreshed with the fps rather than every
+    /// frame: three percentiles over a 600-frame ring are a sort each.
+    fn refresh_perf_readout(&mut self) {
+        let drew = self.last_present.is_some();
+        self.perf_readout = NetGraphStats {
+            frame_p99_ms: self.frame_ring.percentile(99.0),
+            cpu_p50_ms: self.cpu_ring.percentile(50.0),
+            cpu_p99_ms: self.cpu_ring.percentile(99.0),
+            gpu_p50_ms: self.gpu_ring.percentile(50.0),
+            gpu_timed: self.gpu_timed,
+            draws: drew.then_some(self.last_cost.draws),
+            triangles: drew.then_some(self.last_cost.triangles),
+            net: self.net_stats.view(),
+            interp_ms: self.socket.is_some().then_some(INTERP_DELAY_MS),
+        };
+    }
+
     fn clock_ms() -> f64 {
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
@@ -1953,6 +2060,7 @@ impl App {
                 }
                 Incoming::Event(Event::Snapshot(s)) => {
                     let ack = s.ack;
+                    self.net_stats.on_snapshot(s.tick, s.t, Self::clock_ms());
                     // A respawn moves the body without any command of ours
                     // causing it, so it is a reset rather than a correction —
                     // reconciling would try to ease a jump across the map.
@@ -4011,7 +4119,13 @@ impl ApplicationHandler for App {
             .with_fullscreen(fullscreen)
             // The size a windowed session opens at, and what fullscreen returns
             // to when it is turned off in the menu.
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0));
+            .with_inner_size(if self.bench.is_some() {
+                // Physical, not logical: a bench at 1080p means 1080 rows of
+                // pixels whatever the display scaling is.
+                winit::dpi::Size::from(winit::dpi::PhysicalSize::new(BENCH_SIZE.0, BENCH_SIZE.1))
+            } else {
+                winit::dpi::Size::from(winit::dpi::LogicalSize::new(1280.0, 800.0))
+            });
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -4721,6 +4835,7 @@ impl ApplicationHandler for App {
                     rtt: self.ping.rtt(),
                     fps: if self.fps > 0.0 { Some(self.fps) } else { None },
                     net_graph: self.net_graph(),
+                    perf: self.perf_readout,
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
                     damage: &self.damage_placed,
@@ -4797,15 +4912,32 @@ impl ApplicationHandler for App {
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already
                 // handled inside; there is nothing to report and nothing to stop.
-                match renderer.render(&drawn_camera) {
+                let presented = match renderer.render(&drawn_camera) {
                     // Only a frame that actually presented counts. Occluded and
                     // minimised frames return early, and counting them would make
                     // the fps readout report work that never happened — the one
                     // number in this client that has to be trustworthy.
-                    Ok(true) => self.frames += 1,
-                    Ok(false) => {}
+                    Ok(true) => {
+                        self.frames += 1;
+                        true
+                    }
+                    Ok(false) => false,
                     Err(e) => {
                         eprintln!("hassault: {e}");
+                        event_loop.exit();
+                        false
+                    }
+                };
+                if presented {
+                    let cost = renderer.last_cost();
+                    let gpu_timed = renderer.gpu_timed();
+                    let size = renderer.size();
+                    let mut gpu = Vec::new();
+                    renderer.gpu_times(|ms| gpu.push(ms));
+                    if let Some(line) = self.note_frame(cost, gpu_timed, &gpu, size) {
+                        // Stdout, one line, prefixed: the bench's whole output,
+                        // for a script to pick out of everything on stderr.
+                        println!("BENCH {line}");
                         event_loop.exit();
                     }
                 }
@@ -4836,7 +4968,12 @@ impl ApplicationHandler for App {
         // landed mid-sleep until the next iteration — a whole cap period of
         // added latency on the one thing in this loop that came from the server.
         self.wait_for_frame();
+        self.work_start = Instant::now();
         self.pump_network(event_loop);
+        if let Some(socket) = self.socket.as_ref() {
+            let (bytes_in, bytes_out) = socket.traffic();
+            self.net_stats.sample(bytes_in, bytes_out, Self::clock_ms());
+        }
         self.poll_clipboard();
         self.poll_store();
 
@@ -4855,6 +4992,19 @@ impl ApplicationHandler for App {
             self.fly_and_pick(dt);
         } else {
             self.send_input(dt);
+        }
+
+        // The bench's camera, over whatever the input put there. Train has no
+        // socket, so nothing on the wire depends on `self.camera`; the body
+        // stands where it spawned and only the view flies.
+        if let Some(run) = self.bench.as_mut() {
+            if let Some(pose) = run.advance(dt) {
+                self.camera.x = pose.x;
+                self.camera.y = pose.y;
+                self.camera.z = pose.z;
+                self.camera.yaw = pose.yaw.to_degrees();
+                self.camera.pitch = pose.pitch.to_degrees();
+            }
         }
 
         // After the input, so the weapon sways to the angles this frame is about
@@ -4879,6 +5029,7 @@ impl ApplicationHandler for App {
             self.frames = 0;
             self.fps_since = now;
             self.pending = self.prediction.pending();
+            self.refresh_perf_readout();
             self.update_title();
         }
 

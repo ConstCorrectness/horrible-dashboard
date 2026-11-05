@@ -331,6 +331,18 @@ impl Characters {
         queue.write_buffer(&self.bones, 0, &self.staging);
     }
 
+    /// What `draw` will issue: `(draw calls, vertices)`. For the frame-cost
+    /// readout, computed rather than counted so `draw` keeps its signature.
+    pub fn draw_cost(&self) -> (u32, u64) {
+        let (calls, verts) = self
+            .primitives
+            .iter()
+            .filter(|p| self.materials.get(p.material).is_some())
+            .fold((0u64, 0u64), |(c, v), p| (c + 1, v + p.vertex_count as u64));
+        let actors = self.actors as u64;
+        ((calls * actors) as u32, verts * actors)
+    }
+
     /// Draw every prepared actor.
     ///
     /// One draw per primitive per player — nine primitives is nine draws each,

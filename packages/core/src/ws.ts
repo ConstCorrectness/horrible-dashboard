@@ -91,6 +91,7 @@ function open(url: string): void {
     } catch {
       return;
     }
+    traffic(msg.channel).in += e.data.length;
     handlers.get(msg.channel)?.forEach((h) => h(msg));
   };
   socket.onclose = () => {
@@ -135,6 +136,33 @@ export function onSocketClose(listener: () => void): () => void {
   };
 }
 
+/** Characters received and sent on one channel since load. */
+export interface ChannelTraffic {
+  in: number;
+  out: number;
+}
+
+const trafficByChannel = new Map<string, ChannelTraffic>();
+
+function traffic(channel: string): ChannelTraffic {
+  let t = trafficByChannel.get(channel);
+  if (!t) {
+    t = { in: 0, out: 0 };
+    trafficByChannel.set(channel, t);
+  }
+  return t;
+}
+
+/**
+ * Cumulative characters on `channel` in each direction — what a game's
+ * NetGraph turns into KB/s. The payloads are JSON and almost entirely ASCII,
+ * so characters are bytes to within the odd accented callsign; counting UTF-8
+ * exactly would mean encoding every message a second time to weigh it.
+ */
+export function channelTraffic(channel: string): Readonly<ChannelTraffic> {
+  return traffic(channel);
+}
+
 /** Subscribe to a channel; returns an unsubscribe function. Connects lazily. */
 export function subscribeChannel(channel: string, handler: Handler): () => void {
   connect();
@@ -157,6 +185,7 @@ export function subscribeChannel(channel: string, handler: Handler): () => void 
 export function sendChannel(channel: string, event: string, data?: unknown): void {
   connect();
   const payload = JSON.stringify({ channel, event, data });
+  traffic(channel).out += payload.length;
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(payload);
   } else {

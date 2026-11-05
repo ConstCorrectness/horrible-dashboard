@@ -92,11 +92,17 @@ export default function App() {
     return () => globalThis.clearTimeout(id);
   }, []);
 
-  // A shared link lands on the deploy screen for its room.
+  // A shared link lands on the deploy screen for its room. So does a training
+  // link (`#map=hd_dust2&mode=train`): `host` writes that hash so the page is
+  // bookmarkable, and a reload of it used to drop back to the landing page. It
+  // is also how `scripts/hassault_bench_browser.mjs` opens a map offline.
   useEffect(() => {
     const initial = parseLocationParams();
     if (initial.room) {
       setTarget({ room: initial.room, map: initial.map });
+      setView('deploy');
+    } else if (initial.mode === 'train') {
+      setTarget({ room: null, map: initial.map, mode: 'train' });
       setView('deploy');
     }
   }, []);

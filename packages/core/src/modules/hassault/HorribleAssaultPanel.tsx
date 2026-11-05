@@ -49,6 +49,10 @@ import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu, MoneyCounter } from './panels/BuyMenu';
 import { PostChain } from './post-chain';
+import { BenchRun, benchPath, type BenchResult } from './bench';
+import { FrameStats, GpuTimer, type PerfProbe } from './perf-stats';
+import { channelTraffic } from '../../ws';
+import { INTERP_DELAY_MS } from './net';
 import { DuelQueueBanner, RatingResult } from './panels/DuelPanels';
 import { buyGroups, pressBuyKey } from './buy-menu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
@@ -1186,6 +1190,71 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const strideRef = useRef(0);
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
+  /** The pane's frame, GPU and network numbers, for the NetGraph and `bench`. */
+  const perfProbeRef = useRef<PerfProbe | null>(null);
+  /** A `bench` in flight: the frame loop flies the camera and feeds it. */
+  const benchRef = useRef<{ run: BenchRun; done: (r: BenchResult) => void } | null>(null);
+  const mapNameRef = useRef(mapName);
+  mapNameRef.current = mapName;
+  // `bench [map]` in the console and `window.__hassaultBench(map)` for scripted
+  // runs: fly the shared camera path (`bench.ts`) over the loaded map and report
+  // frame, CPU and GPU percentiles. It flies the map that is loaded rather than
+  // loading one, so a number is never polluted by a load in the middle of it.
+  useEffect(() => {
+    const run = (requested?: string): Promise<BenchResult> => {
+      const current = mapNameRef.current;
+      const map = requested || current;
+      if (!map) return Promise.reject(new Error('no map is loaded'));
+      if (map !== current) {
+        return Promise.reject(
+          new Error(`bench flies the loaded map (${current || 'none'}); load ${map} first`),
+        );
+      }
+      if (!perfProbeRef.current) return Promise.reject(new Error('the renderer is not running'));
+      const path = benchPath(map);
+      if (!path) return Promise.reject(new Error(`no bench path for ${map}`));
+      if (benchRef.current) return Promise.reject(new Error('a bench is already running'));
+      return new Promise<BenchResult>((resolve) => {
+        benchRef.current = {
+          run: new BenchRun(map, path, graphicsChoiceRef.current),
+          done: resolve,
+        };
+      });
+    };
+    const w = window as unknown as { __hassaultBench?: typeof run };
+    w.__hassaultBench = run;
+    const unhook = consoleExecutor.setBenchHandler(async (map) => {
+      try {
+        const r = await run(map);
+        const gpu = r.gpuP50 == null ? 'gpu n/a' : `gpu p50 ${r.gpuP50} / p99 ${r.gpuP99} ms`;
+        return {
+          ok: true,
+          command: '',
+          output: [
+            `[bench] ${r.map} (${r.tier}): ${r.frames} frames over ${r.seconds}s, ${r.fps} fps`,
+            `[bench] frame p50 ${r.p50} / p95 ${r.p95} / p99 ${r.p99} / max ${r.max} ms`,
+            `[bench] cpu p50 ${r.cpuP50} / p99 ${r.cpuP99} ms · ${gpu}`,
+            `[bench] draw calls max ${r.drawCallsMax} (mean ${r.drawCallsMean}) · ${Math.round(r.trianglesMax / 1000)}k tris max`,
+            ...r.framings.map((f) => `[bench]   ${f.label}: p50 ${f.p50} / p99 ${f.p99} ms`),
+          ],
+          affected_cvars: {},
+          result_data: JSON.stringify(r),
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          command: '',
+          output: [],
+          error: e instanceof Error ? e.message : String(e),
+          affected_cvars: {},
+        };
+      }
+    });
+    return () => {
+      unhook();
+      if (w.__hassaultBench === run) delete w.__hassaultBench;
+    };
+  }, []);
   const shotsRef = useRef<ShotController | null>(null);
   /** Grenade selection and the throw edge. See `utility.ts`. */
   const nadesRef = useRef<GrenadeController | null>(null);
@@ -1945,6 +2014,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       renderer.domElement.style.width = '100%';
       renderer.domElement.style.height = '100%';
       renderer.domElement.style.cursor = 'crosshair';
+      // Counted across every pass of a frame (shadow, scene, bloom, sharpen)
+      // rather than only the last `render` call: reset by hand once per frame.
+      renderer.info.autoReset = false;
+      const frameStats = new FrameStats();
+      const cpuStats = new FrameStats();
+      const gpuTimer = GpuTimer.create(renderer.getContext());
+      perfProbeRef.current = {
+        frames: frameStats,
+        cpu: cpuStats,
+        gpuTimed: gpuTimer != null,
+        drawCalls: () => renderer.info.render.calls,
+        triangles: () => renderer.info.render.triangles,
+        net: () => {
+          const s = sessionRef.current;
+          return s && s.state.status === 'joined' ? s.netStats.view() : null;
+        },
+        interpDelayMs: () => INTERP_DELAY_MS,
+      };
 
       // Hemisphere light alone reads flat; the directional adds enough gradient
       // to tell walls from floors before real textures exist. The colours here
@@ -2335,6 +2422,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // hidden — content the file would simply not have.
         const dt = Math.min(exportRef.current ? 0.05 : Infinity, Math.max(0, (now - last) / 1000));
         last = now;
+        // The frame's main-thread cost is measured from here, not from `now`:
+        // rAF's timestamp is the frame's start, which can predate this callback.
+        const workStart = performance.now();
 
         // Belt and braces for the frame or two between the native client
         // starting and the effect below parking the loop. The real saving is
@@ -3276,6 +3366,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             visible: false,
           });
         }
+        // A `bench` flies the camera along the shared path, overriding whatever
+        // the game put there this frame; everything after this (sky, lamps,
+        // the render) follows the camera, so it is placed before all of it.
+        const bench = benchRef.current;
+        if (bench) {
+          const pose = bench.run.advance(dt);
+          if (pose) {
+            // Cube (x, y, height) → three (x, height, y), as the freecam does.
+            camera.position.set(pose.x, pose.z, pose.y);
+            camera.rotation.set(pose.pitch, -pose.yaw - Math.PI / 2, 0, 'YXZ');
+          }
+        }
         // The dome is centred on the eye, so it is always the backdrop and never
         // something to walk out of.
         sky?.position.copy(camera.position);
@@ -3289,7 +3391,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (renderer.toneMappingExposure !== exposure) renderer.toneMappingExposure = exposure;
         // Through the post chain, which is a plain `renderer.render` while bloom
         // and sharpening are both off; on, the scene's MSAA follows the canvas's.
+        renderer.info.reset();
+        gpuTimer?.begin();
         post.render(scene, camera, postRef.current, canvasAntialias);
+        gpuTimer?.end();
         // Straight after the render, in the same frame: the afterimage is a copy
         // of the canvas just drawn, and the drawing buffer is gone by the next task.
         flashLayer.frame(dt, renderer.domElement);
@@ -3310,6 +3415,31 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           if (demo.ended) finishExport();
         }
 
+        const cpuMs = performance.now() - workStart;
+        frameStats.push(dt * 1000);
+        cpuStats.push(cpuMs);
+        gpuTimer?.poll((gpuMs) => {
+          frameStats.pushGpu(gpuMs);
+          benchRef.current?.run.recordGpu(gpuMs);
+        });
+        if (session) {
+          const traffic = channelTraffic('hassault');
+          session.netStats.sample(traffic.in, traffic.out, now);
+        }
+        if (bench) {
+          bench.run.size = [renderer.domElement.width, renderer.domElement.height];
+          bench.run.record({
+            frameMs: dt * 1000,
+            cpuMs,
+            drawCalls: renderer.info.render.calls,
+            triangles: renderer.info.render.triangles,
+          });
+          if (bench.run.done) {
+            benchRef.current = null;
+            bench.done(bench.run.result());
+          }
+        }
+
         fpsAccum += dt;
         fpsFrames += 1;
         hudAccum += dt;
@@ -3325,9 +3455,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           const nextStamina = Math.round(player.stamina ?? 100);
           const nextSprinting = player.isSprinting ?? false;
           const nextSliding = player.isSliding ?? false;
+          // What was drawn this frame, across every pass — not the collision
+          // mesh's count, which this used to show and which never changed.
+          const nextTris = renderer.info.render.triangles;
           setHud((h) => {
             if (
               h.fps === nextFps &&
+              h.triangles === nextTris &&
               h.x === nextX &&
               h.y === nextY &&
               h.z === nextZ &&
@@ -3345,6 +3479,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             return {
               ...h,
               fps: nextFps,
+              triangles: nextTris,
               x: nextX,
               y: nextY,
               z: nextZ,
@@ -3421,6 +3556,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       cleanup = () => {
         cancelAnimationFrame(raf);
         observer.disconnect();
+        gpuTimer?.dispose();
+        perfProbeRef.current = null;
+        benchRef.current = null;
         avatars.dispose();
         effects.dispose();
         decals.dispose();
@@ -5245,7 +5383,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         )}
 
         {/* CS:GO Style NetGraph HUD */}
-        {phase === 'playing' && <NetGraphHUD rttMs={net.rtt} />}
+        {phase === 'playing' && <NetGraphHUD rttMs={net.rtt} probe={perfProbeRef} />}
 
         {/* Developer Console (Overlay) */}
         <DeveloperConsole

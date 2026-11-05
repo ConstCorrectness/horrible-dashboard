@@ -9243,7 +9243,7 @@ hAssault supports two client execution targets that speak the exact same backend
    - Runs as a standalone external OS window for maximum performance and ultra-low input latency.
    - Shares the same authoritative `/ws` wire, collision hitboxes, and physics models.
    - Renders the **same skinned operator GLB the browser client does**, GPU-skinned, with the 23 Mixamo clips and procedural weapon props. See [The operator in the native client](#the-operator-in-the-native-client).
-   - Includes in-game CS:GO-style NetGraph HUD (FPS, Ping, Loss, Variance) toggled with `F3`.
+   - Includes in-game CS:GO-style NetGraph HUD (FPS, frame and GPU time, tick rate, bandwidth, loss, jitter) toggled with `F3`, and a `--bench=<map>` frame-time benchmark. See [Measuring performance](#measuring-performance).
 
 ## The standalone web client
 
@@ -9382,7 +9382,7 @@ Every CVar and ConCommand is strictly structured into modular namespaces:
 #### `net.*` — Networking & Lag Compensation
 | Name | Type | Default | Description | Flags |
 |---|---|---|---|---|
-| `net.graph` | `int` (0-3) | `0` | In-game NetGraph overlay (0: off, 1: fps/ping, 2: io/interp, 3: loss/jitter) | `client` |
+| `net.graph` | `int` (0-3) | `0` | In-game NetGraph overlay (0: off, 1: fps/ping, 2: frame cost + tick/io/interp, 3: + loss/jitter). Every value measured; see [Measuring performance](#measuring-performance) | `client` |
 | `net.simulate_lag` | `float` (0-1000) | `0.0` | Injects artificial round-trip latency in milliseconds | `cheat`, `client` |
 | `net.simulate_loss` | `float` (0-1) | `0.0` | Injects artificial packet loss ratio (0.0 to 1.0) | `cheat`, `client` |
 | `net.simulate_jitter` | `float` (0-500) | `0.0` | Injects latency variance in milliseconds | `cheat`, `client` |
@@ -10053,6 +10053,127 @@ The skin system provides distinct faction styling and collectible operator skins
 > [!IMPORTANT]
 > **Strict Hitbox Invariance**:
 > Every operator skin and attachment is strictly bounded within the canonical collision cylinder (`r = 1.1`, `h = 5.2`) and head band (`1.0`) defined in `DEFAULT_HITBOX`. Hit registration remains strictly server-authoritative raycast vs canonical cylinder. Skins never alter hitboxes, movement speeds, or sight lines.
+
+## Measuring performance
+
+Every performance change to either client is reported against a measured
+baseline, never against a feeling. The instruments are the same in both
+clients so a number read off one means the same thing on the other.
+
+### The NetGraph
+
+`net.graph` (or `F3`) steps through four levels. Level 1 is fps and ping. Levels
+2 and 3 used to print fixed strings in the native client (`TICK: 15.6MS`,
+`IN: 14.2 KB/S`), which survived the server moving to 60 Hz without changing a
+digit. Both clients now print measured values, and `--` for anything not yet
+measured:
+
+| Line | What it is | Where it comes from |
+|---|---|---|
+| `P99` | 99th-percentile frame interval over the last 600 frames | frame loop |
+| `CPU p50/p99` | time spent building and submitting one frame | frame loop |
+| `GPU` | GPU time per frame, `N/A` where the adapter cannot time it | `EXT_disjoint_timer_query_webgl2` (browser), wgpu timestamp queries (native, `gpu_timer.rs`) |
+| `DRAWS`, `TRIS` | scene draw calls and triangles in the last frame | `renderer.info` (browser), `Renderer::last_cost` (native) |
+| `TICK` | server ticks per second of *server* time, from each snapshot's `tick` and `t` | `net-stats.ts` / `net_stats.rs` |
+| `SNAP` | snapshots arriving per second on our clock | same |
+| `IN` / `OUT` | WebSocket payload KB/s on the match socket | `ws.ts` `channelTraffic` / `net::Traffic` |
+| `INTERP` | the interpolation delay | `net.ts` / `interp.rs` |
+| `LOSS` (level 3) | ticks the counter skipped, over the last whole second | `net-stats.ts` / `net_stats.rs` |
+| `JITTER` (level 3) | RFC 3550 interarrival jitter, gain 1/16 | same |
+
+A tick counter that goes backwards is a new match, not loss. The two NetStats
+ports share their test cases (`perf-instruments.test.ts`, `net_stats.rs`).
+
+The native client also sets `TCP_NODELAY` on its socket: with Nagle's algorithm
+on, an input batch written while the previous one is unacknowledged waits for
+that ACK or the delayed-ACK timer (up to 40 ms on Windows).
+
+### The bench
+
+A fixed camera path per map, `packages/core/src/modules/hassault/bench-paths.json`,
+generated from the map JSONs by `scripts/gen_hassault_bench_paths.py`. For each
+bomb site (or, on maps without sites, the centre and the two farthest spawns),
+plus mid between the teams' first spawns, it holds an eye-height framing, a
+4-second turn and a high overview. The first 2 seconds hold the first framing
+unrecorded, so shader compiles and uploads count as load cost, not frame cost.
+Framings cut rather than blend, so a framing's cost does not depend on its
+neighbours.
+
+- **Browser:** load a map offline and type `bench` in the console (or call
+  `window.__hassaultBench()` from a script). It prints frame, CPU, GPU and
+  draw-call percentiles with a per-framing breakdown, and returns the JSON.
+  Run it in a **foreground** tab: a hidden tab gets no `requestAnimationFrame`.
+  In an ordinary tab the frame interval is capped by the display, so the CPU
+  and GPU columns are the true cost measure there.
+  `node scripts/hassault_bench_browser.mjs` runs every map at Medium and High in
+  a headed Playwright Chromium at 1920x1080 with vsync and the frame-rate limit
+  off (so the frame interval is the cost, as natively), on the high-performance
+  GPU, opening each map through the offline training link
+  `#map=<id>&mode=train`. Point assault-web at a node first: the
+  `assault-web-bench` launch config proxies to a backend on port 8123.
+- **Native:** `hassault-native --bench=<map>` flies the same path in Train with
+  vsync and the frame cap off, prints one `BENCH {json}` line on stdout and
+  exits. Pick the tier with `--set=hassault.video.quality=high`.
+  `scripts/hassault_bench_native.py --server <node>` runs every map at Medium
+  and High and prints the table below.
+
+Both print the same JSON shape (`BenchResult` in `bench.ts` / `bench.rs`).
+
+### Baseline
+
+Recorded before the G-phase work (graphics, performance and gameplay); later
+phases report against these rows.
+
+2026-11-04/05, one machine: RTX 4080 Laptop GPU, 1920x1080, vsync and frame cap off, each tier's full preset. Native on Vulkan (`scripts/hassault_bench_native.py`); browser in a headed Playwright Chromium on ANGLE/D3D11 (`scripts/hassault_bench_browser.mjs`). Offline Train, so no other players are drawn. One run per row: treat differences under about 10% as noise.
+
+What the baseline says:
+
+- **Native is CPU-bound and flat.** About 2.4 ms of CPU per frame on every map against 0.5–1.6 ms of GPU, so every map sits near 400 fps. The world is one draw; the other ~460 are most likely the range's skinned dummies (one draw per primitive per actor), not yet confirmed.
+- **The browser's p50 is fine and its p99 is not.** Medians of 1–9 ms, but p99 of 6–40 ms: hitches, not a slow steady state. The worst maps (Assault, Bank, Office, Inferno) are the ones with 800–1160 draws and 600–820k triangles, about twice the native client's triangles for the same map.
+- **High is not reliably dearer than Medium in the browser.** Run-to-run noise is as large as the tier difference on several maps, which is itself a finding: the per-frame cost is dominated by something the tier does not change.
+
+| Map | Client | Tier | Res | fps | p50 ms | p99 ms | CPU p50/p99 ms | GPU p50/p99 ms | Draws (max) | Tris (max) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hd_aim | browser | medium | 1920x1080 | 641 | 0.80 | 6.50 | 0.70 / 5.40 | 0.90 / 6.59 | 447 | 151k |
+| hd_aim | native | medium | 1920x1080 | 495 | 1.97 | 2.63 | 1.93 / 2.54 | 0.48 / 0.60 | 463 | 159k |
+| hd_aim | browser | high | 1920x1080 | 493 | 0.90 | 8.60 | 0.80 / 7.00 | 1.48 / 7.70 | 460 | 151k |
+| hd_aim | native | high | 1920x1080 | 463 | 2.11 | 2.80 | 2.07 / 2.73 | 0.78 / 1.09 | 463 | 159k |
+| hd_assault | browser | medium | 1920x1080 | 94 | 6.80 | 40.10 | 7.00 / 21.90 | 5.29 / 18.53 | 937 | 645k |
+| hd_assault | native | medium | 1920x1080 | 434 | 2.28 | 2.89 | 2.23 / 2.79 | 0.55 / 0.76 | 463 | 325k |
+| hd_assault | browser | high | 1920x1080 | 95 | 5.30 | 18.50 | 4.20 / 13.70 | 4.41 / 11.67 | 937 | 645k |
+| hd_assault | native | high | 1920x1080 | 413 | 2.37 | 3.24 | 2.32 / 3.17 | 0.88 / 2.73 | 463 | 325k |
+| hd_bank | browser | medium | 1920x1080 | 100 | 4.10 | 27.40 | 3.70 / 19.80 | 3.22 / 15.05 | 1160 | 820k |
+| hd_bank | native | medium | 1920x1080 | 410 | 2.40 | 3.10 | 2.34 / 3.02 | 0.76 / 2.40 | 463 | 411k |
+| hd_bank | browser | high | 1920x1080 | 90 | 5.00 | 33.40 | 4.70 / 23.00 | 4.41 / 20.08 | 1160 | 820k |
+| hd_bank | native | high | 1920x1080 | 376 | 2.46 | 5.25 | 2.40 / 5.20 | 1.57 / 4.58 | 463 | 411k |
+| hd_dust2 | browser | medium | 1920x1080 | 405 | 1.10 | 9.10 | 0.90 / 5.30 | 2.50 / 5.30 | 562 | 281k |
+| hd_dust2 | native | medium | 1920x1080 | 400 | 2.46 | 3.31 | 2.40 / 3.23 | 0.55 / 0.68 | 463 | 281k |
+| hd_dust2 | browser | high | 1920x1080 | 324 | 1.10 | 9.80 | 1.00 / 8.00 | 3.03 / 7.58 | 550 | 300k |
+| hd_dust2 | native | high | 1920x1080 | 392 | 2.50 | 3.30 | 2.44 / 3.19 | 0.95 / 2.48 | 463 | 281k |
+| hd_facility | browser | medium | 1920x1080 | 397 | 1.30 | 8.20 | 1.10 / 5.10 | 1.34 / 5.07 | 563 | 231k |
+| hd_facility | native | medium | 1920x1080 | 416 | 2.37 | 3.06 | 2.32 / 2.95 | 0.49 / 0.76 | 464 | 231k |
+| hd_facility | browser | high | 1920x1080 | 258 | 2.20 | 13.40 | 2.00 / 12.40 | 1.60 / 9.87 | 563 | 231k |
+| hd_facility | native | high | 1920x1080 | 409 | 2.39 | 3.45 | 2.34 / 3.39 | 0.90 / 2.62 | 464 | 231k |
+| hd_inferno | browser | medium | 1920x1080 | 120 | 3.10 | 17.30 | 2.90 / 14.30 | 2.49 / 12.88 | 856 | 787k |
+| hd_inferno | native | medium | 1920x1080 | 406 | 2.43 | 3.06 | 2.37 / 2.98 | 0.60 / 0.81 | 463 | 394k |
+| hd_inferno | browser | high | 1920x1080 | 110 | 3.90 | 32.30 | 3.80 / 24.40 | 3.37 / 20.56 | 856 | 787k |
+| hd_inferno | native | high | 1920x1080 | 398 | 2.46 | 3.15 | 2.41 / 3.06 | 1.02 / 2.53 | 463 | 394k |
+| hd_junkflea | browser | medium | 1920x1080 | 112 | 4.20 | 29.60 | 3.80 / 16.50 | 1.01 / 9.93 | 569 | 344k |
+| hd_junkflea | native | medium | 1920x1080 | 407 | 2.42 | 3.09 | 2.37 / 2.98 | 0.55 / 0.66 | 463 | 344k |
+| hd_junkflea | browser | high | 1920x1080 | 207 | 3.70 | 15.20 | 3.50 / 14.30 | 2.32 / 11.50 | 569 | 344k |
+| hd_junkflea | native | high | 1920x1080 | 398 | 2.47 | 3.14 | 2.41 / 3.03 | 0.94 / 2.40 | 463 | 344k |
+| hd_mirage | browser | medium | 1920x1080 | 271 | 2.00 | 13.70 | 1.80 / 11.40 | 1.46 / 10.24 | 859 | 737k |
+| hd_mirage | native | medium | 1920x1080 | 400 | 2.46 | 3.16 | 2.41 / 3.03 | 0.50 / 0.63 | 463 | 369k |
+| hd_mirage | browser | high | 1920x1080 | 145 | 2.90 | 30.10 | 2.70 / 21.40 | 2.60 / 18.25 | 859 | 737k |
+| hd_mirage | native | high | 1920x1080 | 388 | 2.54 | 3.26 | 2.48 / 3.20 | 0.79 / 1.12 | 463 | 369k |
+| hd_nuke | browser | medium | 1920x1080 | 201 | 2.00 | 15.30 | 1.80 / 13.50 | 2.92 / 12.26 | 748 | 781k |
+| hd_nuke | native | medium | 1920x1080 | 400 | 2.46 | 3.13 | 2.41 / 3.03 | 0.64 / 0.82 | 463 | 402k |
+| hd_nuke | browser | high | 1920x1080 | 135 | 2.50 | 30.60 | 2.20 / 17.40 | 3.71 / 16.03 | 751 | 781k |
+| hd_nuke | native | high | 1920x1080 | 388 | 2.52 | 3.35 | 2.46 / 3.26 | 1.15 / 2.58 | 463 | 402k |
+| hd_office | browser | medium | 1920x1080 | 115 | 7.10 | 25.10 | 6.90 / 17.10 | 5.94 / 14.61 | 837 | 608k |
+| hd_office | native | medium | 1920x1080 | 393 | 2.50 | 3.54 | 2.44 / 3.47 | 0.61 / 0.79 | 463 | 304k |
+| hd_office | browser | high | 1920x1080 | 88 | 8.90 | 29.60 | 8.60 / 14.60 | 7.19 / 12.55 | 720 | 592k |
+| hd_office | native | high | 1920x1080 | 392 | 2.50 | 3.31 | 2.44 / 3.21 | 1.15 / 2.80 | 463 | 304k |
 
 ---
 

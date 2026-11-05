@@ -86,10 +86,10 @@ CHANNEL = "hassault"
 _ACK_HOLE = "\x00hassault:ack\x00"
 _YOU_HOLE = "\x00hassault:you\x00"
 
-# Snapshots per second. 20 Hz with ~100 ms of client-side interpolation delay is
-# the classic Source-engine setting and holds up: remote players are rendered
-# from two snapshots that have both already arrived, so ordinary jitter never
-# shows. Raising this costs bandwidth linearly and buys very little.
+# Snapshots per second. 60 Hz (raised from the classic 20 Hz in df9a9838) lets
+# the clients draw remote players ~45 ms in the past instead of ~100 ms, which
+# is most of what peeker's advantage is made of. It costs bandwidth linearly,
+# which is why the per-tick payload is kept to what actually moves.
 SNAPSHOT_HZ = 60
 TICK_INTERVAL = 1.0 / SNAPSHOT_HZ
 
@@ -177,14 +177,14 @@ class HeardShot:
 EMPTY_GRACE = 60.0
 
 
-#: Ticks kept in the rolling performance window. Ten seconds at 20 Hz — long
+#: Ticks kept in the rolling performance window. ~3 s at 60 Hz — long
 #: enough that one slow tick does not read as a trend, short enough that the
 #: numbers still describe the match you are in rather than the one you left.
 TICK_WINDOW = 200
 
 
 class TickStats:
-    """Where the 50 ms of a tick actually goes.
+    """Where the `TICK_INTERVAL` of a tick actually goes.
 
     The loop already sleeps the *remainder* of `TICK_INTERVAL` rather than a flat
     interval, precisely so the rate does not sag silently under load. That makes
@@ -233,7 +233,7 @@ class TickStats:
             "simulateMs": stat(self.simulate_ms),
             "broadcastMs": stat(self.broadcast_ms),
             # Summed across every recipient of one tick, so this is what the
-            # room costs the uplink 20 times a second.
+            # room costs the uplink `SNAPSHOT_HZ` times a second.
             "tickBytes": stat(self.tick_bytes),
         }
 

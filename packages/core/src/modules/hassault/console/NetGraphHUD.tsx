@@ -2,26 +2,105 @@
  * CS:GO / Source Engine style in-game NetGraph HUD overlay for hAssault.
  *
  * Activated when `net.graph` > 0.
- * Level 1: Basic FPS, Ping, Frame Variance
- * Level 2: + In/Out KB/s, Tickrate, Interpolation Delay
- * Level 3: + Loss %, Choke %, Jitter ms, Simulated Lag
+ * Level 1: fps, frame-time p99, ping
+ * Level 2: + CPU / GPU frame cost, draw calls, triangles, tick and snapshot
+ *          rate, in/out KB/s, interpolation delay
+ * Level 3: + loss, jitter, simulated lag/loss
+ *
+ * Every number is measured (`perf-stats.ts`, `net-stats.ts`). These rows used
+ * to be string literals — `tick: 20.0` survived the server going to 60 Hz — and
+ * a readout that cannot move is worse than none. What has not been measured
+ * yet shows as `—`, never as a plausible default.
+ *
+ * Polled twice a second from the pane's `PerfProbe` rather than pushed: the
+ * pane re-rendering at display rate to update this would cost more than
+ * everything here measures.
  */
 
 import React, { useEffect, useState } from 'react';
+
+import type { PerfProbe } from '../perf-stats';
 import { consoleRegistry } from './registry';
 
 interface NetGraphHUDProps {
   rttMs: number;
   level?: number;
+  /** The pane's numbers. Absent, only ping is shown. */
+  probe?: React.RefObject<PerfProbe | null>;
   style?: React.CSSProperties;
 }
 
-export function NetGraphHUD({ rttMs, level: propLevel, style }: NetGraphHUDProps) {
+interface Readout {
+  fps: number | null;
+  frameP99: number | null;
+  cpuP50: number | null;
+  cpuP99: number | null;
+  gpuP50: number | null;
+  gpuTimed: boolean;
+  calls: number;
+  tris: number;
+  tickHz: number | null;
+  snapHz: number | null;
+  inKBs: number | null;
+  outKBs: number | null;
+  interpMs: number | null;
+  lossPct: number | null;
+  jitterMs: number | null;
+}
+
+const EMPTY: Readout = {
+  fps: null,
+  frameP99: null,
+  cpuP50: null,
+  cpuP99: null,
+  gpuP50: null,
+  gpuTimed: false,
+  calls: 0,
+  tris: 0,
+  tickHz: null,
+  snapHz: null,
+  inKBs: null,
+  outKBs: null,
+  interpMs: null,
+  lossPct: null,
+  jitterMs: null,
+};
+
+const POLL_MS = 500;
+
+function read(probe: PerfProbe | null): Readout {
+  if (!probe) return EMPTY;
+  const mean = probe.frames.mean();
+  const net = probe.net();
+  return {
+    fps: mean && mean > 0 ? 1000 / mean : null,
+    frameP99: probe.frames.percentile(99),
+    cpuP50: probe.cpu.percentile(50),
+    cpuP99: probe.cpu.percentile(99),
+    gpuP50: probe.frames.gpuPercentile(50),
+    gpuTimed: probe.gpuTimed,
+    calls: probe.drawCalls(),
+    tris: probe.triangles(),
+    tickHz: net?.serverTickHz ?? null,
+    snapHz: net?.snapshotHz ?? null,
+    inKBs: net?.inBytesPerSec != null ? net.inBytesPerSec / 1024 : null,
+    outKBs: net?.outBytesPerSec != null ? net.outBytesPerSec / 1024 : null,
+    interpMs: net ? probe.interpDelayMs() : null,
+    lossPct: net?.lossPct ?? null,
+    jitterMs: net?.jitterMs ?? null,
+  };
+}
+
+/** One decimal, or `—` for a number that has not been measured. */
+function fmt(v: number | null, digits = 1): string {
+  return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits);
+}
+
+export function NetGraphHUD({ rttMs, level: propLevel, probe, style }: NetGraphHUDProps) {
   const [level, setLevel] = useState<number>(propLevel ?? consoleRegistry.getNumber('net.graph'));
   const [simLag, setSimLag] = useState<number>(consoleRegistry.getNumber('net.simulate_lag'));
   const [simLoss, setSimLoss] = useState<number>(consoleRegistry.getNumber('net.simulate_loss'));
-  const [fps, setFps] = useState(60);
-  const [frameTimeMs, setFrameTimeMs] = useState(16.6);
+  const [r, setR] = useState<Readout>(EMPTY);
 
   useEffect(() => {
     return consoleRegistry.subscribe((name, val) => {
@@ -31,35 +110,22 @@ export function NetGraphHUD({ rttMs, level: propLevel, style }: NetGraphHUDProps
     });
   }, []);
 
-  // Frame rate & frame time sampling loop
   useEffect(() => {
     if (level <= 0) return;
-    let frames = 0;
-    let lastTime = performance.now();
-    let animId: number;
-
-    const tick = (now: number) => {
-      frames++;
-      const dt = now - lastTime;
-      if (dt >= 500) {
-        setFps(Math.round((frames * 1000) / dt));
-        setFrameTimeMs(Math.round((dt / frames) * 10) / 10);
-        frames = 0;
-        lastTime = now;
-      }
-      animId = requestAnimationFrame(tick);
-    };
-
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
-  }, [level]);
+    const tick = () => setR(read(probe?.current ?? null));
+    tick();
+    const id = setInterval(tick, POLL_MS);
+    return () => clearInterval(id);
+  }, [level, probe]);
 
   if (level <= 0) return null;
 
   const totalPing = Math.round(rttMs + simLag);
   const pingColor = totalPing < 50 ? '#4ade80' : totalPing < 100 ? '#facc15' : '#f87171';
-  const fpsColor = fps >= 55 ? '#4ade80' : fps >= 30 ? '#facc15' : '#f87171';
-  const lossPct = Math.round(simLoss * 100);
+  // Judged against the 144 Hz budget the game is tuned for, not against 60.
+  const fpsColor =
+    r.fps == null ? '#94a3b8' : r.fps >= 140 ? '#4ade80' : r.fps >= 60 ? '#facc15' : '#f87171';
+  const lossColor = (r.lossPct ?? 0) > 0 ? '#f87171' : '#4ade80';
 
   return (
     <div
@@ -83,11 +149,10 @@ export function NetGraphHUD({ rttMs, level: propLevel, style }: NetGraphHUDProps
         ...style,
       }}
     >
-      {/* Row 1: FPS & Ping */}
       <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
         <span>
-          fps: <strong style={{ color: fpsColor }}>{fps}</strong>{' '}
-          <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({frameTimeMs}ms)</span>
+          fps: <strong style={{ color: fpsColor }}>{fmt(r.fps, 0)}</strong>{' '}
+          <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>(p99 {fmt(r.frameP99)}ms)</span>
         </span>
         <span>
           ping: <strong style={{ color: pingColor }}>{totalPing} ms</strong>
@@ -95,55 +160,65 @@ export function NetGraphHUD({ rttMs, level: propLevel, style }: NetGraphHUDProps
         </span>
       </div>
 
-      {/* Row 2: Tickrate & Net I/O */}
       {level >= 2 && (
-        <div
-          style={{
-            display: 'flex',
-            gap: '14px',
-            marginTop: '3px',
-            color: '#cbd5e1',
-            fontSize: '0.74rem',
-          }}
-        >
-          <span>
-            tick: <strong>20.0</strong>
-          </span>
-          <span>
-            in: <strong>14.2 KB/s</strong>
-          </span>
-          <span>
-            out: <strong>2.8 KB/s</strong>
-          </span>
-          <span>
-            interp: <strong>50.0ms</strong>
-          </span>
-        </div>
+        <>
+          <div style={rowStyle}>
+            <span>
+              cpu: <strong>{fmt(r.cpuP50)}</strong>/<strong>{fmt(r.cpuP99)}ms</strong>
+            </span>
+            <span>
+              gpu: <strong>{r.gpuTimed ? `${fmt(r.gpuP50)}ms` : 'n/a'}</strong>
+            </span>
+            <span>
+              calls: <strong>{r.calls}</strong>
+            </span>
+            <span>
+              tris: <strong>{Math.round(r.tris / 1000)}k</strong>
+            </span>
+          </div>
+          <div style={rowStyle}>
+            <span>
+              tick: <strong>{fmt(r.tickHz)}</strong>
+            </span>
+            <span>
+              snap: <strong>{fmt(r.snapHz)}/s</strong>
+            </span>
+            <span>
+              in: <strong>{fmt(r.inKBs)} KB/s</strong>
+            </span>
+            <span>
+              out: <strong>{fmt(r.outKBs)} KB/s</strong>
+            </span>
+            <span>
+              interp: <strong>{fmt(r.interpMs, 0)}ms</strong>
+            </span>
+          </div>
+        </>
       )}
 
-      {/* Row 3: Quality Metrics */}
       {level >= 3 && (
-        <div
-          style={{
-            display: 'flex',
-            gap: '14px',
-            marginTop: '3px',
-            color: '#cbd5e1',
-            fontSize: '0.72rem',
-          }}
-        >
+        <div style={{ ...rowStyle, fontSize: '0.72rem' }}>
           <span>
-            loss:{' '}
-            <strong style={{ color: lossPct > 0 ? '#f87171' : '#4ade80' }}>{lossPct}%</strong>
+            loss: <strong style={{ color: lossColor }}>{fmt(r.lossPct)}%</strong>
           </span>
           <span>
-            choke: <strong style={{ color: '#4ade80' }}>0%</strong>
+            jitter: <strong>{fmt(r.jitterMs)}ms</strong>
           </span>
-          <span>
-            jitter: <strong>0.8ms</strong>
-          </span>
+          {(simLag > 0 || simLoss > 0) && (
+            <span style={{ color: '#facc15' }}>
+              sim: +{simLag}ms / {Math.round(simLoss * 100)}%
+            </span>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+const rowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: '14px',
+  marginTop: '3px',
+  color: '#cbd5e1',
+  fontSize: '0.74rem',
+};

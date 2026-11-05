@@ -31,7 +31,7 @@ import type { World } from './world';
 /**
  * How far behind the newest snapshot remote players are drawn.
  *
- * Two snapshot intervals at 20 Hz. Less than one interval and there is routinely
+ * About 2.7 snapshot intervals at 60 Hz. Less than one interval and there is routinely
  * no later snapshot to interpolate towards, which is exactly when a renderer
  * starts extrapolating and walking people through walls.
  */

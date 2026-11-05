@@ -51,7 +51,7 @@ struct Unacked {
 
 /// How many unacknowledged commands to keep.
 ///
-/// At 240fps and a 20Hz snapshot rate, a round trip of 100 ms is ~24 commands, so
+/// At the 250 Hz command clock, a round trip of 100 ms is ~25 commands, so
 /// this is generous. It is a **bound, not a target**: an unbounded buffer on a
 /// stalled connection grows until the replay itself becomes the stall.
 const MAX_UNACKED: usize = 256;

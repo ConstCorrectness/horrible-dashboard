@@ -413,6 +413,23 @@ pub struct Renderer {
     /// The skinned operators for Counter-Terrorist and Terrorist teams.
     characters_ct: Option<crate::characters_gpu::Characters>,
     characters_t: Option<crate::characters_gpu::Characters>,
+    /// GPU time per frame, where the adapter can measure it. See `gpu_timer.rs`.
+    gpu_timer: Option<crate::gpu_timer::GpuTimer>,
+    /// What the last presented frame drew. See `FrameCost`.
+    last_cost: FrameCost,
+}
+
+/// What one frame asked the GPU to draw: the browser's
+/// `renderer.info.render.calls` and `.triangles`, so the two clients' NetGraphs
+/// and benches report the same columns.
+///
+/// Draw calls are the scene's, not the post chain's or the HUD's: a
+/// full-screen triangle is not what a culling or batching change moves.
+/// Triangles are vertices over three, every stream here being a triangle list.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameCost {
+    pub draws: u32,
+    pub triangles: u64,
 }
 
 /// The offscreen target the world is rendered into.
@@ -492,7 +509,7 @@ impl Renderer {
             wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
         } else {
             wgpu::Features::empty()
-        };
+        } | crate::gpu_timer::GpuTimer::features(&adapter);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("hassault"),
@@ -861,6 +878,7 @@ impl Renderer {
         let sky_pipeline = sky_pipeline(&device, &sky_layout, &shader, format, video.samples());
         let text = crate::textquad::TextQuad::new(&device, format);
 
+        let gpu_timer = crate::gpu_timer::GpuTimer::new(&device, &queue);
         Ok(Renderer {
             surface,
             device,
@@ -920,7 +938,27 @@ impl Renderer {
             is_3d: false,
             characters_ct: None,
             characters_t: None,
+            gpu_timer,
+            last_cost: FrameCost::default(),
         })
+    }
+
+    /// What the last presented frame drew.
+    pub fn last_cost(&self) -> FrameCost {
+        self.last_cost
+    }
+
+    /// GPU frame times that have finished since the last call, in milliseconds.
+    /// Empty where the adapter cannot measure them; never blocks.
+    pub fn gpu_times(&mut self, on_result: impl FnMut(f64)) {
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.poll(&self.device, on_result);
+        }
+    }
+
+    /// Whether `gpu_times` can ever say anything.
+    pub fn gpu_timed(&self) -> bool {
+        self.gpu_timer.is_some()
     }
 
     /// Upload the operator's geometry, textures and materials (fallback / single-team).
@@ -1377,6 +1415,14 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.begin(&mut encoder);
+        }
+        let mut cost = FrameCost::default();
+        let count = |cost: &mut FrameCost, draws: u32, verts: u64| {
+            cost.draws += draws;
+            cost.triangles += verts / 3;
+        };
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1440,6 +1486,7 @@ impl Renderer {
                 pass.set_pipeline(&self.sky_pipeline);
                 pass.set_bind_group(0, &self.sky_bind_group, &[]);
                 pass.draw(0..3, 0..1);
+                count(&mut cost, 1, 3);
             }
 
             pass.set_pipeline(&self.pipeline);
@@ -1454,6 +1501,7 @@ impl Renderer {
             pass.set_bind_group(3, &self.pbr.bind_group, &[]);
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
             pass.draw(0..self.world_verts, 0..1);
+            count(&mut cost, 1, self.world_verts as u64);
             if self.body_verts > 0 {
                 // Bodies, grenades and hitbox wireframes: the same pipeline, a
                 // camera whose build-in is finished. A player standing in a map
@@ -1461,6 +1509,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.settled_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.body_buffer.slice(..));
                 pass.draw(0..self.body_verts, 0..1);
+                count(&mut cost, 1, self.body_verts as u64);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
             }
             // After the world and the untextured bodies, into the same depth
@@ -1468,9 +1517,13 @@ impl Renderer {
             // hitbox wireframes still overlay it.
             if let Some(ct) = self.characters_ct.as_ref() {
                 ct.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
+                let (d, v) = ct.draw_cost();
+                count(&mut cost, d, v);
             }
             if let Some(t) = self.characters_t.as_ref() {
                 t.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
+                let (d, v) = t.draw_cost();
+                count(&mut cost, d, v);
             }
 
             // Translucent volumes last, inside the *same* pass. Deliberately not
@@ -1490,6 +1543,7 @@ impl Renderer {
                 pass.set_bind_group(3, &self.smoke_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.volume_buffer.slice(..));
                 pass.draw(0..self.volume_verts, 0..1);
+                count(&mut cost, 1, self.volume_verts as u64);
             }
         }
 
@@ -1532,6 +1586,8 @@ impl Renderer {
             // player is looking at.
             self.props.draw_hands(&mut pass, &self.hands_bind_group);
             self.props.draw(&mut pass, &self.prop_bind_groups);
+            let (d, v) = self.props.draw_cost();
+            count(&mut cost, d, v);
 
             // Guarded on its own, because the pass now runs for a prop with no
             // CPU vertices behind it — which is the common case, and the one
@@ -1547,6 +1603,7 @@ impl Renderer {
                 pass.set_bind_group(3, &self.pbr.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
                 pass.draw(0..self.viewmodel_verts, 0..1);
+                count(&mut cost, 1, self.viewmodel_verts as u64);
             }
         }
 
@@ -1607,9 +1664,16 @@ impl Renderer {
             self.text.draw(&mut pass);
         }
 
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.end(&mut encoder);
+        }
         self.queue.submit(Some(encoder.finish()));
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.submitted();
+        }
         // Presented through the queue in wgpu 30, not off the texture.
         self.queue.present(frame);
+        self.last_cost = cost;
         Ok(true)
     }
 

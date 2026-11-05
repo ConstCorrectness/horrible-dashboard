@@ -452,6 +452,10 @@ pub struct HudView<'a> {
     pub rtt: Option<f32>,
     pub fps: Option<f32>,
     pub net_graph: u32,
+    /// What `net_graph` 2 and 3 print beyond fps and ping. Every field is
+    /// optional for the reason `rtt` is: a number that has not been measured is
+    /// drawn as `--`, never as a plausible-looking constant.
+    pub perf: NetGraphStats,
     /// The player's own reticle. Every number here is theirs, and the one thing
     /// that is *not* is the opening with spread — the gap setting is the floor
     /// the cone opens from, never a cap on it. A crosshair that could be
@@ -3134,7 +3138,39 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
     }
 }
 
-/// CS:GO style NetGraph overlay (FPS, Ping, KB/s I/O, Loss, Variance).
+/// The measured half of the NetGraph: frame cost from the renderer, the wire
+/// from `net_stats.rs`. The browser's `NetGraphHUD.tsx` prints the same fields
+/// in the same order, so a number read off one client means the same on the
+/// other.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetGraphStats {
+    pub frame_p99_ms: Option<f64>,
+    pub cpu_p50_ms: Option<f64>,
+    pub cpu_p99_ms: Option<f64>,
+    pub gpu_p50_ms: Option<f64>,
+    /// Whether this adapter can time the GPU at all: `N/A` and `--` are
+    /// different answers (never measurable, not measured yet).
+    pub gpu_timed: bool,
+    pub draws: Option<u32>,
+    pub triangles: Option<u64>,
+    pub net: crate::net_stats::NetStatsView,
+    pub interp_ms: Option<f64>,
+}
+
+fn ms(v: Option<f64>) -> String {
+    v.map(|v| format!("{v:.1}")).unwrap_or_else(|| "--".into())
+}
+
+fn whole(v: Option<f64>) -> String {
+    v.map(|v| format!("{v:.0}")).unwrap_or_else(|| "--".into())
+}
+
+fn kbps(v: Option<f64>) -> String {
+    v.map(|v| format!("{:.1}", v / 1024.0))
+        .unwrap_or_else(|| "--".into())
+}
+
+/// CS:GO style NetGraph overlay.
 /// What the net graph will write, without drawing it.
 ///
 /// Split out so its **height** can be known before the ammo block is laid out.
@@ -3157,18 +3193,48 @@ fn net_graph_lines(view: &HudView) -> Vec<String> {
     } else {
         "PING: --".to_string()
     };
-    match view.net_graph {
-        1 => vec![format!("{fps_text} | {ping_text}")],
-        2 => vec![
-            format!("{fps_text} (VAR: 0.8MS) | {ping_text}"),
-            "IN: 14.2 KB/S | OUT: 4.8 KB/S | LOSS: 0.0%".to_string(),
-        ],
-        _ => vec![
-            format!("{fps_text} (VAR: 0.8MS) | {ping_text}"),
-            "RATE: 64/S | JITTER: 0.6MS | LOSS: 0.0%".to_string(),
-            "IN: 14.2 KB/S | OUT: 4.8 KB/S | TICK: 15.6MS".to_string(),
-        ],
+    if view.net_graph == 1 {
+        return vec![format!("{fps_text} | {ping_text}")];
     }
+    let s = &view.perf;
+    let gpu = if s.gpu_timed {
+        ms(s.gpu_p50_ms)
+    } else {
+        "N/A".to_string()
+    };
+    let draws = s
+        .draws
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| "--".into());
+    let tris = s
+        .triangles
+        .map(|t| format!("{:.0}K", t as f64 / 1000.0))
+        .unwrap_or_else(|| "--".into());
+    let n = &s.net;
+    let mut lines = vec![
+        format!("{fps_text} (P99 {}MS) | {ping_text}", ms(s.frame_p99_ms)),
+        format!(
+            "CPU: {}/{}MS | GPU: {gpu}MS | DRAWS: {draws} | TRIS: {tris}",
+            ms(s.cpu_p50_ms),
+            ms(s.cpu_p99_ms)
+        ),
+        format!(
+            "TICK: {}/S | SNAP: {}/S | IN: {} | OUT: {} KB/S | INTERP: {}MS",
+            whole(n.server_tick_hz),
+            whole(n.snapshot_hz),
+            kbps(n.in_bytes_per_sec),
+            kbps(n.out_bytes_per_sec),
+            whole(s.interp_ms)
+        ),
+    ];
+    if view.net_graph >= 3 {
+        lines.push(format!(
+            "LOSS: {}% | JITTER: {}MS",
+            ms(n.loss_pct),
+            ms(n.jitter_ms)
+        ));
+    }
+    lines
 }
 
 /// How tall that box is, including the gap under it. Zero when it is off.
@@ -4632,6 +4698,7 @@ mod tests {
             rtt: None,
             fps: None,
             net_graph: 0,
+            perf: NetGraphStats::default(),
             scoreboard: None,
             scores: &[],
             radar: None,
@@ -5344,6 +5411,52 @@ mod tests {
         let mut suppressed_out = Vec::new();
         hud.build(&v, &mut suppressed_out);
         assert_eq!(suppressed_out.len(), base_out.len());
+    }
+
+    #[test]
+    fn the_net_graph_prints_what_was_measured_and_dashes_for_what_was_not() {
+        // Levels 2 and 3 used to be string literals ("TICK: 15.6MS", "IN: 14.2
+        // KB/S") that survived the server going to 60 Hz unchanged.
+        let you = alive();
+        let mut v = view(Some(&you));
+        v.net_graph = 3;
+        let blank = net_graph_lines(&v).join("\n");
+        assert!(blank.contains("TICK: --/S"), "{blank}");
+        assert!(blank.contains("LOSS: --%"), "{blank}");
+        assert!(blank.contains("GPU: N/AMS"), "{blank}");
+
+        v.perf = NetGraphStats {
+            frame_p99_ms: Some(6.94),
+            cpu_p50_ms: Some(1.2),
+            cpu_p99_ms: Some(3.4),
+            gpu_p50_ms: Some(2.5),
+            gpu_timed: true,
+            draws: Some(17),
+            triangles: Some(212_000),
+            net: crate::net_stats::NetStatsView {
+                snapshot_hz: Some(59.8),
+                server_tick_hz: Some(60.0),
+                jitter_ms: Some(0.6),
+                loss_pct: Some(0.0),
+                in_bytes_per_sec: Some(30.0 * 1024.0),
+                out_bytes_per_sec: Some(2.5 * 1024.0),
+            },
+            interp_ms: Some(45.0),
+        };
+        let lines = net_graph_lines(&v);
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].contains("P99 6.9MS"), "{}", lines[0]);
+        assert_eq!(
+            lines[1],
+            "CPU: 1.2/3.4MS | GPU: 2.5MS | DRAWS: 17 | TRIS: 212K"
+        );
+        assert_eq!(
+            lines[2],
+            "TICK: 60/S | SNAP: 60/S | IN: 30.0 | OUT: 2.5 KB/S | INTERP: 45MS"
+        );
+        assert_eq!(lines[3], "LOSS: 0.0% | JITTER: 0.6MS");
+        v.net_graph = 2;
+        assert_eq!(net_graph_lines(&v).len(), 3);
     }
 
     #[test]

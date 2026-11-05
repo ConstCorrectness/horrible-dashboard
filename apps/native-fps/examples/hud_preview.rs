@@ -474,6 +474,7 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         rtt: Some(38.0),
         fps: Some(144.0),
         net_graph: 1,
+        perf: Default::default(),
         crosshair: Default::default(),
         radar: show_radar.then(|| radar_map.view()),
         utility: Some(&utility),

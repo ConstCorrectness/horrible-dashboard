@@ -332,6 +332,39 @@ impl Props {
         self.hands.as_ref().is_some_and(|h| h.right > 0)
     }
 
+    /// What `draw_hands` and `draw` will issue together: `(draw calls,
+    /// vertices)`. For the frame-cost readout.
+    pub fn draw_cost(&self) -> (u32, u64) {
+        let mut calls = 0u32;
+        let mut verts = 0u64;
+        if let Some(hands) = self.hands.as_ref().filter(|h| h.right > 0) {
+            for count in [hands.right, hands.left] {
+                if count == 0 {
+                    continue;
+                }
+                for draw in hands
+                    .draws
+                    .iter()
+                    .filter(|d| hands.materials.get(d.material).is_some())
+                {
+                    calls += 1;
+                    verts += draw.vertex_count as u64;
+                }
+            }
+        }
+        if let Some(prop) = self.current.as_ref().and_then(|id| self.uploaded.get(id)) {
+            for draw in prop
+                .draws
+                .iter()
+                .filter(|d| prop.materials.get(d.material).is_some())
+            {
+                calls += 1;
+                verts += draw.vertex_count as u64;
+            }
+        }
+        (calls, verts)
+    }
+
     /// Draw the hands with `camera`, whose pose must be the identity: the
     /// vertices are already in camera space.
     pub fn draw_hands(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) {

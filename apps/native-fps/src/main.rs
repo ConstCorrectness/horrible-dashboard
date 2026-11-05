@@ -151,6 +151,9 @@ struct Args {
     /// what the node holds and never written back. How a preset is compared
     /// against another from a terminal without touching anybody's settings.
     overrides: Vec<(String, serde_json::Value)>,
+    /// `--bench=<map>`: fly that map's benchmark path in Train, print one
+    /// `BENCH {json}` line on stdout and exit. See `bench.rs`.
+    bench: Option<String>,
 }
 
 impl Default for Args {
@@ -183,6 +186,7 @@ impl Default for Args {
             low_power: false,
             windowed: false,
             overrides: Vec::new(),
+            bench: None,
         }
     }
 }
@@ -232,6 +236,8 @@ fn parse_args() -> Args {
             // Accepted and ignored, for the launcher's older request shape.
             // There is no frame cap to set — the present mode decides — and raw
             // input is not an option, it is how the mouse is read.
+        } else if let Some(v) = arg.strip_prefix("--bench=") {
+            args.bench = Some(v.to_string());
         } else if arg == "--new" {
             args.blank = true;
         } else if let Some(v) = arg.strip_prefix("--spawn=") {
@@ -287,6 +293,9 @@ fn parse_args() -> Args {
                    --low-power         prefer the power-saving GPU\n\
                    --windowed          open in a window, whatever the saved setting\n\
                    --set=<key>=<value> a settings row for this run only, never saved\n\
+                   --bench=<map>       fly the map's benchmark path offline, print\n\
+                   \x20                   `BENCH {{json}}` and exit (vsync and cap off;\n\
+                   \x20                   pick the tier with --set=hassault.video.quality=)\n\
                    --list-adapters     print the GPUs as JSON and exit\n"
             );
             std::process::exit(0);
@@ -296,7 +305,22 @@ fn parse_args() -> Args {
 }
 
 fn main() {
-    let args = parse_args();
+    let mut args = parse_args();
+    if let Some(map) = args.bench.clone() {
+        // Checked before anything loads: a typo should fail in a millisecond,
+        // not after the map has been fetched and meshed.
+        if hassault_native::bench::path_for(&map).is_none() {
+            eprintln!(
+                "hassault: no bench path for {map} (have: {})",
+                hassault_native::bench::maps().join(", ")
+            );
+            std::process::exit(2);
+        }
+        // Offline, on that map: a bench measures this machine drawing the
+        // map, and a match would add a server and other players to it.
+        args.map = map;
+        args.mode = Mode::Train;
+    }
     if let Err(e) = run(&args) {
         // One line, naming the thing that failed. The overwhelmingly common
         // failure is "the node is not running", and it deserves to say so rather
@@ -433,6 +457,21 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         settings.gpu.low_power = true;
     }
     if args.windowed {
+        settings.video.fullscreen = false;
+    }
+    if args.bench.is_some() {
+        // The tier's whole preset, not just its label: `quality` is a name,
+        // and the rows it stands for (MSAA, shadows, lights) are stored one by
+        // one, so `--set=hassault.video.quality=high` alone would bench
+        // whatever this machine's rows happen to say under a "high" heading.
+        // Uncapped, at full render scale, windowed at a fixed size (`app.rs`
+        // `BENCH_SIZE`), so a row in the table carries its own conditions.
+        // None of it is written back.
+        let quality = settings.video.quality;
+        settings.video.apply_preset(quality);
+        settings.video.vsync = false;
+        settings.video.fps_limit = 0;
+        settings.video.render_scale = 1.0;
         settings.video.fullscreen = false;
     }
     let writer = SettingsWriter::new(&args.server);
@@ -631,6 +670,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             "hassault: training on {} — no server, no other players",
             args.map
         );
+        let settings_tier = settings.video.quality.label();
         let event_loop = EventLoop::new()?;
         let mut app = App::new(
             world,
@@ -650,6 +690,17 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         app.controls = controls.clone();
         if let Some(sp) = args.spawn {
             app.spawn_at_index(sp);
+        }
+        if let Some(map) = args.bench.as_deref() {
+            let path = hassault_native::bench::path_for(map).unwrap_or_default();
+            let tier = settings_tier.to_lowercase();
+            eprintln!("hassault: benchmarking {map} at {tier}");
+            app.start_bench(hassault_native::bench::BenchRun::new(
+                map,
+                path,
+                &tier,
+                hassault_native::bench::warmup_seconds(),
+            ));
         }
         event_loop.run_app(&mut app)?;
         return Ok(());

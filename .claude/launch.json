@@ -90,6 +90,15 @@
       }
     },
     {
+      "name": "assault-web-bench",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@horrible/assault-web", "dev"],
+      "port": 5180,
+      "env": {
+        "HORRIBLE_DEV_BACKEND_PORT": "8123"
+      }
+    },
+    {
       "name": "assault-web-prodlike",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@horrible/assault-web", "dev"],

@@ -1,7 +1,7 @@
 //! Remote-player interpolation, and the render clock it defines.
 //!
-//! The server broadcasts at 20 Hz. Drawing each snapshot the instant it arrives
-//! means every other player in the match moves in fifty-millisecond jumps — and
+//! The server broadcasts at 60 Hz. Drawing each snapshot the instant it arrives
+//! means every other player in the match moves in tick-sized jumps — and
 //! because those jumps are *also* where jitter lands, the bodies snap backwards
 //! and forwards around where they really are. That is the rubber-banding people
 //! read as "the netcode is bad" even on a loopback connection, and it is a

@@ -28,7 +28,9 @@
 //! 60, and the server's parser caps a batch at 64 anyway.
 
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -93,6 +95,25 @@ pub const SEND_INTERVAL: Duration = Duration::from_millis(16);
 /// the client trims first rather than sending bytes to be thrown away.
 pub const MAX_COMMANDS_PER_MESSAGE: usize = 64;
 
+/// Bytes the socket has carried, counted by the owner thread and read by the
+/// NetGraph (`net_stats.rs`). Payload bytes, not wire bytes: the WebSocket and
+/// TCP framing are not ours to measure, and the browser's counter (`ws.ts`
+/// `channelTraffic`) can only see payloads too, so the two clients agree.
+#[derive(Debug, Default)]
+pub struct Traffic {
+    pub bytes_in: AtomicU64,
+    pub bytes_out: AtomicU64,
+}
+
+impl Traffic {
+    pub fn totals(&self) -> (u64, u64) {
+        (
+            self.bytes_in.load(Ordering::Relaxed),
+            self.bytes_out.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// How often to measure the round trip.
 const PING_INTERVAL: Duration = Duration::from_millis(1000);
 
@@ -108,6 +129,7 @@ pub struct MatchSocket {
     last_ping: Option<Instant>,
     /// Whether the backlog warning has already been printed. See `flush`.
     warned_overflow: bool,
+    traffic: Arc<Traffic>,
 }
 
 impl MatchSocket {
@@ -121,10 +143,21 @@ impl MatchSocket {
         // The read timeout is what lets one thread do both jobs. Without it the
         // thread would sit in `read` until a snapshot arrived, and anything queued
         // for sending would wait there with it.
+        //
+        // `TCP_NODELAY` because every message here is small and wanted now: with
+        // Nagle on, an input batch written while the previous one is still
+        // unacknowledged waits for that ACK (or the delayed-ACK timer, up to
+        // 40 ms on Windows) before it leaves. Failing to set it costs latency,
+        // not correctness, so it is not a reason to refuse the connection.
         match socket.get_mut() {
-            MaybeTlsStream::Plain(stream) => stream
-                .set_read_timeout(Some(READ_TIMEOUT))
-                .map_err(|e| NetError::Connect(e.to_string()))?,
+            MaybeTlsStream::Plain(stream) => {
+                stream
+                    .set_read_timeout(Some(READ_TIMEOUT))
+                    .map_err(|e| NetError::Connect(e.to_string()))?;
+                if let Err(e) = stream.set_nodelay(true) {
+                    eprintln!("hassault: warning — could not set TCP_NODELAY: {e}");
+                }
+            }
             // The node is on this machine, so the socket is plain TCP and this
             // arm is unreachable today. If a TLS transport is ever added, the
             // timeout has to be set on the stream underneath it — and the cost of
@@ -137,10 +170,12 @@ impl MatchSocket {
 
         let (inbound_tx, rx) = mpsc::channel();
         let (outbound, outbound_rx) = mpsc::channel::<String>();
+        let traffic = Arc::new(Traffic::default());
+        let counted = Arc::clone(&traffic);
 
         thread::Builder::new()
             .name("hassault-ws".into())
-            .spawn(move || io_loop(socket, inbound_tx, outbound_rx))
+            .spawn(move || io_loop(socket, inbound_tx, outbound_rx, &counted))
             .map_err(|e| NetError::Connect(e.to_string()))?;
 
         Ok(MatchSocket {
@@ -151,7 +186,13 @@ impl MatchSocket {
             last_send: None,
             last_ping: None,
             warned_overflow: false,
+            traffic,
         })
+    }
+
+    /// Cumulative payload bytes `(in, out)` since the socket opened.
+    pub fn traffic(&self) -> (u64, u64) {
+        self.traffic.totals()
     }
 
     fn send<T: serde::Serialize>(&self, msg: &T) -> Result<(), NetError> {
@@ -365,10 +406,18 @@ impl MatchSocket {
 }
 
 /// The socket's whole life, on one thread.
-fn io_loop(mut socket: Socket, inbound: Sender<Incoming>, outbound: Receiver<String>) {
+fn io_loop(
+    mut socket: Socket,
+    inbound: Sender<Incoming>,
+    outbound: Receiver<String>,
+    traffic: &Traffic,
+) {
     loop {
         match socket.read() {
             Ok(Message::Text(text)) => {
+                traffic
+                    .bytes_in
+                    .fetch_add(text.len() as u64, Ordering::Relaxed);
                 if let Some(event) = protocol::classify(&text) {
                     if inbound.send(Incoming::Event(event)).is_err() {
                         return;
@@ -391,10 +440,12 @@ fn io_loop(mut socket: Socket, inbound: Sender<Incoming>, outbound: Receiver<Str
         loop {
             match outbound.try_recv() {
                 Ok(text) => {
+                    let len = text.len() as u64;
                     if let Err(e) = socket.send(Message::Text(text)) {
                         let _ = inbound.send(Incoming::Closed(e.to_string()));
                         return;
                     }
+                    traffic.bytes_out.fetch_add(len, Ordering::Relaxed);
                 }
                 Err(TryRecvError::Empty) => break,
                 // The game side is gone: close politely and stop.

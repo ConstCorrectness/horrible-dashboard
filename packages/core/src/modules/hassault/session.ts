@@ -27,6 +27,7 @@ import {
   type ShotFx,
   type Snapshot,
 } from './net';
+import { NetStats } from './net-stats';
 
 export interface MatchPeer {
   id: string;
@@ -379,6 +380,8 @@ const SEND_INTERVAL_MS = 16;
 export class MatchSession {
   readonly predictor = new Predictor();
   readonly snapshots = new SnapshotBuffer();
+  /** What the NetGraph shows: snapshot and tick rate, jitter, loss, KB/s. */
+  readonly netStats = new NetStats();
   readonly ping = new PingTracker();
 
   state: SessionState = {
@@ -899,7 +902,9 @@ export class MatchSession {
       case 'snapshot': {
         const snapshot = data as unknown as Snapshot;
         if (!Array.isArray(snapshot.players)) return;
-        this.snapshots.push(snapshot, performance.now());
+        const arrived = performance.now();
+        this.snapshots.push(snapshot, arrived);
+        this.netStats.onSnapshot(snapshot.tick, snapshot.t, arrived);
         const mine = snapshot.players.find((p) => p.id === this.state.playerId);
         // Handed to the render loop rather than applied here: reconciliation
         // needs the World, which lives with the renderer, and a socket callback

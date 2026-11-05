@@ -16,7 +16,17 @@ import type { ConsoleExecResult } from './types';
  * knows whether we are in a server room (ask the server), our own match (set it
  * here) or someone else's (refuse). `value` is undefined for a query.
  */
-export type RoomCvarHandler = (name: string, value: string | undefined) => Promise<ConsoleExecResult>;
+export type RoomCvarHandler = (
+  name: string,
+  value: string | undefined,
+) => Promise<ConsoleExecResult>;
+
+/**
+ * Who runs `bench [map]`: the pane, which owns the renderer and the camera.
+ * Client-only — the served definition (`console.py`) exists so the command
+ * completes and shows in `help`, but nothing about it reaches the server.
+ */
+export type BenchHandler = (map: string | undefined) => Promise<ConsoleExecResult>;
 
 const HISTORY_STORAGE_KEY = 'hassault.console.history';
 const BINDS_STORAGE_KEY = 'hassault.console.binds';
@@ -30,9 +40,18 @@ export class ConsoleExecutor {
   binds = new Map<string, string>();
 
   private roomHandler: RoomCvarHandler | null = null;
+  private benchHandler: BenchHandler | null = null;
 
   constructor() {
     this.loadPersistedData();
+  }
+
+  /** Install the `bench` handler; returns its removal. */
+  setBenchHandler(handler: BenchHandler): () => void {
+    this.benchHandler = handler;
+    return () => {
+      if (this.benchHandler === handler) this.benchHandler = null;
+    };
   }
 
   /** Install the room-cvar handler; returns its removal. */
@@ -208,6 +227,26 @@ export class ConsoleExecutor {
       };
     }
 
+    // `bench`, `bench hd_dust2`, `bench()`, `bench('hd_dust2')`: the pane flies
+    // the camera, so the pane answers. Without a pane there is nothing to fly.
+    if (cmd === 'bench' || cmd.startsWith('bench(')) {
+      const arg = expandedLine
+        .replace(/^bench\s*\(?\s*/i, '')
+        .replace(/\s*\)?\s*$/, '')
+        .replace(/^["']|["']$/g, '');
+      if (!this.benchHandler) {
+        return {
+          ok: false,
+          command: line,
+          output: [],
+          error: 'bench runs in the game: load a map first',
+          affected_cvars: {},
+        };
+      }
+      const res = await this.benchHandler(arg || undefined);
+      return { ...res, command: line };
+    }
+
     // A room setting: whoever holds the room decides, so the pane answers.
     const targetCvar = consoleRegistry.cvars.get(tokens[0]);
     if (targetCvar && targetCvar.flags.includes('room') && this.roomHandler) {
@@ -281,8 +320,7 @@ export class ConsoleExecutor {
           ok: false,
           command: line,
           output: [],
-          error:
-            typeof detail === 'string' ? detail : `Server HTTP ${res.status}: ${errText}`,
+          error: typeof detail === 'string' ? detail : `Server HTTP ${res.status}: ${errText}`,
           affected_cvars: {},
         };
       }

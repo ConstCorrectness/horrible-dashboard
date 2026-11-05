@@ -1506,9 +1506,9 @@ class HistoryFrame:
 class PositionHistory:
     """A room's rolling record of player positions, for rewinding a shot.
 
-    Sampled once per tick (20 Hz) and interpolated on read, so a rewind lands on
-    the shooter's actual view instant rather than on the nearest tick — 50 ms of
-    quantisation is most of a body width at running speed.
+    Sampled once per tick (`SNAPSHOT_HZ`) and interpolated on read, so a rewind
+    lands on the shooter's actual view instant rather than on the nearest tick —
+    even 17 ms of quantisation is a visible slice of a body at running speed.
     """
 
     def __init__(self, seconds: float = HISTORY_SECONDS) -> None:
