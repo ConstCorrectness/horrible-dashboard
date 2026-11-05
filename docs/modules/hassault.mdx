@@ -595,6 +595,20 @@ so Low gets it too. The browser keeps `COLOR_0` through the static-batch merge.
 lines, that neither the skin shader nor the shared lighting sees it, that no
 setting mentions it, and that every opaque surface of every map carries it.
 
+**Baked bounce light.** `tools/blender/bake_bounce.py` runs after fit (fit
+moves lights) and bakes each map's indirect diffuse light into `COLOR_1`: a
+Cycles DIFFUSE bake, indirect only, per vertex, under the rig the server serves
+(`atmosphere.resolve` and `atmosphere.lights`): the sun as a sun, the
+hemisphere as a world whose halves have the sky and ground radiance, each lamp as
+a point light of `4π × candela`. The fill is left out, because it stands in for
+bounce at higher quality levels. Calibrated against Cycles, so the value is in the
+units of `shade()`'s irradiance sum: a client adds it before `albedo / π`. It is
+stored as normalised bytes on a square-root curve, `bounce = 4 · c²`, and the
+GLB says so in `asset.extras.hassaultBounce`. The GLB is patched, not
+re-exported, so `COLOR_0` stays byte-identical (the script refuses to write
+otherwise). Like AO it is content at every quality level, so it changes nobody's
+view. Consuming it in the clients' shaders is a later phase.
+
 Checked and closed: Bank's street spawn at (36, 8) m was written up as standing
 inside the bus shelter. Rendered from the GLB at eye height, it stands 0.4 m in
 front of the shelter's open north side, facing the bank, with the canopy behind
@@ -738,9 +752,9 @@ overlapping, rubble below an eye, no passage closed, deterministic for a seed.
 
 **Photographed surfaces.** Dust II's surfaces carry real colour, normal and roughness
 maps from ambientCG (CC0; `apps/web/public/maps/textures/README.md` lists each set
-and the licence). They are twenty kinds in `glb-surfaces.json` (`photoKinds`),
-matched only by the `dust2_`, `mirage_`, `inferno_`, `nuke_`, `office_`, `bank_`
-and `assault_` infixes in each map's own
+and the licence). They are twenty-five kinds in `glb-surfaces.json` (`photoKinds`),
+matched only by the `dust2_`, `mirage_`, `inferno_`, `nuke_`, `office_`, `bank_`,
+`assault_`, `facility_` and `junkflea_` infixes in each map's own
 material names, so the names the other maps share (`mat_wood_crate`,
 `mat_sandstone_ochre`) stay as they were. To give another map photographed
 surfaces, give its materials an infix of their own and add that infix to the
@@ -761,6 +775,16 @@ painted metal and tread plate; Office uses carpet tile, polished marble (its
 floor), ceramic tile (the server room's raised floor) and wall plaster.
 Each kind needs an entry in `maplib.SOFTEN_BY_KIND` too, which every photo kind
 already has.
+G7 added five more for the biggest surfaces still on a generated tile:
+`ceiling_tile` (Office's and Assault's ceilings), `brushed_steel` (stainless,
+vault steel, ducts), `limestone_block` (Bank's facade), `polished_wood` (the
+mahogany) and `wet_mud` (Junk Flea's ground). Facility's and Junk Flea's
+generator materials took `facility_` and `junkflea_` infixes, so both maps went
+from none of their area photographed to most of it; Office, Assault and Bank
+gained rules for their roofs, steel and concrete. Each new rule names a material
+whose old kind softened the same way, so no map changed shape. Every kind also
+ships 1024 px variants (`<kind>_c_1k.webp` …), not loaded yet: they are for the
+High quality level, and swapping the suffix is all a client needs.
 
 `tools/hassault_process_textures.py` turns a downloaded set into three 512 px WebP
 files. The albedo is **normalised**: per channel, in linear light, to the same mean

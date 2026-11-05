@@ -2327,6 +2327,6 @@
     {"x": 96, "y": 162, "z": 0, "yaw": 180, "team": 1},
     {"x": 96, "y": 147, "z": 0, "yaw": 180, "team": 1}
   ],
-  "collisionSource": "095902cbb9137e5c",
-  "collisionBaked": "095902cbb9137e5c"
+  "collisionSource": "c1ffe27dc12aff2e",
+  "collisionBaked": "c1ffe27dc12aff2e"
 }

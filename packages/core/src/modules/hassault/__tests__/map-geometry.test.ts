@@ -53,6 +53,7 @@ interface Node {
 }
 
 interface Gltf {
+  asset?: { extras?: Record<string, unknown> };
   scene?: number;
   scenes: { nodes: number[] }[];
   nodes: Node[];
@@ -65,6 +66,7 @@ interface Gltf {
     byteOffset?: number;
     count: number;
     componentType: number;
+    normalized?: boolean;
     type: string;
   }[];
   bufferViews: { byteOffset?: number; byteStride?: number }[];
@@ -263,5 +265,56 @@ describe.each(MAPS)('%s baked AO', (name) => {
     }
     expect(lit / total).toBeGreaterThan(0.95);
     expect(lo).toBeGreaterThanOrEqual(AO_FLOOR - 0.01);
+  });
+});
+
+/**
+ * Baked bounce light (`tools/blender/bake_bounce.py`) rides in COLOR_1: the
+ * indirect diffuse irradiance a Cycles bake found under the map's served rig,
+ * in the units of the clients' own irradiance sum, on a square-root curve
+ * (`bounce = scale * c^2`) so a dim corridor keeps its precision. The GLB says
+ * so in `asset.extras.hassaultBounce`, which a client reads rather than
+ * hard-coding the scale. A regeneration that forgot the bake (the generators
+ * write COLOR_0 only) fails here, as does a bake that lit nothing.
+ */
+const BOUNCE = { attribute: 'COLOR_1', scale: 4, curve: 'square' };
+
+describe.each(MAPS)('%s baked bounce', (name) => {
+  const { gltf, bin } = readGlb(`${PUBLIC_DIR}${name}.glb`);
+
+  it('declares its encoding', () => {
+    expect(gltf.asset?.extras?.hassaultBounce).toEqual(BOUNCE);
+  });
+
+  it('covers the surfaces AO covers, as normalised bytes', () => {
+    let withAo = 0;
+    let withBoth = 0;
+    let lit = 0;
+    let sum = 0;
+    let badAlpha = 0;
+    for (const mesh of gltf.meshes) {
+      for (const prim of mesh.primitives) {
+        const count = gltf.accessors[prim.attributes.POSITION!]!.count;
+        const index = prim.attributes.COLOR_1;
+        if (prim.attributes.COLOR_0 !== undefined) withAo += count;
+        if (index === undefined) continue;
+        if (prim.attributes.COLOR_0 !== undefined) withBoth += count;
+        const a = gltf.accessors[index]!;
+        expect(a).toMatchObject({ componentType: 5121, normalized: true, type: 'VEC4', count });
+        const values = accessor(gltf, bin, index);
+        for (let k = 0; k < values.length; k += 4) {
+          if (values[k + 3] !== 255) badAlpha++;
+          const c = Math.max(values[k]!, values[k + 1]!, values[k + 2]!) / 255;
+          const bounce = BOUNCE.scale * c * c;
+          sum += bounce;
+          if (bounce > 0) lit++;
+        }
+      }
+    }
+    // Fixtures boxing a lamp in are left out of the bake; nothing else is.
+    expect(badAlpha).toBe(0);
+    expect(withBoth / withAo).toBeGreaterThan(0.95);
+    expect(lit).toBeGreaterThan(0);
+    expect(sum / withBoth).toBeGreaterThan(0.001);
   });
 });

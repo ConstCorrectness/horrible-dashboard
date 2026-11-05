@@ -41,7 +41,8 @@ export type SurfaceKind =
 /**
  * Kinds backed by photographed CC0 maps (colour, normal, roughness) rather than a
  * generated tile. Matched only by a map's own infixed material names (`dust2_`,
- * `mirage_`, `inferno_`, `nuke_`, `office_`, `bank_`, `assault_`), so no other
+ * `mirage_`, `inferno_`, `nuke_`, `office_`, `bank_`, `assault_`, `facility_`,
+ * `junkflea_`), so no other
  * map changes. See
  * `tools/hassault_process_textures.py`.
  */
@@ -65,7 +66,12 @@ export type PhotoKind =
   | 'ceramic_tile'
   | 'polished_marble'
   | 'red_brick'
-  | 'wall_plaster';
+  | 'wall_plaster'
+  | 'ceiling_tile'
+  | 'brushed_steel'
+  | 'limestone_block'
+  | 'polished_wood'
+  | 'wet_mud';
 
 interface SurfaceTable {
   default: SurfaceKind;
@@ -110,6 +116,11 @@ export const PHOTO_FALLBACK: Record<PhotoKind, SurfaceKind> = {
   polished_marble: 'marble',
   red_brick: 'brick',
   wall_plaster: 'plaster',
+  ceiling_tile: 'plaster',
+  brushed_steel: 'vault_steel',
+  limestone_block: 'masonry',
+  polished_wood: 'wood',
+  wet_mud: 'concrete',
 };
 
 /** Where a photo kind's map lives, relative to the web root. `c` albedo, `n` normal, `r` roughness. */

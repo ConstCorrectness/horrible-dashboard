@@ -23,10 +23,10 @@ pub const TEXTURE_SIZE: u32 = 256;
 /// The generated surfaces, then the photographed ones' albedo, then their detail.
 pub const GENERATED_LAYERS: u32 = 18;
 /// Surfaces backed by photographed CC0 maps (`apps/web/public/maps/textures/`).
-pub const PHOTO_COUNT: u32 = 20;
+pub const PHOTO_COUNT: u32 = 25;
 /// Base layer index for the 18 procedural normal + micro-roughness detail layers.
 pub const GENERATED_DETAIL_BASE: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
-/// Every layer of the array: 18 generated albedos, 20 photo albedos, 20 photo
+/// Every layer of the array: 18 generated albedos, 25 photo albedos, 25 photo
 /// details, and 18 generated normal+roughness detail layers. The generated
 /// albedos never move; `shader.wgsl` hardcodes the photo range, the photo detail
 /// offset and the generated detail base, so a new photo kind changes those three.
@@ -885,6 +885,13 @@ pub enum MaterialKind {
     PolishedMarble = 36,
     RedBrick = 37,
     WallPlaster = 38,
+    // G7's: Office's ceilings and stainless, Bank's facade and joinery, and
+    // Facility's and Junk Flea's own (`facility_`, `junkflea_`) materials.
+    CeilingTile = 39,
+    BrushedSteel = 40,
+    LimestoneBlock = 41,
+    PolishedWood = 42,
+    WetMud = 43,
 }
 
 impl MaterialKind {
@@ -930,6 +937,11 @@ impl MaterialKind {
             "polished_marble" => MaterialKind::PolishedMarble,
             "red_brick" => MaterialKind::RedBrick,
             "wall_plaster" => MaterialKind::WallPlaster,
+            "ceiling_tile" => MaterialKind::CeilingTile,
+            "brushed_steel" => MaterialKind::BrushedSteel,
+            "limestone_block" => MaterialKind::LimestoneBlock,
+            "polished_wood" => MaterialKind::PolishedWood,
+            "wet_mud" => MaterialKind::WetMud,
             _ => return None,
         })
     }
@@ -979,6 +991,11 @@ impl MaterialKind {
             MaterialKind::PolishedMarble => 0.15,
             MaterialKind::RedBrick => 0.8,
             MaterialKind::WallPlaster => 0.7,
+            MaterialKind::CeilingTile => 0.9,
+            MaterialKind::BrushedSteel => 0.35,
+            MaterialKind::LimestoneBlock => 0.75,
+            MaterialKind::PolishedWood => 0.3,
+            MaterialKind::WetMud => 0.6,
         }
     }
 
@@ -1008,6 +1025,11 @@ impl MaterialKind {
             MaterialKind::PaintedMetal => 0.55,
             MaterialKind::TreadPlate => 0.85,
             MaterialKind::CarpetTile => 0.0,
+            MaterialKind::BrushedSteel => 0.85,
+            MaterialKind::CeilingTile
+            | MaterialKind::LimestoneBlock
+            | MaterialKind::PolishedWood
+            | MaterialKind::WetMud => 0.02,
             MaterialKind::PolishedMarble => 0.04,
             MaterialKind::YardAsphalt
             | MaterialKind::CeramicTile
@@ -1218,6 +1240,11 @@ const PHOTO_KINDS: [MaterialKind; PHOTO_COUNT as usize] = [
     MaterialKind::PolishedMarble,
     MaterialKind::RedBrick,
     MaterialKind::WallPlaster,
+    MaterialKind::CeilingTile,
+    MaterialKind::BrushedSteel,
+    MaterialKind::LimestoneBlock,
+    MaterialKind::PolishedWood,
+    MaterialKind::WetMud,
 ];
 
 /// In `MaterialKind` order, from Limewash.
@@ -1242,6 +1269,11 @@ static PHOTO_SETS: [PhotoSet; PHOTO_COUNT as usize] = [
     photo_set!("polished_marble"),
     photo_set!("red_brick"),
     photo_set!("wall_plaster"),
+    photo_set!("ceiling_tile"),
+    photo_set!("brushed_steel"),
+    photo_set!("limestone_block"),
+    photo_set!("polished_wood"),
+    photo_set!("wet_mud"),
 ];
 
 /// Decode an embedded WebP to RGBA8 at `size` x `size`.
@@ -1802,6 +1834,11 @@ mod tests {
             "polished_marble",
             "red_brick",
             "wall_plaster",
+            "ceiling_tile",
+            "brushed_steel",
+            "limestone_block",
+            "polished_wood",
+            "wet_mud",
         ]
         .iter()
         .enumerate()
@@ -1872,6 +1909,11 @@ mod tests {
         assert_eq!(MaterialKind::from_name("mat_office_carpet_tile"), MaterialKind::CarpetTile);
         assert_eq!(MaterialKind::from_name("mat_office_marble_floor"), MaterialKind::PolishedMarble);
         assert_eq!(MaterialKind::from_name("mat_office_wall_drywall"), MaterialKind::WallPlaster);
+        assert_eq!(MaterialKind::from_name("mat_office_ceiling_tile"), MaterialKind::CeilingTile);
+        assert_eq!(MaterialKind::from_name("Mat_Bank_Limestone_Facade"), MaterialKind::LimestoneBlock);
+        assert_eq!(MaterialKind::from_name("Mat_Facility_Steel_Stainless_Brushed"), MaterialKind::BrushedSteel);
+        assert_eq!(MaterialKind::from_name("Mat_Junkflea_Trench_Mud_Dark"), MaterialKind::WetMud);
+        assert_eq!(MaterialKind::from_name("mat_office_mahogany"), MaterialKind::PolishedWood);
         assert_eq!(MaterialKind::from_name("Mat_Bank_Marble_White"), MaterialKind::PolishedMarble);
         assert_eq!(MaterialKind::from_name("Mat_Bank_Brick_Commercial_Red"), MaterialKind::RedBrick);
         assert_eq!(MaterialKind::from_name("Mat_Bank_Asphalt_Street"), MaterialKind::YardAsphalt);

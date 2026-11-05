@@ -98,51 +98,51 @@ def setup_materials():
     mats = {}
 
     # Terrain & Ground
-    mats["Gravel_Mud_Wet"] = create_pbr_material("Mat_Gravel_Mud_Wet", (0.24, 0.22, 0.20), metallic=0.05, roughness=0.88)
-    mats["Trench_Mud_Dark"] = create_pbr_material("Mat_Trench_Mud_Dark", (0.16, 0.14, 0.12), metallic=0.02, roughness=0.92)
-    mats["Water_Slick"] = create_pbr_material("Mat_Water_Slick_Detail", (0.08, 0.10, 0.12), metallic=0.15, roughness=0.04)
+    mats["Gravel_Mud_Wet"] = create_pbr_material("Mat_Junkflea_Gravel_Mud_Wet", (0.24, 0.22, 0.20), metallic=0.05, roughness=0.88)
+    mats["Trench_Mud_Dark"] = create_pbr_material("Mat_Junkflea_Trench_Mud_Dark", (0.16, 0.14, 0.12), metallic=0.02, roughness=0.92)
+    mats["Water_Slick"] = create_pbr_material("Mat_Junkflea_Water_Slick_Detail", (0.08, 0.10, 0.12), metallic=0.15, roughness=0.04)
 
     # Concrete Retaining Walls
-    mats["Concrete_Wall"] = create_pbr_material("Mat_Concrete_Wall", (0.44, 0.42, 0.40), metallic=0.0, roughness=0.86)
-    mats["Concrete_Stained"] = create_pbr_material("Mat_Concrete_Stained", (0.30, 0.28, 0.26), metallic=0.0, roughness=0.90)
+    mats["Concrete_Wall"] = create_pbr_material("Mat_Junkflea_Concrete_Wall", (0.44, 0.42, 0.40), metallic=0.0, roughness=0.86)
+    mats["Concrete_Stained"] = create_pbr_material("Mat_Junkflea_Concrete_Stained", (0.30, 0.28, 0.26), metallic=0.0, roughness=0.90)
 
     # Corrugated Shipping Container Enamels
-    mats["Container_Blue_Maersk"] = create_pbr_material("Mat_Container_Blue", (0.16, 0.32, 0.48), metallic=0.68, roughness=0.46)
-    mats["Container_Red_Hanjin"] = create_pbr_material("Mat_Container_Red", (0.52, 0.20, 0.16), metallic=0.65, roughness=0.48)
-    mats["Container_Green_Evergreen"] = create_pbr_material("Mat_Container_Green", (0.20, 0.35, 0.24), metallic=0.66, roughness=0.48)
-    mats["Container_Orange_Weathered"] = create_pbr_material("Mat_Container_Orange", (0.58, 0.32, 0.15), metallic=0.62, roughness=0.52)
-    mats["Container_Frame_Dark"] = create_pbr_material("Mat_Container_Frame", (0.12, 0.13, 0.14), metallic=0.82, roughness=0.38)
+    mats["Container_Blue_Maersk"] = create_pbr_material("Mat_Junkflea_Container_Blue", (0.16, 0.32, 0.48), metallic=0.68, roughness=0.46)
+    mats["Container_Red_Hanjin"] = create_pbr_material("Mat_Junkflea_Container_Red", (0.52, 0.20, 0.16), metallic=0.65, roughness=0.48)
+    mats["Container_Green_Evergreen"] = create_pbr_material("Mat_Junkflea_Container_Green", (0.20, 0.35, 0.24), metallic=0.66, roughness=0.48)
+    mats["Container_Orange_Weathered"] = create_pbr_material("Mat_Junkflea_Container_Orange", (0.58, 0.32, 0.15), metallic=0.62, roughness=0.52)
+    mats["Container_Frame_Dark"] = create_pbr_material("Mat_Junkflea_Container_Frame", (0.12, 0.13, 0.14), metallic=0.82, roughness=0.38)
 
     # Metals, Grating & Structural Steel
-    mats["Steel_Structural"] = create_pbr_material("Mat_Steel_Structural", (0.32, 0.34, 0.36), metallic=0.88, roughness=0.36)
-    mats["Steel_Rusted"] = create_pbr_material("Mat_Steel_Rusted", (0.38, 0.26, 0.20), metallic=0.72, roughness=0.65)
-    mats["Corrugated_Steel_Rusted"] = create_pbr_material("Mat_Corrugated_Steel_Rusted", (0.36, 0.24, 0.18), metallic=0.74, roughness=0.68)
-    mats["Steel_IBeam_Yellow"] = create_pbr_material("Mat_Steel_IBeam_Yellow", (0.84, 0.68, 0.12), metallic=0.65, roughness=0.42)
-    mats["Diamond_Plate"] = create_pbr_material("Mat_Diamond_Plate", (0.42, 0.44, 0.46), metallic=0.90, roughness=0.38)
-    mats["Sheet_Pile_Trench"] = create_pbr_material("Mat_Sheet_Pile", (0.28, 0.24, 0.22), metallic=0.78, roughness=0.62)
-    mats["Cast_Iron_Dark"] = create_pbr_material("Mat_Cast_Iron_Dark", (0.16, 0.17, 0.18), metallic=0.90, roughness=0.34)
-    mats["Chrome_Galvanized"] = create_pbr_material("Mat_Chrome_Galv", (0.75, 0.76, 0.78), metallic=0.85, roughness=0.28)
+    mats["Steel_Structural"] = create_pbr_material("Mat_Junkflea_Steel_Structural", (0.32, 0.34, 0.36), metallic=0.88, roughness=0.36)
+    mats["Steel_Rusted"] = create_pbr_material("Mat_Junkflea_Steel_Rusted", (0.38, 0.26, 0.20), metallic=0.72, roughness=0.65)
+    mats["Corrugated_Steel_Rusted"] = create_pbr_material("Mat_Junkflea_Corrugated_Steel_Rusted", (0.36, 0.24, 0.18), metallic=0.74, roughness=0.68)
+    mats["Steel_IBeam_Yellow"] = create_pbr_material("Mat_Junkflea_Steel_IBeam_Yellow", (0.84, 0.68, 0.12), metallic=0.65, roughness=0.42)
+    mats["Diamond_Plate"] = create_pbr_material("Mat_Junkflea_Diamond_Plate", (0.42, 0.44, 0.46), metallic=0.90, roughness=0.38)
+    mats["Sheet_Pile_Trench"] = create_pbr_material("Mat_Junkflea_Sheet_Pile", (0.28, 0.24, 0.22), metallic=0.78, roughness=0.62)
+    mats["Cast_Iron_Dark"] = create_pbr_material("Mat_Junkflea_Cast_Iron_Dark", (0.16, 0.17, 0.18), metallic=0.90, roughness=0.34)
+    mats["Chrome_Galvanized"] = create_pbr_material("Mat_Junkflea_Chrome_Galv", (0.75, 0.76, 0.78), metallic=0.85, roughness=0.28)
 
     # Compacted Scrap Bales
-    mats["Scrap_Car_Red"] = create_pbr_material("Mat_Scrap_Car_Red", (0.44, 0.18, 0.15), metallic=0.75, roughness=0.58)
-    mats["Scrap_Car_Blue"] = create_pbr_material("Mat_Scrap_Car_Blue", (0.15, 0.26, 0.40), metallic=0.75, roughness=0.58)
-    mats["Scrap_Car_Yellow"] = create_pbr_material("Mat_Scrap_Car_Yellow", (0.52, 0.42, 0.15), metallic=0.72, roughness=0.60)
-    mats["Scrap_Metal_Mangled"] = create_pbr_material("Mat_Scrap_Metal_Mangled", (0.30, 0.28, 0.26), metallic=0.82, roughness=0.55)
-    mats["Steel_Wire_Bale"] = create_pbr_material("Mat_Steel_Wire_Bale_Detail", (0.65, 0.66, 0.68), metallic=0.92, roughness=0.25)
+    mats["Scrap_Car_Red"] = create_pbr_material("Mat_Junkflea_Scrap_Car_Red", (0.44, 0.18, 0.15), metallic=0.75, roughness=0.58)
+    mats["Scrap_Car_Blue"] = create_pbr_material("Mat_Junkflea_Scrap_Car_Blue", (0.15, 0.26, 0.40), metallic=0.75, roughness=0.58)
+    mats["Scrap_Car_Yellow"] = create_pbr_material("Mat_Junkflea_Scrap_Car_Yellow", (0.52, 0.42, 0.15), metallic=0.72, roughness=0.60)
+    mats["Scrap_Metal_Mangled"] = create_pbr_material("Mat_Junkflea_Scrap_Metal_Mangled", (0.30, 0.28, 0.26), metallic=0.82, roughness=0.55)
+    mats["Steel_Wire_Bale"] = create_pbr_material("Mat_Junkflea_Steel_Wire_Bale_Detail", (0.65, 0.66, 0.68), metallic=0.92, roughness=0.25)
 
     # Industrial Rubber, Pallets, Drums & Hazard
-    mats["Rubber_Tire"] = create_pbr_material("Mat_Rubber_Tire", (0.08, 0.08, 0.09), metallic=0.0, roughness=0.86)
-    mats["Wood_Pallet"] = create_pbr_material("Mat_Wood_Pallet", (0.46, 0.34, 0.22), metallic=0.0, roughness=0.82)
-    mats["Drum_Blue"] = create_pbr_material("Mat_Drum_Blue", (0.12, 0.26, 0.46), metallic=0.80, roughness=0.40)
-    mats["Drum_Hazmat"] = create_pbr_material("Mat_Drum_Hazmat", (0.82, 0.70, 0.12), metallic=0.80, roughness=0.40)
-    mats["Drum_Rust"] = create_pbr_material("Mat_Drum_Rust", (0.42, 0.25, 0.16), metallic=0.70, roughness=0.66)
-    mats["Hazard_Yellow"] = create_pbr_material("Mat_Hazard_Yellow", (0.92, 0.76, 0.12), metallic=0.20, roughness=0.42)
-    mats["Hazard_Black"] = create_pbr_material("Mat_Hazard_Black", (0.06, 0.06, 0.06), metallic=0.10, roughness=0.62)
+    mats["Rubber_Tire"] = create_pbr_material("Mat_Junkflea_Rubber_Tire", (0.08, 0.08, 0.09), metallic=0.0, roughness=0.86)
+    mats["Wood_Pallet"] = create_pbr_material("Mat_Junkflea_Wood_Pallet", (0.46, 0.34, 0.22), metallic=0.0, roughness=0.82)
+    mats["Drum_Blue"] = create_pbr_material("Mat_Junkflea_Drum_Blue", (0.12, 0.26, 0.46), metallic=0.80, roughness=0.40)
+    mats["Drum_Hazmat"] = create_pbr_material("Mat_Junkflea_Drum_Hazmat", (0.82, 0.70, 0.12), metallic=0.80, roughness=0.40)
+    mats["Drum_Rust"] = create_pbr_material("Mat_Junkflea_Drum_Rust", (0.42, 0.25, 0.16), metallic=0.70, roughness=0.66)
+    mats["Hazard_Yellow"] = create_pbr_material("Mat_Junkflea_Hazard_Yellow", (0.92, 0.76, 0.12), metallic=0.20, roughness=0.42)
+    mats["Hazard_Black"] = create_pbr_material("Mat_Junkflea_Hazard_Black", (0.06, 0.06, 0.06), metallic=0.10, roughness=0.62)
 
     # Lighting & Signs
-    mats["Sodium_Floodlight"] = create_pbr_material("Mat_Sodium_Floodlight_Glow", (1.0, 0.85, 0.45), emission_color=(1.0, 0.72, 0.22), emission_strength=7.0)
-    mats["Strobe_Amber"] = create_pbr_material("Mat_Strobe_Amber_Glow", (1.0, 0.55, 0.08), emission_color=(1.0, 0.55, 0.08), emission_strength=9.0)
-    mats["Placard_White"] = create_pbr_material("Mat_Placard_White_Detail", (0.88, 0.88, 0.86), metallic=0.05, roughness=0.70)
+    mats["Sodium_Floodlight"] = create_pbr_material("Mat_Junkflea_Sodium_Floodlight_Glow", (1.0, 0.85, 0.45), emission_color=(1.0, 0.72, 0.22), emission_strength=7.0)
+    mats["Strobe_Amber"] = create_pbr_material("Mat_Junkflea_Strobe_Amber_Glow", (1.0, 0.55, 0.08), emission_color=(1.0, 0.55, 0.08), emission_strength=9.0)
+    mats["Placard_White"] = create_pbr_material("Mat_Junkflea_Placard_White_Detail", (0.88, 0.88, 0.86), metallic=0.05, roughness=0.70)
 
     return mats
 

@@ -1,8 +1,15 @@
 """Turn downloaded CC0 PBR sets into the map textures both clients ship.
 
     python tools/hassault_process_textures.py <dir of unzipped ambientCG sets> [out_dir] [kind ...]
+    python tools/hassault_process_textures.py --size 1024 <dir> [out_dir] [kind ...]
 
 Name kinds to process only those (the others' sets need not be downloaded).
+
+`--size 1024` writes the **High-tier variants** beside the 512 px files, named
+`<kind>_c_1k.webp`, `<kind>_n_1k.webp` and `<kind>_r_1k.webp`: the same
+processing at the set's full 1K resolution. The 512 px files stay what every
+client loads today (and what native embeds); a client that wants more detail on
+a capable GPU swaps the suffix, nothing else.
 
 The sets are ambientCG's, licence CC0 1.0 (https://docs.ambientcg.com/license/):
 free to use, change and ship, no attribution required (it is given anyway, in
@@ -32,6 +39,8 @@ from PIL import Image
 
 DETAIL_MEAN = 0.6667  # linear; glb-surfaces.json `detailMean`
 SIZE = 512
+#: File-name suffix per output size: the default size has none.
+SUFFIX = {512: "", 1024: "_1k"}
 
 # kind -> (ambientCG set, what it is for)
 KINDS = {
@@ -58,6 +67,13 @@ KINDS = {
     "polished_marble": ("Marble012", "polished marble"),
     "red_brick": ("Bricks085", "red brick walls"),
     "wall_plaster": ("PaintedPlaster017", "painted interior plaster"),
+    # G7: the biggest surfaces still drawn from a generated tile — Office's
+    # ceilings and stainless, Bank's facade and joinery — and Junk Flea's mud.
+    "ceiling_tile": ("OfficeCeiling001", "acoustic ceiling tile"),
+    "brushed_steel": ("Metal009", "brushed stainless steel"),
+    "limestone_block": ("Tiles143", "dressed limestone blocks"),
+    "polished_wood": ("Wood066", "polished hardwood and veneer"),
+    "wet_mud": ("Ground036", "wet churned mud"),
 }
 
 
@@ -92,41 +108,53 @@ def normalise_albedo(img):
     return np.clip(out, 0.0, 1.0)
 
 
-def process(src_dir, out_dir, only=None):
+def process(src_dir, out_dir, only=None, size=SIZE):
     os.makedirs(out_dir, exist_ok=True)
     report = {}
     for kind, (set_id, _) in KINDS.items():
         if only and kind not in only:
             continue
         base = os.path.join(src_dir, set_id, f"{set_id}_1K-JPG")
-        color = Image.open(f"{base}_Color.jpg").resize((SIZE, SIZE), Image.LANCZOS)
+        suffix = SUFFIX[size]
+        color = Image.open(f"{base}_Color.jpg").resize((size, size), Image.LANCZOS)
         normal = (
             Image.open(f"{base}_NormalGL.jpg")
             .convert("RGB")
-            .resize((SIZE, SIZE), Image.LANCZOS)
+            .resize((size, size), Image.LANCZOS)
         )
         rough = (
             Image.open(f"{base}_Roughness.jpg")
             .convert("L")
-            .resize((SIZE, SIZE), Image.LANCZOS)
+            .resize((size, size), Image.LANCZOS)
         )
 
         lin = normalise_albedo(color)
         Image.fromarray(
             (linear_to_srgb(lin) * 255.0 + 0.5).astype(np.uint8), "RGB"
-        ).save(os.path.join(out_dir, f"{kind}_c.webp"), quality=88, method=6)
-        normal.save(os.path.join(out_dir, f"{kind}_n.webp"), quality=92, method=6)
-        rough.save(os.path.join(out_dir, f"{kind}_r.webp"), quality=90, method=6)
+        ).save(os.path.join(out_dir, f"{kind}_c{suffix}.webp"), quality=88, method=6)
+        normal.save(
+            os.path.join(out_dir, f"{kind}_n{suffix}.webp"), quality=92, method=6
+        )
+        rough.save(
+            os.path.join(out_dir, f"{kind}_r{suffix}.webp"), quality=90, method=6
+        )
         report[kind] = lin.reshape(-1, 3).mean(axis=0)
     return report
 
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
+    argv = sys.argv[1:]
+    size = SIZE
+    if argv[:1] == ["--size"]:
+        size = int(argv[1])
+        if size not in SUFFIX:
+            raise SystemExit(f"--size must be one of {sorted(SUFFIX)}")
+        argv = argv[2:]
     out = (
-        sys.argv[2]
-        if len(sys.argv) > 2
+        argv[1]
+        if len(argv) > 1
         else os.path.join(here, "..", "apps", "web", "public", "maps", "textures")
     )
-    for kind, mean in process(sys.argv[1], out, set(sys.argv[3:])).items():
+    for kind, mean in process(argv[0], out, set(argv[2:]), size).items():
         print(f"{kind:11s} linear mean {np.round(mean, 4)}")

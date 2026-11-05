@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_`, Inferno's own `inferno_`, Nuke's own `nuke_`, Office's own `office_`, Bank's own `bank_` and Assault's own `assault_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_`, Inferno's own `inferno_`, Nuke's own `nuke_`, Office's own `office_`, Bank's own `bank_`, Assault's own `assault_`, Facility's own `facility_` and Junk Flea's own `junkflea_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -39,11 +39,22 @@
     },
     {
       "kind": "limewash",
-      "match": ["dust2_sandstone_light", "mirage_sandstone_light", "mirage_moorish_plaster", "inferno_tuscan_stucco_warm"]
+      "match": [
+        "dust2_sandstone_light",
+        "mirage_sandstone_light",
+        "mirage_moorish_plaster",
+        "inferno_tuscan_stucco_warm"
+      ]
     },
     {
       "kind": "sandstone",
-      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark", "mirage_sandstone_ochre", "inferno_tuscan_stucco_ochre", "inferno_limestone"]
+      "match": [
+        "dust2_sandstone_ochre",
+        "dust2_sandstone_dark",
+        "mirage_sandstone_ochre",
+        "inferno_tuscan_stucco_ochre",
+        "inferno_limestone"
+      ]
     },
     {
       "kind": "paving",
@@ -55,19 +66,41 @@
     },
     {
       "kind": "cedar",
-      "match": ["dust2_wood_cedar", "dust2_palm_bark", "mirage_cedar_wood", "mirage_palm_bark", "inferno_wood_chestnut", "inferno_italian_cypress_trunk"]
+      "match": [
+        "dust2_wood_cedar",
+        "dust2_palm_bark",
+        "mirage_cedar_wood",
+        "mirage_palm_bark",
+        "inferno_wood_chestnut",
+        "inferno_italian_cypress_trunk"
+      ]
     },
     {
       "kind": "souk_crate",
-      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate", "nuke_wood_crate", "assault_wood_crate"]
+      "match": [
+        "dust2_wood_crate",
+        "mirage_wood_crate",
+        "inferno_wood_crate",
+        "nuke_wood_crate",
+        "assault_wood_crate",
+        "assault_wood_pallet"
+      ]
     },
     {
       "kind": "rust_iron",
-      "match": ["dust2_metal_iron_rusted"]
+      "match": ["dust2_metal_iron_rusted", "junkflea_steel_rusted", "assault_train_rail"]
     },
     {
       "kind": "burlap",
-      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap", "inferno_canopy_", "inferno_sandbag", "nuke_sandbag"]
+      "match": [
+        "dust2_canopy_",
+        "dust2_sack_burlap",
+        "mirage_canopy_",
+        "mirage_sack_burlap",
+        "inferno_canopy_",
+        "inferno_sandbag",
+        "nuke_sandbag"
+      ]
     },
     {
       "kind": "glaze",
@@ -75,23 +108,76 @@
     },
     {
       "kind": "cast_concrete",
-      "match": ["nuke_concrete_wall", "nuke_concrete_dark", "assault_concrete", "aim_block_wall", "aim_divider_concrete"]
+      "match": [
+        "nuke_concrete_wall",
+        "nuke_concrete_dark",
+        "assault_concrete",
+        "aim_block_wall",
+        "aim_divider_concrete",
+        "facility_concrete_bunker",
+        "junkflea_concrete_wall",
+        "bank_perimeter_concrete"
+      ]
     },
     {
       "kind": "slab_concrete",
-      "match": ["nuke_concrete_floor", "assault_warehouse_floor", "bank_concrete_sidewalk", "aim_concrete_floor"]
+      "match": [
+        "nuke_concrete_floor",
+        "assault_warehouse_floor",
+        "bank_concrete_sidewalk",
+        "aim_concrete_floor",
+        "facility_concrete_floor",
+        "facility_concrete_pit",
+        "junkflea_concrete_stained"
+      ]
     },
     {
       "kind": "corrugated",
-      "match": ["nuke_container_", "assault_container_", "assault_warehouse_wall"]
+      "match": [
+        "nuke_container_",
+        "assault_container_",
+        "assault_warehouse_wall",
+        "junkflea_corrugated_steel",
+        "junkflea_container_",
+        "junkflea_sheet_pile",
+        "assault_warehouse_roof"
+      ]
     },
     {
       "kind": "painted_metal",
-      "match": ["nuke_steel_industrial", "nuke_steel_dark", "nuke_reactor_hull", "nuke_pipe_yellow", "nuke_drum_blue", "assault_drum_", "assault_rack_", "aim_steel_"]
+      "match": [
+        "nuke_steel_industrial",
+        "nuke_steel_dark",
+        "nuke_reactor_hull",
+        "nuke_pipe_yellow",
+        "nuke_drum_blue",
+        "assault_drum_",
+        "assault_rack_",
+        "aim_steel_",
+        "facility_steel_structural",
+        "facility_pipe_industrial",
+        "facility_steel_cast_iron",
+        "facility_server_",
+        "junkflea_steel_structural",
+        "junkflea_steel_ibeam",
+        "office_black_metal",
+        "assault_steel_dark",
+        "assault_steel_truss",
+        "assault_truck_trailer",
+        "bank_steel_structural"
+      ]
     },
     {
       "kind": "tread_plate",
-      "match": ["nuke_steel_grate", "assault_diamond_plate", "assault_steel_catwalk", "aim_booth_plate"]
+      "match": [
+        "nuke_steel_grate",
+        "assault_diamond_plate",
+        "assault_steel_catwalk",
+        "aim_booth_plate",
+        "facility_steel_diamond_plate",
+        "facility_steel_grate",
+        "junkflea_diamond_plate"
+      ]
     },
     {
       "kind": "yard_asphalt",
@@ -116,6 +202,32 @@
     {
       "kind": "wall_plaster",
       "match": ["office_wall_drywall", "office_wall_accent", "assault_office_wall", "bank_plaster_"]
+    },
+    {
+      "kind": "ceiling_tile",
+      "match": ["office_ceiling_tile", "assault_office_ceiling"]
+    },
+    {
+      "kind": "brushed_steel",
+      "match": [
+        "office_stainless",
+        "facility_steel_stainless",
+        "assault_vent_duct",
+        "bank_deposit_box_steel",
+        "bank_vault_steel"
+      ]
+    },
+    {
+      "kind": "limestone_block",
+      "match": ["bank_limestone_"]
+    },
+    {
+      "kind": "polished_wood",
+      "match": ["office_mahogany", "bank_mahogany_"]
+    },
+    {
+      "kind": "wet_mud",
+      "match": ["junkflea_gravel_mud", "junkflea_trench_mud"]
     },
     {
       "kind": "site_a",
@@ -265,7 +377,12 @@
     "ceramic_tile": 2,
     "polished_marble": 3,
     "red_brick": 2,
-    "wall_plaster": 4
+    "wall_plaster": 4,
+    "ceiling_tile": 11,
+    "brushed_steel": 3,
+    "limestone_block": 8,
+    "polished_wood": 4,
+    "wet_mud": 6
   },
   "detailMean": 0.6667,
   "detailGain": 1.5,
@@ -289,7 +406,12 @@
     "ceramic_tile",
     "polished_marble",
     "red_brick",
-    "wall_plaster"
+    "wall_plaster",
+    "ceiling_tile",
+    "brushed_steel",
+    "limestone_block",
+    "polished_wood",
+    "wet_mud"
   ],
   "photoNormalScale": {
     "limewash": 0.5,
@@ -311,6 +433,11 @@
     "ceramic_tile": 0.8,
     "polished_marble": 0.4,
     "red_brick": 1.2,
-    "wall_plaster": 0.5
+    "wall_plaster": 0.5,
+    "ceiling_tile": 0.6,
+    "brushed_steel": 0.5,
+    "limestone_block": 0.8,
+    "polished_wood": 0.6,
+    "wet_mud": 1.0
   }
 }

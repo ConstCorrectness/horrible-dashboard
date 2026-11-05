@@ -81,42 +81,42 @@ def setup_facility_materials():
     mats = {}
 
     # Reinforced Concrete & Subterranean Bunker Surfaces
-    mats["Concrete_Bunker_Dark"] = create_pbr_material("Mat_Concrete_Bunker_Dark", (0.24, 0.25, 0.27), metallic=0.02, roughness=0.84)
-    mats["Concrete_Floor_Epoxy"] = create_pbr_material("Mat_Concrete_Floor_Epoxy", (0.32, 0.34, 0.36), metallic=0.08, roughness=0.42)
-    mats["Concrete_Pit_Damp"] = create_pbr_material("Mat_Concrete_Pit_Damp", (0.16, 0.18, 0.20), metallic=0.04, roughness=0.92)
+    mats["Concrete_Bunker_Dark"] = create_pbr_material("Mat_Facility_Concrete_Bunker_Dark", (0.24, 0.25, 0.27), metallic=0.02, roughness=0.84)
+    mats["Concrete_Floor_Epoxy"] = create_pbr_material("Mat_Facility_Concrete_Floor_Epoxy", (0.32, 0.34, 0.36), metallic=0.08, roughness=0.42)
+    mats["Concrete_Pit_Damp"] = create_pbr_material("Mat_Facility_Concrete_Pit_Damp", (0.16, 0.18, 0.20), metallic=0.04, roughness=0.92)
 
     # Structural Steel & Diamond Plate
-    mats["Steel_Structural_Dark"] = create_pbr_material("Mat_Steel_Structural_Dark", (0.22, 0.24, 0.26), metallic=0.88, roughness=0.34)
-    mats["Steel_Diamond_Plate"] = create_pbr_material("Mat_Steel_Diamond_Plate", (0.44, 0.46, 0.48), metallic=0.92, roughness=0.32)
-    mats["Steel_Grate_Perforated"] = create_pbr_material("Mat_Steel_Grate_Perforated", (0.18, 0.20, 0.22), metallic=0.85, roughness=0.45)
-    mats["Steel_Stainless_Brushed"] = create_pbr_material("Mat_Steel_Stainless_Brushed", (0.70, 0.72, 0.74), metallic=0.94, roughness=0.22)
-    mats["Steel_Cast_Iron"] = create_pbr_material("Mat_Steel_Cast_Iron", (0.14, 0.15, 0.16), metallic=0.90, roughness=0.40)
+    mats["Steel_Structural_Dark"] = create_pbr_material("Mat_Facility_Steel_Structural_Dark", (0.22, 0.24, 0.26), metallic=0.88, roughness=0.34)
+    mats["Steel_Diamond_Plate"] = create_pbr_material("Mat_Facility_Steel_Diamond_Plate", (0.44, 0.46, 0.48), metallic=0.92, roughness=0.32)
+    mats["Steel_Grate_Perforated"] = create_pbr_material("Mat_Facility_Steel_Grate_Perforated", (0.18, 0.20, 0.22), metallic=0.85, roughness=0.45)
+    mats["Steel_Stainless_Brushed"] = create_pbr_material("Mat_Facility_Steel_Stainless_Brushed", (0.70, 0.72, 0.74), metallic=0.94, roughness=0.22)
+    mats["Steel_Cast_Iron"] = create_pbr_material("Mat_Facility_Steel_Cast_Iron", (0.14, 0.15, 0.16), metallic=0.90, roughness=0.40)
 
     # Pipe Networks & Containment Equipment
-    mats["Pipe_Industrial_Green"] = create_pbr_material("Mat_Pipe_Industrial_Green", (0.15, 0.32, 0.22), metallic=0.75, roughness=0.38)
-    mats["Pipe_Steam_Silver"] = create_pbr_material("Mat_Pipe_Steam_Silver", (0.65, 0.67, 0.70), metallic=0.88, roughness=0.30)
-    mats["Valve_Red"] = create_pbr_material("Mat_Valve_Red", (0.78, 0.12, 0.10), metallic=0.70, roughness=0.35)
-    mats["Hydraulic_Chrome"] = create_pbr_material("Mat_Hydraulic_Chrome", (0.85, 0.86, 0.88), metallic=0.96, roughness=0.15)
+    mats["Pipe_Industrial_Green"] = create_pbr_material("Mat_Facility_Pipe_Industrial_Green", (0.15, 0.32, 0.22), metallic=0.75, roughness=0.38)
+    mats["Pipe_Steam_Silver"] = create_pbr_material("Mat_Facility_Pipe_Steam_Silver", (0.65, 0.67, 0.70), metallic=0.88, roughness=0.30)
+    mats["Valve_Red"] = create_pbr_material("Mat_Facility_Valve_Red", (0.78, 0.12, 0.10), metallic=0.70, roughness=0.35)
+    mats["Hydraulic_Chrome"] = create_pbr_material("Mat_Facility_Hydraulic_Chrome", (0.85, 0.86, 0.88), metallic=0.96, roughness=0.15)
 
     # Laboratory & Control Telemetry
-    mats["Server_Cabinet_Matte"] = create_pbr_material("Mat_Server_Cabinet_Matte", (0.10, 0.11, 0.12), metallic=0.80, roughness=0.42)
-    mats["Server_Faceplate_Dark"] = create_pbr_material("Mat_Server_Faceplate_Dark", (0.05, 0.05, 0.06), metallic=0.50, roughness=0.60)
-    mats["LED_Array_Green"] = create_pbr_material("Mat_LED_Green_Glow", (0.2, 0.9, 0.3), emission_color=(0.1, 1.0, 0.2), emission_strength=7.0)
-    mats["LED_Array_Amber"] = create_pbr_material("Mat_LED_Amber_Glow", (0.95, 0.6, 0.1), emission_color=(1.0, 0.55, 0.05), emission_strength=7.0)
-    mats["CRT_Phosphor_Green"] = create_pbr_material("Mat_CRT_Phosphor_Green", (0.05, 0.3, 0.1), emission_color=(0.1, 0.9, 0.3), emission_strength=5.0)
+    mats["Server_Cabinet_Matte"] = create_pbr_material("Mat_Facility_Server_Cabinet_Matte", (0.10, 0.11, 0.12), metallic=0.80, roughness=0.42)
+    mats["Server_Faceplate_Dark"] = create_pbr_material("Mat_Facility_Server_Faceplate_Dark", (0.05, 0.05, 0.06), metallic=0.50, roughness=0.60)
+    mats["LED_Array_Green"] = create_pbr_material("Mat_Facility_LED_Green_Glow", (0.2, 0.9, 0.3), emission_color=(0.1, 1.0, 0.2), emission_strength=7.0)
+    mats["LED_Array_Amber"] = create_pbr_material("Mat_Facility_LED_Amber_Glow", (0.95, 0.6, 0.1), emission_color=(1.0, 0.55, 0.05), emission_strength=7.0)
+    mats["CRT_Phosphor_Green"] = create_pbr_material("Mat_Facility_CRT_Phosphor_Green", (0.05, 0.3, 0.1), emission_color=(0.1, 0.9, 0.3), emission_strength=5.0)
 
     # Safety Hazard Stripes & Emissives
-    mats["Hazard_Yellow"] = create_pbr_material("Mat_Hazard_Yellow", (0.92, 0.76, 0.08), metallic=0.15, roughness=0.45)
-    mats["Hazard_Black"] = create_pbr_material("Mat_Hazard_Black", (0.05, 0.05, 0.06), metallic=0.10, roughness=0.65)
-    mats["Placard_White"] = create_pbr_material("Mat_Placard_White", (0.88, 0.88, 0.86), metallic=0.05, roughness=0.70)
-    mats["Emergency_Siren_Red"] = create_pbr_material("Mat_Emergency_Siren_Red", (1.0, 0.15, 0.1), emission_color=(1.0, 0.08, 0.05), emission_strength=8.0)
-    mats["Fluorescent_Troffer"] = create_pbr_material("Mat_Fluorescent_Troffer", (0.95, 0.96, 1.0), emission_color=(0.95, 0.96, 1.0), emission_strength=6.5)
-    mats["Coolant_Fluid_Glow"] = create_pbr_material("Mat_Coolant_Fluid_Glow", (0.1, 0.75, 0.5), emission_color=(0.05, 0.65, 0.4), emission_strength=3.5, alpha=0.88)
+    mats["Hazard_Yellow"] = create_pbr_material("Mat_Facility_Hazard_Yellow", (0.92, 0.76, 0.08), metallic=0.15, roughness=0.45)
+    mats["Hazard_Black"] = create_pbr_material("Mat_Facility_Hazard_Black", (0.05, 0.05, 0.06), metallic=0.10, roughness=0.65)
+    mats["Placard_White"] = create_pbr_material("Mat_Facility_Placard_White", (0.88, 0.88, 0.86), metallic=0.05, roughness=0.70)
+    mats["Emergency_Siren_Red"] = create_pbr_material("Mat_Facility_Emergency_Siren_Red", (1.0, 0.15, 0.1), emission_color=(1.0, 0.08, 0.05), emission_strength=8.0)
+    mats["Fluorescent_Troffer"] = create_pbr_material("Mat_Facility_Fluorescent_Troffer", (0.95, 0.96, 1.0), emission_color=(0.95, 0.96, 1.0), emission_strength=6.5)
+    mats["Coolant_Fluid_Glow"] = create_pbr_material("Mat_Facility_Coolant_Fluid_Glow", (0.1, 0.75, 0.5), emission_color=(0.05, 0.65, 0.4), emission_strength=3.5, alpha=0.88)
 
     # Chemical Waste Drums & Tactical Cargo
-    mats["Drum_Hazmat_Yellow"] = create_pbr_material("Mat_Drum_Hazmat_Yellow", (0.85, 0.70, 0.10), metallic=0.78, roughness=0.42)
-    mats["Drum_Bio_Blue"] = create_pbr_material("Mat_Drum_Bio_Blue", (0.12, 0.28, 0.52), metallic=0.78, roughness=0.42)
-    mats["Rubber_Bumper_Black"] = create_pbr_material("Mat_Rubber_Bumper_Black", (0.07, 0.07, 0.08), metallic=0.0, roughness=0.88)
+    mats["Drum_Hazmat_Yellow"] = create_pbr_material("Mat_Facility_Drum_Hazmat_Yellow", (0.85, 0.70, 0.10), metallic=0.78, roughness=0.42)
+    mats["Drum_Bio_Blue"] = create_pbr_material("Mat_Facility_Drum_Bio_Blue", (0.12, 0.28, 0.52), metallic=0.78, roughness=0.42)
+    mats["Rubber_Bumper_Black"] = create_pbr_material("Mat_Facility_Rubber_Bumper_Black", (0.07, 0.07, 0.08), metallic=0.0, roughness=0.88)
 
     return mats
 
