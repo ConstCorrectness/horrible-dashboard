@@ -4693,5 +4693,57 @@
   },
   "collision": "baked",
   "collisionSource": "8ddb56e80b35b2d7",
-  "collisionBaked": "8ddb56e80b35b2d7"
+  "collisionBaked": "8ddb56e80b35b2d7",
+  "lineups": [
+    {
+      "id": "a_apts_balcony_flash",
+      "site": "A",
+      "kind": "flash",
+      "route": "apts_balcony",
+      "from": [155.5, 157.5],
+      "yaw": 50.52,
+      "pitch": 49.85,
+      "land": [177.4, 184.0]
+    },
+    {
+      "id": "a_site_a_pit_smoke",
+      "site": "A",
+      "kind": "smoke",
+      "route": "site_a_pit",
+      "from": [180.5, 149.5],
+      "yaw": 116.03,
+      "pitch": 32.31,
+      "land": [160.6, 190.2]
+    },
+    {
+      "id": "b_route1_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "route1",
+      "from": [83.5, 155.5],
+      "yaw": 79.99,
+      "pitch": 4.47,
+      "land": [89.6, 189.8]
+    },
+    {
+      "id": "b_route1_flash",
+      "site": "B",
+      "kind": "flash",
+      "route": "route1",
+      "from": [83.5, 155.5],
+      "yaw": 115.82,
+      "pitch": 51.91,
+      "land": [68.5, 186.5]
+    },
+    {
+      "id": "b_banana_sandbags_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "banana_sandbags",
+      "from": [67.5, 150.5],
+      "yaw": 60.57,
+      "pitch": 34.72,
+      "land": [89.5, 189.4]
+    }
+  ]
 }

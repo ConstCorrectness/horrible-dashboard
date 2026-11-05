@@ -5377,5 +5377,37 @@
     {"x": 132, "y": 123, "yaw": 180, "team": 1}
   ],
   "collisionSource": "a0735d3162121b70",
-  "collisionBaked": "a0735d3162121b70"
+  "collisionBaked": "a0735d3162121b70",
+  "lineups": [
+    {
+      "id": "a_site_a_table_south_flash",
+      "site": "A",
+      "kind": "flash",
+      "route": "site_a_table_south",
+      "from": [69.5, 159.5],
+      "yaw": 160.22,
+      "pitch": 37.13,
+      "land": [42.6, 166.6]
+    },
+    {
+      "id": "a_site_a_north_gap_smoke",
+      "site": "A",
+      "kind": "smoke",
+      "route": "site_a_north_gap",
+      "from": [61.5, 181.5],
+      "yaw": -119.8,
+      "pitch": 24.41,
+      "land": [39.9, 143.8]
+    },
+    {
+      "id": "b_b_mid_door_flash",
+      "site": "B",
+      "kind": "flash",
+      "route": "b_mid_door",
+      "from": [69.5, 73.5],
+      "yaw": 173.66,
+      "pitch": 49.16,
+      "land": [34.6, 77.4]
+    }
+  ]
 }

@@ -125,15 +125,22 @@ def build(name):
     cgz = assets.load_map(name)
     world = physics.World.from_map(cgz)
     standable = maplint._standable(world)
-    spawns = [(int(s.x), int(s.y)) for s in cgz.spawns()]
-    reach = set()
-    for s in spawns:
-        if s in standable and s not in reach:
-            reach |= maplint._reachable(world, s, standable)
-    # Cells a body can be centred on and actually walk out of along a line.
-    cells = {
-        c for c in reach if nav.floor_under(world, c[0] + 0.5, c[1] + 0.5) is not None
+    # Cells a body can be centred on and actually walk out of along a line...
+    fits = {
+        c
+        for c in standable
+        if nav.floor_under(world, c[0] + 0.5, c[1] + 0.5) is not None
     }
+    # ...that a spawn reaches *with the moves the routes below take*. Not
+    # `maplint._reachable`, a four-way flood: Dust II's A platform is reached up
+    # diagonal catwalk stairs and a drop, which that fill never sees, so the
+    # whole site was left out, `site_A` snapped to the floor below it and every
+    # bot sent to A parked under the platform edge for the round.
+    cells: set[tuple[int, int]] = set()
+    for s in cgz.spawns():
+        start = nearest_cell(fits, s.x + 0.5, s.y + 0.5)
+        if start not in cells:
+            cells |= set(walk_dijkstra(world, fits, start)[0])
 
     keys: list[tuple[tuple[int, int], str]] = []
     for i, s in enumerate(cgz.spawns()):
@@ -196,6 +203,16 @@ def build(name):
         if nav.path(world, graph, (s.x + 0.5, s.y + 0.5), (x, y)) is None
     ]
 
+    # A route that ends at the nearest node rather than at the target is right
+    # for a target only a jump reaches, and a silent stale graph otherwise.
+    short = sorted(
+        {
+            label
+            for x, y, label in targets
+            if nav._join(world, graph, x, y, into=True) is None
+        }
+    )
+
     out = {
         "_doc": "Bot waypoints for this map, in cubes. Built by tools/hassault_nav_build.py; read by backend/modules/hassault/nav.py. links are directed [from, to].",
         "nodes": [[round(n[0], 1), round(n[1], 1), n[2]] for n in nodes],
@@ -214,6 +231,8 @@ def build(name):
     print(f"{name}: {len(nodes)} nodes, {len(links)} links -> {path}")
     for m in missing:
         print(f"  UNREACHABLE {m}")
+    for label in short:
+        print(f"  no node walks onto {label}: routes there end at the nearest node")
     return not missing
 
 

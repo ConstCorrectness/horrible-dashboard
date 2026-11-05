@@ -26,6 +26,7 @@ nothing about why.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -118,6 +119,34 @@ def _on_floor(world: World, x: float, y: float) -> float:
     return physics.spawn_at(world, _Point(x, y)).z
 
 
+def _site_floor(world: World, x: float, y: float, radius: float) -> float:
+    """The floor most of a site's area stands on: the height `Site.contains`
+    measures its vertical band from.
+
+    **Not the floor under the centre cell.** A site is usually drawn around a
+    crate or a box, and the centre lands on one about as often as not: Inferno's
+    A put its centre on a 7-cube prop, so the band (`PICKUP_BELOW` /
+    `PICKUP_ABOVE` around 7) excluded the floor 296 of its 384 cells stand on, and
+    the bomb could only be planted on top of the boxes. Office A and Inferno B lost
+    their ground floor the same way, on smaller steps. The most common floor among
+    the open cells inside the radius is the site's floor; ties go to the lower,
+    so a raised platform only wins when it really is most of the site.
+    """
+    counts: dict[float, int] = {}
+    r = int(math.ceil(radius))
+    for cy in range(int(y) - r, int(y) + r + 1):
+        for cx in range(int(x) - r, int(x) + r + 1):
+            if math.hypot(cx + 0.5 - x, cy + 0.5 - y) > radius:
+                continue
+            if world.is_solid(cx, cy):
+                continue
+            z = round(world.floor_at(cx, cy) * 2) / 2
+            counts[z] = counts.get(z, 0) + 1
+    if not counts:
+        return _on_floor(world, x - 0.5, y - 0.5)
+    return max(counts, key=lambda z: (counts[z], -z))
+
+
 class _Point:
     """The three fields `physics.spawn_at` reads. Cheaper than a `MapEntity`, and
     it makes clear that only the position is being used — the `z` an entity
@@ -149,7 +178,12 @@ def place(world: World, cmap: cgz.CgzMap) -> Objectives:
             id=str(spec["id"]),
             x=float(spec["x"]) + 0.5,
             y=float(spec["y"]) + 0.5,
-            z=_on_floor(world, float(spec["x"]), float(spec["y"])),
+            z=_site_floor(
+                world,
+                float(spec["x"]) + 0.5,
+                float(spec["y"]) + 0.5,
+                float(spec.get("radius", 4.0)),
+            ),
             radius=float(spec.get("radius", 4.0)),
         )
         for spec in (cmap.objectives or {}).get("sites", [])

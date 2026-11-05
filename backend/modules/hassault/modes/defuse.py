@@ -229,7 +229,9 @@ def _weapon_rows() -> list[BuyItem]:
             if index in FREE_SLOTS or spec.slot != category or spec.price <= 0:
                 continue
             rows.append(
-                BuyItem(spec.id, spec.name, "weapon", index, spec.price, spec.side, category)
+                BuyItem(
+                    spec.id, spec.name, "weapon", index, spec.price, spec.side, category
+                )
             )
     return rows
 
@@ -1240,7 +1242,9 @@ class Defuse(GameMode):
         self._put_down(room, player, slot, now)
         self._hold(player, self._sidearm(player))
 
-    def _put_down(self, room: MatchRoom, player: MatchPlayer, slot: int, now: float) -> None:
+    def _put_down(
+        self, room: MatchRoom, player: MatchPlayer, slot: int, now: float
+    ) -> None:
         """Lay an owned gun on the floor where `player` stands, magazine and all."""
         self._drop_seq += 1
         self.dropped_weapons.append(
@@ -1528,17 +1532,10 @@ class Defuse(GameMode):
             return Goal(x=bomb.x, y=bomb.y, z=bomb.z, radius=1.0)
         if not self.sites:
             return None
-        if attacking:
-            site = self.sites[hash(me.id) % len(self.sites)]
-            return Goal(
-                x=site.x,
-                y=site.y,
-                z=site.z,
-                # Only the carrier can plant, and holding `use` elsewhere is
-                # harmless — but sending it only from the carrier keeps the wire
-                # honest about what the bot is trying to do.
-                use=bomb.carrier == me.id,
-                radius=site.radius * 0.6,
-            )
-        site = self.sites[hash(me.id) % len(self.sites)]
-        return Goal(x=site.x, y=site.y, z=site.z, radius=site.radius)
+        # Otherwise it is the team plan's call: one site a round for the
+        # attackers, holds and rotations for the defenders. The carrier is the
+        # only bot sent with `use`, which keeps the wire honest about what it
+        # is trying to do.
+        from backend.modules.hassault import bots
+
+        return bots.defuse_goal(room, me, self)
