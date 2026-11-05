@@ -460,9 +460,9 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.vsync',
       title: 'Native client: vsync',
       description:
-        'On by default, which is what the client has always done when the row was unset. Off presents immediately — the lowest latency there is, and the reason the native client exists — at the cost of tearing.',
+        'Off by default: frames present immediately, the lowest latency there is and the reason the native client exists, at the cost of tearing. Turn it on if the tearing bothers you more than a frame of latency does, or set a frame cap instead.',
       type: 'boolean',
-      default: true,
+      default: false,
     },
     // The crosshair rows are spec v1 (`backend/modules/hassault/crosshair.py`),
     // the same in both clients and what an `HXC1-` share code writes. Ranges

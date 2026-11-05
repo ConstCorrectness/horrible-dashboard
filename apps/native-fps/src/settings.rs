@@ -355,6 +355,11 @@ pub struct Video {
     /// Vertical sync. First in the present-mode list when on, because tearing is
     /// real and somebody who can see it should be able to say so; off, a frame of
     /// queued latency is precisely what this client exists to avoid.
+    ///
+    /// **Off by default** (G2). It defaulted on, which made the client's
+    /// headline reason to exist — `Immediate` present, no queued frame — an
+    /// opt-in. A player who sees tearing turns it on, or sets a frame cap,
+    /// which now holds its rate exactly (`pacing.rs`).
     pub vsync: bool,
     /// Vertical field of view, in **degrees**, before the scope divides it.
     ///
@@ -494,7 +499,7 @@ impl Default for Video {
             render_scale: 1.0,
             hud_scale: 1.0,
             quality: Quality::default(),
-            vsync: true,
+            vsync: false,
             fov: 75.0,
             msaa: 1,
             anisotropy: 16,

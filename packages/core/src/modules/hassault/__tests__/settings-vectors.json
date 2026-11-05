@@ -335,7 +335,7 @@
   {
    "key": "hassault.video.vsync",
    "type": "boolean",
-   "default": true,
+   "default": false,
    "scope": "machine",
    "native": true
   },

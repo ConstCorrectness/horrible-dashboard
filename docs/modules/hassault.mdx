@@ -7944,6 +7944,12 @@ shader taking the filter taps. It is offered because some people prefer the flat
 read — presenting it as a performance option would be the placebo the rest of this
 page keeps refusing to ship.
 
+**Vsync** (`hassault.video.vsync`) is **off by default**: the native client
+presents immediately (`Immediate`), which is the lowest input latency there is and
+the reason the client exists, at the cost of tearing. It defaulted on until G2,
+which made that an opt-in. A player who minds the tearing turns it on, or sets a
+frame cap.
+
 **Frame cap** (`hassault.video.fpsLimit`, one of 0/60/120/144/240/360, uncapped by
 default) waits out the remainder of a frame's slice. Unlike vsync it queues no
 frame and adds no latency; it is for a laptop that would otherwise run its fan

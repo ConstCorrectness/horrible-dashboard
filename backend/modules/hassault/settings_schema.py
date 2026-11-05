@@ -213,7 +213,7 @@ SCHEMA: tuple[SettingSpec, ...] = (
         enum=("low", "medium", "high", "ultra"),
         native=True,
     ),
-    _flag("hassault.video.vsync", True, "machine", native=True),
+    _flag("hassault.video.vsync", False, "machine", native=True),
     # The preset rows: defaults are what `medium` writes.
     _num("hassault.video.msaa", 1, "machine", 1, 8, choices=(1, 2, 4, 8), native=True),
     _flag("hassault.video.antialias", False, "machine", native=True),
