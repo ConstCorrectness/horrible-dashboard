@@ -21,6 +21,7 @@ class FakePeer {
   remote: string | null = null;
   connectionState: RTCPeerConnectionState = 'new';
   onconnectionstatechange: (() => void) | null = null;
+  transceivers: Array<{ track: unknown; init: unknown }> = [];
 
   constructor(readonly config: RTCConfiguration) {
     FakePeer.made.push(this);
@@ -30,7 +31,9 @@ class FakePeer {
     this.connectionState = state;
     this.onconnectionstatechange?.();
   }
-  addTransceiver() {}
+  addTransceiver(track: unknown, init: unknown) {
+    this.transceivers.push({ track, init });
+  }
   addEventListener() {}
   removeEventListener() {}
   async createOffer() {
@@ -48,7 +51,11 @@ class FakePeer {
   }
 }
 
-const stream = { getTracks: () => [] } as unknown as MediaStream;
+const stream = {
+  getTracks: () => [],
+  getVideoTracks: () => [],
+  getAudioTracks: () => [],
+} as unknown as MediaStream;
 
 /** A fetch whose POSTs resolve only when the test says so. */
 function gatedFetch() {
@@ -145,6 +152,32 @@ describe('WhipPublisher watchdog', () => {
     relay({ iceServers: [turn] });
     await new WhipPublisher().publish('https://relay/whip/t', stream);
     expect(FakePeer.made[0].config.iceServers).toContainEqual(turn);
+  });
+
+  it('enforces max-bundle policy in RTCConfiguration', async () => {
+    relay();
+    await new WhipPublisher().publish('https://relay/whip/t', stream);
+    expect(FakePeer.made[0].config.bundlePolicy).toBe('max-bundle');
+  });
+
+  it('publishes at most one video and one audio track, even if the stream carries multiple', async () => {
+    relay();
+    const v1 = { kind: 'video', id: 'v1' } as MediaStreamTrack;
+    const v2 = { kind: 'video', id: 'v2' } as MediaStreamTrack;
+    const a1 = { kind: 'audio', id: 'a1' } as MediaStreamTrack;
+    const a2 = { kind: 'audio', id: 'a2' } as MediaStreamTrack;
+
+    const multiStream = {
+      getTracks: () => [v1, v2, a1, a2],
+      getVideoTracks: () => [v1, v2],
+      getAudioTracks: () => [a1, a2],
+    } as unknown as MediaStream;
+
+    await new WhipPublisher().publish('https://relay/whip/t', multiStream);
+    const added = FakePeer.made[0].transceivers;
+    expect(added).toHaveLength(2);
+    expect(added[0]).toEqual({ track: v1, init: { direction: 'sendonly', streams: [multiStream] } });
+    expect(added[1]).toEqual({ track: a1, init: { direction: 'sendonly', streams: [multiStream] } });
   });
 
   it('publishes anyway when the relay has no ICE route', async () => {

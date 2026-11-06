@@ -46,14 +46,17 @@ primary_region = 'iad'
   # The per-stream viewer ceiling. Set here rather than left to the default so the
   # number this machine was sized for is visible next to the machine.
   #
-  # Lowered from 25 after this relay was OOM-killed 2m21s into a single share
-  # (exit_code=137, oom_killed=true, on the 4gb performance-2x below). That kill
-  # takes the in-memory registry with it, so it does not degrade one stream -- it
-  # kills EVERY link on the relay at once, and each host's browser goes on
-  # publishing into nothing because WebRTC to a departed peer does not raise.
-  # Raising this needs a measurement, not an optimistic guess; see the note under
-  # [[vm]].
-  SHARE_RELAY_MAX_VIEWERS = '6'
+  # 20, from a measurement (scripts/share_relay_loadtest.py, relay pinned to 2
+  # cores, 1080p15 with audio): 25 viewers all held 15 fps at ~76% of the 200% CPU
+  # budget and ~300 MB RSS, because the room now encodes video and audio ONCE and
+  # each viewer only packetizes. It was 6 while every viewer cost its own software
+  # encode -- 15 viewers then got 3 fps each. Re-run the load test against this
+  # app before raising it; watch /health -> load.encode_ms_p50.
+  SHARE_RELAY_MAX_VIEWERS = '20'
+  # Video bitrate of the room's single encode, kbps (CBR). Every viewer gets this
+  # rate, so it is also the floor on a viewer's downlink: 3000 is readable 1080p
+  # text and ~60 Mbps of egress at 20 viewers.
+  SHARE_RELAY_VIDEO_KBPS = '3000'
 
 # SHARE_RELAY_KEY is NOT here. It gates minting, so it is a real secret:
 #   fly secrets set SHARE_RELAY_KEY=... -a horrible-share
@@ -104,11 +107,11 @@ primary_region = 'iad'
 [[vm]]
   # A PERFORMANCE VM, not a shared one, and that is the whole point of this block.
   #
-  # aiortc's `MediaRelay` is not a passthrough: it decodes the inbound stream once
-  # in a `decoder_worker` thread and re-encodes it per viewer, in software, in
-  # Python. The host captures the desktop at its native resolution on purpose
-  # (`startCapture` sends no width/height -- scaled text is an unreadable share),
-  # so every viewer adds a full-resolution software encoder.
+  # aiortc decodes the inbound stream once in a `decoder_worker` thread, and the
+  # room re-encodes it once (backend/share_relay/encoder.py) for every viewer to
+  # packetize -- 1 decode + 1 encode per stream, plus a cheap packetize per
+  # viewer. Before that it was one software encode PER VIEWER, which is what the
+  # notes below were written against.
   #
   # On `shared-cpu-1x` that was visibly laggy with a single viewer. A shared vCPU
   # is throttled to a fraction of a core under sustained load, which is exactly
@@ -125,11 +128,9 @@ primary_region = 'iad'
   memory = '4gb'
   memory_mb = 4096
 
-  # Watch BOTH before raising `SHARE_RELAY_MAX_VIEWERS`: 25 was not a number this
-  # machine could honour at desktop resolution, on either axis, and it proved that
-  # by being OOM-killed rather than by getting laggy. Restreaming adds an ffmpeg
-  # process on top of all of it.
+  # Watch BOTH before raising `SHARE_RELAY_MAX_VIEWERS`. Restreaming adds an
+  # ffmpeg process on top of all of it.
   #
-  # The ceiling is per stream, not per machine: two concurrent shares at six
-  # viewers each is twelve software encodes. Nothing enforces a machine-wide
-  # total, so treat this number as a floor on what a single popular link costs.
+  # The ceiling is per stream, not per machine: each concurrent share is its own
+  # decode + encode, so two popular links cost roughly twice one. Nothing enforces
+  # a machine-wide total.

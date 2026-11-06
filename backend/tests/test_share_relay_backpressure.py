@@ -142,3 +142,74 @@ async def test_buffered_mode_is_the_leak_this_avoids() -> None:
     assert proxy._queue.qsize() > 10, (
         "expected an unbounded backlog; aiortc may have changed its queue policy"
     )
+
+
+@pytest.mark.anyio
+async def test_bundle_policy_is_max_compat_to_preserve_primary_candidates(monkeypatch) -> None:
+    """The relay must configure MAX_COMPAT so aiortc's BUNDLE pass merges slave
+    m-lines onto media[0]'s transport without overwriting media[0]'s candidates."""
+    configs = []
+    orig_pc = aiortc.RTCPeerConnection
+
+    def intercept_pc(config=None):
+        configs.append(config)
+        return orig_pc(config)
+
+    monkeypatch.setattr(aiortc, "RTCPeerConnection", intercept_pc)
+    room = Room("tok")
+
+    from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
+
+    pub_pc = orig_pc(
+        aiortc.RTCConfiguration(bundlePolicy=aiortc.RTCBundlePolicy.MAX_COMPAT)
+    )
+    pub_pc.addTrack(VideoStreamTrack())
+    pub_pc.addTrack(AudioStreamTrack())
+    pub_pc.addTrack(AudioStreamTrack())
+    await pub_pc.setLocalDescription(await pub_pc.createOffer())
+    await room.publish(pub_pc.localDescription.sdp)
+    assert configs[-1].bundlePolicy == aiortc.RTCBundlePolicy.MAX_COMPAT
+
+    # All three transceivers must be bundled onto a single ICE transport, and
+    # its remote candidates must come from media[0] (the primary BUNDLE mid).
+    from aiortc import sdp
+
+    parsed_offer = sdp.SessionDescription.parse(pub_pc.localDescription.sdp)
+    primary_ports = {c.port for c in parsed_offer.media[0].ice_candidates}
+    transports = list(room._publisher._RTCPeerConnection__iceTransports)
+    assert len(transports) == 1
+    remote_ports = {c.port for c in transports[0]._connection.remote_candidates}
+    assert remote_ports == primary_ports
+
+    sub_pc = orig_pc()
+    sub_pc.addTransceiver("video", direction="recvonly")
+    sub_pc.addTransceiver("audio", direction="recvonly")
+    sub_offer = await sub_pc.createOffer()
+    await room.subscribe(sub_offer.sdp)
+    assert configs[-1].bundlePolicy == aiortc.RTCBundlePolicy.MAX_COMPAT
+
+    await room.close()
+    await pub_pc.close()
+    await sub_pc.close()
+
+
+@pytest.mark.anyio
+async def test_duplicate_track_of_same_kind_is_drained_and_ignored() -> None:
+    """A publisher sending duplicate tracks (e.g. 2 audio tracks) ignores the duplicate without leaking."""
+    room = Room("tok")
+
+    from aiortc.mediastreams import VideoStreamTrack
+
+    pub_pc = aiortc.RTCPeerConnection()
+    pub_pc.addTrack(VideoStreamTrack())
+    pub_pc.addTrack(VideoStreamTrack())
+    offer = await pub_pc.createOffer()
+    await room.publish(offer.sdp)
+    await _settle(10)
+
+    assert room._tracks.get("video") is not None
+    # Ensure side task exists for the duplicate track drain
+    assert len(room._side_tasks) == 1
+
+    await room.close()
+    await pub_pc.close()

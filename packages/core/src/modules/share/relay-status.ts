@@ -34,13 +34,18 @@ export function reconcileRelay(prev: RelayView, status: LinkStatus): RelayView {
     return { ...prev, relayState: 'unknown' };
   }
   const live = status.state === 'live';
+  // `connecting` is the normal transition state while ICE gathers and the
+  // first frame is in flight — not an error. Showing an error banner during
+  // normal startup alarms the host before the grace window even has a chance.
+  // Only `idle`, `gone`, or an explicit failure report an error here.
+  const isError = !live && status.state !== 'connecting';
   return {
     relaying: live,
     relayState: status.state,
     relayViewers: status.viewers,
     // `idle` and `gone` need different advice from the host, so the relay's own
     // wording travels instead of being flattened into a boolean.
-    relayError: live ? null : status.detail || null,
+    relayError: isError ? status.detail || null : null,
   };
 }
 

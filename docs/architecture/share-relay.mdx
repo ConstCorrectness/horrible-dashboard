@@ -189,21 +189,25 @@ Fan-out uses `MediaRelay`, so the host uploads **one** copy of the stream no
 matter how many people watch. That is the bandwidth win and the reason a public
 link scales further than the fabric mesh.
 
-It is **not** a passthrough, and assuming it is will size a machine wrong.
-aiortc decodes every incoming stream in a `decoder_worker` thread, and every
-outgoing sender holds its own `Encoder` and re-encodes. The real cost is **one
-decode plus N encodes**.
+It is **not** a passthrough. aiortc decodes every incoming stream in a
+`decoder_worker` thread, and left to itself every outgoing sender holds its own
+`Encoder` and re-encodes -- **one decode plus N encodes**. That was the relay's
+capacity, and it was small: measured on two cores, fifteen viewers of a 1080p
+share got **3 fps each** out of the host's 15, the CPU pinned, and the starved
+event loop stalled ICE and DTLS for anyone still connecting. That is what
+"laggy" and "stuck connecting" were.
 
-**There are two ceilings and they bite differently.** Memory is what *crashes*
-the relay; CPU is what makes the stream *bad*. This file originally named only
-CPU, which missed the crash entirely; the correction then over-swung and called
-CPU a non-issue, which missed the lag. Both are real: The host captures the desktop at its native resolution on
-purpose (`startCapture` sends no `width`/`height`; scaled text is an unreadable
-share), so every viewer adds a full-resolution encoder. On a 512 MB machine that
-was an OOM kill **16 seconds after the second viewer connected**: 403 MB RSS,
-one publisher and two viewers, no restream running. `fly.share.toml` now asks for
-2 GB, and the machine has since moved off shared CPU entirely (below), so the
-budget is 4 GB.
+So video and audio are each **encoded once per room** and every viewer is handed
+the same packets (`encoder.py`); see
+[Encode once, packetize per viewer](#encode-once-packetize-per-viewer).
+
+**There are two ceilings and they bite differently.** Memory is what *crashed*
+the relay; CPU is what made the stream *bad*. The host captures the desktop at its
+native resolution on purpose (`startCapture` sends no `width`/`height`; scaled
+text is an unreadable share). On a 512 MB machine that was an OOM kill **16
+seconds after the second viewer connected**; the machine is now a 4 GB
+`performance-2x`, and the memory mechanism turned out to be queue discipline, not
+size (next section).
 
 ### Memory is a queue-discipline bug, not a sizing problem
 
@@ -232,28 +236,26 @@ So `fanout.py` holds two rules, both pinned by
 1. **The ingest is pumped from the moment it is published** (`Room._start_pump`),
    not from the moment somebody watches. The pump discards what it reads; the
    point is the side effect of keeping `MediaRelay`'s reader running.
-2. **Video subscribers are unbuffered** (`_buffered_for`), so a slow encoder skips
-   to the newest frame instead of growing a backlog — one frame of memory per
-   viewer regardless of how far behind they fall. Audio stays buffered, because
-   dropped audio is *audible* where a dropped video frame is merely coarser, and
-   a decoded Opus frame is three orders of magnitude smaller.
+2. **Decoded video is never queued.** The pump writes each frame into the room's
+   `FrameHolder` (one slot) and the room's single encoder takes the newest one, so
+   a slow encode skips frames instead of growing a backlog. The audio pump's proxy
+   is buffered (`_buffered_for`), which is safe only because the pump never stops
+   draining it.
 
 For live video, skipping is the correct semantics rather than a compromise: a
 frame that arrives late is worthless, and the alternative is latency that climbs
-until the process dies. Re-encoding removes the usual hazard — dropping *decoded*
-input cannot desynchronise a downstream decoder, because each viewer's encoder
-emits its own keyframes on PLI.
+until the process dies. Skipping *decoded* frames before the encoder is always
+safe. Skipping *encoded* frames after it is not -- see the keyframe rules below.
 
 The test file asserts the failure mode as well as the fix. If aiortc ever bounds
 its own queues, the control case goes red, and that is a signal to revisit the
 approach rather than a test to repair.
 
-**CPU is the quality ceiling.** The decode and every encode are software, in
-Python. A shared vCPU is throttled to a fraction of a core under sustained load,
-and a continuous encode is exactly that — the burst credits that make shared CPUs
-fine for HTTP buy nothing here. `shared-cpu-1x` was visibly laggy with a *single*
-viewer. The relay runs on `performance-2x`; this is not a workload a shared vCPU
-can do, and no amount of memory fixes it.
+**CPU is the quality ceiling.** The decode and the encode are software. A shared
+vCPU is throttled to a fraction of a core under sustained load, and a continuous
+encode is exactly that — the burst credits that make shared CPUs fine for HTTP
+buy nothing here. `shared-cpu-1x` was visibly laggy with a *single* viewer. The
+relay runs on `performance-2x`.
 
 An OOM is worse than it sounds, because the registry is process memory: the kill
 takes **every token** with it. The link goes dead for everyone holding it, and
@@ -262,26 +264,85 @@ raise. That is why the node polls
 [`GET /streams/{token}`](../modules/share.mdx#the-four-relay-states) while a
 share is running.
 
-That ceiling is real: **tens of concurrent viewers per small machine, not
-thousands** — and at desktop capture resolution the honest number is far closer
-to "a handful" than to 25. The ceiling refuses the next viewer with a 503 and a
-plain sentence, because accepting them and degrading the stream for everyone
-already watching is the worse failure. An HLS branch is the answer when it
-matters (Phase 6).
+## Encode once, packetize per viewer
 
-The number is **six**, and it is six because the twenty-five it replaced was
-disproved rather than doubted: the deployed relay was OOM-killed 2m21s into a
-single share on a 4 GB `performance-2x` (`exit_code=137, oom_killed=true`). It is
-`SHARE_RELAY_MAX_VIEWERS`, set in `fly.share.toml` next to the machine it was
-sized for, because the right value is a property of the box — how many software
-encodes it carries at the host's capture resolution — and not of the code.
-`DEFAULT_MAX_VIEWERS` in `tokens.py` is the same six for a relay run with no env
-at all. Raise it from a measurement, not from a demo that happened to survive.
+`RoomEncoder` takes the room's newest frame, encodes it **once** with its own
+libvpx context on its own thread, and pushes the `av.Packet` to every viewer's
+`PacketTrack`. aiortc's sender, handed a packet instead of a frame, takes its
+passthrough path (`encoder.pack()`), which only packetizes. `RoomAudio` does the
+same for Opus. The cost is one decode plus one video and one audio encode per
+room, plus a cheap packetize per viewer.
 
-Note the ceiling is **per stream**, not per machine: two concurrent shares at six
-viewers each is twelve encodes, and nothing enforces a machine-wide total. Six is
-therefore a floor on what one popular link costs, not a cap on what the relay can
-be asked to do.
+Audio had to be shared too, and that was found by measuring rather than guessed:
+with video shared, 25 viewers ran at full frame rate on two cores -- until the
+publisher carried audio. Each viewer's sender then Opus-encoded the same samples
+in the loop's default executor (about 1,250 jobs a second), the one video encode
+queued behind them (median 15 ms to 83 ms), and every viewer fell to 2 fps. The
+video encode now also has its own thread, so nothing else can queue in front of it.
+
+Sharing *encoded* packets imposes rules that sharing decoded frames did not:
+
+- **A viewer starts on a keyframe.** A `PacketTrack` queues nothing until its
+  sender first pulls (so a viewer mid-handshake never starts on a stale backlog),
+  then asks for a keyframe and discards packets until one arrives.
+- **A viewer never skips a single encoded frame.** Dropping a delta frame breaks
+  every frame after it. A viewer that falls behind (`VIEWER_QUEUE_MAX`) drops its
+  whole backlog and resumes at the next keyframe, which it requests.
+- **PLI goes to the room.** aiortc ignores its own force-keyframe flag on the
+  passthrough path, so `Room.subscribe` points each sender's `_send_keyframe` at
+  the room encoder. Requests coalesce to one keyframe per `MIN_KEYFRAME_GAP_S`,
+  and one is forced every `KEYFRAME_INTERVAL_S` regardless, because RTCP is lossy
+  too.
+- **Codecs are pinned.** Each viewer is negotiated onto VP8 and Opus only. A
+  viewer that preferred H.264 would otherwise get VP8 bytes split as NAL units:
+  connected, and garbage.
+- **One bitrate for everyone** (`SHARE_RELAY_VIDEO_KBPS`, default 3000, CBR). A
+  viewer's REMB retunes nothing. aiortc's own `Vp8Encoder` clamped to 1.5 Mbps --
+  unreadable for a desktop -- and rebuilt its codec, keyframe included, on every
+  10% swing of each viewer's estimate. Frames taller than `SHARE_RELAY_MAX_HEIGHT`
+  (1080) are scaled down once before the encode.
+
+**The host's upload needed the same care.** aiortc estimates the ingest bandwidth
+by REMB alone, tracking about 1.5x whatever is currently arriving, so a still
+desktop pinned the host's Chrome at **53 kbps** (`qualityLimitationReason:
+bandwidth`, resolution halved) and the next scroll arrived as a smear for every
+viewer. The WHIP answer now carries `x-google-min-bitrate` and
+`x-google-start-bitrate` on its video codecs (`ingest_bitrate_hints`; floor
+`SHARE_RELAY_INGEST_MIN_KBPS`, default 1000). Measured after: 1280x720 at about
+2 Mbps, limitation `none`.
+
+### Measured capacity
+
+`scripts/share_relay_loadtest.py` publishes a synthetic 1080p desktop (scrolling
+text plus a moving bar, with audio) and opens N real WHEP viewers in separate
+processes, then reports each viewer's frame rate and the relay's CPU and memory.
+`--pin-cores 2` restricts a local relay to the two cores the Fly machine has and
+keeps the harness off them.
+
+| Relay on 2 cores, 1080p at 15 fps | Viewer fps | Relay CPU (of 200%) | RSS |
+| --- | --- | --- | --- |
+| Per-viewer encoders, 15 viewers | **3.0** | 177% | 1.5 GB |
+| Shared encode, 15 viewers | 15.0 | 64% | 329 MB |
+| Shared video, per-viewer audio, 25 viewers | **1.9** | 80% | 542 MB |
+| Shared video and audio, 25 viewers | 15.0 | 76% | 284 MB |
+
+The ceiling is `SHARE_RELAY_MAX_VIEWERS`, set in `fly.share.toml` next to the
+machine it was sized for, now **20**: inside the 25 measured above, with room for
+the real network. It is **per stream**, not per machine. Run the load test against
+the deployed relay after any change to this path (mint with `--key`), and watch
+`/health` -> `load`: an `encode_ms_p50` creeping toward the frame interval (66 ms
+at 15 fps) is the early warning, and viewer frame rate falls after it.
+
+## A seat is given back when its viewer leaves
+
+The seat count used to be written only when a viewer joined, and the capacity
+check read that number -- so viewers who left never gave a seat back, and a stream
+that once filled turned everyone away after it, reconnects included. The count is
+now read from the room at every check. The WHEP answer also carries a resource URL
+(`Location: /whep/<code>/<viewer_id>`), and the viewer page DELETEs it on
+`pagehide` and before every redial (`keepalive`, so it outlives the page), so a
+reload does not hold two seats until ICE consent expires. A viewer stuck
+`disconnected` for `VIEWER_DISCONNECT_GRACE_S` (10 s) is reclaimed too.
 
 ## Viewers need TURN too, and that costs something
 

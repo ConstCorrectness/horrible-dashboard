@@ -136,6 +136,19 @@
       "env": {
         "SHARE_RELAY_KEY": ""
       }
+    },
+    {
+      "name": "share-relay-loadtest",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.share_relay.app:app", "--port", "9101"],
+      "port": 9101,
+      "env": {
+        "SHARE_RELAY_KEY": "",
+        "SHARE_RELAY_STUN": "",
+        "CLOUDFLARE_TURN_KEY_ID": "",
+        "CLOUDFLARE_TURN_API_TOKEN": "",
+        "SHARE_RELAY_MAX_VIEWERS": "40"
+      }
     }
   ]
 }

@@ -163,12 +163,14 @@ def test_sweep_drops_the_code_index_too() -> None:
     assert gone.code not in registry._codes
 
 
-def test_default_ceiling_is_a_handful_not_twenty_five() -> None:
+def test_default_ceiling_is_the_measured_number() -> None:
     """The default is the measured number, not an aspirational one.
 
     Pinned because the failure it guards against is silent and total: the ceiling
-    only ever shows up as a refused viewer, so a default drifting back upward
-    would be invisible until a relay was OOM-killed and took every link with it.
+    only ever shows up as a refused viewer, so a default drifting upward would be
+    invisible until a relay starved and degraded every link on it. Twenty is
+    inside the 25 that `scripts/share_relay_loadtest.py --pin-cores 2` held at
+    full frame rate with the shared encode; move it only with a new measurement.
     """
-    assert DEFAULT_MAX_VIEWERS == 6
+    assert DEFAULT_MAX_VIEWERS == 20
     assert Registry().max_viewers_per_stream == DEFAULT_MAX_VIEWERS

@@ -25,6 +25,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend.share_relay import app as relay_app
+from backend.share_relay import ice
 from backend.share_relay.ratelimit import DEFAULT_MISS_LIMIT, MissLimiter
 from backend.share_relay.tokens import DEFAULT_MAX_VIEWERS, Registry
 
@@ -44,7 +45,19 @@ def clean_relay(monkeypatch):
     monkeypatch.setenv("SHARE_RELAY_PUBLIC_URL", "https://share.example.com")
     monkeypatch.delenv("SHARE_RELAY_KEY", raising=False)
     monkeypatch.delenv("FLY_APP_NAME", raising=False)
+    for name in (
+        "SHARE_RELAY_STUN",
+        "SHARE_RELAY_TURN_URL",
+        "SHARE_RELAY_TURN_USER",
+        "SHARE_RELAY_TURN_PASS",
+        "SHARE_RELAY_TURN_FOR_VIEWERS",
+        "CLOUDFLARE_TURN_KEY_ID",
+        "CLOUDFLARE_TURN_API_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    ice.reset_cache()
     yield
+    ice.reset_cache()
 
 
 @pytest.fixture
@@ -378,6 +391,55 @@ async def test_a_full_stream_is_refused_rather_than_degraded(
     finally:
         await pub.close()
         await relay_app.rooms.drop(token)
+
+
+@pytest.mark.anyio
+async def test_a_seat_comes_back_when_its_viewer_leaves(client, monkeypatch) -> None:
+    """THE "stream is full" regression. The seat count was written only when a
+    viewer joined, so viewers who left never gave a seat back: once a stream
+    filled, everyone after -- reconnects included -- was turned away for good.
+    """
+    monkeypatch.setattr(relay_app.registry, "max_viewers_per_stream", 1)
+    body = await mint(client)
+    token, code = body["token"], body["code"]
+    pub, offer = await publisher_offer()
+    views = []
+    try:
+        await publish_live(client, token, offer)
+        first, sdp = await viewer_offer()
+        views.append(first)
+        seated = await client.post(f"/whep/{code}", content=sdp)
+        assert seated.status_code == 201
+        resource = seated.headers["location"]
+        assert resource.startswith(f"/whep/{code}/")
+        # The resource is addressed by the watch code, never the publish token.
+        assert token not in resource
+
+        second, sdp2 = await viewer_offer()
+        views.append(second)
+        assert (await client.post(f"/whep/{code}", content=sdp2)).status_code == 503
+
+        left = await client.delete(resource)
+        assert left.status_code == 200 and left.json() == {"stopped": True}
+        # Idempotent: a page that fires DELETE twice (pagehide + redial) is fine.
+        assert (await client.delete(resource)).json() == {"stopped": False}
+        assert (await client.get(f"/streams/{token}")).json()["viewers"] == 0
+
+        third, sdp3 = await viewer_offer()
+        views.append(third)
+        assert (await client.post(f"/whep/{code}", content=sdp3)).status_code == 201
+    finally:
+        for view in views:
+            await view.close()
+        await pub.close()
+        await relay_app.rooms.drop(token)
+
+
+@pytest.mark.anyio
+async def test_health_reports_load(client) -> None:
+    load = (await client.get("/health")).json()["load"]
+    assert load["viewers"] == 0
+    assert load["rooms"] == []
 
 
 @pytest.mark.anyio

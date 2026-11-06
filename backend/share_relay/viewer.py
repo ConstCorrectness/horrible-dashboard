@@ -208,6 +208,17 @@ const phaseCount = $('phase-count');
 const diagLog = $('diag-log');
 
 let pc = null;
+// This viewer's WHEP resource (the answer's Location). DELETE it to give the
+// seat back the moment we leave or redial, instead of holding it until the
+// relay notices the connection died -- a full stream turned reloads away.
+let resource = null;
+function leaveSeat() {
+  if (!resource) return;
+  const url = resource;
+  resource = null;
+  // keepalive lets the request outlive a closing page.
+  try { fetch(url, { method: 'DELETE', keepalive: true }).catch(() => {}); } catch (e) {}
+}
 let passphrase = '';
 let attempts = 0;
 // The pending "not started yet" retry, so a second call to connect() cancels it
@@ -452,6 +463,7 @@ function watchFirstFrame(stale) {
 /** Drop whatever attempt is running, including one still mid-await. */
 function tearDown() {
   generation += 1; // every in-flight attempt is now stale
+  leaveSeat();
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
   if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
@@ -606,6 +618,7 @@ async function connect() {
   if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
   if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
   if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
+  leaveSeat();
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
 
   // This function awaits five times, and every one of them is a window in which
@@ -625,7 +638,9 @@ async function connect() {
   gotFrame = false;
   await refreshIce();
   if (gen !== generation) return;
-  const self = new RTCPeerConnection({ iceServers });
+  // max-bundle: one transport, so one set of candidates to gather before the
+  // offer goes out (there is no trickle), matching the host's WHIP side.
+  const self = new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle' });
   pc = self;
   const stale = () => gen !== generation;
   const abandon = () => { try { self.close(); } catch (e) {} };
@@ -801,6 +816,8 @@ async function connect() {
     return;
   }
 
+  const location = res.headers.get('Location');
+  if (location) resource = location;
   const answer = await res.text();
   if (stale()) return abandon();
   setPhase('negotiate');
@@ -968,7 +985,7 @@ $('diag-stats').addEventListener('click', () => void sampleStats('manual'));
 // consent expires ~30s later -- and a slot is a full-resolution encoder on a
 // machine whose first ceiling is memory. Closing the connection makes the
 // relay notice immediately.
-addEventListener('pagehide', () => { stopStats(); if (pc) { try { pc.close(); } catch (e) {} } });
+addEventListener('pagehide', () => { stopStats(); leaveSeat(); if (pc) { try { pc.close(); } catch (e) {} } });
 
 diagLine('page loaded; found=' + CFG.found + ' turn=' +
   (CFG.iceServers || []).some((s) => String(s.urls).indexOf('turn') === 0));

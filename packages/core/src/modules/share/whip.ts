@@ -24,7 +24,7 @@ import { getSetting } from '../../settings';
 import { buildIceConfig } from './signal';
 
 /** How long to wait for ICE gathering before sending the offer anyway. */
-const GATHER_TIMEOUT_MS = 2500;
+const GATHER_TIMEOUT_MS = 3500;
 
 /** How long to wait for the relay's ICE list before publishing without it. */
 const ICE_FETCH_TIMEOUT_MS = 3000;
@@ -70,7 +70,11 @@ function iceConfig(extra: RTCIceServer[]): RTCConfiguration {
     turnUsername: getSetting<string>('network.turnUsername'),
     turnCredential: getSetting<string>('network.turnCredential'),
   });
-  return { ...base, iceServers: [...base.iceServers, ...extra] };
+  return {
+    ...base,
+    iceServers: [...base.iceServers, ...extra],
+    bundlePolicy: 'max-bundle',
+  };
 }
 
 export interface WhipOptions {
@@ -168,8 +172,24 @@ export class WhipPublisher {
     // `sendonly`, explicitly. Adding a track without a direction gives
     // `sendrecv`, and the relay would then answer with transceivers it is never
     // going to use — harmless in practice and noise in every SDP dump forever.
-    for (const track of stream.getTracks()) {
-      pc.addTransceiver(track, { direction: 'sendonly', streams: [stream] });
+    //
+    // At most one video track and at most one audio track:
+    // WHIP is an ingest protocol for a single broadcast presentation. Adding
+    // multiple tracks of the same kind causes candidate explosion across TURN
+    // servers, stalling ICE gathering past GATHER_TIMEOUT_MS, and the relay's
+    // fanout multiplexes only one stream of each kind anyway.
+    const tracks = stream.getTracks ? stream.getTracks() : [];
+    const video = stream.getVideoTracks
+      ? stream.getVideoTracks()[0]
+      : tracks.find((t) => t.kind === 'video');
+    if (video) {
+      pc.addTransceiver(video, { direction: 'sendonly', streams: [stream] });
+    }
+    const audio = stream.getAudioTracks
+      ? stream.getAudioTracks()[0]
+      : tracks.find((t) => t.kind === 'audio');
+    if (audio) {
+      pc.addTransceiver(audio, { direction: 'sendonly', streams: [stream] });
     }
 
     await pc.setLocalDescription(await pc.createOffer());

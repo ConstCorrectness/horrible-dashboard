@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -274,6 +275,31 @@ class RelayInfo(BaseModel):
     #: carries no media -- so "is ICE configured" has to be answerable without
     #: reproducing the failure.
     ice: dict = {}
+    #: Is the machine keeping up? Viewer total, process RSS, and each live
+    #: room's shared-encoder timing. An encode median creeping toward the frame
+    #: interval (~66ms at 15 fps) is the early warning; viewer fps falls after.
+    load: dict = {}
+
+
+def _rss_mb() -> float | None:
+    """Resident memory of this process, from /proc on Linux (the deploy target)."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        return None
+    return None
+
+
+def _load() -> dict:
+    live = [room for room in rooms.all() if room.publishing]
+    return {
+        "viewers": sum(room.viewers for room in rooms.all()),
+        "rss_mb": _rss_mb(),
+        "rooms": [room.encoder_stats() for room in live],
+    }
 
 
 @app.get("/health", response_model=RelayInfo)
@@ -286,6 +312,7 @@ async def health() -> RelayInfo:
         gated=bool(_ingest_key()),
         max_viewers_per_stream=registry.max_viewers_per_stream,
         ice=ice.describe(),
+        load=_load(),
     )
 
 
@@ -342,6 +369,8 @@ def _resolve(token: str) -> Stream:
 async def status(token: str) -> StatusOut:
     stream = _resolve(token)
     room = rooms.get(token)
+    if room is not None:
+        stream.viewers = room.viewers
     return StatusOut(
         token=token,
         live=bool(room and room.live),
@@ -494,14 +523,34 @@ async def whep(
             else "stream is not live yet"
         )
         raise HTTPException(status_code=409, detail=detail)
+    # Counted from the room *now*. This used to read a number written only when
+    # somebody joined, so viewers who left never gave their seat back: a stream
+    # that once filled turned away everyone after, reconnects included.
+    stream.viewers = room.viewers
     if registry.at_capacity(stream):
         raise HTTPException(status_code=503, detail="this stream is full")
 
     offer = await _sdp_body(request)
     await ice.refresh()
-    answer = await room.subscribe(offer, ice.ice_servers())
+    viewer_id = secrets.token_urlsafe(12)
+    answer = await room.subscribe(offer, ice.ice_servers(), viewer_id=viewer_id)
     stream.viewers = room.viewers
-    return _sdp_response(answer, token)
+    # WHEP's resource URL: DELETE it to leave. The viewer page does on unload
+    # and before every redial, so a reload does not hold two seats.
+    return _sdp_response(
+        answer, token, extra={"Location": f"/whep/{stream.code}/{viewer_id}"}
+    )
+
+
+@app.delete("/whep/{code}/{viewer_id}")
+async def whep_stop(code: str, viewer_id: str, request: Request) -> dict[str, bool]:
+    """Viewer leaves. Idempotent: an unknown or already-closed viewer is fine."""
+    stream = _resolve_code(code, _ip(request))
+    room = rooms.get(stream.token)
+    dropped = await room.drop_viewer(viewer_id) if room is not None else False
+    if room is not None:
+        stream.viewers = room.viewers
+    return {"stopped": dropped}
 
 
 @app.get("/whep/{code}/ice")

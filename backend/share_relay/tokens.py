@@ -79,20 +79,18 @@ def _new_code() -> str:
 
 #: How many viewers one stream may hold before the relay starts refusing them.
 #:
-#: Six, not the twenty-five this used to be, and the change was forced rather
-#: than tidied: a `performance-2x` was OOM-killed 2m21s into a single desktop
-#: share, which takes the whole registry with it and kills every link on the
-#: relay at once (see `Registry`). Twenty-five was never a number this machine
-#: could honour — `fanout` re-encodes the frames **per viewer** in software at
-#: whatever resolution the host is capturing, so the cost is linear in viewers
-#: and the docs already put the honest figure at "a handful".
+#: Twenty, and measured: with the room encoding video and audio **once**
+#: (`encoder.py`) and each viewer only packetizing, 25 viewers of a 1080p15
+#: share held full frame rate on the two cores of a `performance-2x`
+#: (`scripts/share_relay_loadtest.py --pin-cores 2`). It was six while every
+#: viewer cost its own software encode -- fifteen then got 3 fps each.
 #:
-#: Refusing the seventh viewer is the cheap failure; accepting them and killing
-#: the process is the expensive one, because it takes the six who were already
-#: watching *and* everybody else's links with it. Override with
-#: `SHARE_RELAY_MAX_VIEWERS` once a bigger machine has actually been measured —
-#: not before, and not from the number a demo happened to survive.
-DEFAULT_MAX_VIEWERS = 6
+#: Refusing the next viewer is the cheap failure; accepting them and starving
+#: the process is the expensive one, because it degrades everyone already
+#: watching *and* everybody else's links on the relay. Override with
+#: `SHARE_RELAY_MAX_VIEWERS` from a measurement -- not from the number a demo
+#: happened to survive.
+DEFAULT_MAX_VIEWERS = 20
 
 
 def _hash_passphrase(passphrase: str, salt: bytes) -> str:

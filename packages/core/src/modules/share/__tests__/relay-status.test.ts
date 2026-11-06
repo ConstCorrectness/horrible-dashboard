@@ -35,6 +35,22 @@ describe('reconcileRelay', () => {
     expect(next.relayError).toBeNull();
   });
 
+  it('treats connecting as in-flight setup rather than an error banner', () => {
+    // The initial transition: the offer was answered and ICE is forming.
+    // It must not flash an error banner before the grace period has elapsed.
+    const next = reconcileRelay(
+      RELAYING,
+      status({
+        state: 'connecting',
+        live: false,
+        detail: 'The relay accepted the stream but no picture has reached it yet.',
+      }),
+    );
+    expect(next.relaying).toBe(false);
+    expect(next.relayState).toBe('connecting');
+    expect(next.relayError).toBeNull();
+  });
+
   it('drops the claim when the relay says it has forgotten the token', () => {
     // The OOM case: the relay is up and has never heard of this token, so every
     // viewer holding the URL is on an expired page.
