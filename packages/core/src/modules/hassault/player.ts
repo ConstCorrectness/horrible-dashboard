@@ -150,7 +150,6 @@ export interface MoveInput {
   crouch: boolean;
   /** Hold to walk: slower and silent. */
   walk?: boolean;
-  sprint?: boolean;
   /**
    * Knife in hand. The server derives it as "holds weapon 0", read *before* the
    * command's own weapon switch — `Predictor` derives it the same way, so a

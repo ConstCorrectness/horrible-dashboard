@@ -13,9 +13,11 @@ weapon's rate, because commands arrive in batches).
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
+from pathlib import Path
 
 import pytest
 
@@ -734,25 +736,47 @@ def test_the_route_actually_publishes_the_spray_pattern():
             assert weapon["residualSpread"] == weapon["spread"], wid
 
 
-def test_catmull_rom_subtick_rewind_smooths_curved_motion():
-    """Catmull-Rom cubic spline predicts smooth velocity curvature under 4-point strafing."""
+def test_rewind_is_a_straight_line_between_ticks_like_the_clients_draw():
+    """An accelerating body is judged where the clients drew it: on the lerp.
+
+    A spline through the neighbouring frames lands a little ahead of or behind
+    the straight line, and the straight line is what was on screen.
+    """
     history = PositionHistory()
-    # A player accelerating or turning: (0,0), (10,0), (22,0), (36,0)
     history.record(1000.0, {"p": (0.0, 0.0, 0.0)})
     history.record(1100.0, {"p": (10.0, 0.0, 0.0)})
     history.record(1200.0, {"p": (22.0, 0.0, 0.0)})
     history.record(1300.0, {"p": (36.0, 0.0, 0.0)})
-
-    # Midpoint between 1100 and 1200:
-    # Linear midpoint would be (10 + 22) / 2 = 16.0
-    # Catmull-Rom with positive acceleration evaluates slightly differently than pure linear:
-    rewound = history.rewind(1150.0, smooth=True)
+    rewound = history.rewind(1150.0)
     assert rewound is not None
-    x = rewound["p"][0]
-    # Verify smooth interpolation is within the bounds [10, 22] and physically sound
-    assert 15.0 <= x <= 17.0
-    # Also verify linear fallback when smooth=False
-    assert history.rewind(1150.0, smooth=False)["p"][0] == pytest.approx(16.0)
+    assert rewound["p"][0] == pytest.approx(16.0)
+    assert history.rewind(1125.0)["p"][0] == pytest.approx(13.0)
+
+
+INTERP_VECTORS = (
+    Path(__file__).resolve().parents[2]
+    / "packages/core/src/modules/hassault/__tests__/interp-vectors.json"
+)
+
+
+def test_rewind_matches_the_shared_curve_the_clients_replay():
+    """`interp-vectors.json` `rewinds`: the curve both clients draw along.
+
+    Written from this function by the generator, so this pins that nobody has
+    changed the rewind without regenerating; the clients' suites pin that they
+    draw the same line.
+    """
+    vectors = json.loads(INTERP_VECTORS.read_text(encoding="utf-8"))
+    history = PositionHistory()
+    for frame in vectors["rewinds"]["frames"]:
+        history.record(
+            frame["t"], {k: tuple(v) for k, v in frame["positions"].items()}
+        )
+    for query in vectors["rewinds"]["queries"]:
+        got = history.rewind(query["t"])
+        assert got is not None
+        for pid, expect in query["expect"].items():
+            assert got[pid] == pytest.approx(tuple(expect), abs=1e-9), (query["t"], pid)
 
 
 def test_pellet_hit_reports_hit_zone_and_rewind_delta():

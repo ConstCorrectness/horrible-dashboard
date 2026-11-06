@@ -20,7 +20,6 @@
  */
 import type { ItemReach, ItemSpec, WeaponSpec } from './api';
 import type { ItemRow, LoadoutSlots, PickedItem, PlayerRow, SelfState } from './net';
-import { visualId } from './weapon-visuals';
 import { currentHitbox, heightAt } from './hitbox';
 import { spawnAt } from './player';
 import {
@@ -90,7 +89,6 @@ export interface RangeShot {
   faces: number[];
   hits: TargetHit[];
   wallbang?: boolean;
-  shatteredWindows?: string[];
 }
 
 interface Target {
@@ -534,8 +532,6 @@ export class TrainingRange {
     pitch: number,
     scoped: number,
     rand: () => number = Math.random,
-    physics3d?: import('./physics-rapier').RapierPhysicsWorld,
-    world3d?: import('./world3d').World3D,
     /**
      * How the shooter was moving, for the accuracy model. Omitted is standing
      * still, which is what every caller that predates the model meant.
@@ -581,37 +577,21 @@ export class TrainingRange {
     const ends: Vec[] = [];
     const faces: number[] = [];
     const hits: TargetHit[] = [];
-    const allShattered: string[] = [];
     let hadWallbang = false;
+    // The served penetration depth, cubes: how far past a surface a body can
+    // still be hit through it (`weapons.resolve_shot`). Zero stops at the wall.
+    const penetration = weapon.penetration ?? 0;
 
     for (let pellet = 0; pellet < Math.max(1, weapon.pellets); pellet++) {
       const [pdx, pdy, pdz] = spreadVector(direction, cone, rand);
-      let wall = weapon.range;
-      let face = 0;
-      let penFactor = 1.0;
-      let pelletWallbang = false;
-
-      if (physics3d) {
-        const rayResult = physics3d.castRayPenetrating(
-          { x: origin[0], y: origin[1], z: origin[2] },
-          { x: pdx, y: pdy, z: pdz },
-          weapon.range,
-          visualId(weapon),
-        );
-        wall = rayResult.dist;
-        penFactor = rayResult.damageFactor;
-        pelletWallbang = rayResult.wallbang;
-        if (rayResult.shatteredWindows.length > 0) {
-          for (const wid of rayResult.shatteredWindows) {
-            allShattered.push(wid);
-            world3d?.shatterWindow?.(wid);
-          }
-        }
-      } else {
-        const res = raycastWorldFace(world, origin, [pdx, pdy, pdz], weapon.range);
-        wall = res.distance;
-        face = res.face;
-      }
+      // The grid, as the server traces it: Train is practice for a match, so a
+      // modelled map is shot against the same baked cubes the server judges.
+      const { distance: wall, face } = raycastWorldFace(
+        world,
+        origin,
+        [pdx, pdy, pdz],
+        weapon.range,
+      );
 
       let best: { distance: number; target: Target } | null = null;
       for (const target of this.targets) {
@@ -626,9 +606,14 @@ export class TrainingRange {
           undefined,
           height,
         );
-        // A body behind an impenetrable wall is not a target. If penetrated, damage carries through!
         if (distance === null) continue;
-        if (distance >= wall && penFactor <= 0.05) continue;
+        // Through a wall only within the weapon's penetration, and never into a
+        // body standing in solid: the server's rule, so a range wallbang is one
+        // a match would also give you.
+        if (distance >= wall) {
+          if (penetration <= 0 || distance > wall + penetration) continue;
+          if (world.isSolid(Math.floor(target.x), Math.floor(target.y))) continue;
+        }
         if (best === null || distance < best.distance) best = { distance, target };
       }
 
@@ -663,11 +648,10 @@ export class TrainingRange {
             : limbs
               ? 0.75
               : 1.0;
-      const wallbangHit = pelletWallbang || distance > wall;
+      const wallbangHit = distance >= wall;
       if (wallbangHit) hadWallbang = true;
-      const finalDamageFactor = distance > wall ? penFactor : 1.0;
       const amount = Math.round(
-        damageAt(weapon, distance, falloffStart(weapon)) * mult * finalDamageFactor,
+        damageAt(weapon, distance, falloffStart(weapon)) * mult * (wallbangHit ? 0.6 : 1),
       );
       target.hp -= amount;
       const killed = target.hp <= 0;
@@ -696,7 +680,6 @@ export class TrainingRange {
       faces,
       hits,
       wallbang: hadWallbang,
-      shatteredWindows: allShattered.length > 0 ? allShattered : undefined,
     };
   }
 

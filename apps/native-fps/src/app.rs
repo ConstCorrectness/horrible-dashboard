@@ -60,7 +60,7 @@ use hassault_native::hud::{
 };
 use hassault_native::bench::{BenchRun, FrameRing, Sample, FRAME_RING};
 use hassault_native::hud::NetGraphStats;
-use hassault_native::interp::{PingTracker, SnapshotBuffer, INTERP_DELAY_MS};
+use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::net_stats::NetStats;
 use hassault_native::renderer::FrameCost;
 use hassault_native::items::ItemField;
@@ -68,7 +68,6 @@ use hassault_native::menu::{self, Action, Menu};
 use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
-use hassault_native::physics_rapier::RapierPhysicsWorld;
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
 use hassault_native::protocol::{
@@ -162,7 +161,6 @@ pub struct App {
     mesh: MeshData,
     world: World,
     pub world3d: Option<World3D>,
-    pub rapier_physics: Option<RapierPhysicsWorld>,
     pub spawn_index: Option<usize>,
     /// The match, when there is one. **Train has none** — it is one player on a
     /// map, off the wire entirely, which is what the browser client's Train is
@@ -563,17 +561,16 @@ impl App {
             || map_name == "hd_bank"
             || map_name == "hd_assault"
             || map_name == "hd_aim";
-        let (world3d, rapier_physics, mesh) = if is_gltf {
+        // A modelled map is drawn from its mesh and collided against the cube
+        // grid it bakes, in Train exactly as in a match: the server steps every
+        // body against that grid, so practice on anything else teaches moves
+        // that do not exist.
+        let (world3d, mesh) = if is_gltf {
             let w3d = world3d::create_world_3d(world.info.clone());
-            let rapier = RapierPhysicsWorld::new_with_windows(
-                &w3d.col_vertices,
-                &w3d.col_indices,
-                Some(&w3d.windows),
-            );
             let m3d = w3d.to_mesh_data();
-            (Some(w3d), Some(rapier), m3d)
+            (Some(w3d), m3d)
         } else {
-            (None, None, mesh)
+            (None, mesh)
         };
         // Read before `world` is moved into the struct below.
         let world_items = world.info.items.clone();
@@ -590,7 +587,6 @@ impl App {
             mesh,
             world,
             world3d,
-            rapier_physics,
             spawn_index: None,
             socket,
             pending_bots: None,
@@ -972,7 +968,11 @@ impl App {
             draws: drew.then_some(self.last_cost.draws),
             triangles: drew.then_some(self.last_cost.triangles),
             net: self.net_stats.view(),
-            interp_ms: self.socket.is_some().then_some(INTERP_DELAY_MS),
+            interp_ms: self
+                .socket
+                .is_some()
+                .then(|| self.snapshots.delay_ms(Self::clock_ms()))
+                .flatten(),
         };
     }
 
@@ -1670,16 +1670,29 @@ impl App {
 
     /// (Re)start the drill: restock, stand at its station, count down.
     ///
-    /// A station is a place to stand on a cube map only. A modelled map's
-    /// body is Rapier's, and the any-map drill has no station anyway.
+    /// A station is exact on a cube map, and grounded on the baked grid on a
+    /// modelled one, as any spawn is (the browser's `standAt`). The any-map
+    /// drill has no station.
     fn begin_drill(&mut self) {
         let Some(spec) = self.drill.clone() else {
             return;
         };
-        if let (Some(at), None) = (spec.shooter, self.world3d.as_ref()) {
+        if let Some(at) = spec.shooter {
+            let z = if self.world3d.is_some() {
+                // `spawn_at` takes a cell; the shooter is the cell's centre.
+                let cell = physics::Spawn {
+                    x: at.x - 0.5,
+                    y: at.y - 0.5,
+                    z: at.z,
+                    yaw: 0.0,
+                };
+                physics::spawn_at(&self.world, &cell).z
+            } else {
+                at.z
+            };
             self.camera.yaw = at.yaw.to_degrees();
             self.camera.pitch = 0.0;
-            self.prediction.reset(at.x, at.y, at.z, at.yaw, 0.0);
+            self.prediction.reset(at.x, at.y, z, at.yaw, 0.0);
             self.follow_prediction();
         }
         self.range.reset();
@@ -1767,28 +1780,15 @@ impl App {
                 } else {
                     None
                 }
-            })
-            .or_else(|| {
-                // A map row is a cell on a rounded floor: grounded on the mesh.
-                // An override is already exactly where it means.
-                self.world3d
-                    .as_ref()
-                    .and_then(|w| w.spawns.first().copied())
-                    .map(|mut sp| {
-                        if let Some(rapier) = &self.rapier_physics {
-                            (sp.x, sp.y, sp.z) = rapier.ground_spawn(sp.x, sp.y, sp.z);
-                        }
-                        sp
-                    })
             });
+        // An override (screenshots, the bench) is already exactly where it
+        // means. Anything else is a map spawn entity, grounded on the grid below
+        // as a match grounds it, modelled map or not.
         if let Some(sp) = spawn_3d {
             self.camera.yaw = sp.yaw;
             self.camera.pitch = override_pitch;
             self.prediction
                 .reset(sp.x, sp.y, sp.z, sp.yaw.to_radians(), 0.0);
-            if let Some(rapier) = &mut self.rapier_physics {
-                rapier.set_position(sp.x, sp.y, sp.z);
-            }
             self.joined = true;
             self.follow_prediction();
 
@@ -2559,11 +2559,7 @@ impl App {
             let (yaw, pitch) = self.view_angles();
             self.prediction.state.yaw = yaw;
             self.prediction.state.pitch = pitch;
-            if let Some(rapier) = &mut self.rapier_physics {
-                rapier.step_player(&mut self.prediction.state, input, dt);
-            } else {
-                physics::step(&self.world, &mut self.prediction.state, &input, dt);
-            }
+            physics::step(&self.world, &mut self.prediction.state, &input, dt);
             // The range plays the server's part, and it has to run *after* the
             // step: a shot leaves from where the body is this frame, and firing
             // before moving aims from where it was on the previous one.
@@ -2611,7 +2607,7 @@ impl App {
         cmd.buy = std::mem::replace(&mut self.pending_buy, -1);
         cmd.sell = std::mem::replace(&mut self.pending_sell, -1);
         cmd.drop = std::mem::take(&mut self.pending_drop);
-        // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
+        // And the instant it was aimed at. Bodies are drawn `delay_ms` in
         // the past, so without this every shot is resolved against positions a
         // tenth of a second newer than the ones on screen when the trigger was
         // pulled — which is not a small error at a running target, and reads as

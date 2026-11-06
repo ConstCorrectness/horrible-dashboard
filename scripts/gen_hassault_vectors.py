@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 from backend.modules.hassault.physics import (
@@ -37,6 +38,7 @@ from backend.modules.hassault.weapons import (
     BODY_HEIGHT,
     WEAPON_BY_ID as weapon_by_id,
     WEAPONS,
+    PositionHistory,
     aim_vector,
     apply_spray,
     damage_at,
@@ -1004,6 +1006,340 @@ def _face_is_ambiguous(world, case) -> bool:
     return len(faces) > 1
 
 
+# ---------------------------------------------------------------------------
+# Remote bodies: one curve, and the clients' render clock
+# ---------------------------------------------------------------------------
+#
+# Two things the three ports must agree on that are not movement:
+#
+# - **The curve.** A shot is judged by rewinding the server's position history
+#   to the instant the shooter was drawing (`viewT`), so the server's rewind has
+#   to be the same straight line the clients draw remote bodies along. The
+#   `rewinds` cases are the server's own `PositionHistory.rewind`; the clients
+#   replay them through `SnapshotBuffer.sampleAt` / `sample_at`.
+# - **The render clock.** How far in the past remote bodies are drawn, and how
+#   that follows the network. Only the clients run it, so its reference lives
+#   here, as the spec both ports are held to (`InterpClock`, below), with its
+#   constants in the fixture so neither port can quietly retune them.
+
+INTERP = {
+    # One server tick: the least a client can trail by and still have a
+    # snapshot either side of what it draws.
+    "tickMs": 1000.0 / 60.0,
+    "minDelayMs": 25.0,
+    "maxDelayMs": 100.0,
+    # RFC 3550's interarrival-jitter gain, as `NetStats` uses.
+    "jitterGain": 1.0 / 16.0,
+    # The clock offset is the smallest `local - t` in this window, not of all
+    # time: an all-time minimum cannot follow a clock that drifts the other way.
+    "windowMs": 5000.0,
+    # How fast the drawn lag may move toward its target, in ms per ms: the
+    # render clock runs at most 10% slow while backing off and 4% fast while
+    # catching up. Fast enough to get ahead of a jitter spike, slow enough that
+    # nobody on screen visibly speeds up or slows down.
+    "easeUp": 0.10,
+    "easeDown": 0.04,
+    # A change this big is a new clock (a reconnect, a different server), not
+    # drift, and is taken at once.
+    "snapMs": 250.0,
+    # For this long after the first snapshot (or a snap) the lag follows its
+    # target without easing: the first frames of a connection often queue, and
+    # easing down from one of those at `easeDown` would draw every body late
+    # for seconds. Nobody is watching bodies glide while they spawn.
+    "warmupMs": 1000.0,
+    # When starved, bodies carry on along their last velocity for at most this
+    # long, horizontally only, and only at a speed a body can actually move.
+    "extrapolateMs": 50.0,
+    "extrapolateMaxSpeed": 40.0,
+}
+
+
+class InterpClock:
+    """The reference render clock. `net.ts` and `interp.rs` are ports of this."""
+
+    def __init__(self) -> None:
+        # (local arrival, local - t), the samples increasing: the head is the
+        # window's minimum.
+        self.window: list[tuple[float, float]] = []
+        self.jitter = 0.0
+        self.last: tuple[float, float] | None = None
+        self.lag: float | None = None
+        self.anchor = 0.0
+        self.target = 0.0
+        self.since = 0.0
+
+    def lag_at(self, local: float) -> float | None:
+        if self.lag is None:
+            return None
+        dt = max(0.0, local - self.anchor)
+        diff = self.target - self.lag
+        if diff > 0:
+            return self.lag + min(diff, INTERP["easeUp"] * dt)
+        return self.lag + max(diff, -INTERP["easeDown"] * dt)
+
+    def push(self, t: float, local: float) -> None:
+        sample = local - t
+        while self.window and self.window[-1][1] >= sample:
+            self.window.pop()
+        self.window.append((local, sample))
+        cutoff = local - INTERP["windowMs"]
+        while self.window[0][0] < cutoff:
+            self.window.pop(0)
+        if self.last is not None:
+            d = abs((local - self.last[0]) - (t - self.last[1]))
+            self.jitter += (d - self.jitter) * INTERP["jitterGain"]
+        self.last = (local, t)
+        delay = min(
+            max(INTERP["tickMs"] + 2.0 * self.jitter, INTERP["minDelayMs"]),
+            INTERP["maxDelayMs"],
+        )
+        target = self.window[0][1] + delay
+        current = self.lag_at(local)
+        if current is None:
+            self.lag = target
+            self.since = local
+        elif abs(target - current) > INTERP["snapMs"]:
+            # A new clock, not a late packet: the step it put into the jitter
+            # estimate is not jitter, and keeping it would hold the delay at
+            # its ceiling for a second for nothing.
+            self.jitter = 0.0
+            target = self.window[0][1] + max(INTERP["tickMs"], INTERP["minDelayMs"])
+            self.lag = target
+            self.since = local
+        elif local - self.since < INTERP["warmupMs"]:
+            self.lag = target
+        else:
+            self.lag = current
+        self.anchor = local
+        self.target = target
+
+    def render_time(self, local: float) -> float | None:
+        lag = self.lag_at(local)
+        return None if lag is None else local - lag
+
+    def delay(self, local: float) -> float | None:
+        lag = self.lag_at(local)
+        return None if lag is None else lag - self.window[0][1]
+
+
+def extrapolate(frames, target: float):
+    """Bodies past the newest frame: what the clients draw when starved."""
+    newest = frames[-1]
+    prev = frames[-2] if len(frames) >= 2 else None
+    ahead = min(target - newest["t"], INTERP["extrapolateMs"])
+    out = {}
+    for pid, (x, y, z) in newest["positions"].items():
+        before = prev["positions"].get(pid) if prev else None
+        span = newest["t"] - prev["t"] if prev else 0.0
+        if before is None or span <= 0:
+            out[pid] = [x, y, z]
+            continue
+        vx = (x - before[0]) / span
+        vy = (y - before[1]) / span
+        if math.hypot(vx, vy) * 1000.0 > INTERP["extrapolateMaxSpeed"]:
+            out[pid] = [x, y, z]
+            continue
+        out[pid] = [x + vx * ahead, y + vy * ahead, z]
+    return out
+
+
+TICK = 1000.0 / 60.0
+
+# Server frames at 60 Hz with one dropped tick, carrying a body that
+# accelerates along x, one that jumps, and one that stands still.
+REWIND_FRAMES = [
+    {
+        "t": 10000.0 + i * TICK,
+        "positions": {
+            "runner": [4.0 + 0.002 * (i * TICK) ** 1.5, 8.0, 2.0],
+            "jumper": [12.0, 12.0 + 0.1 * i, 2.0 + max(0.0, 3.0 * i - 0.45 * i * i)],
+            "still": [20.0, 3.5, 6.0],
+        },
+    }
+    for i in (0, 1, 2, 3, 5, 6, 7)
+]
+REWIND_QUERIES = (
+    [9990.0, REWIND_FRAMES[0]["t"]]
+    + [f["t"] for f in REWIND_FRAMES[1:]]
+    + [f["t"] + TICK * k for f in REWIND_FRAMES[:-1] for k in (0.25, 0.5, 0.9)]
+    # Inside the dropped tick's gap.
+    + [10000.0 + 4 * TICK]
+)
+
+
+def _rewind_cases():
+    history = PositionHistory()
+    for frame in REWIND_FRAMES:
+        history.record(frame["t"], {k: tuple(v) for k, v in frame["positions"].items()})
+    out = []
+    for q in sorted(REWIND_QUERIES):
+        got = history.rewind(q)
+        out.append({"t": q, "expect": {k: list(v) for k, v in got.items()}})
+    return out
+
+
+def _extrapolation_cases():
+    frames = [
+        {
+            "t": 20000.0,
+            "positions": {
+                "runner": [10.0, 10.0, 2.0],
+                "faller": [5.0, 5.0, 12.0],
+                "teleported": [3.0, 3.0, 2.0],
+            },
+        },
+        {
+            "t": 20000.0 + TICK,
+            "positions": {
+                "runner": [10.3, 10.1, 2.0],
+                "faller": [5.1, 5.0, 11.2],
+                "teleported": [40.0, 50.0, 2.0],
+                "joined": [1.0, 1.0, 2.0],
+            },
+        },
+    ]
+    newest = frames[-1]["t"]
+    return {
+        "frames": frames,
+        "queries": [
+            {"t": q, "expect": extrapolate(frames, q)}
+            for q in (newest + 10.0, newest + 35.0, newest + 50.0, newest + 400.0)
+        ],
+    }
+
+
+def _clock_cases():
+    """Arrivals and probes. `t` near 1e6 so f64 keeps every port to 1e-6."""
+
+    def run(name, arrivals, probe_every, probe_after=8.0):
+        # Each probe is read `probe_after` ms after push number `after`.
+        clock = InterpClock()
+        probes = []
+        for i, (t, local) in enumerate(arrivals):
+            clock.push(t, local)
+            if i % probe_every == probe_every - 1:
+                at = local + probe_after
+                probes.append(
+                    {
+                        "after": i,
+                        "at": at,
+                        "renderTime": clock.render_time(at),
+                        "delay": clock.delay(at),
+                    }
+                )
+        return {"name": name, "pushes": [list(a) for a in arrivals], "probes": probes}
+
+    base_t, base_local = 1_000_000.0, 5000.0
+    cases = []
+    # A clean link: the delay sits at its floor.
+    cases.append(
+        run(
+            "steady 60 Hz, 30 ms away",
+            [(base_t + i * TICK, base_local + i * TICK + 30.0) for i in range(120)],
+            15,
+        )
+    )
+    # Queuing that varies tick to tick: the delay grows with the jitter, eased.
+    cases.append(
+        run(
+            "jittery",
+            [
+                (
+                    base_t + i * TICK,
+                    base_local
+                    + i * TICK
+                    + 30.0
+                    + (14.0 if i % 3 == 0 else 0.0)
+                    + (i % 5) * 2.5,
+                )
+                for i in range(180)
+            ],
+            12,
+        )
+    )
+    # This clock running 0.3% fast: the sliding minimum follows it, where an
+    # all-time minimum would leave the render clock creeping ahead of the data.
+    # Every fourth tick only, to keep fifteen seconds of it short.
+    cases.append(
+        run(
+            "local clock drifting fast",
+            [
+                (base_t + i * TICK, base_local + (i * TICK) * 1.003 + 30.0)
+                for i in range(0, 900, 4)
+            ],
+            15,
+        )
+    )
+    # A 400 ms stall, its frames then arriving together, then a clean link.
+    stalled = []
+    for i in range(180):
+        local = base_local + i * TICK + 30.0
+        if 60 <= i < 84:
+            local = base_local + 84 * TICK + 30.0
+        stalled.append((base_t + i * TICK, local))
+    cases.append(run("a stall and its burst", stalled, 6))
+    # The server's clock jumps two seconds: a new clock, taken at once.
+    jumped = [
+        (
+            base_t + i * TICK + (2000.0 if i >= 60 else 0.0),
+            base_local + i * TICK + 30.0,
+        )
+        for i in range(120)
+    ]
+    cases.append(run("the server clock jumps", jumped, 10))
+    # The first snapshot queued 200 ms; the rest did not. Settled within the
+    # warm-up, not eased down over seconds.
+    cases.append(
+        run(
+            "a slow first snapshot",
+            [(base_t, base_local + 200.0)]
+            + [(base_t + i * TICK, base_local + i * TICK) for i in range(1, 90)],
+            5,
+        )
+    )
+    return cases
+
+
+INTERP_OUT = OUT.with_name("interp-vectors.json")
+
+
+def _write_interp_vectors() -> None:
+    """`interp-vectors.json`: the curve, the starved extrapolation, the clock.
+
+    Its own file, and with every list of numbers on one line, because the clock
+    cases are hundreds of arrivals: written the way `physics-vectors.json` is,
+    they would be most of that file.
+    """
+    payload = {
+        "_comment": (
+            "Remote-body interpolation vectors, written by "
+            "scripts/gen_hassault_vectors.py. 'rewinds' are the server's own "
+            "PositionHistory.rewind and pin the one curve a shot is judged on "
+            "and a body is drawn along. 'extrapolations' and 'interpClock' "
+            "are the clients' render clock, from the reference InterpClock in "
+            "the generator. Replayed by backend/tests/test_hassault_weapons.py, "
+            "packages/core/src/modules/hassault/__tests__/interp-vectors.test.ts "
+            "and apps/native-fps/tests/conformance.rs."
+        ),
+        "interp": INTERP,
+        "clockTolerance": 1e-6,
+        # The native rows are f32.
+        "positionTolerance": 1e-4,
+        "rewinds": {"frames": REWIND_FRAMES, "queries": _rewind_cases()},
+        "extrapolations": _extrapolation_cases(),
+        "interpClock": _clock_cases(),
+    }
+    text = json.dumps(payload, indent=2)
+    # Every array of plain numbers onto one line.
+    text = re.sub(
+        r"\[\s*([-0-9.eE+]+(?:,\s*[-0-9.eE+]+)*)\s*\]",
+        lambda m: "[" + ", ".join(v.strip() for v in m.group(1).split(",")) + "]",
+        text,
+    )
+    INTERP_OUT.write_text(text + "\n", encoding="utf-8")
+    print(f"wrote {INTERP_OUT}")
+
+
 def main() -> None:
     out_cases = []
     for case in CASES:
@@ -1221,6 +1557,7 @@ def main() -> None:
         "throws": out_throws,
     }
     OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _write_interp_vectors()
     print(
         f"wrote {OUT} with {len(out_cases)} step cases, {len(out_spawns)} spawn "
         f"cases, {len(out_traces)} traces, {len(out_bodies)} body cases, "

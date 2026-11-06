@@ -52,7 +52,6 @@ import { PostChain } from './post-chain';
 import { BenchRun, benchPath, type BenchResult } from './bench';
 import { FrameStats, GpuTimer, type PerfProbe } from './perf-stats';
 import { channelTraffic } from '../../ws';
-import { INTERP_DELAY_MS } from './net';
 import { DuelQueueBanner, RatingResult } from './panels/DuelPanels';
 import { buyGroups, pressBuyKey } from './buy-menu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
@@ -222,7 +221,6 @@ import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
 import { loadWorld3D, type World3D } from './world3d';
-import { ensureRapierInitialized, RapierPhysicsWorld } from './physics-rapier';
 import {
   DemoError,
   DemoPlayer,
@@ -1194,7 +1192,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // re-rendering the component 60 times a second would be absurd.
   const worldRef = useRef<World | null>(null);
   const world3dRef = useRef<World3D | null>(null);
-  const rapierRef = useRef<RapierPhysicsWorld | null>(null);
   /**
    * The interpolated rows the last frame drew, for the radar.
    *
@@ -1927,7 +1924,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           playerRef.current.y = req.spawn.y;
           playerRef.current.z = req.spawn.z;
           if (req.spawn.yaw != null) playerRef.current.yaw = req.spawn.yaw;
-          rapierRef.current?.setPosition(req.spawn.x, req.spawn.y, req.spawn.z);
         }
       } else {
         if (req.spawn) pendingSpawnRef.current = req.spawn;
@@ -1960,13 +1956,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         noclipRef.current = next;
         consoleRegistry.set('player.noclip', next ? '1' : '0');
       } else if (cmd === 'respawn' && playerRef.current && worldRef.current) {
-        const row = world3dRef.current?.spawns.all[0];
-        const s = row ? (rapierRef.current?.groundSpawn(row) ?? row) : worldRef.current.spawns()[0];
-        if (s) {
+        // The map's own spawn, grounded on the grid as a match grounds it.
+        const row = worldRef.current.spawns()[0];
+        if (row) {
+          const s = spawnAt(worldRef.current, { ...row, yaw: row.yaw ?? null });
           playerRef.current.x = s.x;
           playerRef.current.y = s.y;
           playerRef.current.z = s.z;
-          rapierRef.current?.setPosition(s.x, s.y, s.z);
         }
       }
     });
@@ -2072,7 +2068,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           const s = sessionRef.current;
           return s && s.state.status === 'joined' ? s.netStats.view() : null;
         },
-        interpDelayMs: () => INTERP_DELAY_MS,
+        interpDelayMs: () => sessionRef.current?.snapshots.delayMs(performance.now()) ?? null,
       };
 
       // Hemisphere light alone reads flat; the directional adds enough gradient
@@ -2761,8 +2757,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 player.pitch,
                 intent.scoped,
                 Math.random,
-                rapierRef.current ?? undefined,
-                world3dRef.current ?? undefined,
                 // The accuracy model's inputs, from the body that just stepped.
                 {
                   speed: Math.hypot(player.velX, player.velY),
@@ -2771,18 +2765,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 },
               );
               if (shot) {
-                if (shot.shatteredWindows && shot.shatteredWindows.length > 0) {
-                  for (const wid of shot.shatteredWindows) {
-                    const win = world3dRef.current?.windows?.get(wid);
-                    if (win) {
-                      effects.glassShatter(win.center, win.normal);
-                      const dx = win.center[0] - player.x;
-                      const dy = win.center[1] - player.y;
-                      const bearing = Math.atan2(dx, dy);
-                      audioRef.current?.glassShatter(bearing, player.yaw);
-                    }
-                  }
-                }
                 const isKnife = shots.isKnife || shots.slot === 0;
                 if (!isKnife) {
                   // The range resolves its own shots, so its faces come from
@@ -2826,12 +2808,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 }
               }
             }
-            const offlineInput = { ...input, knife: (shots?.slot ?? -1) === 0 };
-            if (rapierRef.current && world3dRef.current) {
-              rapierRef.current.stepPlayer(player, offlineInput, dt);
-            } else {
-              step(world, player, offlineInput, dt);
-            }
+            // The match's own movement on every map, modelled or not: the cube
+            // grid a modelled map bakes is what the server steps you against, so
+            // it is what Train steps you against too. Practice that moved you
+            // differently would teach a jump that fails in a match.
+            step(world, player, { ...input, knife: (shots?.slot ?? -1) === 0 }, dt);
             // After the step, matching the order `Predictor.record` uses online
             // and the order the match server fires in. Applied before it, a
             // shoot-jump would land somewhere training never taught you.
@@ -3755,15 +3736,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
         const is3D = mapInfo.format === 'gltf';
         let world3d: World3D | null = null;
-        let rapierPhysics: RapierPhysicsWorld | null = null;
         if (is3D) {
           const THREE = await loadThree();
-          await ensureRapierInitialized();
           world3d = await loadWorld3D(THREE, mapInfo);
-          rapierPhysics = new RapierPhysicsWorld(world3d.collision, world3d.windows);
         }
         world3dRef.current = world3d;
-        rapierRef.current = rapierPhysics;
 
         const world = new World(mapInfo, cubes);
         worldRef.current = world;
@@ -3771,23 +3748,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
         const pendingSpawn = pendingSpawnRef.current;
         pendingSpawnRef.current = null;
-        const spawn = pendingSpawn
-          ? pendingSpawn
-          : is3D && world3d?.spawns.all[0]
-            ? world3d.spawns.all[0]
-            : world.spawns()[0];
+        // The map's own spawn entities, which are what the server spawns a match
+        // from, modelled map or not.
+        const spawn = pendingSpawn ?? world.spawns()[0];
 
         if (spawn) {
-          // A map row is a cell on a rounded floor; a pending spawn (a teleport)
-          // is already exactly where it means.
-          const at =
-            !pendingSpawn && is3D && rapierPhysics ? rapierPhysics.groundSpawn(spawn) : spawn;
-          playerRef.current = is3D
-            ? createPlayer(at.x, at.y, at.z, ((spawn.yaw ?? 0) * Math.PI) / 180)
-            : spawnAt(world, { ...spawn, yaw: spawn.yaw ?? null });
-          if (is3D && rapierPhysics) {
-            rapierPhysics.setPosition(at.x, at.y, at.z);
-          }
+          // A map row is a cell, grounded on the grid exactly as a match grounds
+          // it (`spawnAt`); a pending spawn on a modelled map (a teleport) is
+          // already exactly where it means.
+          playerRef.current =
+            pendingSpawn && is3D
+              ? createPlayer(spawn.x, spawn.y, spawn.z, ((spawn.yaw ?? 0) * Math.PI) / 180)
+              : spawnAt(world, { ...spawn, yaw: spawn.yaw ?? null });
         } else {
           playerRef.current = createPlayer(world.ssize / 2, world.ssize / 2, 0);
         }
@@ -4411,17 +4383,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     }
     const world = worldRef.current;
     if (!world) return;
-    const spawns = world3dRef.current ? world3dRef.current.spawns.all : world.spawns();
+    const spawns = world.spawns();
     const spawn = spawns[Math.floor(Math.random() * spawns.length)];
-    if (spawn) {
-      if (world3dRef.current && rapierRef.current) {
-        const at = rapierRef.current.groundSpawn(spawn);
-        playerRef.current = createPlayer(at.x, at.y, at.z, ((spawn.yaw ?? 0) * Math.PI) / 180);
-        rapierRef.current.setPosition(at.x, at.y, at.z);
-      } else {
-        playerRef.current = spawnAt(world, spawn);
-      }
-    }
+    if (spawn) playerRef.current = spawnAt(world, spawn);
   }, []);
 
   /** Enter the world. The one path from any menu to actually playing. */
@@ -4526,21 +4490,21 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       setDrillStatus(null);
       setDrillBest(false);
       // A drill station has a place to stand; the any-map drill has none. On a
-      // modelled map the body is Rapier's, so it is grounded on the mesh and
-      // moved there too. Skipping that left you in whatever lane you spawned
-      // in — on hd_aim, Close — while the Gallery or Long Lane targets moved in
-      // a lane you could not see.
+      // modelled map the station is grounded on the grid, as any spawn is.
+      // Skipping the move left you in whatever lane you spawned in — on hd_aim,
+      // Close — while the Gallery or Long Lane targets moved in a lane you could
+      // not see.
       const standAt = (shooter: DrillSpec['shooter']) => {
         if (!shooter) return;
-        const rapier = world3dRef.current ? rapierRef.current : null;
-        // `groundSpawn` takes a cell; the shooter is the cell's centre.
-        const at = rapier
-          ? rapier.groundSpawn({ x: shooter.x - 0.5, y: shooter.y - 0.5, z: shooter.z })
-          : shooter;
-        const p = createPlayer(at.x, at.y, at.z, shooter.yaw);
+        const world = worldRef.current;
+        // `spawnAt` takes a cell; the shooter is the cell's centre.
+        const p =
+          world && world3dRef.current
+            ? spawnAt(world, { x: shooter.x - 0.5, y: shooter.y - 0.5, z: shooter.z, yaw: null })
+            : createPlayer(shooter.x, shooter.y, shooter.z, shooter.yaw);
+        p.yaw = shooter.yaw;
         p.onGround = true;
         playerRef.current = p;
-        rapier?.setPosition(at.x, at.y, at.z);
       };
       // Free practice on a map with stations: still dummies on the first still
       // drill's posts, so the lane you are in has something in it.

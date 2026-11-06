@@ -29,13 +29,39 @@ import {
 import type { World } from './world';
 
 /**
- * How far behind the newest snapshot remote players are drawn.
+ * The render clock: how far behind the server remote players are drawn, and how
+ * that follows the network (`InterpClock`).
  *
- * About 2.7 snapshot intervals at 60 Hz. Less than one interval and there is routinely
- * no later snapshot to interpolate towards, which is exactly when a renderer
- * starts extrapolating and walking people through walls.
+ * Ported from the reference `InterpClock` in `scripts/gen_hassault_vectors.py`,
+ * and pinned to it by `interp-vectors.json`; `interp.rs` is the other port. The
+ * delay was a flat 45 ms: right for nobody, too much on a clean link and too
+ * little on a jittery one.
  */
-export const INTERP_DELAY_MS = 45;
+export const INTERP = {
+  /** One server tick: the least a body can trail by and still be bracketed. */
+  tickMs: 1000 / 60,
+  minDelayMs: 25,
+  maxDelayMs: 100,
+  /** RFC 3550's interarrival-jitter gain, as `NetStats` uses. */
+  jitterGain: 1 / 16,
+  /** The clock offset is the smallest `local - t` over this window. */
+  windowMs: 5000,
+  /** ms of lag change per ms: the render clock runs at most 10% slow, 4% fast. */
+  easeUp: 0.1,
+  easeDown: 0.04,
+  /** A change this big is a new clock, not drift, and is taken at once. */
+  snapMs: 250,
+  /**
+   * After the first snapshot (or a snap) the lag follows its target uneased for
+   * this long: a connection's first frames often queue, and easing down from
+   * one of those would draw every body late for seconds.
+   */
+  warmupMs: 1000,
+  /** Starved: carry on along the last velocity this long, horizontally only. */
+  extrapolateMs: 50,
+  /** Cubes per second. Faster than a body can move is a teleport: held. */
+  extrapolateMaxSpeed: 40,
+} as const;
 
 /** Snapshot history kept. Enough to ride out a stall without unbounded growth. */
 export const SNAPSHOT_BUFFER_MS = 2000;
@@ -1147,17 +1173,118 @@ export class Predictor {
 }
 
 /**
+ * The render clock: which server instant remote bodies are drawn at.
+ *
+ * Server and client clocks are unrelated, so this does not synchronise them. It
+ * keeps the smallest `localArrival - serverTimestamp` seen in the last
+ * `INTERP.windowMs`: the sample that queued least, which is the best offset
+ * estimate available without a clock-sync protocol. Windowed rather than
+ * all-time, because a local clock running even slightly fast makes the true
+ * offset grow, and an all-time minimum would leave the render clock creeping
+ * ahead of the data for the rest of the match.
+ *
+ * On top of the offset sits the delay: one tick plus twice the interarrival
+ * jitter, clamped to `[minDelayMs, maxDelayMs]`. A clean link draws 25 ms
+ * behind; a jittery one backs off until the snapshot either side of the drawn
+ * instant has usually arrived.
+ *
+ * Neither is applied at once. The drawn lag moves toward its target at most
+ * `easeUp`/`easeDown` ms per ms, so a body never visibly speeds up or slows
+ * down when the estimate moves. Only a jump bigger than `snapMs` is taken at
+ * once (that is a new clock, not drift), and anything in the first
+ * `warmupMs` (a connection's first frames are the ones that queue).
+ */
+export class InterpClock {
+  /** `[localArrival, local - t]`, samples increasing: the head is the minimum. */
+  private window: Array<[number, number]> = [];
+  private jitter = 0;
+  private last: [number, number] | null = null;
+  private lag: number | null = null;
+  private anchor = 0;
+  private target = 0;
+  private since = 0;
+
+  push(t: number, local: number): void {
+    const sample = local - t;
+    while (this.window.length > 0 && this.window[this.window.length - 1][1] >= sample) {
+      this.window.pop();
+    }
+    this.window.push([local, sample]);
+    const cutoff = local - INTERP.windowMs;
+    while (this.window[0][0] < cutoff) this.window.shift();
+    if (this.last) {
+      const d = Math.abs(local - this.last[0] - (t - this.last[1]));
+      this.jitter += (d - this.jitter) * INTERP.jitterGain;
+    }
+    this.last = [local, t];
+    const delay = Math.min(
+      Math.max(INTERP.tickMs + 2 * this.jitter, INTERP.minDelayMs),
+      INTERP.maxDelayMs,
+    );
+    let target = this.window[0][1] + delay;
+    const current = this.lagAt(local);
+    if (current === null) {
+      this.lag = target;
+      this.since = local;
+    } else if (Math.abs(target - current) > INTERP.snapMs) {
+      // A new clock, not a late packet: the step it put into the jitter estimate
+      // is not jitter, and keeping it would pin the delay at its ceiling.
+      this.jitter = 0;
+      target = this.window[0][1] + Math.max(INTERP.tickMs, INTERP.minDelayMs);
+      this.lag = target;
+      this.since = local;
+    } else if (local - this.since < INTERP.warmupMs) {
+      this.lag = target;
+    } else {
+      this.lag = current;
+    }
+    this.anchor = local;
+    this.target = target;
+  }
+
+  /** Server-clock instant to draw at `local`, or `null` before any snapshot. */
+  renderTime(local: number): number | null {
+    const lag = this.lagAt(local);
+    return lag === null ? null : local - lag;
+  }
+
+  /** How far behind the newest data bodies are drawn, ms. For the net graph. */
+  delay(local: number): number | null {
+    const lag = this.lagAt(local);
+    return lag === null ? null : lag - this.window[0][1];
+  }
+
+  reset(): void {
+    this.window = [];
+    this.jitter = 0;
+    this.last = null;
+    this.lag = null;
+    this.anchor = 0;
+    this.target = 0;
+    this.since = 0;
+  }
+
+  /** The lag at `local`, eased from where the last push left it. Pure. */
+  private lagAt(local: number): number | null {
+    if (this.lag === null) return null;
+    const dt = Math.max(0, local - this.anchor);
+    const diff = this.target - this.lag;
+    if (diff > 0) return this.lag + Math.min(diff, INTERP.easeUp * dt);
+    return this.lag + Math.max(diff, -INTERP.easeDown * dt);
+  }
+}
+
+/**
  * Snapshot history for everyone who is not us, sampled in the past.
  *
- * Server and client clocks are unrelated, so rather than trying to synchronise
- * them this tracks the smallest `localArrival - serverTimestamp` ever seen. The
- * minimum is the sample with the least queuing delay, which is the best estimate
- * of the true offset available without a full clock-sync protocol — and it is
- * stable, which matters more here than being exactly right.
+ * `InterpClock` says *when* to draw; this says *where* everyone was then: on the
+ * straight line between the two snapshots around that instant. The server
+ * rewinds a shot along the same line (`PositionHistory.rewind`), which is the
+ * point: the body you aimed at is the body you are judged against.
  */
 export class SnapshotBuffer {
   private snapshots: Snapshot[] = [];
-  private offset = Number.POSITIVE_INFINITY;
+  private readonly clock = new InterpClock();
 
   /**
    * The newest packet, un-interpolated.
@@ -1173,16 +1300,24 @@ export class SnapshotBuffer {
   }
 
   push(snapshot: Snapshot, localNow: number): void {
-    this.offset = Math.min(this.offset, localNow - snapshot.t);
+    this.clock.push(snapshot.t, localNow);
     this.snapshots.push(snapshot);
     this.snapshots.sort((a, b) => a.t - b.t);
     const cutoff = snapshot.t - SNAPSHOT_BUFFER_MS;
     while (this.snapshots.length > 2 && this.snapshots[0].t < cutoff) this.snapshots.shift();
   }
 
-  /** Server-clock time the renderer should be showing right now. */
+  /**
+   * Server-clock time the renderer should be showing right now. `-Infinity`
+   * before the first snapshot, which a caller reads as "no instant yet".
+   */
   renderTime(localNow: number): number {
-    return localNow - this.offset - INTERP_DELAY_MS;
+    return this.clock.renderTime(localNow) ?? Number.NEGATIVE_INFINITY;
+  }
+
+  /** The current interpolation delay, ms, or `null` before the first snapshot. */
+  delayMs(localNow: number): number | null {
+    return this.clock.delay(localNow);
   }
 
   /**
@@ -1192,8 +1327,13 @@ export class SnapshotBuffer {
    * the interpolated copy too would render us 100 ms behind ourselves.
    */
   sample(localNow: number, selfId: string): PlayerRow[] {
+    const target = this.clock.renderTime(localNow);
+    return target === null ? [] : this.sampleAt(target, selfId);
+  }
+
+  /** Every remote player at server instant `target`: the curve itself. */
+  sampleAt(target: number, selfId: string): PlayerRow[] {
     if (this.snapshots.length === 0) return [];
-    const target = this.renderTime(localNow);
 
     let older = this.snapshots[0];
     let newer: Snapshot | null = null;
@@ -1205,9 +1345,7 @@ export class SnapshotBuffer {
       }
     }
 
-    // Past the newest snapshot: hold the last known position rather than
-    // extrapolate. A brief stall is honest; a guess walks people through walls.
-    if (!newer) return older.players.filter((p) => p.id !== selfId);
+    if (!newer) return this.extrapolate(older, target, selfId);
 
     const span = newer.t - older.t;
     const t = span > 0 ? Math.min(1, Math.max(0, (target - older.t) / span)) : 0;
@@ -1231,9 +1369,37 @@ export class SnapshotBuffer {
       });
   }
 
+  /**
+   * Past the newest snapshot: starved. Each body carries on along its last
+   * velocity for up to `INTERP.extrapolateMs`, then holds.
+   *
+   * Bounded three ways, because a guess is a body drawn where nobody is: in
+   * time (50 ms is about one body width at a run), to the horizontal (a falling
+   * body carried on would sink into the floor it lands on), and in speed (a
+   * respawn between two snapshots reads as a sprint across the map, and is
+   * held instead).
+   */
+  private extrapolate(newest: Snapshot, target: number, selfId: string): PlayerRow[] {
+    const rows = newest.players.filter((p) => p.id !== selfId);
+    const at = this.snapshots.indexOf(newest);
+    const prev = at > 0 ? this.snapshots[at - 1] : null;
+    const span = prev ? newest.t - prev.t : 0;
+    const ahead = Math.min(target - newest.t, INTERP.extrapolateMs);
+    if (!prev || span <= 0 || ahead <= 0) return rows;
+    const before = new Map(prev.players.map((p) => [p.id, p]));
+    return rows.map((row) => {
+      const from = before.get(row.id);
+      if (!from) return row;
+      const vx = (row.x - from.x) / span;
+      const vy = (row.y - from.y) / span;
+      if (Math.hypot(vx, vy) * 1000 > INTERP.extrapolateMaxSpeed) return row;
+      return { ...row, x: row.x + vx * ahead, y: row.y + vy * ahead };
+    });
+  }
+
   clear(): void {
     this.snapshots = [];
-    this.offset = Number.POSITIVE_INFINITY;
+    this.clock.reset();
   }
 
   get size(): number {

@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { MapInfo } from '../api';
 import {
-  INTERP_DELAY_MS,
+  INTERP,
   lerpAngle,
   PingTracker,
   Predictor,
@@ -483,23 +483,31 @@ describe('SnapshotBuffer', () => {
 
   it('interpolates between the two snapshots straddling the render time', () => {
     const buffer = new SnapshotBuffer();
-    // Local clock equals server clock here, so render time is exactly
-    // `now - INTERP_DELAY_MS`.
     buffer.push(snapshot(1000, 0, [other(10)]), 1000);
     buffer.push(snapshot(1100, 0, [other(20)]), 1100);
-    // Render time 1050: halfway.
-    const rows = buffer.sample(1050 + INTERP_DELAY_MS, 'me');
+    // Server instant 1050: halfway.
+    const rows = buffer.sampleAt(1050, 'me');
     expect(rows).toHaveLength(1);
     expect(rows[0].x).toBeCloseTo(15, 6);
   });
 
-  it('holds the last known position rather than extrapolating past it', () => {
+  it('carries a starved body on for at most 50 ms, then holds it', () => {
     const buffer = new SnapshotBuffer();
+    // 2 cubes in 100 ms: a run.
     buffer.push(snapshot(1000, 0, [other(10)]), 1000);
-    buffer.push(snapshot(1100, 0, [other(20)]), 1100);
-    // Far beyond the newest snapshot. A guess here walks people through walls.
-    const rows = buffer.sample(5000 + INTERP_DELAY_MS, 'me');
-    expect(rows[0].x).toBeCloseTo(20, 6);
+    buffer.push(snapshot(1100, 0, [other(12)]), 1100);
+    expect(buffer.sampleAt(1120, 'me')[0].x).toBeCloseTo(12.4, 6);
+    // Far beyond the newest snapshot: 50 ms of guess, never more. Past that a
+    // guess walks people through walls.
+    expect(buffer.sampleAt(5000, 'me')[0].x).toBeCloseTo(12 + 0.02 * INTERP.extrapolateMs, 6);
+  });
+
+  it('holds a body that moved faster than anyone can, rather than extrapolating it', () => {
+    const buffer = new SnapshotBuffer();
+    // A respawn between two snapshots: 40 cubes in 100 ms.
+    buffer.push(snapshot(1000, 0, [other(10)]), 1000);
+    buffer.push(snapshot(1100, 0, [other(50)]), 1100);
+    expect(buffer.sampleAt(1130, 'me')[0].x).toBeCloseTo(50, 6);
   });
 
   it('excludes our own player, who comes from prediction', () => {
@@ -507,7 +515,7 @@ describe('SnapshotBuffer', () => {
     const me: PlayerRow = { ...other(1), id: 'me', name: 'me' };
     buffer.push(snapshot(1000, 0, [me, other(10)]), 1000);
     buffer.push(snapshot(1100, 0, [me, other(20)]), 1100);
-    const rows = buffer.sample(1050 + INTERP_DELAY_MS, 'me');
+    const rows = buffer.sampleAt(1050, 'me');
     expect(rows.map((r) => r.id)).toEqual(['other']);
   });
 
@@ -515,14 +523,25 @@ describe('SnapshotBuffer', () => {
     const buffer = new SnapshotBuffer();
     buffer.push(snapshot(1000, 0, [other(10, Math.PI - 0.1)]), 1000);
     buffer.push(snapshot(1100, 0, [other(10, -Math.PI + 0.1)]), 1100);
-    const rows = buffer.sample(1050 + INTERP_DELAY_MS, 'me');
+    const rows = buffer.sampleAt(1050, 'me');
     expect(Math.abs(Math.abs(rows[0].yaw) - Math.PI)).toBeLessThan(0.01);
   });
 
   it('renders in the past by the interpolation delay', () => {
     const buffer = new SnapshotBuffer();
     buffer.push(snapshot(1000, 0, [other(10)]), 1000);
-    expect(buffer.renderTime(2000)).toBeCloseTo(2000 - INTERP_DELAY_MS, 6);
+    // One sample: no jitter yet, so the floor.
+    expect(buffer.renderTime(2000)).toBeCloseTo(2000 - INTERP.minDelayMs, 6);
+    expect(buffer.delayMs(2000)).toBeCloseTo(INTERP.minDelayMs, 6);
+  });
+
+  it('samples through the render clock', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(snapshot(1000, 0, [other(10)]), 1000);
+    buffer.push(snapshot(1100, 0, [other(20)]), 1100);
+    const at = 1200;
+    const drawn = buffer.renderTime(at);
+    expect(buffer.sample(at, 'me')).toEqual(buffer.sampleAt(drawn, 'me'));
   });
 
   it('estimates the clock offset from the least-delayed sample', () => {
@@ -531,7 +550,9 @@ describe('SnapshotBuffer', () => {
     buffer.push(snapshot(5000, 0, [other(10)]), 0);
     buffer.push(snapshot(5100, 0, [other(20)]), 180);
     // The minimum offset (-5000) is the honest one, so render time tracks it.
-    expect(buffer.renderTime(200)).toBeCloseTo(5200 - INTERP_DELAY_MS, 6);
+    // The 80 ms of queueing is one jitter sample: 80/16 = 5 ms of jitter, and a
+    // delay of one tick plus twice that.
+    expect(buffer.renderTime(200)).toBeCloseTo(5200 - (INTERP.tickMs + 2 * 5), 6);
   });
 
   it('trims history but always keeps enough to interpolate', () => {

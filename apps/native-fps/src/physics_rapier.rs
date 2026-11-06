@@ -1,7 +1,14 @@
 //! Rapier3D Character Controller and Physics Simulation in Rust.
 //!
-//! Provides deterministic 3D capsule-against-trimesh physics simulation, matching
-//! the TypeScript `physics-rapier.ts` implementation.
+//! **Not gameplay any more.** Train on a modelled map used to step this
+//! capsule-against-trimesh controller, with its own sprint, slide and stamina,
+//! while a match steps the cube grid the map bakes (`physics.rs`, the server's
+//! `physics.py`). Since G4, Train steps the grid too, and the browser's
+//! `physics-rapier.ts` is gone. What is left here is a probe over the *drawn*
+//! mesh for the content tests (`test_spawn_clearance.rs`,
+//! `test_glb_colliders.rs`, `test_world3d.rs`): a spawn inside a desk or a
+//! missing perimeter wall is still wrong to look at, even though nothing
+//! collides with the mesh.
 //!
 //! Unlocks:
 //! - Arbitrary 3D slope climbing and slide deceleration.

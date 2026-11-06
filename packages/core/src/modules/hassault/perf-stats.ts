@@ -36,8 +36,11 @@ export interface PerfProbe {
   triangles(): number;
   /** The match's network numbers, or `null` offline. */
   net(): NetStatsView | null;
-  /** How far behind the newest snapshot remote players are drawn, ms. */
-  interpDelayMs(): number;
+  /**
+   * How far behind the newest data remote players are drawn, ms. Adaptive
+   * (`InterpClock`), so this is the live value; `null` before a snapshot.
+   */
+  interpDelayMs(): number | null;
 }
 
 export class FrameStats {

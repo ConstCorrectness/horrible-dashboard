@@ -917,3 +917,130 @@ fn the_settings_clamps_are_the_schemas() {
     }
     assert!(checked > 30, "only {checked} native keys in the schema");
 }
+
+// ---------------------------------------------------------------------------
+// Remote bodies: `interp-vectors.json`
+// ---------------------------------------------------------------------------
+//
+// `rewinds` are the server's own `PositionHistory.rewind`: passing them means
+// this client draws a body on the line the server judges a shot against.
+// `extrapolations` and `interpClock` are the reference render clock in
+// `scripts/gen_hassault_vectors.py`, which `net.ts` replays too.
+
+use hassault_native::interp::{self as interp, InterpClock, SnapshotBuffer};
+use hassault_native::protocol::PlayerRow;
+
+fn interp_vectors() -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/core/src/modules/hassault/__tests__/interp-vectors.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("interp vectors missing at {} ({e})", path.display()));
+    serde_json::from_str(&text).expect("interp vectors are not valid JSON")
+}
+
+fn buffered(frames: &Value) -> SnapshotBuffer {
+    let mut buffer = SnapshotBuffer::new();
+    for frame in frames.as_array().unwrap() {
+        let t = frame["t"].as_f64().unwrap();
+        let players = frame["positions"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, at)| PlayerRow {
+                id: id.clone(),
+                x: at[0].as_f64().unwrap() as f32,
+                y: at[1].as_f64().unwrap() as f32,
+                z: at[2].as_f64().unwrap() as f32,
+                alive: true,
+                ..Default::default()
+            })
+            .collect();
+        // Arrival time is irrelevant: these replay `sample_at`, not the clock.
+        buffer.push(t, players, t);
+    }
+    buffer
+}
+
+fn assert_positions(buffer: &SnapshotBuffer, queries: &Value, tol: f64) {
+    for q in queries.as_array().unwrap() {
+        let t = q["t"].as_f64().unwrap();
+        let got = buffer.sample_at(t, "nobody");
+        for (id, want) in q["expect"].as_object().unwrap() {
+            let row = got
+                .iter()
+                .find(|r| &r.id == id)
+                .unwrap_or_else(|| panic!("t={t}: {id} missing"));
+            for (axis, v) in [row.x, row.y, row.z].into_iter().enumerate() {
+                let w = want[axis].as_f64().unwrap();
+                assert!(
+                    (f64::from(v) - w).abs() < tol,
+                    "t={t} {id} axis {axis}: {v} vs {w}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_render_clock_runs_on_the_shared_constants() {
+    let v = interp_vectors();
+    let c = &v["interp"];
+    for (key, ours) in [
+        ("tickMs", interp::TICK_MS),
+        ("minDelayMs", interp::MIN_DELAY_MS),
+        ("maxDelayMs", interp::MAX_DELAY_MS),
+        ("jitterGain", interp::JITTER_GAIN),
+        ("windowMs", interp::WINDOW_MS),
+        ("easeUp", interp::EASE_UP),
+        ("easeDown", interp::EASE_DOWN),
+        ("snapMs", interp::SNAP_MS),
+        ("warmupMs", interp::WARMUP_MS),
+        ("extrapolateMs", interp::EXTRAPOLATE_MS),
+        ("extrapolateMaxSpeed", interp::EXTRAPOLATE_MAX_SPEED),
+    ] {
+        assert_eq!(c[key].as_f64(), Some(ours), "{key}");
+    }
+    assert_eq!(c.as_object().unwrap().len(), 11, "a constant this port does not pin");
+}
+
+#[test]
+fn bodies_are_drawn_on_the_servers_rewind_curve() {
+    let v = interp_vectors();
+    let tol = v["positionTolerance"].as_f64().unwrap();
+    let buffer = buffered(&v["rewinds"]["frames"]);
+    assert_positions(&buffer, &v["rewinds"]["queries"], tol);
+}
+
+#[test]
+fn a_starved_body_is_extrapolated_like_the_reference() {
+    let v = interp_vectors();
+    let tol = v["positionTolerance"].as_f64().unwrap();
+    let buffer = buffered(&v["extrapolations"]["frames"]);
+    assert_positions(&buffer, &v["extrapolations"]["queries"], tol);
+}
+
+#[test]
+fn the_render_clock_matches_the_reference() {
+    let v = interp_vectors();
+    let tol = v["clockTolerance"].as_f64().unwrap();
+    for case in v["interpClock"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let probes = case["probes"].as_array().unwrap();
+        let mut clock = InterpClock::default();
+        let mut next = 0;
+        for (i, push) in case["pushes"].as_array().unwrap().iter().enumerate() {
+            clock.push(push[0].as_f64().unwrap(), push[1].as_f64().unwrap());
+            while next < probes.len() && probes[next]["after"].as_u64() == Some(i as u64) {
+                let p = &probes[next];
+                next += 1;
+                let at = p["at"].as_f64().unwrap();
+                let rt = clock.render_time(at).unwrap();
+                let d = clock.delay(at).unwrap();
+                let (want_rt, want_d) = (p["renderTime"].as_f64().unwrap(), p["delay"].as_f64().unwrap());
+                assert!((rt - want_rt).abs() < tol, "{name} @ {at}: render {rt} vs {want_rt}");
+                assert!((d - want_d).abs() < tol, "{name} @ {at}: delay {d} vs {want_d}");
+            }
+        }
+        assert_eq!(next, probes.len(), "{name}: probes not reached");
+    }
+}

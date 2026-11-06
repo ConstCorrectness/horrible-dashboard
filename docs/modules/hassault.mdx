@@ -4743,10 +4743,12 @@ Spawn placement is pinned across the two languages by the same fixture `step` is
 
 ### Remote players are rendered in the past
 
-Everyone else is drawn 100 ms behind the newest snapshot, interpolated between
-two that have **both already arrived**. Ordinary jitter then never becomes
-visible motion, and nothing is ever extrapolated: past the newest snapshot the
-last known position is held, because a guess walks people through walls.
+Everyone else is drawn behind the newest snapshot, interpolated between two
+that have **both already arrived**, so ordinary jitter never becomes visible
+motion. Since G4 how far behind is adaptive (25–100 ms, from the measured
+jitter), the clock offset is a sliding-window minimum, and a starved body is
+carried on for at most 50 ms before it holds: see
+[After G4: one curve and an adaptive render clock](#after-g4-one-curve-and-an-adaptive-render-clock). The rest of this section describes the original buffer.
 
 Server and client clocks are unrelated, so rather than synchronising them the
 buffer tracks the smallest `arrival - timestamp` ever seen. The minimum is the
@@ -4927,6 +4929,93 @@ time, taken at import. They read `time.time()`, which an NTP correction can step
 mid-match, putting snapshots out of order by their own timestamps and a rewind
 on the wrong instant. `t` is still epoch milliseconds, so a client's offset
 estimate does not change.
+
+### After G4: one curve and an adaptive render clock
+
+Three changes to how remote bodies are drawn and judged, held together by one
+fixture, `__tests__/interp-vectors.json`, which `scripts/gen_hassault_vectors.py`
+writes and all three languages replay.
+
+**One curve.** A shot is judged by rewinding the server's position history to
+the instant the shooter was drawing (`viewT`). Both clients draw remote bodies by
+lerping between the two snapshots around that instant. The server's
+`PositionHistory.rewind` lerped only as a fallback: whenever a neighbouring frame
+existed, which was nearly always, it ran a Catmull-Rom spline through four
+frames, which lands a little ahead of or behind the straight line on any body
+that is speeding up, slowing down or turning. The rewind is now the straight
+line, and the fixture's `rewinds` cases are written from it and replayed by
+`test_hassault_weapons.py`, `interp-vectors.test.ts` (through
+`SnapshotBuffer.sampleAt`) and `conformance.rs` (`sample_at`). The body you aimed
+at is the body you are judged against, to f32 precision.
+
+**An adaptive delay.** The delay was a flat 45 ms: too much on a clean link and
+too little on a jittery one. `InterpClock` (`net.ts`, `interp.rs`) now works it
+out:
+
+| Piece | Rule |
+|---|---|
+| Delay | one tick + 2 × interarrival jitter (RFC 3550, gain 1/16), clamped to 25–100 ms |
+| Clock offset | smallest `local − t` in the last **5 s**, not of all time |
+| Easing | the drawn lag moves at most 10% (backing off) or 4% (catching up) per ms of wall time |
+| Snap | a change over 250 ms is a new clock: taken at once, and the jitter estimate reset |
+| Warm-up | for 1 s after the first snapshot (or a snap) the lag follows its target directly |
+| Starved | past the newest snapshot, a body carries on along its last velocity for at most 50 ms, horizontally, at most 40 cubes/s; then holds |
+
+Why each piece:
+- **The windowed minimum** follows a local clock that runs slightly fast. With
+  the all-time minimum, the true offset grows away from the estimate, and the
+  render clock creeps ahead of the data for the rest of the match.
+- **The easing** keeps the delay from visibly speeding anyone up or slowing them
+  down when the estimate moves.
+- **The warm-up** exists because a connection's first frames are the ones that
+  queue. Easing down from one of those at 4% took about 4.6 s, during which
+  every body was drawn late.
+- **Extrapolation is bounded three ways.** A falling body carried on vertically
+  would sink into the floor it lands on. A respawn between two snapshots reads
+  as a sprint across the map, so it is held instead.
+
+The constants live in the fixture, and both ports assert theirs equal them.
+
+The net graph's `interp` readout (`net.graph 2` in both clients) is now the live
+delay rather than a constant, so a jittery link shows up as the number climbing.
+
+The reference implementation is `InterpClock` in the generator itself, because
+only the clients run it: it is the spec both ports are held to, and the
+`interpClock` cases cover:
+- a clean link;
+- a jittery one;
+- a local clock 0.3% fast;
+- a 400 ms stall and its burst;
+- the server clock jumping 2 s;
+- a slow first snapshot.
+
+**Transport.** Nothing needed changing. The native socket has set `TCP_NODELAY`
+since G0 (`net.rs`), and Python's asyncio sets it on every TCP transport it
+creates, accepted sockets included, on both the selector and proactor loops.
+
+**Train steps the match's physics.** Offline Train on a modelled map stepped a
+Rapier capsule against the render mesh. That controller had its own sprint,
+slide and stamina, a 0.4 step instead of 1.6, and in the browser a shot trace
+against the mesh that could shatter windows. None of those exist in a match,
+which steps everyone against the cube grid the map bakes. So Train taught moves
+that fail in a match.
+
+Both clients now step `player.ts`/`physics.rs` against that grid in Train too:
+- spawns and drill stations are grounded with `spawnAt`/`spawn_at`;
+- the browser range traces shots with `raycastWorldFace`;
+- wallbangs follow the server's rule: within the weapon's served
+  `penetration`, never into a body standing in solid, at 0.6× damage. The range
+  had let a body behind any wall take full damage on cube maps.
+
+The cleanup:
+- `physics-rapier.ts`, its test and `@dimforge/rapier3d-compat` are gone.
+- `physics_rapier.rs` stays, but only as a probe over the drawn mesh for the
+  content tests (spawn clearance, perimeter walls).
+- Native drill stations now work on modelled maps; they were skipped there
+  because the body was Rapier's.
+
+One Train/match difference is left, and it is a damage rule, not movement: the
+range scales groin hits by 1.5 and limb hits by 0.75, and the server does not.
 
 ### Playing in a friend's match
 
@@ -5579,10 +5668,10 @@ world as the shooter saw it:
 sequenceDiagram
     participant C as Shooter's browser
     participant S as Match server
-    Note over C: renders remote players at<br/>renderTime = now − offset − 100 ms
+    Note over C: renders remote players at<br/>renderTime = now − offset − delay (25–100 ms)
     C->>S: command { fire, yaw, pitch, viewT }
     Note over S: clamp viewT into<br/>[now − 500 ms, now]
-    Note over S: rewind everyone to that instant<br/>(interpolated between two history frames)
+    Note over S: rewind everyone to that instant<br/>(the same straight line the client drew)
     Note over S: raycast: world first, then bodies<br/>nearer than the wall
     S-->>C: snapshot { you.hits, fx: [shot, kill] }
 ```
@@ -6302,31 +6391,18 @@ is redundant with the declaration and reachable only for those two names — a t
 `gltf` map needs the declaration and nothing else. Worth knowing before adding
 one, because the shape of that line invites you to append to it.
 
-### The heightfield physics does not run on a `gltf` map
+### The heightfield physics runs on every map
 
-This is the part that is easy to read backwards. The three ported
-implementations — `physics.py`, `player.ts`, `physics.rs` — and the
-`physics-vectors.json` fixture that binds them all describe the **cube** path.
-A `gltf` map runs **Rapier3D** instead: `physics-rapier.ts` in the browser
-(`@dimforge/rapier3d-compat`, wasm) and `physics_rapier.rs` natively
-(`rapier3d`). `HorribleAssaultPanel` constructs a `RapierPhysicsWorld` only inside
-its `if (is3D)` branch, so on a cube map the wasm is never even initialised.
-
-What Rapier buys is what a capsule-against-trimesh controller gives you for free
-and the heightfield port cannot: continuous collision against arbitrary geometry,
-slope climbing with automatic sliding past the limit, stair stepping, and a
-collision capsule that shrinks with a crouch.
-
-**What it does not have is the fixture.** `physics-vectors.json` covers neither
-Rapier port; `conformance.test.ts` and `conformance.rs` mention Rapier nowhere.
-So the duplication argument made in
-[Three implementations, one fixture](#three-implementations-one-fixture) — that
-two ports of one rule set are only safe while a shared fixture binds them —
-currently holds for the cube path and **not** for the `gltf` one, where the same
-rules exist twice with nothing replaying them against each other.
-`physics-rapier.test.ts` pins the browser side's own behaviour (slopes, steps,
-crouch, momentum) but says nothing about whether Rust agrees. That is a real gap,
-not a simplification of one.
+It did not always. The three ported implementations (`physics.py`, `player.ts`,
+`physics.rs`) and the `physics-vectors.json` fixture that binds them describe the
+**cube** path, and a match on a modelled map has always stepped that path against
+the grid the map bakes. Offline Train on a modelled map used to run a Rapier
+capsule against the render mesh instead (`physics-rapier.ts`, `physics_rapier.rs`),
+with its own sprint, slide, stamina and step height, and nothing replaying it
+against the other port. Since G4 Train steps the grid as well, so there is one
+movement model, the one the fixture pins. `physics_rapier.rs` survives only as a
+probe over the drawn mesh in the native content tests. See
+[After G4: one curve and an adaptive render clock](#after-g4-one-curve-and-an-adaptive-render-clock).
 
 ### On the bundled maps
 
@@ -8100,7 +8176,9 @@ forwards around where they really were. The browser client has had
 `SnapshotBuffer` since the beginning; the native one never got the port.
 
 `interp.rs` is that port, deliberately field-for-field with
-`packages/core/src/modules/hassault/net.ts`. Bodies are drawn
+`packages/core/src/modules/hassault/net.ts`. (Since G4 both run the adaptive
+`InterpClock` instead of the fixed delay and all-time minimum below: see
+[After G4: one curve and an adaptive render clock](#after-g4-one-curve-and-an-adaptive-render-clock).) Bodies are drawn
 `INTERP_DELAY_MS` (100 ms, two snapshot intervals) **in the past**, between two
 snapshots that have both already arrived — so the position shown is an
 interpolation rather than an extrapolation. Past the newest snapshot it **holds**
@@ -10639,10 +10717,9 @@ Not done, measured first:
     [event bus](#the-workspace-three-windows-and-their-strips) that parks an intent for a
     pane that has not mounted yet. (Two workspace presets once arranged them; they
     went with the tiling frame.)
-11. **Full 3D levels** — in progress: `gltf` maps run a Rapier capsule controller
-    for slopes, stairs and a shrinking crouch capsule. The
-    [conformance fixture does not yet cover that path](#the-heightfield-physics-does-not-run-on-a-gltf-map),
-    which is the next thing it needs.
+11. **Full 3D levels** — `gltf` maps are drawn from their mesh and collided
+    against the cube grid they bake, in a match and (since G4) in Train, so the
+    [conformance fixture covers every map](#the-heightfield-physics-runs-on-every-map).
 12. **Textures and map models** — the largest remaining gap between this and
     something that looks like AssaultCube. Needs the `.cfg` parser that maps
     texture slots to files.

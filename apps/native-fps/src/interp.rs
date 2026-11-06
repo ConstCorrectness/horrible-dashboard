@@ -9,34 +9,138 @@
 //! shown at the wrong time.
 //!
 //! So bodies are drawn **in the past** — far enough back that the two snapshots
-//! either side of the moment being drawn have both already arrived, and the
+//! either side of the moment being drawn have usually both arrived, and the
 //! position between them is an interpolation rather than a guess.
 //!
-//! The clocks are the subtle part. The server's `t` and this process's clock
-//! have no relation to each other, so rather than synchronising them this tracks
-//! the **smallest** `local_arrival - server_t` ever seen. The minimum is the
-//! sample that queued the least, which is the best estimate of the true offset
-//! available without a clock-sync protocol — and, more importantly, it is
-//! *stable*. An average would wander with the network and drag every body on
-//! screen with it.
+//! How far back is `InterpClock`'s job, and it follows the network: one tick
+//! plus twice the measured jitter, eased so nobody visibly speeds up or slows
+//! down, against a clock offset taken from the least-queued snapshot of the
+//! last few seconds. Where everyone was at that instant is `SnapshotBuffer`'s:
+//! on the straight line between the two snapshots around it — the same line the
+//! server rewinds a shot along (`PositionHistory.rewind`).
 //!
-//! This is a port of `SnapshotBuffer` in `packages/core/src/modules/hassault/net.ts`,
-//! kept deliberately field-for-field: the browser and this client must not be
-//! able to disagree about where a body is, because the one number the server
-//! rewinds a shot to — `viewT` — comes from `render_time` on both sides.
+//! A port of `InterpClock` and `SnapshotBuffer` in
+//! `packages/core/src/modules/hassault/net.ts`, and both are ports of the
+//! reference `InterpClock` in `scripts/gen_hassault_vectors.py`.
+//! `interp-vectors.json` holds all three to it (`tests/conformance.rs`): the
+//! browser and this client must not be able to disagree about where a body is,
+//! because the one number the server rewinds a shot to — `viewT` — comes from
+//! `render_time` on both sides.
 
 use crate::protocol::PlayerRow;
 
-/// How far behind the newest snapshot remote players are drawn, in ms.
-///
-/// Two snapshot intervals at 20 Hz. Below one interval there is routinely no
-/// later snapshot to interpolate *towards*, which is exactly the moment a
-/// renderer starts extrapolating and walking people through walls.
-pub const INTERP_DELAY_MS: f64 = 45.0;
+/// One server tick: the least a body can trail by and still be bracketed.
+pub const TICK_MS: f64 = 1000.0 / 60.0;
+/// The interpolation delay's floor and ceiling, ms.
+pub const MIN_DELAY_MS: f64 = 25.0;
+pub const MAX_DELAY_MS: f64 = 100.0;
+/// RFC 3550's interarrival-jitter gain, as `NetStats` uses.
+pub const JITTER_GAIN: f64 = 1.0 / 16.0;
+/// The clock offset is the smallest `local - t` over this window, ms. Not of
+/// all time: a local clock running slightly fast makes the true offset grow,
+/// and an all-time minimum would leave the render clock creeping ahead of the
+/// data for the rest of the match.
+pub const WINDOW_MS: f64 = 5000.0;
+/// ms of lag change per ms: the render clock runs at most 10% slow while
+/// backing off and 4% fast while catching up.
+pub const EASE_UP: f64 = 0.10;
+pub const EASE_DOWN: f64 = 0.04;
+/// A change this big is a new clock, not drift, and is taken at once.
+pub const SNAP_MS: f64 = 250.0;
+/// After the first snapshot (or a snap) the lag follows its target uneased for
+/// this long: a connection's first frames often queue, and easing down from one
+/// of those would draw every body late for seconds.
+pub const WARMUP_MS: f64 = 1000.0;
+/// Starved: carry a body on along its last velocity this long, horizontally.
+pub const EXTRAPOLATE_MS: f64 = 50.0;
+/// Cubes per second. Faster than a body can move is a teleport, and is held.
+pub const EXTRAPOLATE_MAX_SPEED: f64 = 40.0;
 
 /// Snapshot history kept, in ms. Enough to ride out a stall, bounded so a long
 /// match does not accumulate one.
 pub const SNAPSHOT_BUFFER_MS: f64 = 2000.0;
+
+/// The render clock: which server instant remote bodies are drawn at.
+#[derive(Default)]
+pub struct InterpClock {
+    /// `(local arrival, local - t)`, samples increasing: the head is the minimum.
+    window: Vec<(f64, f64)>,
+    jitter: f64,
+    last: Option<(f64, f64)>,
+    /// `None` until the first snapshot: seeding it with zero would put the
+    /// render clock an entire server epoch away.
+    lag: Option<f64>,
+    anchor: f64,
+    target: f64,
+    since: f64,
+}
+
+impl InterpClock {
+    pub fn push(&mut self, t: f64, local: f64) {
+        let sample = local - t;
+        while self.window.last().is_some_and(|&(_, s)| s >= sample) {
+            self.window.pop();
+        }
+        self.window.push((local, sample));
+        let cutoff = local - WINDOW_MS;
+        while self.window[0].0 < cutoff {
+            self.window.remove(0);
+        }
+        if let Some((last_local, last_t)) = self.last {
+            let d = ((local - last_local) - (t - last_t)).abs();
+            self.jitter += (d - self.jitter) * JITTER_GAIN;
+        }
+        self.last = Some((local, t));
+        let delay = (TICK_MS + 2.0 * self.jitter)
+            .max(MIN_DELAY_MS)
+            .min(MAX_DELAY_MS);
+        let mut target = self.window[0].1 + delay;
+        match self.lag_at(local) {
+            None => {
+                self.lag = Some(target);
+                self.since = local;
+            }
+            Some(current) if (target - current).abs() > SNAP_MS => {
+                // A new clock, not a late packet: the step it put into the
+                // jitter estimate is not jitter.
+                self.jitter = 0.0;
+                target = self.window[0].1 + TICK_MS.max(MIN_DELAY_MS);
+                self.lag = Some(target);
+                self.since = local;
+            }
+            Some(_) if local - self.since < WARMUP_MS => self.lag = Some(target),
+            Some(current) => self.lag = Some(current),
+        }
+        self.anchor = local;
+        self.target = target;
+    }
+
+    /// The lag at `local`, eased from where the last push left it. Pure.
+    fn lag_at(&self, local: f64) -> Option<f64> {
+        let lag = self.lag?;
+        let dt = (local - self.anchor).max(0.0);
+        let diff = self.target - lag;
+        Some(if diff > 0.0 {
+            lag + diff.min(EASE_UP * dt)
+        } else {
+            lag + diff.max(-EASE_DOWN * dt)
+        })
+    }
+
+    /// The server-clock instant to draw at `local`; `None` before any snapshot.
+    pub fn render_time(&self, local: f64) -> Option<f64> {
+        self.lag_at(local).map(|lag| local - lag)
+    }
+
+    /// How far behind the newest data bodies are drawn, ms. For the net graph.
+    pub fn delay(&self, local: f64) -> Option<f64> {
+        self.lag_at(local).map(|lag| lag - self.window[0].1)
+    }
+
+    pub fn reset(&mut self) {
+        *self = InterpClock::default();
+    }
+}
 
 struct Frame {
     t: f64,
@@ -46,10 +150,7 @@ struct Frame {
 #[derive(Default)]
 pub struct SnapshotBuffer {
     frames: Vec<Frame>,
-    /// Smallest observed `local - server_t`. `None` until the first snapshot:
-    /// seeding it with zero would put the render clock an entire server epoch
-    /// away and hold every body at its first known position.
-    offset: Option<f64>,
+    clock: InterpClock,
 }
 
 impl SnapshotBuffer {
@@ -60,11 +161,7 @@ impl SnapshotBuffer {
     /// File one snapshot. `local_now` is this process's clock in ms — any
     /// monotonic source, as long as it is the same one `sample` is given.
     pub fn push(&mut self, server_t: f64, players: Vec<PlayerRow>, local_now: f64) {
-        let seen = local_now - server_t;
-        self.offset = Some(match self.offset {
-            Some(current) => current.min(seen),
-            None => seen,
-        });
+        self.clock.push(server_t, local_now);
         self.frames.push(Frame {
             t: server_t,
             players,
@@ -84,11 +181,15 @@ impl SnapshotBuffer {
     /// This is what a shot must be stamped with (`viewT`): the server rewinds
     /// its position history to this moment to decide whether the body you were
     /// looking at was really there. Without it, every shot is resolved against
-    /// positions `INTERP_DELAY_MS` newer than the ones you aimed at, and hitting
-    /// a moving target means leading it by a body width.
+    /// positions newer than the ones you aimed at, and hitting a moving target
+    /// means leading it by a body width.
     pub fn render_time(&self, local_now: f64) -> Option<f64> {
-        self.offset
-            .map(|offset| local_now - offset - INTERP_DELAY_MS)
+        self.clock.render_time(local_now)
+    }
+
+    /// The current interpolation delay, ms; `None` before the first snapshot.
+    pub fn delay_ms(&self, local_now: f64) -> Option<f64> {
+        self.clock.delay(local_now)
     }
 
     /// Every remote body at `local_now`, interpolated.
@@ -97,35 +198,33 @@ impl SnapshotBuffer {
     /// interpolated copy as well would render us a tenth of a second behind
     /// ourselves — visible as a second player standing in our own footprints.
     pub fn sample(&self, local_now: f64, self_id: &str) -> Vec<PlayerRow> {
-        let Some(target) = self.render_time(local_now) else {
-            return Vec::new();
-        };
+        match self.render_time(local_now) {
+            Some(target) => self.sample_at(target, self_id),
+            None => Vec::new(),
+        }
+    }
+
+    /// Every remote body at server instant `target`: the curve itself.
+    pub fn sample_at(&self, target: f64, self_id: &str) -> Vec<PlayerRow> {
         if self.frames.is_empty() {
             return Vec::new();
         }
 
-        let mut older = &self.frames[0];
+        let mut older = 0;
         let mut newer: Option<&Frame> = None;
-        for frame in &self.frames {
+        for (i, frame) in self.frames.iter().enumerate() {
             if frame.t <= target {
-                older = frame;
+                older = i;
             } else {
                 newer = Some(frame);
                 break;
             }
         }
 
-        // Past the newest snapshot: hold the last known position rather than
-        // extrapolate. A brief freeze is honest; a guess is a body drawn where
-        // nobody is, and at worst inside a wall.
         let Some(newer) = newer else {
-            return older
-                .players
-                .iter()
-                .filter(|p| p.id != self_id)
-                .cloned()
-                .collect();
+            return self.extrapolate(older, target, self_id);
         };
+        let older = &self.frames[older];
 
         let span = newer.t - older.t;
         let t = if span > 0.0 {
@@ -153,8 +252,6 @@ impl SnapshotBuffer {
                         out.pitch = lerp(from.pitch, to.pitch, t);
                         // Crouch decides how tall the box is drawn, and a body is
                         // only honest if it is drawn the height it can be hit at.
-                        // Popping it at 20 Hz would show a standing target for up
-                        // to 50 ms after it went down.
                         out.crouch = lerp(from.crouch, to.crouch, t);
                         out
                     }
@@ -163,9 +260,47 @@ impl SnapshotBuffer {
             .collect()
     }
 
+    /// Past the newest snapshot: starved. Each body carries on along its last
+    /// velocity for up to `EXTRAPOLATE_MS`, then holds.
+    ///
+    /// Bounded three ways, because a guess is a body drawn where nobody is: in
+    /// time (50 ms is about one body width at a run), to the horizontal (a
+    /// falling body carried on would sink into the floor it lands on), and in
+    /// speed (a respawn between two snapshots reads as a sprint across the map,
+    /// and is held instead).
+    fn extrapolate(&self, newest: usize, target: f64, self_id: &str) -> Vec<PlayerRow> {
+        let frame = &self.frames[newest];
+        let prev = newest.checked_sub(1).map(|i| &self.frames[i]);
+        let span = prev.map_or(0.0, |p| frame.t - p.t);
+        let ahead = (target - frame.t).min(EXTRAPOLATE_MS);
+        frame
+            .players
+            .iter()
+            .filter(|p| p.id != self_id)
+            .map(|row| {
+                let mut out = row.clone();
+                let Some(from) = prev.and_then(|p| p.players.iter().find(|q| q.id == row.id))
+                else {
+                    return out;
+                };
+                if span <= 0.0 || ahead <= 0.0 {
+                    return out;
+                }
+                let vx = (f64::from(row.x) - f64::from(from.x)) / span;
+                let vy = (f64::from(row.y) - f64::from(from.y)) / span;
+                if vx.hypot(vy) * 1000.0 > EXTRAPOLATE_MAX_SPEED {
+                    return out;
+                }
+                out.x = (f64::from(row.x) + vx * ahead) as f32;
+                out.y = (f64::from(row.y) + vy * ahead) as f32;
+                out
+            })
+            .collect()
+    }
+
     pub fn clear(&mut self) {
         self.frames.clear();
-        self.offset = None;
+        self.clock.reset();
     }
 }
 
@@ -248,21 +383,32 @@ mod tests {
         // Offset is pinned by the first push: local 1000 for server 1000.
         buf.push(1000.0, vec![row("a", 0.0, 0.0)], 1000.0);
         buf.push(1100.0, vec![row("a", 10.0, 0.0)], 1100.0);
-        // Render time is local - offset(0) - INTERP_DELAY_MS, so local 1050 + INTERP_DELAY_MS draws server
-        // 1050 — halfway between the two frames.
-        let out = buf.sample(1050.0 + INTERP_DELAY_MS, "me");
+        // Server instant 1050: halfway between the two frames.
+        let out = buf.sample_at(1050.0, "me");
         assert_eq!(out.len(), 1);
         assert!((out[0].x - 5.0).abs() < 0.001, "{}", out[0].x);
     }
 
     #[test]
-    fn past_the_newest_snapshot_a_body_holds_rather_than_extrapolating() {
+    fn a_starved_body_carries_on_for_at_most_50_ms_then_holds() {
         let mut buf = SnapshotBuffer::new();
+        // 2 cubes in 100 ms: a run.
         buf.push(1000.0, vec![row("a", 0.0, 0.0)], 1000.0);
-        buf.push(1100.0, vec![row("a", 10.0, 0.0)], 1100.0);
-        // A stall: render time is now well past the newest frame.
-        let out = buf.sample(2000.0, "me");
-        assert_eq!(out[0].x, 10.0, "extrapolated instead of holding");
+        buf.push(1100.0, vec![row("a", 2.0, 0.0)], 1100.0);
+        let out = buf.sample_at(1120.0, "me");
+        assert!((out[0].x - 2.4).abs() < 1e-4, "{}", out[0].x);
+        // A stall: well past the newest frame. 50 ms of guess, never more.
+        let out = buf.sample_at(5000.0, "me");
+        assert!((out[0].x - 3.0).abs() < 1e-4, "{}", out[0].x);
+    }
+
+    #[test]
+    fn a_body_faster_than_anyone_can_move_is_held_not_extrapolated() {
+        let mut buf = SnapshotBuffer::new();
+        // A respawn between two snapshots: 40 cubes in 100 ms.
+        buf.push(1000.0, vec![row("a", 0.0, 0.0)], 1000.0);
+        buf.push(1100.0, vec![row("a", 40.0, 0.0)], 1100.0);
+        assert_eq!(buf.sample_at(1130.0, "me")[0].x, 40.0);
     }
 
     #[test]
@@ -303,8 +449,12 @@ mod tests {
         buf.push(1000.0, vec![row("a", 0.0, 0.0)], 1200.0);
         buf.push(1100.0, vec![row("a", 0.0, 0.0)], 1100.0);
         // Offset settles on 0, not 200 — otherwise one slow packet would put the
-        // render clock permanently behind and every body with it.
-        assert_eq!(buf.render_time(1300.0), Some(1300.0 - INTERP_DELAY_MS));
+        // render clock permanently behind and every body with it. Inside the
+        // warm-up, so at once; the delay is one tick plus twice the one jitter
+        // sample (|-100 - 100| / 16).
+        let expect = 1300.0 - (TICK_MS + 2.0 * 12.5);
+        let got = buf.render_time(1300.0).unwrap();
+        assert!((got - expect).abs() < 1e-9, "{got} vs {expect}");
     }
 
     #[test]
