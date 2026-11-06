@@ -241,6 +241,33 @@ describe('loading and applying', () => {
   });
 });
 
+describe('uploading the photo maps ahead of their first draw', () => {
+  it('uploads each map once its anisotropy is final and before any material samples it', async () => {
+    // A copy of the namespace is a fresh loader cache, so no other test's load
+    // of this kind is reused.
+    const three = { ...THREE } as typeof THREE;
+    const root = world('mat_dust2_wood_crate', 'mat_mirage_wood_crate');
+    const materials = root.children.map(
+      (c) => (c as THREE.Mesh).material as THREE.MeshStandardMaterial,
+    );
+    const seen: { anisotropy: number; inUse: boolean; version: number }[] = [];
+    const upload = vi.fn(async (t: THREE.Texture) => {
+      seen.push({
+        anisotropy: t.anisotropy,
+        inUse: materials.some((m) => m.map === t || m.normalMap === t || m.roughnessMap === t),
+        version: t.version,
+      });
+    });
+    expect(await upgradePhotoSurfaces(three, root, 8, fakeFetch, upload)).toBe(2);
+    // One kind, three maps, uploaded once each however many materials share them.
+    expect(upload).toHaveBeenCalledTimes(3);
+    expect(seen.every((s) => s.anisotropy === 8 && !s.inUse)).toBe(true);
+    // Applying the maps afterwards does not flag them for a second upload.
+    const after = [materials[0].map!, materials[0].normalMap!, materials[0].roughnessMap!];
+    expect(after.map((t) => t.version)).toEqual(seen.map((s) => s.version));
+  });
+});
+
 describe('turning the photographed surfaces off', () => {
   it('puts the generated tile back, and turning them on again re-applies the photos', async () => {
     const root = world('mat_dust2_sandstone_ochre');

@@ -89,6 +89,22 @@ export function loadPhotoMaps(
   return task;
 }
 
+/** A changed anisotropy re-uploads a texture, so it is set before any upload. */
+function setAnisotropy(maps: PhotoMaps, anisotropy: number): void {
+  for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) {
+    if (t.anisotropy !== anisotropy) {
+      t.anisotropy = anisotropy;
+      t.needsUpdate = true;
+    }
+  }
+}
+
+/**
+ * Sends a texture to the GPU ahead of its first draw (`renderer.initTexture`,
+ * usually paced: see `pacedUploads` in `prewarm.ts`).
+ */
+export type TextureUpload = (texture: THREE.Texture) => void | Promise<void>;
+
 /** Put a kind's maps on a material, in place of its stand-in tile. */
 export function applyPhotoMaps(
   m: THREE.MeshStandardMaterial,
@@ -96,12 +112,7 @@ export function applyPhotoMaps(
   maps: PhotoMaps,
   anisotropy: number,
 ): void {
-  for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) {
-    if (t.anisotropy !== anisotropy) {
-      t.anisotropy = anisotropy;
-      t.needsUpdate = true;
-    }
-  }
+  setAnisotropy(maps, anisotropy);
   m.map = maps.map;
   m.normalMap = maps.normalMap;
   m.normalScale.set(PHOTO_NORMAL_SCALE[kind], PHOTO_NORMAL_SCALE[kind]);
@@ -114,12 +125,18 @@ export function applyPhotoMaps(
 /**
  * Upgrade every photo-kind material under `root`. Resolves with how many
  * materials changed; a kind whose images fail to load keeps its stand-in tile.
+ *
+ * `upload`, when given, sends a kind's maps to the GPU before any material
+ * uses them. Without it the first frame that draws them uploads them: on a
+ * warm cache every kind arrives within a frame or two of the others, and Bank
+ * spent 113 ms of one frame on 69 uploads.
  */
 export async function upgradePhotoSurfaces(
   three: typeof THREE,
   root: THREE.Object3D | null,
   anisotropy: number,
   fetchTexture?: TextureFetch,
+  upload?: TextureUpload,
 ): Promise<number> {
   if (!root) return 0;
   const wanted = new Map<PhotoKind, THREE.MeshStandardMaterial[]>();
@@ -142,6 +159,10 @@ export async function upgradePhotoSurfaces(
     [...wanted].map(async ([kind, materials]) => {
       try {
         const maps = await loadPhotoMaps(three, kind, fetchTexture);
+        if (upload) {
+          setAnisotropy(maps, anisotropy);
+          for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) await upload(t);
+        }
         for (const m of materials) {
           if (!standIns.has(m)) {
             standIns.set(m, {

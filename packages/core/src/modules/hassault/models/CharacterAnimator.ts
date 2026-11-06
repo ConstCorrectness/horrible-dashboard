@@ -39,6 +39,9 @@ const PITCH_SPINE = 0.35;
 const PITCH_CHEST = 0.25;
 const PITCH_HEAD = 0.4;
 
+/** The most mixer time a body out of view is owed, in seconds. */
+const SKIP_CAP = 2;
+
 export class CharacterAnimator {
   private readonly mixer: THREE.AnimationMixer;
   private readonly actions = new Map<string, THREE.AnimationAction>();
@@ -51,6 +54,8 @@ export class CharacterAnimator {
   private prevY = 0;
   private hasPrev = false;
   private smoothedSpeed = 0;
+  /** Mixer time owed for the frames this body spent out of view. */
+  private skipped = 0;
 
   constructor(
     private readonly three: typeof THREE,
@@ -115,7 +120,14 @@ export class CharacterAnimator {
     this.overlay = { action, remaining: hold };
   }
 
-  update(dt: number, row: PlayerRow): void {
+  /**
+   * One frame. `inView` false still chooses the clip (so speed smoothing and
+   * crossfades stay on the row's clock) but skips the mixer and the aim pitch:
+   * the pose of a body nobody can see is the bulk of the cost and is never read.
+   * The time is owed rather than dropped, and paid on the first frame back in
+   * view, so a clip resumes where it would have been.
+   */
+  update(dt: number, row: PlayerRow, inView = true): void {
     if (!(dt > 0) || Number.isNaN(dt)) dt = 1 / 60;
 
     this.model.decayMuzzleFlash(dt);
@@ -133,7 +145,15 @@ export class CharacterAnimator {
       }
     }
 
-    this.mixer.update(dt);
+    if (!inView) {
+      // Capped: past a couple of seconds every crossfade has finished and a
+      // looping clip's phase is arbitrary anyway.
+      this.skipped = Math.min(this.skipped + dt, SKIP_CAP);
+      this.model.nameplate.visible = row.alive !== false;
+      return;
+    }
+    this.mixer.update(dt + this.skipped);
+    this.skipped = 0;
 
     // After the mixer, never before — see the class comment.
     this.applyAimPitch(row);

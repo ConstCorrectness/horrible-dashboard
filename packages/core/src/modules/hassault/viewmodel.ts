@@ -499,6 +499,18 @@ export class WeaponViewModel {
   private propToken = '';
 
   /**
+   * Readies a prop for its first draw (`setWarmup`): uploads its textures and
+   * compiles its programs while the boxes are still in the hands. Without it
+   * the first frame with a new weapon's model did both: a 300 ms frame on the
+   * first spawn, every time a map was loaded.
+   */
+  private warm: ((root: THREE.Object3D) => Promise<void>) | null = null;
+
+  setWarmup(warm: ((root: THREE.Object3D) => Promise<void>) | null): void {
+    this.warm = warm;
+  }
+
+  /**
    * The muzzle flash, as three billboards rather than one cone — see `flash.ts`
    * for what was wrong with the cone and why a sprite cannot repeat it.
    *
@@ -706,7 +718,7 @@ export class WeaponViewModel {
     const propId =
       id === 'knife' ? knifePropId(knifeArchetype(skin?.id ?? '', skin?.name ?? '')) : id;
     void loadWeaponModel(propId)
-      .then((asset) => {
+      .then(async (asset) => {
         // Three ways to be stale, and they are all the same check: the weapon
         // changed, the skin changed, or the view model was disposed while the
         // fetch was in flight.
@@ -754,6 +766,15 @@ export class WeaponViewModel {
             materials.push(mat);
           }
         });
+
+        if (this.warm) {
+          await this.warm(model);
+          // Stale by now? The same three checks as on arrival.
+          if (this.propToken !== token || this.built !== built) {
+            for (const m of materials) m.dispose();
+            return;
+          }
+        }
 
         // The boxes go, the flash stays: it belongs to *this* barrel and its
         // position is recomputed from the prop's own muzzle. Removing the

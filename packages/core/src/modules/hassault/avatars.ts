@@ -20,6 +20,7 @@ import {
   type OperatorAsset,
 } from './models';
 import type { PlayerRow } from './net';
+import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT } from './world';
 import { weaponIdAt } from './weapon-visuals';
 
 /**
@@ -51,7 +52,20 @@ interface Avatar {
   /** The agent it was built wearing (`cosmetics.lookKey`). */
   lookKey: string;
   dispose: () => void;
+  /** The row `sync` placed it at, waiting for `animate`. */
+  row: PlayerRow | null;
+  /** Frame time `sync` has seen since the last `animate`. */
+  dt: number;
 }
+
+/** A standing body's height, feet to crown, in cube units. */
+const BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
+/**
+ * The sphere a body is tested against the view with: centred half way up, and
+ * as wide as the body is tall, so a death clip that lays it out flat in any
+ * direction, or a rifle held out at arm's length, is still inside it.
+ */
+const BODY_RADIUS = BODY_HEIGHT;
 
 interface Hitbox {
   group: THREE.Group;
@@ -64,8 +78,11 @@ interface Hitbox {
  * Manages the set of avatar objects in a scene, keyed by player id.
  *
  * `sync` is called every frame with whatever the interpolator produced, and
- * diffs against what is already in the scene — creating, moving, animating and disposing as
- * membership changes.
+ * diffs against what is already in the scene — creating, moving and disposing as
+ * membership changes. `animate` then poses the bodies, once the camera has been
+ * placed for the frame: it skips the animation of every body outside the view
+ * (`CharacterAnimator.update`), which nobody can see and nothing else reads —
+ * hitboxes are the server's.
  */
 export class AvatarPool {
   private avatars = new Map<string, Avatar>();
@@ -91,7 +108,7 @@ export class AvatarPool {
     private readonly three: typeof THREE,
     private readonly scene: THREE.Scene,
   ) {
-    loadOperator(OPERATOR_CT_URL)
+    const ct = loadOperator(OPERATOR_CT_URL)
       .then((asset) => {
         this.assetCT = asset;
       })
@@ -100,13 +117,14 @@ export class AvatarPool {
         console.error('hassault: CT operator model failed to load; players will not be drawn', err);
       });
 
-    loadOperator(OPERATOR_T_URL)
+    const t = loadOperator(OPERATOR_T_URL)
       .then((asset) => {
         this.assetT = asset;
       })
       .catch((err) => {
         console.warn('hassault: T operator model failed to load; will fall back to CT', err);
       });
+    this.loaded = Promise.all([ct, t]).then(() => undefined);
   }
 
   /** Whether the operator model is in hand. Surfaced for the boot overlay. */
@@ -192,7 +210,7 @@ export class AvatarPool {
     }
   }
 
-  private create(row: PlayerRow, asset: OperatorAsset): Omit<Avatar, 'lookKey'> {
+  private create(row: PlayerRow, asset: OperatorAsset): Omit<Avatar, 'lookKey' | 'row' | 'dt'> {
     // Meshes receive shadow but never cast: the scene's shadow map is rendered
     // once per map and holds static world geometry only (see
     // `HorribleAssaultPanel`), so a casting avatar would leave its shadow
@@ -241,7 +259,7 @@ export class AvatarPool {
         avatar = undefined;
       }
       if (!avatar) {
-        avatar = { ...this.create(row, asset), lookKey: key };
+        avatar = { ...this.create(row, asset), lookKey: key, row: null, dt: 0 };
         this.avatars.set(row.id, avatar);
       }
 
@@ -255,8 +273,11 @@ export class AvatarPool {
 
       avatar.group.rotation.y = avatarRotationY(row.yaw);
 
-      // Clip selection, crossfades, aim pitch, weapon and stale fade.
-      avatar.animator.update(dt, row);
+      // Clip selection, crossfades, aim pitch, weapon and stale fade: in
+      // `animate`, once the camera is placed. The time adds up if a frame
+      // syncs without animating, so no clip loses it.
+      avatar.row = row;
+      avatar.dt += dt;
       avatar.model.setWeaponSkin(skinFor(look, row.team, weaponIdAt(row.weapon ?? -1)));
     }
 
@@ -267,6 +288,55 @@ export class AvatarPool {
     }
 
     if (this.showHitboxes) this.syncHitboxes(rows, seen);
+  }
+
+  /**
+   * Settles once both operator loads have (either way), so a caller can wait
+   * for the bodies before compiling them.
+   */
+  readonly loaded: Promise<void>;
+
+  /**
+   * One body per loaded operator, never added to the scene, for `prewarm` to
+   * compile: the first player to appear otherwise compiles the operator's
+   * programs on the frame they do. The caller disposes it.
+   */
+  warmupBodies(): { roots: THREE.Object3D[]; dispose: () => void } {
+    const rows: PlayerRow[] = [];
+    if (this.assetCT) rows.push({ id: 'warmup-ct', team: 0, x: 0, y: 0, z: 0, yaw: 0 } as PlayerRow);
+    if (this.assetT) rows.push({ id: 'warmup-t', team: 1, x: 0, y: 0, z: 0, yaw: 0 } as PlayerRow);
+    const made = rows.map((row) => {
+      const asset = row.team === 1 ? this.assetT! : this.assetCT!;
+      const model = new CharacterModel(this.three, asset, row.team, '', agentFor(undefined, row.team));
+      return model;
+    });
+    return {
+      roots: made.map((m) => m.rootGroup),
+      dispose: () => {
+        for (const m of made) m.dispose();
+      },
+    };
+  }
+
+  /** The view test's sphere, reused every frame. */
+  private sphere: THREE.Sphere | null = null;
+
+  /**
+   * Pose every body `sync` placed, against this frame's `view`. Without a view
+   * every body animates, as before.
+   */
+  animate(view?: THREE.Frustum): void {
+    const sphere = (this.sphere ??= new this.three.Sphere());
+    for (const avatar of this.avatars.values()) {
+      const row = avatar.row;
+      if (!row) continue;
+      sphere.center.set(row.x, row.z + BODY_HEIGHT * 0.5, row.y);
+      sphere.radius = BODY_RADIUS;
+      const inView = !view || view.intersectsSphere(sphere);
+      avatar.animator.update(avatar.dt, row, inView);
+      avatar.row = null;
+      avatar.dt = 0;
+    }
   }
 
   /** How each player looks, by id: the session's copy (`cosmetics.ts`). */

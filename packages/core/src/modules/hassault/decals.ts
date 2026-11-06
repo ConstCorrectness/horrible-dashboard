@@ -243,30 +243,62 @@ export function drawStabTile(size = SIZE): Uint8Array {
   return out;
 }
 
-/** Build a decal texture for the given kind. A `DataTexture`, so this module runs headless. */
-export function createDecalTexture(
+/** Which atlas tile each kind of mark is drawn from. */
+export const DECAL_TILE: Record<DecalKind, number> = {
+  bullet: 0,
+  knife_slash: 1,
+  knife_stab: 2,
+};
+/**
+ * Tiles across the atlas: the three kinds and one empty slot, so the atlas is a
+ * power of two wide and every tile boundary lands on a texel boundary at every
+ * mip level. A box-filtered mip then never averages one tile into the next,
+ * until a tile is a single texel and a mark is a smudge either way.
+ */
+export const DECAL_ATLAS_TILES = 4;
+
+/**
+ * Every kind of mark in one strip, `DECAL_ATLAS_TILES` tiles wide, so the whole
+ * pool is one material and one draw. Laid out row by row exactly as each tile
+ * is on its own, so a tile reads the same out of the atlas as it did alone.
+ */
+export function drawDecalAtlas(size = SIZE): Uint8Array {
+  const width = size * DECAL_ATLAS_TILES;
+  const out = new Uint8Array(width * size * 4);
+  const tiles: [DecalKind, Uint8Array][] = [
+    ["bullet", drawImpactTile(size)],
+    ["knife_slash", drawSlashTile(size)],
+    ["knife_stab", drawStabTile(size)],
+  ];
+  for (const [kind, tile] of tiles) {
+    const x0 = DECAL_TILE[kind] * size;
+    for (let py = 0; py < size; py++) {
+      out.set(
+        tile.subarray(py * size * 4, (py + 1) * size * 4),
+        (py * width + x0) * 4,
+      );
+    }
+  }
+  return out;
+}
+
+/** Build the atlas texture. A `DataTexture`, so this module runs headless. */
+export function createDecalAtlas(
   three: typeof THREE,
-  kind: DecalKind = 'bullet',
   size = SIZE,
 ): THREE.DataTexture {
-  const data =
-    kind === 'knife_slash'
-      ? drawSlashTile(size)
-      : kind === 'knife_stab'
-      ? drawStabTile(size)
-      : drawImpactTile(size);
-  const texture = new three.DataTexture(data, size, size, three.RGBAFormat);
+  const texture = new three.DataTexture(
+    drawDecalAtlas(size),
+    size * DECAL_ATLAS_TILES,
+    size,
+    three.RGBAFormat,
+  );
   texture.magFilter = three.LinearFilter;
   texture.minFilter = three.LinearMipmapLinearFilter;
   texture.generateMipmaps = true;
   texture.colorSpace = three.SRGBColorSpace;
   texture.needsUpdate = true;
   return texture;
-}
-
-/** Build the impact texture. A `DataTexture`, so this module runs headless. */
-export function createImpactTexture(three: typeof THREE, size = SIZE): THREE.DataTexture {
-  return createDecalTexture(three, 'bullet', size);
 }
 
 /**
@@ -282,18 +314,68 @@ export function decalOpacity(age: number): number {
   return (DECAL_LIFE - age) / DECAL_FADE;
 }
 
+/**
+ * The pool's shader: `MeshBasicMaterial`, so fog, tone mapping and colour space
+ * are three's own, plus two numbers per instance — how opaque the mark is and
+ * which atlas tile it is. The tint is three's own `instanceColor`.
+ */
+export function decalShader(shader: {
+  vertexShader: string;
+  fragmentShader: string;
+}): void {
+  shader.vertexShader = shader.vertexShader
+    .replace(
+      "void main() {",
+      "attribute vec2 decalAttr;\nvarying float vDecalAlpha;\nvoid main() {",
+    )
+    .replace(
+      "#include <uv_vertex>",
+      [
+        "#include <uv_vertex>",
+        "#ifdef USE_MAP",
+        `  vMapUv.x = (vMapUv.x + decalAttr.y) / ${DECAL_ATLAS_TILES}.0;`,
+        "#endif",
+        "  vDecalAlpha = decalAttr.x;",
+      ].join("\n"),
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace("void main() {", "varying float vDecalAlpha;\nvoid main() {")
+    .replace(
+      "#include <alphamap_fragment>",
+      "#include <alphamap_fragment>\n  diffuseColor.a *= vDecalAlpha;",
+    );
+}
+
 interface Mark {
-  mesh: THREE.Mesh;
-  material: THREE.MeshBasicMaterial;
   age: number;
   live: boolean;
 }
 
+/**
+ * Every mark in the world, as **one** `InstancedMesh`.
+ *
+ * It used to be `DECAL_MAX` meshes, each with its own material, all of them in
+ * the scene all the time. Hidden ones draw nothing, but three still walked every
+ * one of them each frame to update its world matrix, and a wall of live ones
+ * was a draw call apiece. Now a mark is a slot (a matrix, a tint, and an
+ * `(opacity, tile)` pair), and the whole pool is one draw however many are up.
+ *
+ * Still a ring buffer: slot `next` is overwritten by the next mark, oldest
+ * first, so the cap holds by construction.
+ */
 export class DecalPool {
   private marks: Mark[] = [];
   private next = 0;
-  private geometry: THREE.PlaneGeometry;
-  private textures: Record<DecalKind, THREE.DataTexture>;
+  private readonly geometry: THREE.PlaneGeometry;
+  private readonly atlas: THREE.DataTexture;
+  private readonly material: THREE.MeshBasicMaterial;
+  private readonly mesh: THREE.InstancedMesh;
+  /** Per slot: opacity, then atlas tile. */
+  private readonly attr: THREE.InstancedBufferAttribute;
+  private readonly color: THREE.Color;
+  private readonly scratch: THREE.Object3D;
+  /** A slot nobody is using: every vertex at the origin, so nothing rasterises. */
+  private readonly empty: THREE.Matrix4;
   /**
    * The six orientations, built once.
    *
@@ -309,11 +391,10 @@ export class DecalPool {
     private readonly scene: THREE.Scene,
   ) {
     this.geometry = new three.PlaneGeometry(1, 1);
-    this.textures = {
-      bullet: createDecalTexture(three, 'bullet'),
-      knife_slash: createDecalTexture(three, 'knife_slash'),
-      knife_stab: createDecalTexture(three, 'knife_stab'),
-    };
+    this.atlas = createDecalAtlas(three);
+    this.color = new three.Color();
+    this.scratch = new three.Object3D();
+    this.empty = new three.Matrix4().makeScale(0, 0, 0);
 
     // A `PlaneGeometry` faces +z in its own space, so each orientation is the
     // rotation taking +z onto that face's normal — in **three**'s axes, where
@@ -324,27 +405,53 @@ export class DecalPool {
       return new three.Quaternion().setFromUnitVectors(from, to);
     });
 
-    this.marks = Array.from({ length: DECAL_MAX }, () => {
-      const material = new three.MeshBasicMaterial({
-        map: this.textures.bullet,
-        transparent: true,
-        opacity: 1,
-        // Depth *tested* so a mark is hidden by anything in front of it, but
-        // never *written*: marks overlap constantly and a written depth would
-        // make the newer one z-fight the older.
-        depthWrite: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -4,
-        polygonOffsetUnits: -4,
-      });
-      const mesh = new three.Mesh(this.geometry, material);
-      mesh.visible = false;
-      // Below the view model's 2, so a mark can never draw over the gun.
-      mesh.renderOrder = 1;
-      scene.add(mesh);
-      return { mesh, material, age: 0, live: false };
+    this.material = new three.MeshBasicMaterial({
+      map: this.atlas,
+      transparent: true,
+      // Depth *tested* so a mark is hidden by anything in front of it, but
+      // never *written*: marks overlap constantly and a written depth would
+      // make the newer one z-fight the older.
+      depthWrite: false,
+      depthTest: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
     });
+    this.material.onBeforeCompile = decalShader;
+    this.material.customProgramCacheKey = () => "hassault-decal";
+
+    this.mesh = new three.InstancedMesh(
+      this.geometry,
+      this.material,
+      DECAL_MAX,
+    );
+    this.attr = new three.InstancedBufferAttribute(
+      new Float32Array(DECAL_MAX * 2),
+      2,
+    );
+    this.attr.setUsage(three.DynamicDrawUsage);
+    this.geometry.setAttribute("decalAttr", this.attr);
+    this.mesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
+    // Every slot starts collapsed to a point: nothing drawn, nothing to fade.
+    this.color.setHex(0xffffff);
+    for (let i = 0; i < DECAL_MAX; i++) {
+      this.mesh.setMatrixAt(i, this.empty);
+      this.mesh.setColorAt(i, this.color);
+    }
+    // Marks are anywhere in the map, so a bounding sphere would have to be
+    // recomputed on every shot to be right; the draw is a few hundred quads.
+    this.mesh.frustumCulled = false;
+    // Below the view model's 2, so a mark can never draw over the gun.
+    this.mesh.renderOrder = 1;
+    // Its own transform never moves; only the instances do.
+    this.mesh.matrixAutoUpdate = false;
+    this.mesh.updateMatrix();
+    scene.add(this.mesh);
+
+    this.marks = Array.from({ length: DECAL_MAX }, () => ({
+      age: 0,
+      live: false,
+    }));
   }
 
   /**
@@ -358,62 +465,79 @@ export class DecalPool {
   mark(
     at: [number, number, number],
     face: number,
-    tintOrMaterial: number | SurfaceMaterial = 'default',
-    kind: DecalKind = 'bullet',
+    tintOrMaterial: number | SurfaceMaterial = "default",
+    kind: DecalKind = "bullet",
     slashAngle = 0,
   ): void {
     if (face === FACE_NONE || face < 0 || face >= FACE_NORMALS.length) return;
-    const entry = this.marks[this.next];
+    const slot = this.next;
     this.next = (this.next + 1) % DECAL_MAX;
 
     const normal = FACE_NORMALS[face];
+    const o = this.scratch;
     // Cube (x, y, height) -> three (x, height, z), lifted off the surface along
     // its own normal so it does not z-fight the wall it is on.
-    entry.mesh.position.set(
+    o.position.set(
       at[0] + normal[0] * DECAL_LIFT,
       at[2] + normal[2] * DECAL_LIFT,
       at[1] + normal[1] * DECAL_LIFT,
     );
-    entry.mesh.quaternion.copy(this.orientations[face]);
+    o.quaternion.copy(this.orientations[face]);
 
-    if (kind === 'knife_slash') {
-      entry.mesh.rotateZ(slashAngle);
-      entry.mesh.scale.set(DECAL_SIZE * 0.45, DECAL_SIZE * 1.5, 1);
-    } else if (kind === 'knife_stab') {
-      entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
-      entry.mesh.scale.set(DECAL_SIZE * 0.75, DECAL_SIZE * 0.75, 1);
+    if (kind === "knife_slash") {
+      o.rotateZ(slashAngle);
+      o.scale.set(DECAL_SIZE * 0.45, DECAL_SIZE * 1.5, 1);
+    } else if (kind === "knife_stab") {
+      o.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
+      o.scale.set(DECAL_SIZE * 0.75, DECAL_SIZE * 0.75, 1);
     } else {
       // Bullet hole: spun about its own normal, so marks are not identical stamps.
-      entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
-      entry.mesh.scale.set(DECAL_SIZE, DECAL_SIZE, 1);
+      o.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
+      o.scale.set(DECAL_SIZE, DECAL_SIZE, 1);
     }
+    o.updateMatrix();
+    this.mesh.setMatrixAt(slot, o.matrix);
+    this.mesh.instanceMatrix.needsUpdate = true;
 
-    entry.material.map = this.textures[kind];
-    entry.material.needsUpdate = true;
     const hex =
-      typeof tintOrMaterial === 'number'
+      typeof tintOrMaterial === "number"
         ? tintOrMaterial
         : (MATERIAL_TINTS[tintOrMaterial] ?? 0xffffff);
-    entry.material.color.setHex(hex);
-    entry.material.opacity = 1;
-    entry.mesh.visible = true;
+    this.mesh.setColorAt(slot, this.color.setHex(hex));
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+
+    this.attr.setXY(slot, 1, DECAL_TILE[kind]);
+    this.attr.needsUpdate = true;
+    const entry = this.marks[slot];
     entry.age = 0;
     entry.live = true;
   }
 
   /** Age every live mark, fading and retiring as it goes. */
   update(dt: number): void {
-    for (const entry of this.marks) {
+    let faded = false;
+    let retired = false;
+    for (let i = 0; i < this.marks.length; i++) {
+      const entry = this.marks[i];
       if (!entry.live) continue;
       entry.age += dt;
       const opacity = decalOpacity(entry.age);
       if (opacity <= 0) {
         entry.live = false;
-        entry.mesh.visible = false;
+        this.attr.setX(i, 0);
+        this.mesh.setMatrixAt(i, this.empty);
+        faded = true;
+        retired = true;
         continue;
       }
-      entry.material.opacity = opacity;
+      // Flat for most of a mark's life, so most frames upload nothing.
+      if (opacity !== this.attr.getX(i)) {
+        this.attr.setX(i, opacity);
+        faded = true;
+      }
     }
+    if (faded) this.attr.needsUpdate = true;
+    if (retired) this.mesh.instanceMatrix.needsUpdate = true;
   }
 
   /** How many marks are currently on the world. For tests and the debug HUD. */
@@ -422,14 +546,11 @@ export class DecalPool {
   }
 
   dispose(): void {
-    for (const entry of this.marks) {
-      this.scene.remove(entry.mesh);
-      entry.material.dispose();
-    }
-    this.marks = [];
+    this.scene.remove(this.mesh);
+    this.mesh.dispose();
+    this.material.dispose();
     this.geometry.dispose();
-    for (const tex of Object.values(this.textures)) {
-      tex.dispose();
-    }
+    this.atlas.dispose();
+    this.marks = [];
   }
 }

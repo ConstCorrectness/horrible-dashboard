@@ -17,8 +17,10 @@ import {
   classifySurface,
   DETAIL_GAIN,
   DETAIL_MEAN,
+  GLASS_MIN_OPACITY,
   planarUv,
   surfaceTileScale,
+  withoutTransmission,
 } from '../glb-surfaces';
 import { drawGlbSurfaceTile, normalizeDetailTile } from '../textures3d';
 
@@ -136,5 +138,55 @@ describe('glb surfaces', () => {
   it('has no generator for the blended kinds', () => {
     expect(drawGlbSurfaceTile('glass')).toBeNull();
     expect(drawGlbSurfaceTile('none')).toBeNull();
+  });
+});
+
+describe('withoutTransmission', () => {
+  const pane = (transmission: number, opacity = 1) => ({
+    transmission,
+    opacity,
+    transparent: false,
+    depthWrite: true,
+  });
+
+  it('turns a transmissive pane into blended glass that is still see-through', () => {
+    const m = pane(1);
+    expect(withoutTransmission(m)).toBe(true);
+    expect(m).toEqual({ transmission: 0, opacity: GLASS_MIN_OPACITY, transparent: true, depthWrite: false });
+  });
+
+  it('scales opacity with how transmissive the pane was, never above what it had', () => {
+    const half = pane(0.5);
+    withoutTransmission(half);
+    expect(half.opacity).toBeCloseTo(1 - 0.5 * (1 - GLASS_MIN_OPACITY));
+    const faint = pane(0.2, 0.3);
+    withoutTransmission(faint);
+    expect(faint.opacity).toBe(0.3);
+  });
+
+  it('leaves an opaque material alone', () => {
+    const m = pane(0);
+    expect(withoutTransmission(m)).toBe(false);
+    expect(m).toEqual(pane(0));
+  });
+
+  it('converts every transmissive material the bundled maps ship', () => {
+    // The six maps that had panes, read straight from their GLBs: after the
+    // conversion none of them would make three run its transmission pass.
+    let panes = 0;
+    for (const file of readdirSync(MAPS_DIR).filter((f) => f.endsWith('.glb'))) {
+      const buf = readFileSync(new URL(file, MAPS_DIR));
+      const json = JSON.parse(buf.subarray(20, 20 + buf.readUInt32LE(12)).toString('utf8'));
+      for (const mat of json.materials ?? []) {
+        const t = mat.extensions?.KHR_materials_transmission?.transmissionFactor;
+        if (t === undefined) continue;
+        panes += 1;
+        const m = pane(t, mat.pbrMetallicRoughness?.baseColorFactor?.[3] ?? 1);
+        withoutTransmission(m);
+        expect(m.transmission, `${file} ${mat.name}`).toBe(0);
+        if (t > 0) expect(m.transparent, `${file} ${mat.name}`).toBe(true);
+      }
+    }
+    expect(panes).toBeGreaterThan(0);
   });
 });

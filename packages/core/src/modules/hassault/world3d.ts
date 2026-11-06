@@ -31,6 +31,7 @@ import {
   isPhotoKind,
   planarUv,
   surfaceTileScale,
+  withoutTransmission,
 } from './glb-surfaces';
 import { glbNodeCollides, isDecorNode } from './glb-colliders';
 import { getCachedAssetUrl } from './models/assetCache';
@@ -1936,6 +1937,9 @@ const surfacedMaterials = new WeakSet<THREE.Material>();
 function applyGlbSurface(three: typeof import('three'), m: THREE.Material): void {
   if (surfacedMaterials.has(m) || !(m instanceof three.MeshStandardMaterial)) return;
   surfacedMaterials.add(m);
+  // Transmission re-renders the whole opaque world every frame: see
+  // `withoutTransmission`. GLTFLoader makes these `MeshPhysicalMaterial`.
+  if (m instanceof three.MeshPhysicalMaterial && withoutTransmission(m)) m.needsUpdate = true;
   const kind = classifySurface(m.name || '');
   const pbr = glbSurfacePbrMaps(three, kind, DETAIL_MEAN);
   if (!pbr) {

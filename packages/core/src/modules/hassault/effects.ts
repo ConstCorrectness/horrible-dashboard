@@ -39,7 +39,16 @@ const BLAST_TINT: Record<string, number> = {
 /** Beyond this, older effects are dropped rather than queued. */
 const MAX_LIVE = 160;
 
+/** What an effect is drawn as: each kind is one geometry and one material setup. */
+type Kind = 'tracer' | 'impact' | 'particle' | 'shell' | 'core';
+
+interface Spawned {
+  object: THREE.Mesh | THREE.Line;
+  material: THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
+}
+
 interface Live {
+  kind: Kind;
   object: THREE.Object3D;
   material: THREE.Material & { opacity: number };
   age: number;
@@ -54,6 +63,22 @@ interface Live {
 
 export class EffectsPool {
   private live: Live[] = [];
+  /**
+   * Retired effects, by kind, waiting to be reused.
+   *
+   * An effect used to be a new material and mesh per particle, disposed when it
+   * faded. Beyond the garbage, disposing a material releases its program, and
+   * three deletes a program the moment nothing uses it: so the first tracer
+   * after a quiet spell re-linked its shader, mid-firefight, on the frame it
+   * was fired. Reused, a kind's program lives as long as the pool.
+   */
+  private free: Record<Kind, Spawned[]> = {
+    tracer: [],
+    impact: [],
+    particle: [],
+    shell: [],
+    core: [],
+  };
   private tracerGeo: THREE.BufferGeometry;
   private impactGeo: THREE.BufferGeometry;
   private particleGeo: THREE.BufferGeometry;
@@ -102,14 +127,7 @@ export class EffectsPool {
     const position = new three.Vector3(at[0], at[2], at[1]);
     const tint = BLAST_TINT[kind] ?? BLAST_TINT.he;
 
-    const shellMat = new three.MeshBasicMaterial({
-      color: tint,
-      transparent: true,
-      opacity: 0.5,
-      wireframe: true,
-      depthWrite: false,
-    });
-    const shell = new three.Mesh(this.blastGeo, shellMat);
+    const { object: shell, material: shellMat } = this.spawn('shell', tint, 0.5);
     shell.position.copy(position);
     // `add` grows an entry from 1 to `scale` over its life, so the shell is a
     // unit sphere told to end up at the blast's real radius — it must not be
@@ -119,13 +137,11 @@ export class EffectsPool {
     // A smoke or a fire has no flash — the cloud it becomes is the event, and a
     // white pop in front of it would read as a second explosion.
     if (kind === 'he' || kind === 'flash') {
-      const coreMat = new three.MeshBasicMaterial({
-        color: kind === 'flash' ? 0xffffff : 0xffcf7a,
-        transparent: true,
-        opacity: 0.95,
-        depthWrite: false,
-      });
-      const core = new three.Mesh(this.blastGeo, coreMat);
+      const { object: core, material: coreMat } = this.spawn(
+        'core',
+        kind === 'flash' ? 0xffffff : 0xffcf7a,
+        0.95,
+      );
       core.position.copy(position);
       this.add(core, coreMat, BLAST_LIFE * 0.45, Math.max(1.2, radius * 0.4));
     }
@@ -147,12 +163,7 @@ export class EffectsPool {
     if (self) return;
     for (const end of ends) {
       const to = new three.Vector3(end[0], end[2], end[1]);
-      const material = new three.LineBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.8,
-      });
-      const line = new three.Line(this.tracerGeo, material);
+      const { object: line, material } = this.spawn('tracer', color, 0.8);
       line.position.copy(from);
       // Explicitly rotating the geometry's +Z onto the shot direction rather
       // than using `lookAt`, whose axis convention differs between cameras and
@@ -167,12 +178,7 @@ export class EffectsPool {
       line.scale.set(1, 1, length);
       this.add(line, material, TRACER_LIFE);
 
-      const impactMat = new three.MeshBasicMaterial({
-        color: 0xffd9a0,
-        transparent: true,
-        opacity: 0.9,
-      });
-      const impact = new three.Mesh(this.impactGeo, impactMat);
+      const { object: impact, material: impactMat } = this.spawn('impact', 0xffd9a0, 0.9);
       impact.position.copy(to);
       this.add(impact, impactMat, IMPACT_LIFE, 2.4);
     }
@@ -182,12 +188,7 @@ export class EffectsPool {
   helmetDink(at: [number, number, number]): void {
     const three = this.three;
     const pos = new three.Vector3(at[0], at[2], at[1]);
-    const dinkMat = new three.MeshBasicMaterial({
-      color: 0xffea00,
-      transparent: true,
-      opacity: 1.0,
-    });
-    const dinkMesh = new three.Mesh(this.impactGeo, dinkMat);
+    const { object: dinkMesh, material: dinkMat } = this.spawn('impact', 0xffea00, 1.0);
     dinkMesh.position.copy(pos);
     this.add(dinkMesh, dinkMat, 0.22, 4.2);
   }
@@ -224,12 +225,7 @@ export class EffectsPool {
           .addScaledVector(bitangent, Math.sin(theta) * spread * 10);
 
         const sparkColor = Math.random() > 0.3 ? 0xffea55 : 0xffaa22;
-        const sparkMat = new three.MeshBasicMaterial({
-          color: sparkColor,
-          transparent: true,
-          opacity: 1.0,
-        });
-        const spark = new three.Mesh(this.particleGeo, sparkMat);
+        const { object: spark, material: sparkMat } = this.spawn('particle', sparkColor, 1.0);
         spark.position.copy(pos);
         this.add(spark, sparkMat, 0.16 + Math.random() * 0.08, 1.2, vel, 2.0, 32.0);
       }
@@ -246,12 +242,7 @@ export class EffectsPool {
           .addScaledVector(bitangent, Math.sin(theta) * spread * 6);
 
         const woodColor = Math.random() > 0.5 ? 0x8a5a2e : 0xbfa073;
-        const woodMat = new three.MeshBasicMaterial({
-          color: woodColor,
-          transparent: true,
-          opacity: 0.9,
-        });
-        const splinter = new three.Mesh(this.particleGeo, woodMat);
+        const { object: splinter, material: woodMat } = this.spawn('particle', woodColor, 0.9);
         splinter.position.copy(pos);
         this.add(splinter, woodMat, 0.22 + Math.random() * 0.08, 1.0, vel, 4.0, 22.0);
       }
@@ -265,12 +256,7 @@ export class EffectsPool {
           .addScaledVector(tangent, (Math.random() - 0.5) * 8)
           .addScaledVector(bitangent, (Math.random() - 0.5) * 8);
 
-        const glassMat = new three.MeshBasicMaterial({
-          color: 0xe0f4fc,
-          transparent: true,
-          opacity: 0.95,
-        });
-        const shard = new three.Mesh(this.particleGeo, glassMat);
+        const { object: shard, material: glassMat } = this.spawn('particle', 0xe0f4fc, 0.95);
         shard.position.copy(pos);
         this.add(shard, glassMat, 0.18 + Math.random() * 0.06, 0.9, vel, 3.0, 25.0);
       }
@@ -287,12 +273,7 @@ export class EffectsPool {
           .addScaledVector(bitangent, Math.sin(theta) * spread * 4);
 
         const dustColor = Math.random() > 0.5 ? 0xcccccc : 0xa6a6a6;
-        const dustMat = new three.MeshBasicMaterial({
-          color: dustColor,
-          transparent: true,
-          opacity: 0.85,
-        });
-        const dust = new three.Mesh(this.particleGeo, dustMat);
+        const { object: dust, material: dustMat } = this.spawn('particle', dustColor, 0.85);
         dust.position.copy(pos);
         this.add(dust, dustMat, 0.24 + Math.random() * 0.08, 1.8, vel, 9.0, 8.0);
       }
@@ -324,16 +305,39 @@ export class EffectsPool {
         .addScaledVector(bitangent, (Math.random() - 0.5) * speed + 2.5);
 
       const glassColor = Math.random() > 0.5 ? 0xeaf7ff : 0xd2edfc;
-      const glassMat = new three.MeshBasicMaterial({
-        color: glassColor,
-        transparent: true,
-        opacity: 0.92,
-      });
-      const shard = new three.Mesh(this.particleGeo, glassMat);
+      const { object: shard, material: glassMat } = this.spawn('particle', glassColor, 0.92);
       shard.position.copy(pos).addScaledVector(vel, 0.02);
       const scale = 0.8 + Math.random() * 1.6;
       this.add(shard, glassMat, 0.35 + Math.random() * 0.25, scale, vel, 2.5, 24.0);
     }
+  }
+
+  /** A fresh-looking effect of `kind`: reused if one is free, built if not. */
+  private spawn(kind: Kind, color: number, opacity: number): Spawned {
+    const three = this.three;
+    let entry = this.free[kind].pop();
+    if (!entry) {
+      if (kind === 'tracer') {
+        const material = new three.LineBasicMaterial({ transparent: true });
+        entry = { object: new three.Line(this.tracerGeo, material), material };
+      } else {
+        const blast = kind === 'shell' || kind === 'core';
+        const material = new three.MeshBasicMaterial({
+          transparent: true,
+          wireframe: kind === 'shell',
+          depthWrite: !blast,
+        });
+        const geometry = kind === 'impact' ? this.impactGeo : blast ? this.blastGeo : this.particleGeo;
+        entry = { object: new three.Mesh(geometry, material), material };
+      }
+      entry.object.userData.effectKind = kind;
+    }
+    entry.material.color.setHex(color);
+    entry.material.opacity = opacity;
+    entry.object.position.set(0, 0, 0);
+    entry.object.quaternion.identity();
+    entry.object.scale.set(1, 1, 1);
+    return entry;
   }
 
   private add(
@@ -347,6 +351,7 @@ export class EffectsPool {
   ): void {
     this.scene.add(object);
     this.live.push({
+      kind: object.userData.effectKind as Kind,
       object,
       material,
       age: 0,
@@ -386,12 +391,19 @@ export class EffectsPool {
 
   private retire(entry: Live): void {
     this.scene.remove(entry.object);
-    entry.material.dispose();
+    this.free[entry.kind].push({
+      object: entry.object as Spawned['object'],
+      material: entry.material as Spawned['material'],
+    });
   }
 
   dispose(): void {
     for (const entry of this.live) this.retire(entry);
     this.live = [];
+    for (const list of Object.values(this.free)) {
+      for (const { material } of list) material.dispose();
+      list.length = 0;
+    }
     this.tracerGeo.dispose();
     this.impactGeo.dispose();
     this.particleGeo.dispose();

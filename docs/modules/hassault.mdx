@@ -1307,6 +1307,14 @@ Simple (Lambert), Standard (PBR with the generated tiles) and Photographed. Turn
 photographs off live puts the generated tiles back (`restoreGeneratedSurfaces`);
 the images stay cached.
 
+**Soft shadows is a filter radius, not a shadow-map type.** three r184
+deprecated `PCFSoftShadowMap` and swaps it for PCF at the first shadow render.
+Every lit program compiled before that point was compiled again, and every
+`setGraphics` set the type back and recompiled the lot. Every tier now uses PCF,
+and soft shadows widens `sun.shadow.radius` to `SOFT_SHADOW_RADIUS` (2.5
+shadow-map texels, against 1). That is a uniform, so switching it recompiles
+nothing.
+
 There is deliberately **no shadows-off row**. Turning off the sun's shadow lights
 a player standing in shade, which is a visibility change, so the rows offer
 shadow resolution and filtering only. The native client still has a `SHADOWS`
@@ -5946,10 +5954,20 @@ firefight. Now every pellet that stops on a surface leaves a mark
 **learnable pattern** (below), the marks on a wall are how you read back the pattern
 you are supposed to be learning.
 
-Both clients hold a **fixed ring** of `DECAL_MAX = 128` marks: allocated once,
+Both clients hold a **fixed ring** of `DECAL_MAX = 256` marks: allocated once,
 reused in order, so nothing is created per shot and the cap holds by construction
 rather than by a trim that runs after every push. An automatic weapon puts thirty
 marks on a wall in two seconds.
+
+In the browser the ring is **one `InstancedMesh`**, not 256 meshes. A mark is a
+slot: a matrix, a tint (`instanceColor`), and an opacity and atlas tile per
+instance, read by a small `onBeforeCompile` patch on `MeshBasicMaterial`. The
+three kinds (bullet, slash, stab) share one atlas, four 32 px tiles wide, so that
+every tile edge falls on a texel edge at every mip level. As separate meshes, the
+hidden marks still cost a matrix update each per frame, and every visible one was
+a draw call of its own. `decals.test.ts` runs the shader patch against three's
+own `MeshBasicMaterial` source, so a three upgrade that renames a chunk fails the
+suite instead of quietly drawing every mark opaque.
 
 Orientation comes from the served face (above), through **six fixed quaternions
 indexed by that face — never `lookAt`**, whose axis convention differs between
@@ -10134,6 +10152,10 @@ neighbours.
 - **Browser:** load a map offline and type `bench` in the console (or call
   `window.__hassaultBench()` from a script). It prints frame, CPU, GPU and
   draw-call percentiles with a per-framing breakdown, and returns the JSON.
+  It refuses with "still loading" until the map is on screen. Before G3 it
+  started as soon as the map was *named*, so its warm-up could end before the
+  map had appeared and the reveal was timed as frames (the G0 table includes
+  that).
   Run it in a **foreground** tab: a hidden tab gets no `requestAnimationFrame`.
   In an ordinary tab the frame interval is capped by the display, so the CPU
   and GPU columns are the true cost measure there.
@@ -10297,6 +10319,82 @@ Integrated GPU (Intel RaptorLake-S Mobile Graphics):
 | hd_nuke | native | medium | 1920x1080 | 80 | 12.47 | 17.79 | 12.35 / 17.74 | 9.89 / 15.39 | 781 | 313k |
 | hd_office | native | low | 1920x1080 | 109 | 9.22 | 11.80 | 9.10 / 11.74 | 6.53 / 9.23 | 675 | 254k |
 | hd_office | native | medium | 1920x1080 | 77 | 13.15 | 17.38 | 13.04 / 17.26 | 10.61 / 14.98 | 676 | 254k |
+
+### After G3: browser performance
+
+2026-11-05, same machine and method as the baseline. Each change was found by
+profiling the bench rather than guessed: the CDP sampling profiler, the
+long-animation-frame observer, and a log of `renderer.info.programs` with
+timestamps.
+
+| Change | What it fixed |
+|---|---|
+| Glass with `KHR_materials_transmission` becomes ordinary blended glass at load (`withoutTransmission`, `glb-surfaces.ts`). Its opacity scales with how transmissive it was, never above what it had | three re-renders every opaque object into a transmission target for any transmissive material in view. Bank at High: 1148 → 690 draws and 822k → 412k triangles, GPU p50 4.2 → 1.6 ms. The glass stays see-through at every tier |
+| The operator's skinned primitives are merged by material at load (`mergeSkinnedPrimitives`) | the T operator loaded as 71 draws. The six range dummies were ~430 of Bank's draws |
+| Skinned meshes over the same bones share one `Skeleton` (`models/skeletons.ts`) | GLTFLoader gives each primitive its own skeleton. 22 bone-texture uploads a frame on Bank became 8, and 2 once off-screen bodies stop animating |
+| Each body's culling sphere is its bind pose, widened for any pose (`presetSkinnedBounds`) | left unset, three skins every vertex on the CPU to cull a body the first time it is seen: about 3 s of one frame when the dummies appeared, and when any player joined |
+| A body outside the view does not animate (`AvatarPool.animate`, after the camera is placed for the frame). Its clip time is paid back on the first frame in view | the mixer and the bone updates of bodies nobody can see. Nothing else reads their pose; hitboxes are the server's |
+| The map's and the scene's matrices are composed once (`matrixAutoUpdate` off) | 1,557 matrix products a frame on Bank, 15% of the frame's JavaScript |
+| Bullet marks are one instanced draw (see [bullet marks](#bullet-marks)) | 256 hidden meshes walked every frame |
+| The finger contact solve is memoised per rig (`hands.ts`) | five fingertip walks of up to 24 steps each, every frame, for the same five numbers: ~5% of the frame |
+| Effects reuse what they retire (`effects.ts` free lists) | a material per particle, disposed on fade. Disposing the last user of a program deletes it, so the first tracer after a quiet spell re-linked its shader on the frame it was fired |
+| `prewarm.ts` uploads every texture and compiles every program against the target the scene is really drawn into. The map stays hidden until the link finishes, and one throwaway body per operator compiles alongside it | first-sight hitches. Compiling is not enough: a program's first draw waits for its link, in the frame. Prewarm takes ~0.3–1 s on the loading screen |
+| The photographed surfaces are waited for (up to 3 s) before the map's prewarm, and anything that arrives once the map is up is uploaded a few milliseconds per task (`pacedUploads`): the photo maps on a slow download or a live tier change, and each weapon's model, which is readied before it replaces the boxes in your hands (`WeaponViewModel.setWarmup`) | both arrived after prewarm and were uploaded by the first frame that drew them. On Bank: 69 photo maps in one frame (~110 ms of uploads, a 300 ms frame), then the rifle's maps on the first spawn (another ~300 ms frame) |
+| PCF shadows at every tier (see [the browser's graphics tier](#the-browsers-graphics-tier)) | every lit program compiled twice per load |
+
+Results, against the G0 browser table above (same machine, 1920x1080,
+`scripts/hassault_bench_browser.mjs`, one run per row). "Worst frame" is the
+longest single frame on the path.
+
+| Map | Tier | fps, G0 → G3 | p99 ms, G0 → G3 | Worst frame ms | Draws (max), G0 → G3 |
+|---|---|---|---|---|---|
+| hd_aim | medium | 641 → 1033 | 6.5 → 2.3 | 10 | 447 → 97 |
+| hd_assault | medium | 94 → 656 | 40.1 → 3.5 | 13 | 937 → 175 |
+| hd_bank | medium | 100 → 616 | 27.4 → 4.0 | 10 | 1160 → 277 |
+| hd_dust2 | medium | 405 → 847 | 9.1 → 2.7 | 18 | 562 → 134 |
+| hd_facility | medium | 397 → 777 | 8.2 → 2.9 | 15 | 563 → 150 |
+| hd_inferno | medium | 120 → 753 | 17.3 → 3.2 | 12 | 856 → 128 |
+| hd_junkflea | medium | 112 → 685 | 29.6 → 3.4 | 17 | 569 → 157 |
+| hd_mirage | medium | 271 → 733 | 13.7 → 3.1 | 16 | 859 → 128 |
+| hd_nuke | medium | 201 → 714 | 15.3 → 3.5 | 19 | 748 → 119 |
+| hd_office | medium | 115 → 771 | 25.1 → 2.9 | 14 | 837 → 120 |
+| hd_aim | high | 493 → 651 | 8.6 → 5.4 | 36 | 460 → 97 |
+| hd_assault | high | 95 → 537 | 18.5 → 5.2 | 17 | 937 → 175 |
+| hd_bank | high | 90 → 432 | 33.4 → 7.7 | 24 | 1160 → 277 |
+| hd_dust2 | high ¹ | 324 → 695 | 9.8 → 6.7 | 591 | 550 → 134 |
+| hd_facility | high ¹ | 258 → 860 | 13.4 → 3.0 | 454 | 563 → 152 |
+| hd_inferno | high ¹ | 110 → 873 | 32.3 → 2.6 | 191 | 856 → 128 |
+| hd_junkflea | high ¹ | 207 → 692 | 15.2 → 4.0 | 55 | 569 → 157 |
+| hd_mirage | high ¹ | 145 → 793 | 30.1 → 3.2 | 215 | 859 → 128 |
+| hd_nuke | high ¹ | 135 → 740 | 30.6 → 3.9 | 204 | 751 → 125 |
+| hd_office | high ¹ | 88 → 767 | 29.6 → 4.2 | 236 | 720 → 120 |
+
+¹ From an earlier run of the same code without the late-texture fix, on the
+bench that still timed the reveal: their worst frames are that reveal, the
+hitch the late-texture row removed. Their steady-state columns stand.
+
+- **p99 fell 3–10× on every map.** The worst maps of G0 (Assault, Bank,
+  Office, Inferno) gained the most, because draws were their cost: 840–1160
+  draws became 120–280.
+- **Every row meets the 144 fps target (p99 ≤ 6.9 ms) except Bank at High,
+  at 7.7 ms.** Bank is still the map with the most draws.
+- **The worst frame on the path is now 10–36 ms,** against several hundred
+  milliseconds before.
+
+Not done, measured first:
+
+- **The HUD's React state stays in the panel.** React is ~2% of a frame in the
+  development build, and the frame is already a fraction of the 6.9 ms budget.
+- **`net.ts`'s `sample` still builds new rows.** The panel keeps them past the
+  frame (the demo recorder, `remoteRowsRef`), so reusing them would corrupt
+  recordings. G4 rewrites that function.
+- **The first one or two frames of the map cost 50–80 ms on Bank.** That is
+  three's first-draw bookkeeping for several hundred objects: geometry
+  uploads, vertex array objects, each program's uniform table. `compileAsync`
+  does none of it, and the GL calls themselves are ~6 ms of it. It lands on
+  the frame the loading screen lets go, before you can do anything; drawing
+  the map once into a hidden target would move it, at the cost of a render
+  pass on every load.
 
 ---
 

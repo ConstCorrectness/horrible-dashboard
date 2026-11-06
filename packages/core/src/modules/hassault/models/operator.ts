@@ -14,6 +14,7 @@
 import type * as THREE from 'three';
 
 import type { OperatorClip } from './clips';
+import { shareSkeletons } from './skeletons';
 
 /** Where the built GLB is served from. Written to `apps/web/public/`. */
 export const OPERATOR_URL = '/hassault-operator.glb';
@@ -55,21 +56,134 @@ export function loadOperator(url: string = OPERATOR_URL): Promise<OperatorAsset>
   const existing = cache.get(url);
   if (existing) return existing;
   const pending = (async () => {
-    const [{ GLTFLoader }, SkeletonUtils] = await Promise.all([
+    const [{ GLTFLoader }, SkeletonUtils, { mergeGeometries }] = await Promise.all([
       import('three/examples/jsm/loaders/GLTFLoader.js'),
       import('three/examples/jsm/utils/SkeletonUtils.js'),
+      import('three/examples/jsm/utils/BufferGeometryUtils.js'),
     ]);
     const targetUrl = await getCachedAssetUrl(url);
     const gltf = await new GLTFLoader().loadAsync(targetUrl);
+    // Once, on the template: every clone inherits the merged meshes.
+    mergeSkinnedPrimitives(gltf.scene, mergeGeometries);
+    presetSkinnedBounds(gltf.scene);
     const clips = new Map<OperatorClip, THREE.AnimationClip>();
     for (const clip of gltf.animations) clips.set(clip.name as OperatorClip, clip);
-    return { prototype: gltf.scene, clips, clone: SkeletonUtils.clone };
+    // Each clone's two skinned meshes then share one skeleton (`skeletons.ts`).
+    const clone = (source: THREE.Object3D) => shareSkeletons(SkeletonUtils.clone(source));
+    return { prototype: gltf.scene, clips, clone };
   })();
   pending.catch(() => {
     cache.delete(url);
   });
   cache.set(url, pending);
   return pending;
+}
+
+/**
+ * Merge the skinned primitives that would draw identically into one mesh each.
+ *
+ * glTF splits a mesh into one primitive per contiguous run of a material, and
+ * GLTFLoader makes each primitive its own `SkinnedMesh`: the T operator is one
+ * mesh, one skin and **two** materials, and loads as 71 draws. Six of them on the
+ * range were ~430 of Bank's 690 draws; a full match would be over 700 before the
+ * map. Primitives are merged only when nothing about drawing them differs —
+ * same parent, material, skeleton, bind matrix and attribute layout, and an
+ * identity local transform — so the merged mesh skins exactly as its parts did.
+ *
+ * Returns how many meshes were folded away.
+ */
+export function mergeSkinnedPrimitives(
+  root: THREE.Object3D,
+  mergeGeometries: (geometries: THREE.BufferGeometry[], useGroups?: boolean) => THREE.BufferGeometry | null,
+): number {
+  const parents = new Set<THREE.Object3D>();
+  root.traverse((obj) => {
+    if ((obj as THREE.SkinnedMesh).isSkinnedMesh && obj.parent) parents.add(obj.parent);
+  });
+  let removed = 0;
+  for (const parent of parents) {
+    const groups = new Map<string, THREE.SkinnedMesh[]>();
+    for (const child of parent.children) {
+      const mesh = child as THREE.SkinnedMesh;
+      if (!mesh.isSkinnedMesh || Array.isArray(mesh.material) || mesh.morphTargetInfluences) continue;
+      mesh.updateMatrix();
+      if (!isIdentity(mesh.matrix.elements)) continue;
+      const geometry = mesh.geometry;
+      const key = [
+        mesh.material.uuid,
+        mesh.skeleton.uuid,
+        mesh.bindMatrix.elements.join(','),
+        Object.keys(geometry.attributes).sort().join(','),
+        geometry.index ? 'indexed' : 'flat',
+      ].join('|');
+      const list = groups.get(key);
+      if (list) list.push(mesh);
+      else groups.set(key, [mesh]);
+    }
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      const merged = mergeGeometries(
+        list.map((m) => m.geometry),
+        false,
+      );
+      if (!merged) continue;
+      const [keep, ...rest] = list;
+      keep.geometry.dispose();
+      keep.geometry = merged;
+      // The parts' bounds no longer describe the whole: cleared here, and
+      // set from the merged geometry by `presetSkinnedBounds`. (The types say
+      // non-null; three's own default is null.)
+      const bounds = keep as unknown as { boundingBox: unknown; boundingSphere: unknown };
+      bounds.boundingBox = null;
+      bounds.boundingSphere = null;
+      for (const mesh of rest) {
+        parent.remove(mesh);
+        mesh.geometry.dispose();
+        removed += 1;
+      }
+    }
+  }
+  return removed;
+}
+
+/**
+ * How much wider than the bind pose a body's culling sphere is. A death clip
+ * lays the body out flat: its head ends up a body-height from its feet, about
+ * twice the bind-pose sphere's radius from that sphere's centre.
+ */
+export const POSE_SLACK = 2.2;
+
+/**
+ * Give every skinned mesh under `root` a culling sphere from its bind pose.
+ *
+ * Left null, three computes a skinned mesh's sphere the first time it is
+ * culled by skinning every vertex on the CPU through the skeleton: on Bank's
+ * range, about three seconds of one frame the moment the dummies appeared, and
+ * the same stall for every player who joins a match. The bind pose, widened by
+ * `POSE_SLACK` for the poses the clips reach, is computed once on the template
+ * and copied by every clone (`SkinnedMesh.copy`).
+ */
+export function presetSkinnedBounds(root: THREE.Object3D): number {
+  let set = 0;
+  root.traverse((obj) => {
+    const mesh = obj as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    const geometry = mesh.geometry;
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    if (!geometry.boundingSphere) return;
+    const sphere = geometry.boundingSphere.clone();
+    sphere.radius *= POSE_SLACK;
+    mesh.boundingSphere = sphere;
+    set += 1;
+  });
+  return set;
+}
+
+function isIdentity(e: ArrayLike<number>): boolean {
+  for (let i = 0; i < 16; i++) {
+    if (Math.abs(e[i] - (i % 5 === 0 ? 1 : 0)) > 1e-6) return false;
+  }
+  return true;
 }
 
 export function loadOperatorForTeam(team: number | string): Promise<OperatorAsset> {

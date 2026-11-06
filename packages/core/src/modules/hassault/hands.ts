@@ -38,6 +38,7 @@
 import type * as THREE from 'three';
 
 import { getCachedAssetUrl } from './models/assetCache';
+import { shareSkeletons } from './models/skeletons';
 
 export type Vec3 = [number, number, number];
 
@@ -330,6 +331,34 @@ export function thumbCurl(
   return best;
 }
 
+/**
+ * `contactCurl` and `thumbCurl`, remembered per rig.
+ *
+ * Both depend only on the rest pose, the finger, the handle and (for the thumb)
+ * the curl asked for. Each answer walks a fingertip down its chain up to two
+ * dozen times, and `poseArm` used to ask for all five on every frame for every
+ * hand: about 5% of the browser's frame, to recompute the same five numbers.
+ * The key set is small (a handful of handles and grip curls), but it is capped
+ * anyway, so an animated curl cannot grow it without bound.
+ */
+const solved = new WeakMap<HandsRest, Map<string, number>>();
+const SOLVED_MAX = 256;
+
+function solvedCurl(rest: HandsRest, key: string, solve: () => number): number {
+  let cache = solved.get(rest);
+  if (!cache) {
+    cache = new Map();
+    solved.set(rest, cache);
+  }
+  let value = cache.get(key);
+  if (value === undefined) {
+    if (cache.size >= SOLVED_MAX) cache.clear();
+    value = solve();
+    cache.set(key, value);
+  }
+  return value;
+}
+
 /** How far a wrist bends before the hand has to follow the forearm: ~40 degrees. */
 export const MAX_WRIST_BEND = 0.7;
 /** Passes of the wrist/forearm fixed point; three settle it to well under a degree. */
@@ -542,8 +571,8 @@ export function poseArm(
     const radius = target.radius ?? 0;
     amount =
       f === 'thumb'
-        ? thumbCurl(three, rest, radius, amount)
-        : Math.min(amount, contactCurl(three, rest, f, radius));
+        ? solvedCurl(rest, `t:${radius}:${amount}`, () => thumbCurl(three, rest, radius, amount))
+        : Math.min(amount, solvedCurl(rest, `${f}:${radius}`, () => contactCurl(three, rest, f, radius)));
     const ratios = f === 'thumb' ? JOINT_FLEX.thumb : JOINT_FLEX.finger;
     for (const j of [1, 2, 3]) {
       const name = `${f}_${j}`;
@@ -578,7 +607,12 @@ export function loadHandsModel(): Promise<HandsModel> {
     ]);
     const url = await getCachedAssetUrl(HANDS_URL);
     const gltf = await new GLTFLoader().loadAsync(url);
-    return { prototype: gltf.scene, clone: SkeletonUtils.clone };
+    // An arm is five skinned primitives over one skin: one skeleton per clone
+    // (`skeletons.ts`), not five.
+    return {
+      prototype: gltf.scene,
+      clone: (source: THREE.Object3D) => shareSkeletons(SkeletonUtils.clone(source)),
+    };
   })();
   pending = task;
   task.catch(() => {

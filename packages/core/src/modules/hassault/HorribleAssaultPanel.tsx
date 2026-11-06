@@ -171,6 +171,7 @@ import {
   type PlayerState,
 } from './player';
 import { installReveal, type Reveal } from './reveal';
+import { pacedUploads, prewarm } from './prewarm';
 import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
 import { createPaneMatch, detachLobbyVoice, disposePaneMatch, resumedMatch } from './pane-match';
@@ -191,6 +192,7 @@ import {
 } from './atmosphere';
 import {
   MAX_LIGHTS,
+  SOFT_SHADOW_RADIUS,
   effectiveSpec,
   rendererName,
   resolveTier,
@@ -427,7 +429,23 @@ interface SceneHandle {
   reveal: Reveal;
   backdrop: Backdrop;
   camera: any;
+  /** Compile and upload everything the scene holds now (`prewarm.ts`). */
+  prewarm: () => Promise<void>;
 }
+
+/**
+ * How long a map load waits for the operator models before showing the map
+ * without having compiled them (`prewarm`). They load in parallel with the map
+ * and are usually in by the time it is.
+ */
+const OPERATOR_WAIT_MS = 2000;
+
+/**
+ * How long a map load waits for its photographed surfaces (`upgradePhotos`)
+ * before showing the map with the ones that have arrived. On a warm cache they
+ * take about a second and a half on Bank.
+ */
+const PHOTO_WAIT_MS = 3000;
 
 /**
  * HorribleAssault: walk around a real AssaultCube map, rendered in WebGL from the
@@ -1204,6 +1222,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const benchRef = useRef<{ run: BenchRun; done: (r: BenchResult) => void } | null>(null);
   const mapNameRef = useRef(mapName);
   mapNameRef.current = mapName;
+  // The map that is on screen: set once its prewarm has let the loading screen
+  // go, cleared when a new load starts. `mapName` changes the moment a load
+  // starts, so a bench keyed on it alone flew a map that was still hidden and
+  // timed its reveal.
+  const shownMapRef = useRef<string | null>(null);
   // `bench [map]` in the console and `window.__hassaultBench(map)` for scripted
   // runs: fly the shared camera path (`bench.ts`) over the loaded map and report
   // frame, CPU and GPU percentiles. It flies the map that is loaded rather than
@@ -1218,6 +1241,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           new Error(`bench flies the loaded map (${current || 'none'}); load ${map} first`),
         );
       }
+      if (shownMapRef.current !== map) return Promise.reject(new Error(`${map} is still loading`));
       if (!perfProbeRef.current) return Promise.reject(new Error('the renderer is not running'));
       const path = benchPath(map);
       if (!path) return Promise.reject(new Error(`no bench path for ${map}`));
@@ -1970,6 +1994,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       setProgress((p) => advance(p, { renderer: 1 }));
 
       const scene = new THREE.Scene();
+      // The scene itself never moves. Left on, recomposing its matrix every
+      // frame marks the world matrix of **every** node below it for an update —
+      // 1,557 multiplies a frame on Bank, static map included, which profiled
+      // at 15% of the frame's JavaScript. Off, only what moves (and what hangs
+      // off something that moves) is recomputed.
+      scene.matrixAutoUpdate = false;
       // Slightly blue and slightly lifted off black. Pure `#0d1117` made the fog
       // read as the world dissolving into the panel's background rather than
       // into air, and gave a distant wall nothing to sit against.
@@ -1994,6 +2024,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       });
       // Bloom and sharpening after the scene, as the native client has them.
       const post = new PostChain(THREE, renderer);
+      // The view the avatars are culled against, rebuilt each frame.
+      const viewProjection = new THREE.Matrix4();
+      const viewFrustum = new THREE.Frustum();
       const hints = {
         devicePixelRatio: window.devicePixelRatio || 1,
         renderer: rendererName(renderer.getContext()),
@@ -2015,7 +2048,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // per map** rather than once per frame (see `setMesh`). That is the whole
       // reason real shadows are affordable here at all.
       renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = tier.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+      // PCF at every tier; softness is the filter's radius (`softShadows`).
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       renderer.shadowMap.autoUpdate = false;
       mountRef.current.appendChild(renderer.domElement);
       renderer.domElement.style.display = 'block';
@@ -2055,6 +2089,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // acne on the floors detaches the shadows from the foot of every wall.
       sun.shadow.bias = -0.0004;
       sun.shadow.normalBias = 0.08;
+      sun.shadow.radius = tier.softShadows ? SOFT_SHADOW_RADIUS : 1;
       scene.add(sun);
       scene.add(sun.target);
       // A cool fill from behind, at a fraction of the sun's strength. Without
@@ -2197,6 +2232,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
        * arrive. Not on the Low tier, which draws Lambert and has no use for a normal
        * or roughness map; it keeps the generated tiles and never fetches them.
        */
+      // Textures that arrive once the map is up (the photo maps, a weapon's
+      // model) are uploaded a few milliseconds at a time, rather than all on
+      // the first frame that draws them (`pacedUploads`).
+      const uploadPaced = pacedUploads(renderer);
+      // The upgrade in flight, so `prewarm` can wait for it before the map is shown.
+      let photosPending: Promise<unknown> = Promise.resolve();
       const upgradePhotos = () => {
         if (!world3dGroup) return;
         if (tier.lambert || !tier.photos) {
@@ -2206,7 +2247,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           return;
         }
         const aniso = Math.min(tier.anisotropy, renderer.capabilities.getMaxAnisotropy());
-        void upgradePhotoSurfaces(THREE, world3dGroup, aniso).then((n) => {
+        photosPending = upgradePhotoSurfaces(
+          THREE,
+          world3dGroup,
+          aniso,
+          undefined,
+          uploadPaced,
+        ).then((n) => {
           if (n > 0) renderer.shadowMap.needsUpdate = true;
         });
       };
@@ -2266,6 +2313,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // The gun in your hands. Parented to the camera by the constructor, which
       // is also what puts the camera in the scene graph.
       const viewmodel = new WeaponViewModel(THREE, scene, camera);
+      // A weapon's model loads when it is first equipped, after the map's
+      // prewarm, so it is readied on its own before it replaces the boxes.
+      viewmodel.setWarmup((root) =>
+        prewarm(
+          renderer,
+          root,
+          camera,
+          post.sceneTarget(postRef.current, canvasAntialias),
+          scene,
+          uploadPaced,
+        ),
+      );
       // The weapon props are physically-based and metallic; the world is not.
       // Confined to the view model rather than set as `scene.environment`
       // precisely so the map's Lambert surfaces and the operator keep the look
@@ -2317,6 +2376,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           filterSurfaces(world3dGroup);
           setSurfaceQuality(THREE, world3dGroup, tier.lambert);
           upgradePhotos();
+          // The map never moves (a shattered window is hidden, not moved), so
+          // its matrices are composed once here rather than every frame. With
+          // `scene.matrixAutoUpdate` off (where the scene is made), nothing
+          // forces them again.
+          world3dGroup.updateMatrixWorld(true);
+          world3dGroup.traverse((child) => {
+            child.matrixAutoUpdate = false;
+          });
+          // Hidden until `prewarm` has compiled it: drawn any sooner, the frame
+          // that first draws a material waits for its program to link. The
+          // map's only caller runs `prewarm` straight after this, which shows it
+          // again whatever happens.
+          world3dGroup.visible = false;
           scene.add(world3dGroup);
 
           const cx = world3d.bounds.center[0];
@@ -2374,21 +2446,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         tier = effectiveSpec(resolveTier(choice, hints), overrides);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
         resize();
-        const soft = tier.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-        if (renderer.shadowMap.type !== soft || sun.shadow.mapSize.x !== tier.shadowSize) {
-          renderer.shadowMap.type = soft;
+        // A uniform: no program changes. The type stays PCF (`TierSpec.softShadows`);
+        // it used to be switched here, which three r184 undid at the next shadow
+        // render, so every `setGraphics` recompiled every lit material.
+        sun.shadow.radius = tier.softShadows ? SOFT_SHADOW_RADIUS : 1;
+        if (sun.shadow.mapSize.x !== tier.shadowSize) {
           sun.shadow.mapSize.set(tier.shadowSize, tier.shadowSize);
           // The old map is the old size; three reallocates on the next render.
           sun.shadow.map?.dispose();
           sun.shadow.map = null as never;
-          // A shadow-map type is compiled into every material.
-          scene.traverse((child) => {
-            const m = (child as import('three').Mesh).material as
-              | import('three').Material
-              | import('three').Material[]
-              | undefined;
-            for (const mat of Array.isArray(m) ? m : m ? [m] : []) mat.needsUpdate = true;
-          });
+          renderer.shadowMap.needsUpdate = true;
         }
         applyAtmosphere(atmosphere, skyOpen);
         filterSurfaces(world3dGroup);
@@ -3399,6 +3466,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (renderer.toneMappingExposure !== exposure) renderer.toneMappingExposure = exposure;
         // Through the post chain, which is a plain `renderer.render` while bloom
         // and sharpening are both off; on, the scene's MSAA follows the canvas's.
+        // Pose the bodies now the camera is placed for this frame, skipping
+        // the ones it cannot see (`AvatarPool.animate`). The camera's parent is
+        // the scene, whose matrix is the identity.
+        camera.updateMatrix();
+        viewProjection.copy(camera.matrix).invert().premultiply(camera.projectionMatrix);
+        viewFrustum.setFromProjectionMatrix(viewProjection);
+        avatars.animate(viewFrustum);
         renderer.info.reset();
         gpuTimer?.begin();
         post.render(scene, camera, postRef.current, canvasAntialias);
@@ -3551,6 +3625,52 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         reveal,
         backdrop,
         camera: camera as never,
+        prewarm: async () => {
+          const target = post.sceneTarget(postRef.current, canvasAntialias);
+          // The operators alongside the map: on the range the dummies appear
+          // the moment the map does, and the first body drawn would otherwise
+          // compile its programs on that frame. Waited for only so long — a
+          // slow model download must not hold the map.
+          const operators = (async () => {
+            const arrived = await Promise.race([
+              avatars.loaded.then(() => true),
+              new Promise<boolean>((r) => setTimeout(() => r(false), OPERATOR_WAIT_MS)),
+            ]);
+            if (!arrived) return;
+            const bodies = avatars.warmupBodies();
+            try {
+              for (const body of bodies.roots) await prewarm(renderer, body, camera, target, scene);
+            } finally {
+              bodies.dispose();
+            }
+          })();
+          // The photo maps too, or they arrive after the reveal and the frame
+          // that first draws them uploads every one (Bank: 69 textures, a
+          // 300 ms frame). Waited for only so long; ones later than that are
+          // still uploaded paced, just not behind the loading screen.
+          const map = (async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              photosPending,
+              new Promise((r) => {
+                timer = setTimeout(r, PHOTO_WAIT_MS);
+              }),
+            ]);
+            clearTimeout(timer);
+            await prewarm(renderer, scene, camera, target);
+          })();
+          try {
+            await Promise.all([map, operators]);
+          } finally {
+            // Shown now it has linked (see `setMesh`), and its shadows drawn:
+            // the shadow map is redrawn on demand, and the last one was drawn
+            // without it.
+            if (world3dGroup && !world3dGroup.visible) {
+              world3dGroup.visible = true;
+              renderer.shadowMap.needsUpdate = true;
+            }
+          }
+        },
       };
       // If a native match is already in flight, this loop is born parked. The
       // effect keyed on `nativeRunning` cannot do it: it ran before this scene
@@ -3611,6 +3731,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     // A new map re-runs the download, mesh and build stages. `renderer` and
     // `install` stay done — they are not per-map work.
     setProgress((p) => ({ ...p, map: 0, mesh: 0, reveal: 0 }));
+    shownMapRef.current = null;
     setBytes({ loaded: 0, total: null });
 
     void (async () => {
@@ -3681,6 +3802,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
         const triangles = scene.setMesh(world, world3d);
         setHud((h) => ({ ...h, triangles }));
+        // Before the loading screen lets go: every program and texture the map
+        // needs, so the first look down a new corridor is not a stall.
+        await scene.prewarm();
+        if (cancelled) return;
+        shownMapRef.current = mapName;
         setProgress((p) => advance(p, { mesh: 1 }));
 
         // The build. Runs on its own clock rather than on load progress: the map

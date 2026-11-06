@@ -324,6 +324,18 @@ export class PostChain {
     this.mips = mipSizes(width, height).map(([w, h]) => this.target(w, h));
   }
 
+  /**
+   * The target `render` would draw the scene into with these settings: its own
+   * scene target with the chain on, the current one (the canvas) with it off.
+   * For `prewarm`, which has to compile against the same one.
+   */
+  sceneTarget(settings: PostSettings, antialias: boolean): THREE.WebGLRenderTarget | null {
+    if (!chainActive(settings)) return this.renderer.getRenderTarget();
+    const size = this.renderer.getDrawingBufferSize(new this.three.Vector2());
+    this.ensure(Math.max(1, size.x), Math.max(1, size.y), antialias ? 4 : 0);
+    return this.scene;
+  }
+
   private pass(material: THREE.ShaderMaterial, out: THREE.WebGLRenderTarget | null): void {
     this.quad.material = material;
     this.renderer.setRenderTarget(out);

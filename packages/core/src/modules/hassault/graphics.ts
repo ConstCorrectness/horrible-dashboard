@@ -54,7 +54,12 @@ export interface TierSpec {
   antialias: boolean;
   /** The sun's shadow map edge. High is the old fixed 2048. */
   shadowSize: number;
-  /** `PCFSoftShadowMap` rather than `PCFShadowMap`. */
+  /**
+   * A wider shadow filter (`SOFT_SHADOW_RADIUS`). The shadow-map *type* is PCF
+   * at every tier: three r184 deprecated `PCFSoftShadowMap` and swaps it for
+   * PCF at the first shadow render, so asking for it compiled every lit
+   * program twice per load and changed nothing on screen.
+   */
   softShadows: boolean;
   /** How many of the map's point lights shade a frame, nearest first. */
   lights: number;
@@ -131,6 +136,12 @@ export const GRAPHICS_OPTIONS = {
 } as const satisfies Partial<Record<keyof TierSpec, readonly number[]>>;
 
 /** The on/off rows. */
+/**
+ * The PCF filter radius, in shadow-map texels, with `softShadows` on; 1 off.
+ * A uniform, not part of a program, so switching it recompiles nothing.
+ */
+export const SOFT_SHADOW_RADIUS = 2.5;
+
 export const GRAPHICS_TOGGLES = ['antialias', 'softShadows', 'sky', 'lambert', 'photos'] as const;
 
 /** The lamp pool's size: the most any row can ask for. */

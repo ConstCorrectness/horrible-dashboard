@@ -169,3 +169,41 @@ export function planarUv(
   if (ax >= az) return [pz / scale, py / scale];
   return [px / scale, py / scale];
 }
+
+/** The material fields `withoutTransmission` reads and writes. */
+export interface TransmissiveLike {
+  transmission: number;
+  transparent: boolean;
+  opacity: number;
+  depthWrite: boolean;
+}
+
+/** The least a fully transmissive pane is drawn at: still glass you can see. */
+export const GLASS_MIN_OPACITY = 0.25;
+
+/**
+ * Turn a `KHR_materials_transmission` pane into plain blended glass.
+ *
+ * three implements transmission by rendering **every opaque object a second
+ * time**, into a multisampled half-float target with mips, each frame that any
+ * transmissive mesh is in view — and that pass runs with tone mapping off, so
+ * every opaque material swaps shader program twice a frame and three re-derives
+ * its program parameters each time. Profiled on Bank at High, the program
+ * lookups alone were a third of the frame's JavaScript. Six maps have such
+ * panes; the refraction they buy is invisible at a window's thickness.
+ *
+ * Opacity falls with how transmissive the pane was, to `GLASS_MIN_OPACITY` for
+ * full transmission. Still see-through: what a player can see through a window
+ * is not a graphics setting, and this is not one either — it applies at every
+ * tier. Depth writes off, so the glass never hides what is behind it from a
+ * later draw.
+ */
+export function withoutTransmission(m: TransmissiveLike): boolean {
+  if (!(m.transmission > 0)) return false;
+  const t = Math.min(m.transmission, 1);
+  m.opacity = Math.min(m.opacity, 1 - t * (1 - GLASS_MIN_OPACITY));
+  m.transmission = 0;
+  m.transparent = true;
+  m.depthWrite = false;
+  return true;
+}

@@ -8,14 +8,19 @@
  * enough to report itself.
  */
 import { describe, expect, it } from 'vitest';
+import { ShaderLib } from 'three';
 
 import {
+  DECAL_ATLAS_TILES,
   DECAL_FADE,
   DECAL_LIFE,
   DECAL_MAX,
+  DECAL_TILE,
   FACE_NORMALS,
   MATERIAL_TINTS,
   decalOpacity,
+  decalShader,
+  drawDecalAtlas,
   drawImpactTile,
   drawSlashTile,
   drawStabTile,
@@ -272,3 +277,48 @@ describe('the knife stab tile', () => {
   });
 });
 
+
+describe('the decal atlas', () => {
+  it('holds each tile exactly as drawn alone, in its own slot', () => {
+    const atlas = drawDecalAtlas(SIZE);
+    const width = SIZE * DECAL_ATLAS_TILES;
+    const tiles = {
+      bullet: drawImpactTile(SIZE),
+      knife_slash: drawSlashTile(SIZE),
+      knife_stab: drawStabTile(SIZE),
+    } as const;
+    for (const [kind, tile] of Object.entries(tiles) as [keyof typeof tiles, Uint8Array][]) {
+      const x0 = DECAL_TILE[kind] * SIZE;
+      for (let py = 0; py < SIZE; py++) {
+        const row = atlas.subarray((py * width + x0) * 4, (py * width + x0 + SIZE) * 4);
+        expect(Array.from(row)).toEqual(Array.from(tile.subarray(py * SIZE * 4, (py + 1) * SIZE * 4)));
+      }
+    }
+  });
+
+  it('is a power of two wide, so mips never blend one tile into the next', () => {
+    // Every tile boundary on a texel boundary at every mip level.
+    const width = SIZE * DECAL_ATLAS_TILES;
+    expect(width & (width - 1)).toBe(0);
+    expect(new Set(Object.values(DECAL_TILE)).size).toBe(Object.keys(DECAL_TILE).length);
+    for (const tile of Object.values(DECAL_TILE)) expect(tile).toBeLessThan(DECAL_ATLAS_TILES);
+  });
+});
+
+describe('the decal shader patch', () => {
+  it('finds every hook it needs in three’s own basic shader', () => {
+    // `onBeforeCompile` edits are string replaces: if a three upgrade renames a
+    // chunk, the replace silently does nothing and every mark draws at full
+    // opacity from the first atlas tile. This fails instead.
+    const shader = {
+      vertexShader: ShaderLib.basic.vertexShader,
+      fragmentShader: ShaderLib.basic.fragmentShader,
+    };
+    decalShader(shader);
+    expect(shader.vertexShader).toContain('attribute vec2 decalAttr;');
+    expect(shader.vertexShader).toContain(`vMapUv.x = (vMapUv.x + decalAttr.y) / ${DECAL_ATLAS_TILES}.0;`);
+    expect(shader.vertexShader).toContain('vDecalAlpha = decalAttr.x;');
+    expect(shader.fragmentShader).toContain('varying float vDecalAlpha;');
+    expect(shader.fragmentShader).toContain('diffuseColor.a *= vDecalAlpha;');
+  });
+});
