@@ -221,6 +221,11 @@ const TIMBRES: Record<string, Timbre> = {
   // sound has to be legible as "somebody took the armour" from across a room,
   // where a dull one would be mistaken for a footstep.
   pickup: { frequency: 1650, q: 5.5, decay: 0.16, gain: 0.45, body: 0 },
+  // A kill you made: **a chord, not a ping**, which is what separates it from
+  // `pickup` — a narrow ring high up with the body sweeping down a fifth under
+  // it. Purely local, never on the wire, and so with no position in it. The
+  // same numbers as `"kill"` in `apps/native-fps/src/audio.rs`.
+  kill: { frequency: 3100, q: 6.5, decay: 0.26, gain: 0.6, body: 520 },
   // Breaking the surface. Low Q so the burst stays broadband — a splash is
   // noise, and a narrow filter turns it into a bell.
   splash: { frequency: 900, q: 0.6, decay: 0.34, gain: 0.75, body: 40 },

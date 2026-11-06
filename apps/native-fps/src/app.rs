@@ -60,7 +60,9 @@ use hassault_native::hud::{
 };
 use hassault_native::bench::{BenchRun, FrameRing, Sample, FRAME_RING};
 use hassault_native::hud::NetGraphStats;
+use hassault_native::eye::EyeLerp;
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
+use hassault_native::own_shots::{OwnShots, ShotGate};
 use hassault_native::net_stats::NetStats;
 use hassault_native::renderer::FrameCost;
 use hassault_native::items::ItemField;
@@ -313,9 +315,18 @@ pub struct App {
     own_room: bool,
     /// Whether a grenade was in hand on the previous frame. See the stow above.
     nade_held: bool,
-    /// The spray index the last snapshot reported, so the camera can be kicked
-    /// by the step between two of them. See `apply_match_recoil`.
+    /// The spray index the camera has been kicked to: the last snapshot's,
+    /// plus our own shots still in flight. See `apply_match_recoil`.
     match_spray_index: i32,
+    /// Our own shots, felt when sent and reconciled per snapshot. See
+    /// `own_shots.rs`.
+    own_shots: OwnShots,
+    /// The eye after each of the last two command steps, drawn between them
+    /// on every frame. See `eye.rs`.
+    eye: EyeLerp,
+    /// Set by `follow_step` for the `follow_prediction` it calls: the step's
+    /// length, so the eye is recorded rather than snapped to.
+    eye_step: Option<f32>,
     /// Simulated-clock instant of the last command that carried `fire`, so the
     /// trigger is rate-limited to the weapon's own interval.
     last_fire_sent_ms: f64,
@@ -661,6 +672,9 @@ impl App {
             own_room: false,
             nade_held: false,
             match_spray_index: 0,
+            own_shots: OwnShots::default(),
+            eye: EyeLerp::default(),
+            eye_step: None,
             last_fire_sent_ms: f64::NEG_INFINITY,
             decals: DecalPool::default(),
             radar_plan,
@@ -1896,9 +1910,82 @@ impl App {
             }
         }
         let p = &self.prediction.state;
-        self.camera.x = p.x;
-        self.camera.y = p.y;
-        self.camera.z = eye_height(p);
+        let eye = [p.x, p.y, eye_height(p)];
+        // After a step the eye is recorded for `place_eye` to draw between;
+        // from anywhere else (a spawn, a reset, a teleport) it is stood at.
+        match self.eye_step {
+            Some(dt) => self.eye.push(eye, dt),
+            None => self.eye.snap(eye),
+        }
+        self.camera.x = eye[0];
+        self.camera.y = eye[1];
+        self.camera.z = eye[2];
+    }
+
+    /// `follow_prediction` after a command stepped the body `dt` seconds.
+    fn follow_step(&mut self, dt: f32) {
+        self.eye_step = Some(dt);
+        self.follow_prediction();
+        self.eye_step = None;
+    }
+
+    /// Draw the eye between the last two command steps, every frame (`eye.rs`).
+    ///
+    /// Commands step the body at 250 Hz; a frame between two of them used to
+    /// draw the camera exactly where the last one left it, so above 250 fps a
+    /// strafe juddered. `input_accum` is the time since that step. Position
+    /// only: the angles are the mouse's and are already this frame's.
+    fn place_eye(&mut self) {
+        if !self.joined || self.freecam_active || self.auto_director_active {
+            return;
+        }
+        if let Some(eye) = self.eye.at(self.input_accum) {
+            self.camera.x = eye[0];
+            self.camera.y = eye[1];
+            self.camera.z = eye[2];
+        }
+    }
+
+    /// Our own gun, felt on the frame its command is sent (`own_shots.rs`):
+    /// the view model's kick and flash, the shake, the gunshot, and the next
+    /// step of the recoil pattern. `fired` is the command's `fire` flag,
+    /// `switched` whether it also carried a weapon switch.
+    fn predict_own_shot(&mut self, seq: u64, fired: bool, switched: bool) {
+        let (Some(you), Some(weapon)) = (self.you.as_ref(), self.held()) else {
+            return;
+        };
+        let gate = ShotGate {
+            alive: you.alive,
+            reloading: you.reloading,
+            ammo: you.ammo,
+            mag: weapon.mag,
+            auto: weapon.auto,
+            spray_reset: weapon.spray_reset,
+        };
+        let slot = you.weapon;
+        let now = Self::clock_ms();
+        let Some(shot) = self
+            .own_shots
+            .sent(seq, fired, self.keys.fire, switched, now, gate)
+        else {
+            return;
+        };
+        if shot.reset {
+            self.match_spray_index = 0;
+        }
+        let next = self.match_spray_index + 1;
+        self.apply_match_recoil(next, slot);
+        self.own_shot_feedback();
+    }
+
+    /// The kick, the shake and the gunshot of one of our own shots.
+    fn own_shot_feedback(&mut self) {
+        self.viewmodel.fire();
+        // From the served `kickback`, so the heavy weapon is whichever one the
+        // server currently says is heavy.
+        self.shake
+            .add(fire_trauma(self.held().map(|w| w.kickback).unwrap_or(0.0)));
+        self.play_own("shot", 0.55, true);
     }
 
     pub fn toggle_freecam(&mut self) {
@@ -2051,6 +2138,7 @@ impl App {
                     // stale frame is enough to hold every body at a position
                     // from the previous round.
                     self.snapshots.clear();
+                    self.own_shots.reset();
                     self.drawn.clear();
                     self.ping.reset();
                     // A join is not a correction — there is nothing in flight to
@@ -2107,6 +2195,15 @@ impl App {
                     // nor `hits` — landing hard is the one damage in the game
                     // that would otherwise be felt by nothing at all.
                     self.shake.add(damage_trauma(s.you.fell));
+                    // Our shots in this tick, against the ones we predicted and
+                    // already felt: only the ones we did not foresee still need
+                    // their kick and gunshot. See `own_shots.rs`.
+                    let mine = s
+                        .fx
+                        .iter()
+                        .filter(|fx| matches!(fx, Fx::Shot { id, .. } if id == &self.self_id))
+                        .count();
+                    let mut unforeseen = self.own_shots.snapshot(s.ack, mine);
                     for fx in &s.fx {
                         self.hud.on_fx(fx, &self.self_id);
                         // The muzzle flash, from the server's own account of the
@@ -2252,21 +2349,13 @@ impl App {
                             if let Some(squad) = self.squad.as_mut() {
                                 squad.note_shot(id);
                             }
-                            if id == &self.self_id {
-                                self.viewmodel.fire();
-                                // From the served `kickback`, so the heavy
-                                // weapon is whichever one the server currently
-                                // says is heavy.
-                                self.shake.add(fire_trauma(
-                                    self.held().map(|w| w.kickback).unwrap_or(0.0),
-                                ));
-                                // Our own gun, in its own voice. The browser
-                                // plays this off its local trigger; this client
-                                // has no trigger controller, so it would fire on
-                                // shots the server refused — and a gunshot for a
-                                // shot that never happened is worse than one
-                                // arriving a snapshot late.
-                                self.play_own("shot", 0.55, true);
+                            // Our own shot was felt when it was sent, if
+                            // it was foreseen (`predict_own_shot`); one the
+                            // server fired that we did not predict gets its
+                            // kick and gunshot now, late rather than never.
+                            if id == &self.self_id && unforeseen > 0 {
+                                unforeseen -= 1;
+                                self.own_shot_feedback();
                             }
                         }
                     }
@@ -2318,7 +2407,10 @@ impl App {
                             audio.flash_ring(volume, seconds);
                         }
                     }
-                    self.apply_match_recoil(s.you.spray_index, s.you.weapon);
+                    // The server's index plus our shots it has not stepped
+                    // yet: those were kicked when they were sent.
+                    let target = self.own_shots.spray_target(s.you.spray_index);
+                    self.apply_match_recoil(target, s.you.weapon);
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,
                     // and cloned rather than moved: the roster is what
@@ -2565,7 +2657,7 @@ impl App {
             // before moving aims from where it was on the previous one.
             self.train(dt);
             self.update_freecam(dt);
-            self.follow_prediction();
+            self.follow_step(dt);
             return;
         }
         let mut cmd = Command::new(0);
@@ -2684,13 +2776,15 @@ impl App {
             return;
         };
         let switch = cmd.weapon;
+        let fired = cmd.fire;
         let seq = socket.push_command(cmd);
         // The same angles the command carries — literally, not equivalently.
         self.prediction
             .predict(&self.world, seq, input, dt, yaw, pitch, switch);
         self.prediction.ease(dt);
+        self.predict_own_shot(seq, fired, switch >= 0);
         self.update_freecam(dt);
-        self.follow_prediction();
+        self.follow_step(dt);
 
         // Rate-limited inside `flush` — see `SEND_INTERVAL`. Called every frame
         // regardless, so a command is never held longer than one interval.
@@ -2853,13 +2947,12 @@ impl App {
 
     /// Kick the camera by however far the server says the pattern has moved.
     ///
-    /// **Driven from the server's index, not from the trigger.** This client has
-    /// no local trigger controller, so a kick applied when the fire key went down
-    /// would move the view for shots the server refused — rate limiting, an empty
-    /// magazine, being dead — and the crosshair would drift permanently away from
-    /// where the bullets go. Reading the index off the snapshot is a frame or two
-    /// late and *exact*, which is the right trade for a pattern whose only value
-    /// is being learnable.
+    /// **Driven from an index, never from the key.** A shot predicted when its
+    /// command is sent advances it by one (`predict_own_shot`), and each
+    /// snapshot sets it to the server's index plus our shots still in flight
+    /// (`OwnShots::spray_target`). So the kick lands on the click, a shot is
+    /// never kicked twice, and a refused one is simply not counted again: the
+    /// crosshair cannot drift away from where the bullets go.
     ///
     /// **The step, not the position.** The served table is absolute — it is a
     /// shape on a wall a player memorises — while the camera accumulates, so what
@@ -5002,6 +5095,7 @@ impl ApplicationHandler for App {
             self.fly_and_pick(dt);
         } else {
             self.send_input(dt);
+            self.place_eye();
         }
 
         // The bench's camera, over whatever the input put there. Train has no

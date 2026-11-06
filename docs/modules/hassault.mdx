@@ -5017,6 +5017,85 @@ The cleanup:
 One Train/match difference is left, and it is a damage rule, not movement: the
 range scales groin hits by 1.5 and limb hits by 0.75, and the server does not.
 
+### After G5: input and combat feel
+
+**The native eye moves on every frame.** Commands step the predicted body at
+250 Hz, and the camera used to be placed straight from that body. So above
+250 fps some frames repeated the last position: at 300 fps a strafe juddered in
+a 2:1 cadence. `eye.rs` records the eye after each command step, and every frame
+draws it between the last two steps by how far through the next interval it is
+(`input_accum`). The cost is that the view trails the newest step by at most one
+command interval (4–7 ms). It is position only: the angles are the mouse's and
+are applied the instant it moves. A step over 2 cubes (a respawn, a teleport, a
+correction too big to ease) is taken at once instead of slid through.
+
+**Native feels its own shot on the click.** The kick, shake, gunshot and recoil
+step used to wait for the server's `Fx::Shot` naming us, a round trip plus a
+tick. `own_shots.rs` predicts the shot when the command carrying `fire` is sent,
+but only if the server will take it:
+- alive and not reloading;
+- a round left once every shot still in flight has spent its own;
+- for a semi-automatic, the trigger released since the last shot;
+- no weapon switch still in flight.
+
+What makes it safe is the reconciliation, not the guess. Each snapshot's `ack`
+says which commands the server stepped, and its `fx` which of them fired:
+- a server shot beyond the predicted ones it acknowledged was not foreseen, so
+  it gets its feedback late rather than never;
+- a predicted shot acknowledged without firing was refused and is dropped (a
+  kick cannot be un-felt);
+- the recoil index the camera follows is the server's plus the predicted shots
+  in flight, so no shot is kicked twice.
+
+Hits are never predicted, here or in the browser.
+
+**The browser caught up on game feel.** These were rows in the two-clients
+"native has" table:
+- damage-direction arrows from `you.hurt` (`damage-arrows.ts`), with native's
+  life, cap, fade and geometry in HUD units;
+- the kill chord, the same `Timbre` as native's.
+
+Two rows were already done and only the table was stale. Impact effects are per
+pellet, off the served `faces`. The crosshair draws spec v1 from the
+`hassault.crosshair.*` settings.
+
+**Movement and first-shot feel, measured against CS.**
+`tools/hassault_feel_report.py` steps the server's own `physics.step` and
+`weapons.shot_cone` at 250 Hz. It compares them with Source's ground movement,
+stepped at 64 tick with stock cvars. Speeds are in body heights per second,
+because the two games share no unit. Selected rows:
+
+| Measure | hAssault | CS (derived) |
+| --- | --- | --- |
+| Run speed | 4.23 heights/s | 3.47 heights/s |
+| Crouch speed | ×0.40 of run | ×0.34 of run |
+| Rest → 95% run | 360 ms | 438 ms |
+| Release → accurate | 132 ms | 203 ms |
+| **Counter-strafe → accurate** | **16 ms** | **78 ms** |
+| Counter-strafe → stopped | 28 ms | 125 ms |
+| Release → stopped (1%) | 556 ms | 406 ms |
+| Jump apex | 0.56 heights | 0.79 heights |
+| Jump air time | 576 ms | 755 ms |
+
+What it says:
+- **Counter-strafing is about five times quicker than CS's.** The 3.2× braking
+  response when the wish opposes the velocity gets a full run under the accurate
+  threshold in four commands. That makes the counter-strafe close to free, where
+  in CS it is a timing skill.
+- Running is about 20% faster relative to body size.
+- Jumps are lower and shorter, because gravity ramps with time in the air.
+- Releasing without countering never quite stops: the convergence is
+  exponential, so the last 1% takes longer than CS's linear stop-speed floor.
+
+First-shot accuracy: a tap rhythm slower than 350 ms gives the rifles a fresh
+first shot and a restarted pattern every time (the larger of `recovery_time` and
+`spray_reset`). The script prints the per-weapon table. It has no CS column,
+because CS's per-weapon recovery figures are not stock cvars to derive from.
+
+**None of this is tuned yet.** It is a measurement for the playtest, and any
+change goes to `physics.py`, `player.ts` and `physics.rs` together, with the
+vectors regenerated.
+
 ### Playing in a friend's match
 
 A match is authoritative on **one** node. A guest's browser cannot reach it — the

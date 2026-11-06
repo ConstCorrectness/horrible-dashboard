@@ -348,6 +348,12 @@ export interface SelfState {
     armour?: boolean;
     wallbang?: boolean;
   }[];
+  /**
+   * Damage taken since the last snapshot, as bearings to whoever dealt it.
+   * Drained server-side like `hits`, so each arrives once. Drawn as the arrows
+   * around the crosshair (`damage-arrows.ts`). Optional: older servers send none.
+   */
+  hurt?: { bearing: number; amount: number }[];
   /** What prediction rebases on. Absent only from a server older than momentum. */
   move?: MoveState;
   /** Audible noises since the last snapshot, drained server-side. */

@@ -142,6 +142,8 @@ import {
 } from './menu-panels';
 import { coneGapPx, hudUnit } from './crosshair';
 import { CrosshairShapes, useCrosshairSpec } from './crosshair-view';
+import { DAMAGE_ARROW_LIFE_MS, pushHurt, type DamageArrow } from './damage-arrows';
+import { DamageArrows } from './damage-arrows-view';
 import type { ItemsResponse } from './api';
 import type {
   NoiseEvent,
@@ -1685,6 +1687,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const [killBadge, setKillBadge] = useState<KillBadgeData | null>(null);
   const killStreakRef = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const headHitRef = useRef<boolean>(false);
+  // Which way the shots that hurt us came from (`you.hurt`), for the arrows
+  // around the crosshair.
+  const [damageFrom, setDamageFrom] = useState<readonly DamageArrow[]>([]);
 
   const triggerKillBadge = useCallback((isHead: boolean, isKnife: boolean, isWallbang: boolean) => {
     const now = Date.now();
@@ -1745,7 +1750,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const isWallbang = you.hits.some((h) => h.wallbang);
       const isKnife = you.weapon === 0;
       triggerKillBadge(isHead, isKnife, isWallbang);
+      // The confirmation chord, once per snapshot however many markers carry
+      // the kill: a shotgun kill is eight of them, and eight chords is not
+      // louder so much as broken. Native's `confirm_kill` makes the same call.
+      audioRef.current?.own('kill', 0.7);
     }
+    // `pushHurt` hands back the same array when nothing arrived or expired, so
+    // a snapshot without damage does not re-render the pane.
+    setDamageFrom((prev) => pushHurt(prev, you.hurt, Date.now()));
     const hurt = you.hp < lastHpRef.current;
     lastHpRef.current = you.hp;
     // Only on an actual event: this effect runs on every emitted snapshot, and
@@ -1854,6 +1866,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     const timer = window.setTimeout(() => setPicked((p) => p.slice(0, 0)), remaining);
     return () => window.clearTimeout(timer);
   }, [picked]);
+
+  // The arrows fade on a CSS animation, but they still have to leave the list
+  // when it ends, or a quiet stretch keeps an invisible one mounted until the
+  // next snapshot that carries damage.
+  useEffect(() => {
+    if (damageFrom.length === 0) return;
+    const newest = damageFrom[damageFrom.length - 1].at;
+    const remaining = newest + DAMAGE_ARROW_LIFE_MS + 20 - Date.now();
+    const timer = window.setTimeout(
+      () => setDamageFrom((prev) => pushHurt(prev, undefined, Date.now())),
+      Math.max(0, remaining),
+    );
+    return () => window.clearTimeout(timer);
+  }, [damageFrom]);
 
   // Flashes expire by wall clock, so something has to re-render when they do —
   // otherwise the crosshair keeps its hitmarker until the next snapshot that
@@ -5865,6 +5891,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             )}
 
             <NoiseRing heard={heard} yaw={hud.yaw} />
+            <DamageArrows arrows={damageFrom} yaw={hud.yaw} />
 
             {/* The radar. Which enemies are on it is `you.spotted`, decided by
                 the server — see `MatchRoom.spotted_by`. */}
