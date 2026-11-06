@@ -818,6 +818,9 @@ async def hassault_ws(websocket: WebSocket) -> None:
             event = str(msg.get("event") or "")
             data = msg.get("data") if isinstance(msg.get("data"), dict) else {}
             if event == "join":
+                from backend.modules.hassault.match import parse_caps
+
+                conn.wire_caps = parse_caps(data)
                 try:
                     welcome = await referee.join(
                         conn,

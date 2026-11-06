@@ -175,6 +175,7 @@ async def join(
     room_id: str | None = None,
     new: bool = False,
     mode: str | None = None,
+    caps: frozenset[str] = frozenset(),
 ) -> None:
     """Open a socket to the game server and put this client in a room there.
 
@@ -200,6 +201,10 @@ async def join(
         # Only when asked for: a server older than `hassault_modes` ignores the
         # key and opens deathmatch, which is what this join meant before.
         join["mode"] = mode
+    if caps:
+        # The client's, passed on: the frames come back through `_pump`
+        # unchanged, so the client is the one reading the slim rows.
+        join["caps"] = sorted(caps)
     await session.send("join", join)
     # Detached: this pump delivers the welcome that the caller is *inside the
     # handler for*. Awaiting it here would deadlock the socket that has to

@@ -93,6 +93,44 @@ _YOU_HOLE = "\x00hassault:you\x00"
 SNAPSHOT_HZ = 60
 TICK_INTERVAL = 1.0 / SNAPSHOT_HZ
 
+#: `time.time()` minus `time.monotonic()`, taken once at import.
+_WIRE_EPOCH = time.time() - time.monotonic()
+
+
+def wire_clock() -> float:
+    """Seconds since the Unix epoch, read off the monotonic clock.
+
+    The clock the wire's `t`, the lag-compensation history and a shot's rewind
+    are all on. It was `time.time()`, which an NTP correction can step
+    backwards or forwards mid-match: snapshots then arrive out of order by their
+    own timestamps, and a rewind lands on the wrong instant. Still epoch-based,
+    so a client's offset estimate and a replay's timestamps read as before.
+    """
+    return time.monotonic() + _WIRE_EPOCH
+
+
+#: Row fields that change only on a join, a team switch, a kill or a death.
+#: A client that declares the `roster` capability gets them in `roster`, sent
+#: on change, instead of in every row of every tick (`MatchServer._broadcast`).
+ROSTER_FIELDS = ("name", "team", "kills", "deaths", "bot")
+#: What a client puts in `join.caps` to receive the slim rows.
+CAP_ROSTER = "roster"
+#: Every wire capability this server understands.
+WIRE_CAPS = frozenset({CAP_ROSTER})
+
+
+def parse_caps(data: dict[str, Any]) -> frozenset[str]:
+    """The capabilities a `join` declares, keeping only ones this server knows.
+
+    Opt-in per connection so an older client, which sends none, keeps the
+    full rows it can read.
+    """
+    caps = data.get("caps")
+    if not isinstance(caps, list):
+        return frozenset()
+    return frozenset(c for c in caps if isinstance(c, str) and c in WIRE_CAPS)
+
+
 # Simulated seconds a player may bank against real time. Roughly four frames:
 # enough to absorb a stutter or a burst of coalesced commands, far too little to
 # be worth exploiting.
@@ -196,7 +234,7 @@ class TickStats:
     part anyone wants to see.
     """
 
-    __slots__ = ("simulate_ms", "broadcast_ms", "tick_bytes")
+    __slots__ = ("simulate_ms", "broadcast_ms", "tick_bytes", "skipped_sends")
 
     def __init__(self) -> None:
         self.simulate_ms: deque[float] = deque(maxlen=TICK_WINDOW)
@@ -206,6 +244,10 @@ class TickStats:
         # measuring the dict path would mean serialising a second time to weigh
         # the result, which is the very cost being measured.
         self.tick_bytes: deque[int] = deque(maxlen=TICK_WINDOW)
+        # Snapshots not sent because the socket was still writing the last one.
+        # Lifetime count: any number above zero names a client the server was
+        # outrunning.
+        self.skipped_sends = 0
 
     def record(self, simulate_ms: float, broadcast_ms: float) -> None:
         self.simulate_ms.append(simulate_ms)
@@ -235,6 +277,7 @@ class TickStats:
             # Summed across every recipient of one tick, so this is what the
             # room costs the uplink `SNAPSHOT_HZ` times a second.
             "tickBytes": stat(self.tick_bytes),
+            "skippedSends": self.skipped_sends,
         }
 
 
@@ -387,6 +430,12 @@ class MatchPlayer:
     state: PlayerState
     conn: Any = None
     queue: deque[Command] = field(default_factory=deque)
+    # The snapshot send still in flight to this player, if any. A socket that
+    # is still writing last tick's frame is skipped this tick rather than
+    # holding up everyone else's (`MatchServer._broadcast`).
+    send_task: Any = None
+    # The `roster` version this player was last sent; -1 for none yet.
+    roster_sent: int = -1
     last_ping_at: float = -999.0
     attachments: dict[str, str] = field(default_factory=dict)
     # Last command sequence the simulation has actually consumed. Sent back as
@@ -920,6 +969,9 @@ class MatchRoom:
         self.empty_since: float | None = time.monotonic()
         # Where everyone was, for rewinding shots. See `weapons.py`.
         self.history = PositionHistory()
+        # `roster_version`: the last roster's content, and its version.
+        self._roster_key: tuple = ()
+        self._roster_version = 0
         # What the mode counts, per team. Kills in deathmatch; rounds or
         # captures elsewhere. Only `mode.on_kill` and `mode.tick` write to it —
         # `_apply_damage` used to, and that was one of the five places this class
@@ -1250,7 +1302,7 @@ class MatchRoom:
     def simulate(self, elapsed: float) -> None:
         """Drain each player's queue, spending from their time budget."""
         now = time.monotonic()
-        now_ms = time.time() * 1000.0
+        now_ms = wire_clock() * 1000.0
         self._respawn_due(now)
         self._think(elapsed)
         if len(self.players) > 1:
@@ -2849,8 +2901,12 @@ class MatchRoom:
         shared: dict[str, Any],
         ack: Any,
         you: Any,
+        roster: dict[str, Any] | None = None,
     ) -> dict:
         """The one place the snapshot envelope's shape is written down.
+
+        `roster`, for a recipient on the slim rows, is `{"rv": version}` plus,
+        when they have not had this version, `"roster": [...]`.
 
         `ack` and `you` are parameters rather than looked up because
         `snapshot_template` builds this same envelope with holes where they go
@@ -2869,9 +2925,32 @@ class MatchRoom:
                 "players": rows,
                 "you": you,
                 "scores": self.scores,
+                **(roster or {}),
                 **shared,
             },
         }
+
+    def roster_rows(self) -> list[dict[str, Any]]:
+        """Every player's `ROSTER_FIELDS`, with their id, in seat order."""
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "team": p.team,
+                "kills": p.kills,
+                "deaths": p.deaths,
+                "bot": p.is_bot,
+            }
+            for p in self.players.values()
+        ]
+
+    def roster_version(self, roster: list[dict[str, Any]]) -> int:
+        """The roster's version, bumped whenever its content changes."""
+        key = tuple(tuple(r.values()) for r in roster)
+        if key != self._roster_key:
+            self._roster_key = key
+            self._roster_version += 1
+        return self._roster_version
 
     def snapshot_for(
         self,
@@ -2894,7 +2973,11 @@ class MatchRoom:
         )
 
     def snapshot_template(
-        self, now: float, rows: list[dict], shared: dict[str, Any]
+        self,
+        now: float,
+        rows: list[dict],
+        shared: dict[str, Any],
+        roster: dict[str, Any] | None = None,
     ) -> tuple[str, str, str]:
         """The tick serialised **once**, split at the two per-recipient holes.
 
@@ -2913,7 +2996,7 @@ class MatchRoom:
         malformed frame.
         """
         blob = json.dumps(
-            self.snapshot_message(now, rows, shared, _ACK_HOLE, _YOU_HOLE)
+            self.snapshot_message(now, rows, shared, _ACK_HOLE, _YOU_HOLE, roster)
         )
         # The sentinels are strings, so they arrive quoted; splitting on the
         # quoted form is what lets `ack` be spliced back in as a bare number.
@@ -2949,6 +3032,32 @@ class MatchRoom:
             # `joined` and `cosmetics` events; never in a snapshot.
             "cosmetics": self.cosmetics_payload(),
         }
+
+
+#: How long a broadcast waits for its sends before moving on: half a tick.
+SEND_WAIT = TICK_INTERVAL / 2
+
+
+def _slim(row: dict[str, Any]) -> dict[str, Any]:
+    """A snapshot row without its `ROSTER_FIELDS`."""
+    return {k: v for k, v in row.items() if k not in ROSTER_FIELDS}
+
+
+async def _send_frame(conn: Any, frame: str | dict[str, Any]) -> None:
+    """One snapshot to one socket, as its own task (`MatchServer._broadcast`).
+
+    Never cancelled from outside: a websocket write abandoned halfway leaves a
+    torn frame on the stream, which is worse than a late one. Errors are
+    swallowed for the reason the old inline send swallowed them: a dead socket
+    is the `/ws` loop's to notice.
+    """
+    try:
+        if isinstance(frame, str):
+            await conn.send_text(frame)
+        else:
+            await conn.send_json(frame)
+    except Exception:
+        pass
 
 
 class MatchServer:
@@ -3112,7 +3221,7 @@ class MatchServer:
             logger.exception("hassault match loop failed")
 
     async def _broadcast(self, room: MatchRoom) -> None:
-        now = time.time()
+        now = wire_clock()
         mono = time.monotonic()
         # One shared list of rows, but a per-player envelope: `ack`, `you` and the
         # hitmarkers differ per recipient, and `ack` is the field prediction
@@ -3149,37 +3258,90 @@ class MatchServer:
         # sixteen rows and one. `None` if the split failed, which sends everyone
         # down the ordinary dict path.
         template = self._template_or_none(room, now, rows, shared)
+        # The same tick on the slim rows, for clients that declared `roster`
+        # (`ROSTER_FIELDS` sent on change, not every tick). Two templates,
+        # built only if someone needs them: one carrying this roster version,
+        # one with only its number.
+        roster = room.roster_rows()
+        version = room.roster_version(roster)
+        slim_rows = [_slim(row) for row in rows]
+        slim_templates: dict[bool, tuple[str, str, str] | None] = {}
+
+        def roster_meta(with_roster: bool) -> dict[str, Any]:
+            return {"rv": version, "roster": roster} if with_roster else {"rv": version}
+
         # Only meaningful on the pre-serialised path — see `TickStats.tick_bytes`
         # for why the dict path is not weighed.
         sent_bytes = 0
+        pvs_active = getattr(room, "pvs_culling", False)
+        started: list[asyncio.Task[None]] = []
         for player in list(room.players.values()):
             conn = player.conn
             if conn is None:
                 continue
+            if player.send_task is not None and not player.send_task.done():
+                # Still writing last tick's frame. Skipped *before* the private
+                # view is built, because building it drains their hitmarkers:
+                # those ride the next frame that does go out.
+                room.stats.skipped_sends += 1
+                continue
             try:
                 # `private_view_for` drains this player's hitmarkers, so it is
-                # called exactly once per player per tick on both paths.
+                # called exactly once per player per tick that is sent.
                 you = room.private_view_for(player, spotted, heard)
+                slim = CAP_ROSTER in getattr(conn, "wire_caps", ())
+                with_roster = slim and player.roster_sent != version
                 send_text = getattr(conn, "send_text", None)
-                pvs_active = getattr(room, "pvs_culling", False)
-                if not pvs_active and template is not None and send_text is not None:
-                    head, mid, tail = template
+                frame: str | dict
+                if not pvs_active and send_text is not None:
+                    if slim:
+                        if with_roster not in slim_templates:
+                            slim_templates[with_roster] = self._template_or_none(
+                                room, now, slim_rows, shared, roster_meta(with_roster)
+                            )
+                        parts = slim_templates[with_roster]
+                    else:
+                        parts = template
+                else:
+                    parts = None
+                if parts is not None:
+                    head, mid, tail = parts
                     frame = f"{head}{player.ack}{mid}{json.dumps(you)}{tail}"
                     sent_bytes += len(frame)
-                    await send_text(frame)
                 else:
                     player_rows = (
                         room.cull_pvs_snapshot_rows(player, rows, spotted)
                         if pvs_active
                         else rows
                     )
-                    await conn.send_json(
-                        room.snapshot_message(now, player_rows, shared, player.ack, you)
+                    if slim:
+                        player_rows = [_slim(row) for row in player_rows]
+                    frame = room.snapshot_message(
+                        now,
+                        player_rows,
+                        shared,
+                        player.ack,
+                        you,
+                        roster_meta(with_roster) if slim else None,
                     )
+                if slim:
+                    # Marked as it is handed to the socket: the wire is ordered
+                    # and reliable, and a send that fails is a socket that is
+                    # gone, whose player will be a new one with -1 if they return.
+                    player.roster_sent = version
+                task = asyncio.create_task(_send_frame(conn, frame))
+                player.send_task = task
+                started.append(task)
             except Exception:
                 # A dead socket is the /ws loop's problem; dropping the player
                 # here would race its own disconnect handling.
                 pass
+        if started:
+            # Every socket at once, not one after another: one slow client
+            # used to hold the whole room's tick while its socket drained. Up to
+            # half a tick is waited for; a send still going after that finishes
+            # on its own, and its player is skipped until it has.
+            await asyncio.wait(started, timeout=SEND_WAIT)
         if sent_bytes:
             room.stats.tick_bytes.append(sent_bytes)
         # Cleared after everyone has been sent this tick's copy, not as they are
@@ -3193,7 +3355,11 @@ class MatchServer:
 
     @staticmethod
     def _template_or_none(
-        room: MatchRoom, now: float, rows: list[dict], shared: dict[str, Any]
+        room: MatchRoom,
+        now: float,
+        rows: list[dict],
+        shared: dict[str, Any],
+        roster: dict[str, Any] | None = None,
     ) -> tuple[str, str, str] | None:
         """The pre-serialised tick, or `None` to fall back to `send_json`.
 
@@ -3219,7 +3385,7 @@ class MatchServer:
         if is_observed(CHANNEL, "snapshot"):
             return None
         try:
-            return room.snapshot_template(now, rows, shared)
+            return room.snapshot_template(now, rows, shared, roster)
         except ValueError:
             logger.warning("hassault snapshot template split failed; sending plain")
             return None

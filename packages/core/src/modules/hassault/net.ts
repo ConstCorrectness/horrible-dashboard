@@ -790,6 +790,51 @@ export interface ModeSelf {
  */
 export const SUPPORTED_MODE_V = 1;
 
+/**
+ * Wire capabilities this client declares in `join.caps`. The server sends an
+ * older client, which declares none, the shape it always did.
+ *
+ * `roster`: rows without their `RosterEntry` fields, which come in `roster`
+ * when they change (`RosterCache`).
+ */
+export const WIRE_CAPS: readonly string[] = ['roster'];
+
+/** The row fields that change only on a join, a team switch, a kill or a death. */
+export type RosterEntry = Pick<PlayerRow, 'id' | 'name' | 'team' | 'kills' | 'deaths' | 'bot'>;
+
+/**
+ * Puts the roster fields back into a slim snapshot's rows.
+ *
+ * Merged in place as the snapshot arrives, so everything downstream (the
+ * interpolation buffer, the scoreboard, the demo recorder) sees the same full
+ * rows an older server sends.
+ */
+export class RosterCache {
+  private byId = new Map<string, RosterEntry>();
+
+  merge(snapshot: Snapshot): void {
+    if (Array.isArray(snapshot.roster)) {
+      this.byId = new Map(snapshot.roster.map((r) => [r.id, r]));
+    }
+    // No `rv`: a server (or a room) sending full rows, with nothing to fill.
+    if (snapshot.rv === undefined) return;
+    for (const row of snapshot.players) {
+      const r = this.byId.get(row.id);
+      if (!r) continue;
+      row.name = r.name;
+      row.team = r.team;
+      row.kills = r.kills;
+      row.deaths = r.deaths;
+      row.bot = r.bot;
+    }
+  }
+
+  /** A new room: last room's names must not fill this one's rows. */
+  reset(): void {
+    this.byId.clear();
+  }
+}
+
 export interface Snapshot {
   room: string;
   tick: number;
@@ -797,6 +842,10 @@ export interface Snapshot {
   t: number;
   ack: number;
   players: PlayerRow[];
+  /** Roster version, present when the rows are slim (`RosterCache`). */
+  rv?: number;
+  /** The roster, on the ticks it changed or that this client lacks it. */
+  roster?: RosterEntry[];
   you?: SelfState;
   scores?: number[];
   fx?: Fx[];

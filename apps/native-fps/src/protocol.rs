@@ -86,6 +86,67 @@ pub struct JoinRequest {
     /// the server reads a present flag as the request itself.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub ranked: bool,
+    /// Wire capabilities this client reads (`WIRE_CAPS`). Omitted when empty,
+    /// which is what an older client sends.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub caps: Vec<String>,
+}
+
+/// What this client declares in `join.caps`.
+///
+/// `roster`: snapshot rows without their `RosterEntry` fields, which arrive in
+/// the snapshot's `roster` when they change; `RosterCache` puts them back.
+pub const WIRE_CAPS: &[&str] = &["roster"];
+
+/// The row fields that change only on a join, a team switch, a kill or a
+/// death. Not the social `roster` event, which is the friends list.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct RosterEntry {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub team: i32,
+    #[serde(default)]
+    pub kills: i32,
+    #[serde(default)]
+    pub deaths: i32,
+    #[serde(default)]
+    pub bot: bool,
+}
+
+/// Puts the roster fields back into a slim snapshot's rows, so everything after
+/// it sees the full rows an older server sends. One per match: `reset` on a
+/// welcome, or a new room's rows are named after the last room's players.
+#[derive(Debug, Default)]
+pub struct RosterCache {
+    by_id: std::collections::HashMap<String, RosterEntry>,
+}
+
+impl RosterCache {
+    pub fn merge(&mut self, snapshot: &mut Snapshot) {
+        if let Some(roster) = snapshot.roster.take() {
+            self.by_id = roster.into_iter().map(|e| (e.id.clone(), e)).collect();
+        }
+        // No `rv`: full rows, from a server (or a room) that does not slim them.
+        if snapshot.rv.is_none() {
+            return;
+        }
+        for row in &mut snapshot.players {
+            if let Some(e) = self.by_id.get(&row.id) {
+                row.name.clone_from(&e.name);
+                row.team = e.team;
+                row.kills = e.kills;
+                row.deaths = e.deaths;
+                row.bot = e.bot;
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.by_id.clear();
+    }
 }
 
 /// One input frame.
@@ -791,6 +852,12 @@ pub struct Snapshot {
     pub ack: u64,
     #[serde(default)]
     pub players: Vec<PlayerRow>,
+    /// Roster version: present when `players` are slim (`RosterCache`).
+    #[serde(default)]
+    pub rv: Option<u64>,
+    /// The roster, on ticks it changed or that this client did not have it.
+    #[serde(default)]
+    pub roster: Option<Vec<RosterEntry>>,
     #[serde(default)]
     pub you: SelfState,
     #[serde(default)]
@@ -1738,6 +1805,62 @@ mod tests {
         let mut fired = Command::new(2);
         fired.view_t = Some(1234.0);
         assert!(serde_json::to_string(&fired).unwrap().contains("viewT"));
+    }
+
+    #[test]
+    fn a_join_declares_the_roster_capability() {
+        let json = serde_json::to_string(&Outbound::new(
+            "join",
+            JoinRequest {
+                map: "hd_pit".into(),
+                caps: WIRE_CAPS.iter().map(|c| c.to_string()).collect(),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        assert!(json.contains(r#""caps":["roster"]"#), "{json}");
+    }
+
+    fn snapshot_of(json: &str) -> Snapshot {
+        let line = format!(r#"{{"channel":"hassault","event":"snapshot","data":{json}}}"#);
+        match classify(&line) {
+            Some(Event::Snapshot(s)) => *s,
+            other => panic!("not a snapshot: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slim_rows_are_filled_from_the_roster_and_full_rows_are_left_alone() {
+        let mut cache = RosterCache::default();
+        let mut first = snapshot_of(
+            r#"{"tick":1,"t":1.0,"ack":0,"rv":1,
+                "roster":[{"id":"a","name":"alice","team":1,"kills":2,"deaths":1,"bot":false}],
+                "players":[{"id":"a","x":1.0,"y":2.0,"z":3.0,"alive":true}]}"#,
+        );
+        cache.merge(&mut first);
+        assert_eq!(first.players[0].name, "alice");
+        assert_eq!((first.players[0].team, first.players[0].kills), (1, 2));
+        assert!(first.roster.is_none(), "taken into the cache");
+        // A divergence check must not report the new keys as unknown.
+        assert!(first.extra.is_empty(), "{:?}", first.extra);
+
+        // A tick with only the version keeps filling from the cache.
+        let mut next =
+            snapshot_of(r#"{"tick":2,"t":2.0,"ack":0,"rv":1,"players":[{"id":"a","x":5.0}]}"#);
+        cache.merge(&mut next);
+        assert_eq!(next.players[0].name, "alice");
+
+        // Full rows (no `rv`) win over the cache.
+        let mut full = snapshot_of(
+            r#"{"tick":3,"t":3.0,"ack":0,"players":[{"id":"a","name":"renamed","team":0}]}"#,
+        );
+        cache.merge(&mut full);
+        assert_eq!(full.players[0].name, "renamed");
+
+        cache.reset();
+        let mut after = snapshot_of(r#"{"tick":4,"t":4.0,"ack":0,"rv":1,"players":[{"id":"a"}]}"#);
+        cache.merge(&mut after);
+        assert_eq!(after.players[0].name, "");
     }
 
     #[test]

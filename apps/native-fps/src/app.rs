@@ -72,7 +72,7 @@ use hassault_native::physics_rapier::RapierPhysicsWorld;
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
 use hassault_native::protocol::{
-    Command, Event, Fx, HitMarker, ModeInfo, ModeShared, PlayerRow, SelfState,
+    Command, Event, Fx, HitMarker, ModeInfo, ModeShared, PlayerRow, RosterCache, SelfState,
 };
 use hassault_native::radar::{self, Blip, Edge, Mark, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
@@ -203,6 +203,8 @@ pub struct App {
     /// instead, a tenth of a second in the past, between two snapshots that have
     /// both already arrived. See `interp.rs`.
     snapshots: SnapshotBuffer,
+    /// Fills the roster fields of slim snapshot rows (`protocol::RosterCache`).
+    roster: RosterCache,
     /// This frame's interpolated bodies. Rebuilt each frame rather than each
     /// snapshot: the whole point is that it changes between snapshots.
     drawn: Vec<PlayerRow>,
@@ -603,6 +605,7 @@ impl App {
             focused: false,
             players: Vec::new(),
             snapshots: SnapshotBuffer::new(),
+            roster: RosterCache::default(),
             drawn: Vec::new(),
             ping: PingTracker::default(),
             self_id: String::new(),
@@ -2007,6 +2010,7 @@ impl App {
                 Incoming::Event(Event::Welcome(w)) => {
                     eprintln!("hassault: joined room {} as {}", w.room, w.player_id);
                     self.room = w.room.clone();
+                    self.roster.reset();
                     self.self_id = w.player_id;
                     self.players = w.players;
                     // Static for the match, so it is taken once here rather than
@@ -2060,7 +2064,8 @@ impl App {
                     }
                     self.follow_prediction();
                 }
-                Incoming::Event(Event::Snapshot(s)) => {
+                Incoming::Event(Event::Snapshot(mut s)) => {
+                    self.roster.merge(&mut s);
                     let ack = s.ack;
                     self.net_stats.on_snapshot(s.tick, s.t, Self::clock_ms());
                     // A respawn moves the body without any command of ours

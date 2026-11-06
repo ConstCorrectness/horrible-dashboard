@@ -26,6 +26,7 @@ from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.match import (
     _clamp,
     _num,
+    parse_caps,
     parse_command,
     CHANNEL,
     MAX_PLAYERS,
@@ -87,6 +88,10 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         # Leaving whatever we were in first is what makes "join" idempotent from
         # the browser's point of view, local or remote.
         await _leave_any(conn)
+        # What this client can read (`match.parse_caps`): kept on the socket
+        # for a room here, forwarded for one on the game server. A friend's
+        # node is not told, so its rooms send this client the full rows.
+        caps = parse_caps(data)
 
         if bool(data.get("ranked")):
             # **A rated match, simulated by the game server.** The room is not on
@@ -97,14 +102,16 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             # Checked before `host`: a join cannot be both, and "ranked on a
             # friend's node" is not a thing — a friend's node has no more
             # authority over a result than this one does.
-            await ranked.join(conn, map_name)
+            await ranked.join(conn, map_name, caps=caps)
             return
 
         if host == ranked.ONLINE_HOST:
             # A room on the game server, picked out of the browser (or opened
             # there, with no room id) — where web players are. Same proxy as
             # ranked; only which room differs.
-            await ranked.join(conn, map_name, room_id or None, new=not room_id, mode=mode)
+            await ranked.join(
+                conn, map_name, room_id or None, new=not room_id, mode=mode, caps=caps
+            )
             return
 
         if host:
@@ -131,6 +138,7 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             return
 
         loadouts, look = await account_sync.local_look()
+        conn.wire_caps = caps
         try:
             room, player = await match_server.join(
                 conn, map_name, name, room_id, mode, loadouts=loadouts, cosmetics=look

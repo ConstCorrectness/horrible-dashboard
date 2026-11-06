@@ -37,7 +37,9 @@ use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use crate::protocol::{self, Command, ConsoleExec, Event, InputBatch, JoinRequest, Outbound};
+use crate::protocol::{
+    self, Command, ConsoleExec, Event, InputBatch, JoinRequest, Outbound, WIRE_CAPS,
+};
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -230,6 +232,7 @@ impl MatchSocket {
                 host: host.to_string(),
                 name: name.to_string(),
                 ranked,
+                caps: WIRE_CAPS.iter().map(|c| c.to_string()).collect(),
             },
         ))
     }

@@ -128,12 +128,25 @@ class SeatConn:
         #: Set once the socket is gone, so a broadcast mid-teardown is a no-op
         #: rather than an exception inside the tick loop.
         self.closed = False
+        #: What the client declared in `join.caps` (`match.CAP_ROSTER`).
+        self.wire_caps: frozenset[str] = frozenset()
+        # One write at a time: snapshots go out as their own tasks
+        # (`MatchServer._broadcast`), so one can still be writing when an
+        # event for the same socket is sent.
+        self._send_lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
+        await self.send_text(json.dumps(payload))
+
+    async def send_text(self, text: str) -> None:
+        """A frame already serialised: the snapshot, built once per tick for
+        everyone (`MatchRoom.snapshot_template`). Without this method the
+        game server took the per-recipient `json.dumps` path every tick."""
         if self.closed:
             return
         try:
-            await self.websocket.send_text(json.dumps(payload))
+            async with self._send_lock:
+                await self.websocket.send_text(text)
         except Exception:
             # A dropped client must never take the tick with it: every other
             # player in that room is mid-frame.

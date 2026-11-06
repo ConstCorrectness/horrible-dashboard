@@ -4880,6 +4880,54 @@ pre-serialised path, where the string is already in hand. Weighing the plain pat
 would mean serialising a second time to measure the cost of serialising, so it
 reports "not measured" instead of a number it had to manufacture.
 
+### The snapshot after G3: roster on change, sends side by side, one clock
+
+Three changes to the tick's wire, none of them visible to a client that does
+not ask for them.
+
+**The roster is sent when it changes.** `name`, `team`, `kills`, `deaths` and
+`bot` (`ROSTER_FIELDS` in `match.py`) change on a join, a team switch, a kill or
+a death, and were in every row of every tick. A client that puts
+`caps: ["roster"]` in its `join` now gets rows without them, an `rv` (roster
+version) on every snapshot, and a `roster` list on the ticks where the version
+changed or this client has not had it yet. Rows are 29% smaller: for eight
+players, 2,008 bytes a tick become 1,416, about 35 KiB/s per recipient at
+60 Hz. Both clients put the fields back as the snapshot arrives (`RosterCache`
+in `net.ts` and `protocol.rs`), so everything after that sees the full rows.
+
+- **Opt-in per connection.** `match.parse_caps` keeps only capabilities the
+  server knows. A client that declares none, or a socket in a friend's match
+  (the fabric does not pass `caps` on), gets the full rows it always did. The
+  node passes the client's `caps` on to the game server for an online or
+  ranked room (`ranked.join`), whose frames it relays unchanged.
+- **One serialisation per shape.** The full-row template, and the slim ones
+  with and without the roster, are each built at most once per tick and only
+  if a recipient needs them.
+- **What the server keeps is the full rows.** The replay recorder, PVS culling
+  (which reads `team`) and the welcome all work on them; slim rows are made at
+  the last moment, per recipient.
+
+**Sends run side by side.** Each recipient's frame is its own task, and the
+broadcast waits at most half a tick for them together (`SEND_WAIT`). Before,
+they were awaited one after another, so one slow socket held the whole room's
+tick while it drained. A socket still writing the last frame is skipped this
+tick, and it is skipped *before* its private view is built, so the hitmarkers
+it would have drained ride the next frame instead of being lost.
+`server.tick()` reports the count as `skippedSends`. A send is never cancelled:
+a websocket write abandoned halfway leaves a torn frame on the stream.
+
+The game server gained `SeatConn.send_text` with this. Without it, the
+production server had always taken the per-recipient `json.dumps` path, never
+the serialise-once one above. It also gained a send lock, since an event can
+now be sent while a snapshot is still writing.
+
+**One monotonic clock.** `t`, the lag-compensation history and a shot's rewind
+all read `match.wire_clock()`: the monotonic clock plus a fixed offset to epoch
+time, taken at import. They read `time.time()`, which an NTP correction can step
+mid-match, putting snapshots out of order by their own timestamps and a rewind
+on the wrong instant. `t` is still epoch milliseconds, so a client's offset
+estimate does not change.
+
 ### Playing in a friend's match
 
 A match is authoritative on **one** node. A guest's browser cannot reach it — the
@@ -10380,6 +10428,10 @@ hitch the late-texture row removed. Their steady-state columns stand.
   at 7.7 ms.** Bank is still the map with the most draws.
 - **The worst frame on the path is now 10–36 ms,** against several hundred
   milliseconds before.
+
+The server half of G3 (the roster on change, sends side by side, one clock)
+is described under
+[The snapshot after G3](#the-snapshot-after-g3-roster-on-change-sends-side-by-side-one-clock).
 
 Not done, measured first:
 

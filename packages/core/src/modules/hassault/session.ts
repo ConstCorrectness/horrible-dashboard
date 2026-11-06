@@ -13,8 +13,10 @@ import { subscribeChannel, sendChannel } from '../../ws';
 import {
   PingTracker,
   Predictor,
+  RosterCache,
   SnapshotBuffer,
   SUPPORTED_MODE_V,
+  WIRE_CAPS,
   type Command,
   type DetonateFx,
   type Fx,
@@ -380,6 +382,8 @@ const SEND_INTERVAL_MS = 16;
 export class MatchSession {
   readonly predictor = new Predictor();
   readonly snapshots = new SnapshotBuffer();
+  /** Fills the slim rows' roster fields (`RosterCache`). */
+  private readonly roster = new RosterCache();
   /** What the NetGraph shows: snapshot and tick rate, jitter, loss, KB/s. */
   readonly netStats = new NetStats();
   readonly ping = new PingTracker();
@@ -520,7 +524,17 @@ export class MatchSession {
     // The loadout rides along so the first spawn carries it; it is also re-sent
     // after the welcome, for a server that reads it only there.
     const loadout = this.loadoutChoice ?? undefined;
-    sendChannel('hassault', 'join', { map, name, room, host, ranked, mode, loadout });
+    this.roster.reset();
+    sendChannel('hassault', 'join', {
+      map,
+      name,
+      room,
+      host,
+      ranked,
+      mode,
+      loadout,
+      caps: WIRE_CAPS,
+    });
   }
 
   /** Invite a friend to the match we are hosting. */
@@ -902,6 +916,7 @@ export class MatchSession {
       case 'snapshot': {
         const snapshot = data as unknown as Snapshot;
         if (!Array.isArray(snapshot.players)) return;
+        this.roster.merge(snapshot);
         const arrived = performance.now();
         this.snapshots.push(snapshot, arrived);
         this.netStats.onSnapshot(snapshot.tick, snapshot.t, arrived);
