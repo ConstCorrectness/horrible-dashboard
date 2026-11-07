@@ -10,6 +10,7 @@ use crate::drills::DrillStats;
 use crate::hud::Painter;
 use crate::menu::{ACCENT, SCRIM, TEXT, TEXT_DIM};
 use crate::hud::OverlayVertex;
+use crate::text_kit::TextKit;
 use crate::training::{DrillPhase, DrillStatus};
 
 /// Opaque for the reason `summary::CARD_BG` is: a card somebody stops to read
@@ -20,15 +21,6 @@ const CARD_H: f32 = 300.0;
 
 fn scale(height: f32) -> f32 {
     (height / 800.0).clamp(0.75, 2.6)
-}
-
-fn text_width(s: &str, scale: f32) -> f32 {
-    let n = s.chars().count() as f32;
-    if n == 0.0 {
-        0.0
-    } else {
-        n * 6.0 * scale - scale
-    }
 }
 
 /// The six figures the card shows, as label and value. One function so the
@@ -50,8 +42,14 @@ pub fn cells(stats: &DrillStats) -> [(&'static str, String); 6] {
 }
 
 /// Draw whichever overlay `status` calls for, appended over the HUD.
-pub fn build(status: &DrillStatus, width: f32, height: f32, out: &mut Vec<OverlayVertex>) {
-    let mut p = Painter::new(out, width, height);
+pub fn build(
+    status: &DrillStatus,
+    width: f32,
+    height: f32,
+    text: Option<&TextKit>,
+    out: &mut Vec<OverlayVertex>,
+) {
+    let mut p = Painter::with_text(out, width, height, text);
     let k = scale(height);
     match status.phase {
         DrillPhase::Countdown | DrillPhase::Running => {
@@ -61,25 +59,15 @@ pub fn build(status: &DrillStatus, width: f32, height: f32, out: &mut Vec<Overla
             } else {
                 format!("{}S", status.remaining.ceil() as i32)
             };
-            let w = (text_width(&label, 1.3 * k).max(text_width(&figure, 3.0 * k)) + 32.0 * k)
+            // Measured in the faces they are drawn in — the clock is a figure,
+            // so it is monospace and does not jitter as the digits change.
+            let w = (p.text_width(&label, 1.3 * k).max(p.num_width(&figure, 3.0 * k)) + 32.0 * k)
                 .max(140.0 * k);
             let x = (width - w) / 2.0;
             let y = 12.0 * k;
             p.panel(x, y, w, 58.0 * k, 6.0 * k, Some(ACCENT));
-            p.text(
-                (width - text_width(&label, 1.3 * k)) / 2.0,
-                y + 10.0 * k,
-                1.3 * k,
-                TEXT_DIM,
-                &label,
-            );
-            p.text(
-                (width - text_width(&figure, 3.0 * k)) / 2.0,
-                y + 26.0 * k,
-                3.0 * k,
-                TEXT,
-                &figure,
-            );
+            p.center_text(y + 10.0 * k, 1.3 * k, TEXT_DIM, &label);
+            p.center_num(y + 26.0 * k, 3.0 * k, TEXT, &figure);
         }
         DrillPhase::Done => {
             let Some(stats) = status.stats.as_ref() else {
@@ -89,6 +77,7 @@ pub fn build(status: &DrillStatus, width: f32, height: f32, out: &mut Vec<Overla
             let cx = (width - CARD_W * k) / 2.0;
             let cy = (height - CARD_H * k) / 2.0;
             p.rect(cx, cy, CARD_W * k, CARD_H * k, CARD_BG);
+            p.grid(cx, cy, CARD_W * k, CARD_H * k, 18.0 * k, crate::ui_theme::GRID);
             p.rect(cx, cy, CARD_W * k, 2.0 * k, ACCENT);
             p.text(
                 cx + 24.0 * k,
@@ -97,7 +86,7 @@ pub fn build(status: &DrillStatus, width: f32, height: f32, out: &mut Vec<Overla
                 TEXT,
                 &status.name.to_uppercase(),
             );
-            p.text(
+            p.num(
                 cx + 24.0 * k,
                 cy + 52.0 * k,
                 1.3 * k,
@@ -107,12 +96,26 @@ pub fn build(status: &DrillStatus, width: f32, height: f32, out: &mut Vec<Overla
                     stats.hit_shots, stats.shots, stats.hits
                 ),
             );
+            p.rule(
+                cx + 24.0 * k,
+                cy + 74.0 * k,
+                (CARD_W - 48.0) * k,
+                [1.0, 1.0, 1.0, 0.10],
+                ACCENT,
+            );
             let col_w = (CARD_W - 48.0) / 3.0 * k;
             for (i, (label, value)) in cells(stats).iter().enumerate() {
                 let x = cx + 24.0 * k + (i % 3) as f32 * col_w;
                 let y = cy + (90.0 + (i / 3) as f32 * 80.0) * k;
+                p.rect(
+                    x - 8.0 * k,
+                    y,
+                    2.0 * k,
+                    (20.0 + 7.0 * 3.0) * k,
+                    crate::ui_theme::faded(ACCENT, 0.5),
+                );
                 p.text(x, y, 1.3 * k, TEXT_DIM, label);
-                p.text(x, y + 20.0 * k, 3.0 * k, TEXT, value);
+                p.num(x, y + 20.0 * k, 3.0 * k, TEXT, value);
             }
             p.text(
                 cx + 24.0 * k,
@@ -149,7 +152,7 @@ mod tests {
             remaining: 0.0,
             stats: None,
         };
-        build(&status, 1280.0, 720.0, &mut out);
+        build(&status, 1280.0, 720.0, None, &mut out);
         assert!(out.is_empty());
     }
 }

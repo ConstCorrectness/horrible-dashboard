@@ -879,11 +879,12 @@ impl Console {
     // -- editing --------------------------------------------------------------
 
     pub fn insert(&mut self, text: &str) {
-        // Only what the font can draw. A glyph the HUD has no shape for renders
-        // as an invisible column, so accepting it would produce an input line
-        // that does not match what was typed — and a command that fails for a
-        // reason nothing on screen explains.
-        let filtered: String = text.chars().filter(|c| crate::hud::has_glyph(*c)).collect();
+        // Anything printable. The console draws in the system's monospace face
+        // with font fallback, so an accented name or a non-Latin chat line
+        // typed here shows as typed; it used to be filtered to the 5×7 bitmap
+        // font's alphabet. Control characters are still refused — they draw as
+        // nothing and would put the caret somewhere the eye cannot follow.
+        let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
         if filtered.is_empty() {
             return;
         }
@@ -1620,13 +1621,13 @@ mod tests {
     }
 
     #[test]
-    fn the_input_line_only_accepts_what_the_font_can_draw() {
-        // A glyph with no shape paints an invisible column, so accepting one
-        // would leave the input line and the text on screen disagreeing — in the
-        // one surface whose entire job is saying exactly what happened.
+    fn the_input_line_takes_any_printable_character_and_no_control_ones() {
+        // The console draws in a real face with fallback now, so a name with an
+        // accent is typed as written; a control character still draws nothing
+        // and would leave the caret and the text disagreeing.
         let (mut c, _) = console();
-        c.insert("net\u{2318}.graph");
-        assert_eq!(c.input, "net.graph");
+        c.insert("say Zo\u{eb} \u{2318}\u{7}\t!");
+        assert_eq!(c.input, "say Zo\u{eb} \u{2318}!");
     }
 
     #[test]

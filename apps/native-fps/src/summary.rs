@@ -37,6 +37,7 @@
 //! reproduce.
 
 use crate::hud::{OverlayVertex, Painter};
+use crate::text_kit::TextKit;
 use crate::menu::{ACCENT, SCRIM, TEXT, TEXT_DIM};
 use crate::protocol::HitMarker;
 
@@ -79,10 +80,10 @@ const BUTTON_H: f32 = 40.0;
 /// grew without limit would eventually be the window, and one that shrank
 /// without limit would be unreadable before it was small.
 ///
-/// The pause menu does *not* do this and is a fixed 460px wide. That is a real
-/// inconsistency and it is deliberately not being fixed here: it is a settings
-/// list somebody reads for a while, not a card glanced at once, and changing it
-/// would move every row rect the input path hit-tests against.
+/// The pause menu scales too, but in whole HUD units (`menu::zoom`): its rows
+/// are hit-tested every frame the pointer moves, and a row height that is a
+/// whole number of pixels keeps the hit rect and the drawn rect on the same
+/// pixel row. A card with one button can afford the continuous curve.
 fn scale(height: f32) -> f32 {
     (height / 800.0).clamp(0.75, 2.6)
 }
@@ -227,6 +228,9 @@ pub struct SummaryScreen {
     pub open: bool,
     /// Whether the pointer is over the leave button.
     hover: bool,
+    /// When the card came up, for its entrance. `None` draws it settled, which
+    /// is what a test that builds a card without opening it gets.
+    opened: Option<std::time::Instant>,
 }
 
 /// Where the leave button sits, in window pixels.
@@ -255,6 +259,7 @@ impl SummaryScreen {
     pub fn open(&mut self) {
         self.open = true;
         self.hover = false;
+        self.opened = Some(std::time::Instant::now());
     }
 
     pub fn close(&mut self) {
@@ -284,16 +289,28 @@ impl SummaryScreen {
     /// Appended to the overlay rather than clearing it, exactly as `Menu::build`
     /// is: the HUD is drawn first and this goes *over* it, so the scrim covers
     /// the crosshair instead of the crosshair showing through the card.
-    pub fn build(&self, summary: &Summary, width: f32, height: f32, out: &mut Vec<OverlayVertex>) {
+    pub fn build(
+        &self,
+        summary: &Summary,
+        width: f32,
+        height: f32,
+        text: Option<&TextKit>,
+        out: &mut Vec<OverlayVertex>,
+    ) {
         if !self.open {
             return;
         }
-        let mut p = Painter::new(out, width, height);
+        let mut p = Painter::with_text(out, width, height, text);
         p.rect(0.0, 0.0, width, height, SCRIM);
 
         let k = scale(height);
         let (cx, cy) = card_origin(width, height);
+        // Seconds since the card came up; a card nobody opened is settled.
+        let age = self
+            .opened
+            .map_or(f32::MAX, |t| t.elapsed().as_secs_f32());
         p.rect(cx, cy, CARD_W * k, CARD_H * k, CARD_BG);
+        p.grid(cx, cy, CARD_W * k, CARD_H * k, 18.0 * k, crate::ui_theme::GRID);
         // An accent along the top, the same rule the pause menu and every HUD
         // panel follow: the house style is a top edge, never a full perimeter.
         p.rect(cx, cy, CARD_W * k, 2.0 * k, ACCENT);
@@ -341,13 +358,39 @@ impl SummaryScreen {
             (last.0, last.1),
         ];
         let col_w = (CARD_W - 48.0) / 3.0 * k;
+        // A technical divider between the title block and the figures.
+        p.rule(
+            cx + 24.0 * k,
+            cy + 88.0 * k,
+            (CARD_W - 48.0) * k,
+            [1.0, 1.0, 1.0, 0.10],
+            ACCENT,
+        );
         for (i, (label, value)) in cells.iter().enumerate() {
             let col = (i % 3) as f32;
             let row = (i / 3) as f32;
+            // Each cell arrives in turn, slid up a little and faded in; the
+            // stagger is capped in `anim`, so the sixth is not late.
+            let (shown, slide) = crate::anim::entrance(age, i);
             let x = cx + 24.0 * k + col * col_w;
-            let y = cy + (108.0 + row * 92.0) * k;
-            p.text(x, y, 1.3 * k, TEXT_DIM, label);
-            p.text(x, y + 20.0 * k, 3.4 * k, TEXT, value);
+            let y = cy + (108.0 + row * 92.0) * k + slide * 10.0 * k;
+            // A tick on each cell's leading edge, the figure in the monospace
+            // face so the columns of digits line up across the two rows.
+            p.rect(
+                x - 8.0 * k,
+                y,
+                2.0 * k,
+                (20.0 + 7.0 * 3.4) * k,
+                crate::ui_theme::faded(ACCENT, 0.5 * shown),
+            );
+            p.text(x, y, 1.3 * k, crate::ui_theme::faded(TEXT_DIM, shown), label);
+            p.num(
+                x,
+                y + 20.0 * k,
+                3.4 * k,
+                crate::ui_theme::faded(TEXT, shown),
+                value,
+            );
         }
 
         let (bx, by, bw, bh) = button_rect(width, height);
@@ -417,10 +460,11 @@ mod tests {
         let screen = SummaryScreen {
             open: true,
             hover: false,
+            opened: None,
         };
         let mut out = Vec::new();
         let (w, h) = (1280.0_f32, 800.0_f32);
-        screen.build(&Summary::default(), w, h, &mut out);
+        screen.build(&Summary::default(), w, h, None, &mut out);
 
         let ndc = |x: f32, y: f32| [x / w * 2.0 - 1.0, 1.0 - y / h * 2.0];
         let inside = |t: &[OverlayVertex], p: [f32; 2]| {
@@ -503,6 +547,7 @@ mod tests {
         let screen = SummaryScreen {
             open: true,
             hover: false,
+            opened: None,
         };
         let painted = |objectives: i32| {
             let mut out = Vec::new();
@@ -514,6 +559,7 @@ mod tests {
                 },
                 1280.0,
                 800.0,
+                None,
                 &mut out,
             );
             out.len()
@@ -636,7 +682,7 @@ mod tests {
     #[test]
     fn a_closed_screen_draws_nothing_at_all() {
         let mut out = Vec::new();
-        SummaryScreen::default().build(&Summary::default(), 1280.0, 800.0, &mut out);
+        SummaryScreen::default().build(&Summary::default(), 1280.0, 800.0, None, &mut out);
         assert!(out.is_empty());
     }
 
@@ -645,7 +691,7 @@ mod tests {
         let mut screen = SummaryScreen::default();
         screen.open();
         let mut out = Vec::new();
-        screen.build(&Summary::default(), 1280.0, 800.0, &mut out);
+        screen.build(&Summary::default(), 1280.0, 800.0, None, &mut out);
         assert!(!out.is_empty());
         // The scrim is the first thing in it, or the HUD underneath shows
         // through the card.
@@ -717,7 +763,7 @@ mod tests {
                 screen.pointer(bx + bw / 2.0, by + bh / 2.0, 1280.0, 800.0);
             }
             let mut out = Vec::new();
-            screen.build(&summary, 1280.0, 800.0, &mut out);
+            screen.build(&summary, 1280.0, 800.0, None, &mut out);
             // Compared as colours: `OverlayVertex` is not `PartialEq`, and the
             // fill is the only thing hover changes anyway.
             out.iter().map(|v| v.color).collect::<Vec<_>>()

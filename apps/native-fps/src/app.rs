@@ -492,9 +492,9 @@ pub struct App {
     /// The shared key map (`controls.rs`). Defaults until `main` sets the one
     /// read from the node, so a client with no node still has every key.
     pub controls: hassault_native::controls::Controls,
-    /// Chat drawn in real fonts (colour emoji included), when the OS fonts
-    /// have loaded. `None` falls back to the HUD's bitmap font.
-    text: hassault_native::textlayer::TextLayer,
+    /// The HUD's real fonts and their glyph atlas (`text_kit`) — chat, colour
+    /// emoji included, is drawn through it too.
+    text_kit: hassault_native::text_kit::TextKit,
     voice_speakers: HashMap<String, (String, i32, Instant)>,
 }
 
@@ -741,7 +741,7 @@ impl App {
             chat: ChatState::new(),
             voice_transmitting: false,
             controls: hassault_native::controls::Controls::default(),
-            text: hassault_native::textlayer::TextLayer::spawn(),
+            text_kit: hassault_native::text_kit::TextKit::from_env(),
             voice_speakers: HashMap::new(),
         };
         if app.audio.is_none() {
@@ -3607,7 +3607,14 @@ impl App {
         let (w, h) = (w as f32, h as f32);
         let quick = self.console.quick_actions(&self.cvars);
         let detail = self.console.suggestion_detail(&self.cvars);
-        let hits = hud::console_hits(&quick, &self.console.suggestions, detail.is_some(), w, h);
+        let hits = hud::console_hits_with(
+            Some(&self.text_kit),
+            &quick,
+            &self.console.suggestions,
+            detail.is_some(),
+            w,
+            h,
+        );
         let (x, y) = self.pointer;
 
         if let Some((index, _)) = hits.chips.iter().find(|(_, r)| r.contains(x, y)) {
@@ -4248,6 +4255,8 @@ impl ApplicationHandler for App {
                     renderer.set_is_3d(true);
                 }
                 self.renderer = Some(renderer);
+                // A new renderer has an empty atlas texture: send all of it.
+                self.text_kit.mark_all_dirty();
                 if let (Some(renderer), Some(squad)) = (self.renderer.as_mut(), self.squad.as_ref())
                 {
                     renderer.install_dual_operators(squad.operator(), squad.operator_t());
@@ -4861,8 +4870,7 @@ impl ApplicationHandler for App {
                     .values()
                     .map(|(name, _, _)| name.clone())
                     .collect();
-                // Whether the OS fonts have loaded (picked up off their thread).
-                let rich_chat = self.text.ready();
+                self.text_kit.begin_frame();
                 let view = HudView {
                     hud_scale: self.settings.video.hud_scale,
                     team: self
@@ -4939,9 +4947,10 @@ impl ApplicationHandler for App {
                     damage: &self.damage_placed,
                     // The bitmap font draws chat only until the OS fonts have
                     // loaded; after that `textlayer` does, in real glyphs.
-                    chat: (!rich_chat).then_some(&self.chat),
+                    chat: Some(&self.chat),
                     voice_transmitting: self.voice_transmitting,
                     voice_speakers: &active_speakers,
+                    text: Some(&self.text_kit),
                 };
                 self.hud.noise_rings = self.cvars.boolean("draw.noise_rings").unwrap_or(true);
                 self.hud.build(&view, &mut overlay);
@@ -4955,6 +4964,7 @@ impl ApplicationHandler for App {
                     self.socket.is_some(),
                     view.width as f32,
                     view.height as f32,
+                    Some(&self.text_kit),
                     &mut overlay,
                 );
                 // Last, so it is over everything: the card is the only thing on
@@ -4966,6 +4976,7 @@ impl ApplicationHandler for App {
                             &status,
                             view.width as f32,
                             view.height as f32,
+                            Some(&self.text_kit),
                             &mut overlay,
                         );
                     }
@@ -4976,29 +4987,16 @@ impl ApplicationHandler for App {
                         &summary,
                         view.width as f32,
                         view.height as f32,
+                        Some(&self.text_kit),
                         &mut overlay,
                     );
                 }
                 self.overlay = overlay;
 
-                // Chat in real fonts, over the HUD — but not over the menu, the
-                // summary card or the console, which are drawn *on* the HUD and
-                // would otherwise have chat floating on top of them.
-                let hud_unit = ((height as f32 / 360.0).round()
-                    * self.settings.video.hud_scale.clamp(0.75, 1.5))
-                .max(2.0);
-                let chat_image =
-                    if rich_chat && !self.menu.open && !self.summary.open && !self.console.open {
-                        self.text.chat(&self.chat, width, height, hud_unit)
-                    } else {
-                        None
-                    };
-
                 self.laps.lap(hassault_native::profile::Phase::Hud);
                 let Some(renderer) = &mut self.renderer else {
                     return;
                 };
-                renderer.set_text_layer(chat_image);
                 renderer.set_bodies(&verts);
                 renderer.set_volumes(&self.volume_verts);
                 renderer.set_smoke_channels(&self.nades.tunnels());
@@ -5008,6 +5006,9 @@ impl ApplicationHandler for App {
                 }
                 renderer.set_viewmodel(&self.weapon_verts);
                 renderer.set_overlay(&self.overlay);
+                if let Some(upload) = self.text_kit.take_upload() {
+                    renderer.upload_hud_atlas(&upload);
+                }
                 self.laps.lap(hassault_native::profile::Phase::Upload);
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already

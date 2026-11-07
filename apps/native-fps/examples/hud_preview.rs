@@ -18,7 +18,10 @@
 //!
 //! Takes an optional output path, an optional `WIDTHxHEIGHT`, an optional
 //! `summary` to draw the post-match card over the top, and an optional `defuse`
-//! or `ctf` to draw the objective layer. The size is a parameter
+//! or `ctf` to draw the objective layer. `menu`, `menu-video` or
+//! `menu-crosshair` draws that page of the pause menu over the HUD, `drill`
+//! the aim drill's score card, `chat` a chat with the prompt open (emoji, CJK,
+//! Arabic) and `console` the console with a scrollback. The size is a parameter
 //! because the whole layout is derived from one unit, `u = height / 360`, so a
 //! HUD that reads at 1080p can still be a smear at 720p and overlapping at 4K —
 //! and the only way to know is to render all three.
@@ -41,6 +44,7 @@
 
 use hassault_native::damage::Placed;
 use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow, UtilitySlot, UtilityView};
+use hassault_native::overlay_gpu::OverlayGpu;
 use hassault_native::protocol::{BuyItem, ModeBomb, ModeFlag, ModeInfo, ModeSelf, ModeShared};
 use hassault_native::protocol::{HeardRow, ModeSite, NoiseEvent, PlayerRow};
 use hassault_native::radar::{self, Blip, Edge, Mark, RadarSettings, Run};
@@ -442,6 +446,61 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
     let show_radar = flags.iter().any(|a| a == "radar");
     let north_up = flags.iter().any(|a| a == "northup");
     let radar_map = radar_fixture(north_up);
+    // Real fonts, loaded here and now (`HUDFONT=bitmap` for the old 5×7 font).
+    let kit = hassault_native::text_kit::TextKit::blocking_from_env();
+    kit.begin_frame();
+    let preview_flags: Vec<String> = std::env::args().skip(3).collect();
+    let show_chat = preview_flags.iter().any(|a| a == "chat");
+    let mut chat = hassault_native::chat::ChatState::new();
+    chat.receive("1", "p1", "constcorrectness", 0, false, "gg wp \u{1F389}");
+    chat.receive("2", "p2", "horrible", 1, true, "rotate B, smoke mid \u{1F4A8}\u{1F525}");
+    chat.receive("3", "p3", "\u{3055}\u{304F}\u{3089}", 1, false, "日本語もOK \u{1F44D}\u{1F3FD}");
+    chat.receive("4", "p4", "\u{0644}\u{064A}\u{0644}\u{0649}", 0, false, "مرحبا 👋");
+    chat.receive(
+        "5",
+        "p1",
+        "Zoë",
+        0,
+        false,
+        "a longer line, to see it wrap where the panel ends rather than run off under the radar or across the kill feed",
+    );
+    chat.open_prompt(hassault_native::chat::ChatChannel::Team);
+    chat.type_text("typing an emoji \u{1F600}");
+
+    let show_console = preview_flags.iter().any(|a| a == "console");
+    let mut console = hassault_native::console::Console::default();
+    let cvars = hassault_native::console::ClientCvars::default();
+    if show_console {
+        use hassault_native::console::Tone;
+        console.open = true;
+        for i in 0..60 {
+            console.push(format!("net.graph {} -> snapshot {} applied in {:.2} ms", i % 4, 1200 + i, 0.3 + i as f32 * 0.01), Tone::Output);
+        }
+        console.push("] bot_add ct", Tone::Echo);
+        console.push("bot Zoë joined CT", Tone::Note);
+        console.push("unknown command: bot_kick_al", Tone::Error);
+        console.insert("say naïve café");
+    }
+    let console_lines = console.visible();
+    let console_quick = console.quick_actions(&cvars);
+    let console_view = show_console.then(|| hassault_native::hud::ConsoleView {
+        lines: &console_lines,
+        input: &console.input,
+        cursor: console.cursor,
+        scroll: 0,
+        suggestions: &[],
+        suggestion: 0,
+        detail: None,
+        registry_loaded: true,
+        filter: console.filter.label(),
+        hidden: console.hidden_count(),
+        room: "4f2a9c",
+        map: "de_dust2",
+        rtt: Some(38.0),
+        cheats: Some(false),
+        quick: &console_quick,
+    });
+
     let view = HudView {
         hud_scale: 1.0,
         team: 0,
@@ -479,10 +538,11 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         radar: show_radar.then(|| radar_map.view()),
         utility: Some(&utility),
         flash: 0.0,
-        console: None,
-        chat: None,
+        console: console_view,
+        chat: show_chat.then_some(&chat),
         voice_transmitting: false,
         voice_speakers: &[],
+        text: Some(&kit),
     };
 
     // Spatial noise bearings for the crosshair NoiseRing overlay
@@ -498,6 +558,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         // scrim's job is visible.
         let mut screen = SummaryScreen::default();
         screen.open();
+        // The card's figures arrive over a fifth of a second; wait them in, so
+        // the render is the card as it is read and not its first frame.
+        std::thread::sleep(std::time::Duration::from_millis(400));
         // Hovered, because the button at rest is an outline and the filled state
         // is the one that has to be checked against the card behind it.
         let (bx, by, bw, bh) = hassault_native::summary::button_rect(width as f32, height as f32);
@@ -522,6 +585,54 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
             },
             width as f32,
             height as f32,
+            Some(&kit),
+            &mut verts,
+        );
+    }
+    let flags: Vec<String> = std::env::args().skip(3).collect();
+    if let Some(page) = flags.iter().find_map(|a| match a.as_str() {
+        "menu" => Some(hassault_native::menu::Page::Root),
+        "menu-video" => Some(hassault_native::menu::Page::Video),
+        "menu-crosshair" => Some(hassault_native::menu::Page::Crosshair),
+        _ => None,
+    }) {
+        let mut menu = hassault_native::menu::Menu::default();
+        menu.toggle();
+        menu.page = page;
+        menu.build(
+            &hassault_native::settings::Settings::default(),
+            &hassault_native::controls::Controls::default(),
+            true,
+            width as f32,
+            height as f32,
+            Some(&kit),
+            &mut verts,
+        );
+    }
+    if flags.iter().any(|a| a == "drill") {
+        use hassault_native::training::{DrillPhase, DrillStatus};
+        hassault_native::drill_hud::build(
+            &DrillStatus {
+                id: "flick".into(),
+                name: "Flick".into(),
+                phase: DrillPhase::Done,
+                remaining: 0.0,
+                stats: Some(hassault_native::drills::DrillStats {
+                    shots: 64,
+                    hit_shots: 41,
+                    accuracy: 41.0 / 64.0,
+                    hits: 47,
+                    head_hits: 12,
+                    headshot_share: 12.0 / 47.0,
+                    kills: 30,
+                    kills_per_minute: 30.0,
+                    median_ttk: Some(0.412),
+                    median_reaction: Some(0.268),
+                }),
+            },
+            width as f32,
+            height as f32,
+            Some(&kit),
             &mut verts,
         );
     }
@@ -530,66 +641,6 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         verts.len(),
         verts.len() as f32 / 65536.0 * 100.0
     );
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("overlay"),
-        // The same concatenation the client makes: WGSL has no include, and
-        // `shader.wgsl` calls into `lighting.wgsl.inc`. Compiling the overlay
-        // half alone fails on an identifier the HUD never uses.
-        source: wgpu::ShaderSource::Wgsl(
-            concat!(
-                include_str!("../src/lighting.wgsl.inc"),
-                include_str!("../src/shader.wgsl")
-            )
-            .into(),
-        ),
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("overlay"),
-        bind_group_layouts: &[],
-        ..Default::default()
-    });
-    const ATTRS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
-    // The client's own overlay pipeline, restated: alpha blended, no depth, no
-    // culling. Restated rather than borrowed because `Renderer` owns a surface
-    // and there is no window here — and it is nine lines, all of which the
-    // shader validation test already covers for correctness.
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("overlay"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_overlay"),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<OverlayVertex>() as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &ATTRS,
-            })],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_overlay"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: FORMAT,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        // No culling, like the client's: a HUD is flat quads and a quad has no
-        // outside, so culling would silently drop whichever half of the layout
-        // happened to be wound the other way.
-        primitive: wgpu::PrimitiveState {
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
 
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("hud-target"),
@@ -627,18 +678,17 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
             [1.0, y1],
             [-1.0, y1],
         ] {
-            backdrop.push(OverlayVertex { position, color });
+            backdrop.push(OverlayVertex::solid(position, color));
         }
     }
 
     let all: Vec<OverlayVertex> = backdrop.iter().copied().chain(verts).collect();
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("overlay"),
-        size: (all.len() * std::mem::size_of::<OverlayVertex>()) as wgpu::BufferAddress,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&all));
+    // The client's own overlay pipeline and atlas, not a restatement of them.
+    let mut overlay = OverlayGpu::new(&device, FORMAT, all.len().max(1));
+    overlay.set_vertices(&queue, &all);
+    if let Some(upload) = kit.take_upload() {
+        overlay.upload_atlas(&queue, &upload);
+    }
 
     let mut encoder = device.create_command_encoder(&Default::default());
     {
@@ -658,9 +708,7 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&pipeline);
-        pass.set_vertex_buffer(0, buffer.slice(..));
-        pass.draw(0..all.len() as u32, 0..1);
+        overlay.draw(&mut pass);
     }
 
     // Readback. `bytes_per_row` must be a multiple of 256, which is why the

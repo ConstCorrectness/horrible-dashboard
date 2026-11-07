@@ -29,21 +29,48 @@
 //!   `shot` effect. A marker driven by the fire key lights up on shots that hit
 //!   a wall — which is the same class of lie as drawing footstep positions.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+
+use crate::anim::Rolling;
 
 use crate::console::{LogLine, Tone};
 use crate::damage::Placed;
 use crate::protocol::{Fx, HitMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
 use crate::radar::{self, colors as rc, Blip, BlipKind, Edge, Mark, MarkKind, RadarSettings, Run};
 use crate::settings::Crosshair;
+use crate::text_kit::{Face, TextKit};
+use crate::ui_theme as theme;
 
-/// One overlay vertex: a position already in clip space, and a colour with an
-/// alpha the blend state actually uses.
+/// One overlay vertex: a position already in clip space, a colour with an
+/// alpha the blend state actually uses, and where it samples the glyph atlas.
+///
+/// `uv` doubles as the vertex's mode, so shapes and text share one buffer and
+/// one draw: a negative `u` is a flat colour (`SOLID_UV`), anything else is a
+/// texel in `text_kit`'s atlas, multiplied by the colour.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct OverlayVertex {
     pub position: [f32; 2],
     pub color: [f32; 4],
+    pub uv: [f32; 2],
+}
+
+/// The `uv` of a vertex that is just its colour.
+pub const SOLID_UV: [f32; 2] = [-1.0, -1.0];
+
+/// The `u` of a grid-fill vertex; its `v` is the cell size in pixels.
+pub const GRID_MODE: f32 = -2.0;
+
+impl OverlayVertex {
+    /// A flat-coloured vertex — every shape the painter draws.
+    pub const fn solid(position: [f32; 2], color: [f32; 4]) -> OverlayVertex {
+        OverlayVertex {
+            position,
+            color,
+            uv: SOLID_UV,
+        }
+    }
 }
 
 /// How long a kill note stays up. The browser client's `KILL_TTL_MS`.
@@ -154,13 +181,13 @@ pub struct KillBadgeData {
 // is the same colour in both — a health pack red in one client and orange in the
 // other looks deliberate from either side alone, which is the rule
 // `tests/browser_parity.rs` already pins for item tints.
-const WHITE: [f32; 4] = [0.92, 0.94, 0.96, 0.9];
-const DIM: [f32; 4] = [0.72, 0.76, 0.80, 0.65];
+const WHITE: [f32; 4] = theme::TEXT;
+const DIM: [f32; 4] = theme::TEXT_DIM;
 /// One step below `DIM`: structure that must be visible without being read —
 /// bar troughs, spent magazine ticks, grid rules.
-const FAINT: [f32; 4] = [0.52, 0.57, 0.62, 0.40];
-const AMBER: [f32; 4] = [0.94, 0.83, 0.54, 0.95];
-const RED: [f32; 4] = [0.97, 0.32, 0.28, 0.95];
+const FAINT: [f32; 4] = theme::FAINT;
+const AMBER: [f32; 4] = theme::AMBER;
+const RED: [f32; 4] = theme::RED;
 /// The crosshair's outline.
 ///
 /// Near-black rather than black, and not fully opaque: an outline is meant to
@@ -168,10 +195,10 @@ const RED: [f32; 4] = [0.97, 0.32, 0.28, 0.95];
 /// alpha is multiplied by the crosshair's own, so turning the crosshair down
 /// turns the whole thing down together.
 const OUTLINE: [f32; 4] = [0.02, 0.02, 0.03, 0.85];
-const GREEN: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
+const GREEN: [f32; 4] = theme::GREEN;
 /// `0x6f97c4` — the browser's armour colour, unchanged.
 const ARMOUR: [f32; 4] = [0.4353, 0.5922, 0.7686, 0.95];
-const PANEL: [f32; 4] = [0.05, 0.07, 0.09, 0.45];
+const PANEL: [f32; 4] = theme::panel(0.45);
 /// The trough a bar is drawn in. Darker than `PANEL` so a bar reads as
 /// *inset* rather than as another panel stacked on the first.
 const TROUGH: [f32; 4] = [0.06, 0.08, 0.10, 0.72];
@@ -487,6 +514,8 @@ pub struct HudView<'a> {
     pub chat: Option<&'a crate::chat::ChatState>,
     pub voice_transmitting: bool,
     pub voice_speakers: &'a [String],
+    /// Real fonts for the HUD's text, or `None` for the 5×7 bitmap font.
+    pub text: Option<&'a TextKit>,
 }
 
 /// The HUD's own memory: things that persist across frames because they are
@@ -516,6 +545,15 @@ pub struct Hud {
     /// happened.
     ghost_hp: f32,
     ghost_hold: f32,
+    /// The health and armour figures, rolled to each new value rather than
+    /// jumped (`anim::Rolling`). The bars stay instant: a bar is read for where
+    /// it *is*, the number for how much it changed.
+    hp_roll: Rolling,
+    armour_roll: Rolling,
+    /// The money readout, rolled. In a `Cell` because the purse is fed from the
+    /// view while painting (`&self`), and `None` until first seen so the first
+    /// value is shown as it is, not counted up from zero.
+    money_roll: Cell<Option<Rolling>>,
     /// Where damage came from, as world bearings in radians, newest last, with
     /// the age of each. Drawn as arcs around the crosshair.
     damage_from: VecDeque<(f32, f32)>,
@@ -566,6 +604,9 @@ impl Default for Hud {
             last_hp: f32::MAX,
             ghost_hp: 0.0,
             ghost_hold: 0.0,
+            hp_roll: Rolling::new(0.0),
+            armour_roll: Rolling::new(0.0),
+            money_roll: Cell::new(None),
             damage_from: VecDeque::new(),
             heard_noises: VecDeque::new(),
             noise_rings: true,
@@ -795,6 +836,14 @@ impl Hud {
             self.ghost_hp = you.hp;
             self.ghost_hold = 0.0;
         }
+        // Seeded on first sight, rolled on every change after.
+        if self.last_hp == f32::MAX {
+            self.hp_roll.snap(you.hp.max(0.0));
+            self.armour_roll.snap(you.armour.max(0.0));
+        } else {
+            self.hp_roll.set(you.hp.max(0.0));
+            self.armour_roll.set(you.armour.max(0.0));
+        }
         self.last_hp = you.hp;
         // Dying ends the streak, and this is the moment it ends — not the
         // respawn several seconds later, which is where a player would see a
@@ -919,6 +968,12 @@ impl Hud {
         self.fell_age = advance(self.fell_age, dt);
         self.flash_assist_age = advance(self.flash_assist_age, dt);
         self.kill_age = advance(self.kill_age, dt);
+        self.hp_roll.tick(dt);
+        self.armour_roll.tick(dt);
+        if let Some(mut money) = self.money_roll.get() {
+            money.tick(dt);
+            self.money_roll.set(Some(money));
+        }
         // The trail eases toward the live value, holding first so a single hit
         // is legible before it starts draining. Only ever downward: `on_self`
         // owns moving it up, and does so by snapping.
@@ -970,11 +1025,12 @@ impl Hud {
     /// This frame's triangles.
     pub fn build(&self, view: &HudView, out: &mut Vec<OverlayVertex>) {
         out.clear();
-        let mut p = Painter {
+        let mut p = Painter::with_text(
             out,
-            width: view.width.max(1) as f32,
-            height: view.height.max(1) as f32,
-        };
+            view.width.max(1) as f32,
+            view.height.max(1) as f32,
+            view.text,
+        );
         // One unit of HUD, in pixels. Derived from the window rather than fixed,
         // so the same layout is legible on a 720p laptop and on a 4K monitor
         // instead of shrinking to a smear on the second.
@@ -1044,7 +1100,7 @@ impl Hud {
             // at must not be the one underneath. Found by rendering the two
             // together, which no test would have done.
             paint_buy_menu(&mut p, view, u);
-            paint_purse(&mut p, view, u);
+            paint_purse(&mut p, view, u, &self.money_roll);
         }
 
         // Underwater, under everything else the HUD draws: it is a property of
@@ -1075,13 +1131,16 @@ impl Hud {
             p.rect(0.0, 0.0, w, h, [1.0, 1.0, 1.0, a]);
         }
 
-        // Over absolutely everything, in or out of a world.
-        if let Some(console) = &view.console {
-            paint_console(&mut p, console, u);
-        }
-
+        // Chat under the console, and — because the menu and the summary card
+        // are appended after this whole HUD — under those too. One vertex
+        // stream, so this order is the only rule there is.
         if let Some(chat) = view.chat {
             paint_chat(&mut p, chat, u);
+        }
+
+        // Over absolutely everything, in or out of a world.
+        if let Some(console) = &view.console {
+            paint_console(&mut p, console);
         }
         paint_voice_indicator(&mut p, view.voice_transmitting, view.voice_speakers, u);
     }
@@ -1094,8 +1153,11 @@ impl Hud {
 
         for note in &self.feed {
             // The last second is a fade rather than a disappearance, so a line
-            // does not vanish mid-read.
-            let fade = ((KILL_TTL - note.age) / 1.0).clamp(0.0, 1.0);
+            // does not vanish mid-read — and the first fifth of a second is an
+            // entrance from the right, the browser's slide-in.
+            let (enter, slide) = crate::anim::entrance(note.age, 0);
+            let fade = ((KILL_TTL - note.age) / 1.0).clamp(0.0, 1.0) * enter;
+            let shift = slide * u * 12.0;
             if !note.killer_name.is_empty() {
                 let k_color = {
                     let mut c = team_color(note.killer_team);
@@ -1118,10 +1180,10 @@ impl Hud {
                     "molotov" => "MOLOTOV",
                     _ => note.weapon.as_str(),
                 };
-                let k_w = text_width(&note.killer_name, scale);
-                let v_w = text_width(&note.victim_name, scale);
+                let k_w = p.name_width(&note.killer_name, scale);
+                let v_w = p.name_width(&note.victim_name, scale);
                 let pad = scale * 0.8;
-                let wep_w = text_width(wep_label, scale * 0.85) + pad * 2.0;
+                let wep_w = p.text_width(wep_label, scale * 0.85) + pad * 2.0;
 
                 let has_assister = !note.assister_name.is_empty();
                 let a_label = if has_assister {
@@ -1130,7 +1192,7 @@ impl Hud {
                     String::new()
                 };
                 let a_w = if has_assister {
-                    text_width(&a_label, scale * 0.85) + gap * 0.5
+                    p.name_width(&a_label, scale * 0.85) + gap * 0.5
                 } else {
                     0.0
                 };
@@ -1149,8 +1211,10 @@ impl Hud {
                 if note.nutshot { total_w += icon_size + gap; }
                 if note.head { total_w += icon_size + gap; }
 
-                let x = p.width - total_w - u * 6.0;
-                let h = 7.0 * scale + scale * 2.0;
+                let x = p.width - total_w - u * 6.0 + shift;
+                // A little deeper than the cap box: names are set in a face
+                // with descenders.
+                let h = 7.0 * scale + scale * 2.6;
                 let cut = scale * 1.6;
 
                 p.rect(
@@ -1187,13 +1251,13 @@ impl Hud {
                 }
 
                 let mut cur_x = x;
-                p.text(cur_x, y, scale, k_color, &note.killer_name);
+                p.name(cur_x, y, scale, k_color, &note.killer_name);
                 cur_x += k_w;
 
                 if has_assister {
                     cur_x += gap * 0.5;
-                    p.text(cur_x, y, scale * 0.85, a_color, &a_label);
-                    cur_x += text_width(&a_label, scale * 0.85);
+                    p.name(cur_x, y, scale * 0.85, a_color, &a_label);
+                    cur_x += p.name_width(&a_label, scale * 0.85);
                 }
                 cur_x += gap;
 
@@ -1229,14 +1293,14 @@ impl Hud {
                     cur_x += icon_size + gap;
                 }
 
-                p.text(cur_x, y, scale, v_color, &note.victim_name);
+                p.name(cur_x, y, scale, v_color, &note.victim_name);
                 y += 7.0 * scale + u * 3.0;
             } else {
                 let mut color = if note.mine { AMBER } else { DIM };
                 color[3] *= fade;
-                let w = text_width(&note.text, scale);
-                let x = p.width - w - u * 6.0;
-                let h = 7.0 * scale + scale * 2.0;
+                let w = p.text_width(&note.text, scale);
+                let x = p.width - w - u * 6.0 + shift;
+                let h = 7.0 * scale + scale * 2.6;
                 let cut = scale * 1.6;
                 p.rect(
                     x - scale + cut,
@@ -1283,17 +1347,25 @@ impl Hud {
         // last bar cleared the line while the panel drawn around it did not, so
         // the two overlapped by exactly the padding: invisible at 720p, obvious
         // at 1440p, and a function of the window size either way.
-        let padding = u * 1.8;
-        let floor = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - padding;
         // The armour row is **always** reserved, like the reload line opposite.
         // Taking the space only when there is armour means the health bar — the
         // one thing on this HUD read continuously — moves the instant a vest
         // runs out, which is the instant it is being watched hardest.
-        let armour_y = floor - armour_h;
-        let bar_y = armour_y - u * 0.6 - bar_h;
-        let number_y = bar_y - u * 1.6 - 7.0 * big;
+        let HealthRows {
+            armour_y,
+            bar_y,
+            number_y,
+        } = health_rows(p.height, u);
+        debug_assert_eq!((armour_h, bar_h, big), (u * 1.2, u * 2.6, u * 2.4));
 
-        let hp = you.hp.max(0.0).round() as i32;
+        // The rolled figure — unless it is not tracking this value at all (a
+        // view built without `on_self`, as the tests and the preview do), in
+        // which case the true one.
+        let hp = if (self.hp_roll.target() - you.hp.max(0.0)).abs() < 0.5 {
+            self.hp_roll.shown()
+        } else {
+            you.hp.max(0.0).round() as i64
+        };
         let low = you.hp <= 30.0;
         let color = if low { RED } else { WHITE };
         let label = hp.to_string();
@@ -1315,9 +1387,9 @@ impl Hud {
         draw_medical_cross(p, left, cross_y, cross_size, if low { RED } else { [0.85, 0.22, 0.22, 0.95] });
 
         let num_x = left + cross_size + u * 2.0;
-        p.text(num_x, number_y, big, color, &label);
+        p.num(num_x, number_y, big, color, &label);
         p.text(
-            num_x + text_width(&label, big) + small * 1.5,
+            num_x + p.num_width(&label, big) + small * 1.5,
             number_y + 7.0 * big - 7.0 * small,
             small,
             DIM,
@@ -1325,7 +1397,7 @@ impl Hud {
         );
 
         if low {
-            let crit_w = text_width("CRITICAL", small);
+            let crit_w = p.text_width("CRITICAL", small);
             p.text(
                 left + bar_w - crit_w,
                 number_y + 7.0 * big - 7.0 * small,
@@ -1531,7 +1603,20 @@ impl Hud {
         // Above the crosshair, where the kill notice is *below* it: the two can
         // land in the same second — planting while somebody shoots you off the
         // site is the ordinary case — and stacked they would overprint.
-        p.center_text(p.height * 0.30, scale, colour, &self.objective_notice);
+        let y = p.height * 0.30;
+        let (enter, slide) = crate::anim::entrance(self.objective_age, 0);
+        let w = p.text_width(&self.objective_notice, scale) + u * 10.0;
+        let x = (p.width - w) * 0.5 - slide * u * 6.0;
+        p.banner(
+            x,
+            y - u * 1.6,
+            w,
+            7.0 * scale + u * 3.2,
+            u * 2.4,
+            theme::faded(theme::panel(0.78), fade * enter),
+            Some(theme::faded(colour, enter)),
+        );
+        p.center_text(y, scale, theme::faded(colour, enter), &self.objective_notice);
     }
 
     fn paint_center(&self, p: &mut Painter, view: &HudView, u: f32) {
@@ -1539,9 +1624,20 @@ impl Hud {
         let scale = u * 0.9;
         if !you.alive {
             let big = u * 1.6;
-            p.center_text(p.height * 0.42, big, RED, "DEAD");
+            let y = p.height * 0.42;
             let line = format!("RESPAWN IN {:.1}", you.respawn_in.max(0.0));
-            p.center_text(p.height * 0.42 + 9.0 * big, scale, DIM, &line);
+            let w = p.text_width(&line, scale).max(p.text_width("DEAD", big)) + u * 12.0;
+            p.banner(
+                (p.width - w) * 0.5,
+                y - u * 2.0,
+                w,
+                9.0 * big + 7.0 * scale + u * 3.6,
+                u * 3.0,
+                [0.24, 0.04, 0.04, 0.55],
+                Some(RED),
+            );
+            p.center_text(y, big, RED, "DEAD");
+            p.center_num(y + 9.0 * big, scale, DIM, &line);
             return;
         }
         if self.fell_age < 1.2 && self.fell > 0.0 {
@@ -1760,7 +1856,7 @@ fn draw_nutshot_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
 }
 
 fn draw_weapon_badge(p: &mut Painter, x: f32, y: f32, name: &str, scale: f32, fade: f32) -> f32 {
-    let w = text_width(name, scale * 0.85);
+    let w = p.text_width(name, scale * 0.85);
     let pad = scale * 0.8;
     let badge_w = w + pad * 2.0;
     let badge_h = 7.0 * scale * 0.85 + scale * 1.5;
@@ -1917,7 +2013,7 @@ fn draw_badge_banner(
     s: f32,
 ) {
     let font_scale = s * 1.0;
-    let title_w = text_width(title, font_scale);
+    let title_w = p.text_width(title, font_scale);
     let pad_x = s * 8.0;
     let pad_y = s * 3.5;
     let banner_w = (title_w + pad_x * 2.0).max(s * 70.0);
@@ -1959,7 +2055,7 @@ fn draw_badge_banner(
     if !victim.is_empty() {
         let sub_scale = s * 0.75;
         let v_line = format!("[ {victim} ]");
-        let vw = text_width(&v_line, sub_scale);
+        let vw = p.text_width(&v_line, sub_scale);
         p.rect(cx - vw * 0.5 - s * 3.0, next_y - s * 1.0, vw + s * 6.0, 7.0 * sub_scale + s * 2.0, [0.05, 0.07, 0.10, 0.80 * fade]);
         p.center_text(next_y, sub_scale, [0.85, 0.88, 0.92, 0.90 * fade], &v_line);
         next_y += 7.0 * sub_scale + s * 3.5;
@@ -1968,7 +2064,7 @@ fn draw_badge_banner(
     // Streak milestone pill if active
     if !streak.is_empty() {
         let st_scale = s * 0.75;
-        let st_w = text_width(streak, st_scale);
+        let st_w = p.text_width(streak, st_scale);
         p.rect(cx - st_w * 0.5 - s * 4.0, next_y - s * 1.0, st_w + s * 8.0, 7.0 * st_scale + s * 2.0, [0.22, 0.15, 0.04, 0.88 * fade]);
         p.rect(cx - st_w * 0.5 - s * 4.0, next_y - s * 1.0, st_w + s * 8.0, 1.2 * s, [1.0, 0.80, 0.25, 0.95 * fade]);
         p.center_text(next_y, st_scale, [1.0, 0.88, 0.45, 0.95 * fade], streak);
@@ -2031,13 +2127,189 @@ fn draw_shield_icon(p: &mut Painter, x: f32, y: f32, size: f32, color: [f32; 4])
     p.line(x + half_w, y + h * 0.2, x + half_w, y + h * 0.8, 1.2, inner_col);
 }
 
+/// Where the health panel's rows sit. Its own function because chat stacks
+/// above the panel and has to know where that is without drawing it — two
+/// copies of this arithmetic would be a chat that slides under the health
+/// figure the first time either is touched (it did: chat inherited an anchor
+/// from before the panel grew, and covered the HP number).
+struct HealthRows {
+    armour_y: f32,
+    bar_y: f32,
+    number_y: f32,
+}
+
+fn health_rows(height: f32, u: f32) -> HealthRows {
+    let padding = u * 1.8;
+    let floor = height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - padding;
+    let armour_y = floor - u * 1.2;
+    let bar_y = armour_y - u * 0.6 - u * 2.6;
+    let number_y = bar_y - u * 1.6 - 7.0 * (u * 2.4);
+    HealthRows {
+        armour_y,
+        bar_y,
+        number_y,
+    }
+}
+
+/// The health panel's top edge (`paint_health` draws it `u * 1.2` above the
+/// figure), less a gap: the floor chat sits on.
+fn chat_floor(height: f32, u: f32) -> f32 {
+    health_rows(height, u).number_y - u * 1.2 - u * 2.0
+}
+
+/// A colour from 0–255 sRGB bytes, the way chat's colours were written when
+/// they were a CPU-composited image.
+const fn rgb8(r: u8, g: u8, b: u8) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+}
+
+/// Chat in real fonts: laid out by cosmic-text (wrapping, bidi, fallback to the
+/// emoji font) and drawn through the HUD's atlas, in the overlay's own vertex
+/// stream. It used to be a separately rasterized texture drawn after the HUD,
+/// which covered whatever it overlapped and so had to hide whenever a menu was
+/// up; drawn here, it is simply under the menu.
+///
+/// `None` when the fonts are not drawing, having drawn nothing — every line is
+/// laid out before the first is painted, so a fallback never draws twice.
+fn paint_chat_rich(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) -> Option<()> {
+    use crate::chat::{ChatChannel, CHAT_TTL};
+    // Lines shown with the prompt closed, and with it open; how long a line
+    // takes to fade once its time is up.
+    const CLOSED_LINES: usize = 8;
+    const OPEN_LINES: usize = 14;
+    const FADE_SECS: f32 = 1.5;
+    const TAG_TEAM: [f32; 4] = rgb8(74, 222, 128);
+    const TAG_ALL: [f32; 4] = rgb8(148, 163, 184);
+    const PUNCT: [f32; 4] = rgb8(200, 205, 215);
+    const BODY: [f32; 4] = rgb8(240, 243, 248);
+    const NOTICE: [f32; 4] = rgb8(248, 113, 113);
+    const PREEDIT: [f32; 4] = rgb8(180, 200, 255);
+
+    struct Line {
+        para: crate::text_kit::Paragraph,
+        colors: Vec<[f32; 4]>,
+        alpha: f32,
+        backdrop: [f32; 4],
+        /// A bar on the leading edge: the prompt's channel, a notice's red.
+        accent: Option<[f32; 4]>,
+        caret: Option<usize>,
+    }
+
+    // About 15px type at 1080p — cap height `7 * scale` in the body face.
+    let scale = (u * 0.53).max(1.3);
+    let pad = (u * 1.5).round().max(3.0);
+    let width = (p.width * 0.42).clamp(360.0, 980.0).round();
+    let text_w = width - pad * 2.0;
+
+    // Oldest at the top, newest just above the prompt.
+    let limit = if chat.open { OPEN_LINES } else { CLOSED_LINES };
+    let recent: Vec<_> = chat.messages.iter().take(limit).collect();
+    let mut lines: Vec<Line> = Vec::new();
+    for m in recent.into_iter().rev() {
+        let alpha = if chat.open {
+            1.0
+        } else {
+            ((CHAT_TTL - m.age) / FADE_SECS).clamp(0.0, 1.0)
+        };
+        if alpha <= 0.0 {
+            continue;
+        }
+        if m.sender_name.is_empty() {
+            // A local notice ("Not sent: slow down").
+            lines.push(Line {
+                para: p.paragraph(Face::Body, &[&m.text], scale, text_w)?,
+                colors: vec![NOTICE],
+                alpha,
+                backdrop: theme::panel(0.6),
+                accent: Some(theme::RED),
+                caret: None,
+            });
+            continue;
+        }
+        let (tag, tag_col) = if m.is_team {
+            ("TEAM  ", TAG_TEAM)
+        } else {
+            ("ALL  ", TAG_ALL)
+        };
+        // U+2068/U+2069 isolate the name and the message, so a right-to-left
+        // name cannot reorder the tag or the text around it — `<bdi>` in the
+        // browser's chat.
+        let name = format!("\u{2068}{}\u{2069}", m.sender_name);
+        let text = format!("\u{2068}{}\u{2069}", m.text);
+        lines.push(Line {
+            para: p.paragraph(Face::Body, &[tag, &name, ": ", &text], scale, text_w)?,
+            colors: vec![tag_col, theme::with_alpha(team_color(m.team), 1.0), PUNCT, BODY],
+            alpha,
+            backdrop: theme::panel(0.5),
+            accent: None,
+            caret: None,
+        });
+    }
+    if chat.open {
+        let (tag, col) = match chat.channel {
+            ChatChannel::All => ("ALL  ", TAG_ALL),
+            ChatChannel::Team => ("TEAM  ", TAG_TEAM),
+        };
+        let cursor = chat.cursor.min(chat.input.len());
+        let (before, after) = chat.input.split_at(cursor);
+        // Text still being composed by an input method sits at the caret, dimmer.
+        let para = p.paragraph(
+            Face::Body,
+            &[tag, before, &chat.preedit, after],
+            scale,
+            text_w,
+        )?;
+        lines.push(Line {
+            para,
+            colors: vec![col, [1.0; 4], PREEDIT, [1.0; 4]],
+            alpha: 1.0,
+            backdrop: theme::panel(0.85),
+            accent: Some(col),
+            caret: Some(tag.len() + before.len() + chat.preedit.len()),
+        });
+    }
+
+    // Anchored bottom-left, on top of the health panel.
+    let x = (u * 6.0 - pad).max(0.0);
+    let bottom = chat_floor(p.height, u);
+    let total: f32 = lines.iter().map(|l| l.para.height + pad * 0.5).sum();
+    let mut top = (bottom - total).max(0.0);
+    for line in &lines {
+        let h = line.para.height + pad * 0.5;
+        let w = (line.para.width + pad * 2.0).min(width);
+        p.rect(x, top, w, h, theme::faded(line.backdrop, line.alpha));
+        if let Some(accent) = line.accent {
+            p.rect(x, top, (u * 0.4).max(2.0), h, theme::faded(accent, line.alpha));
+        }
+        let y0 = top + pad * 0.25;
+        p.draw_paragraph(&line.para, x + pad, y0, &line.colors, line.alpha);
+        if let Some(byte) = line.caret {
+            let (cx, cy) = line.para.caret(byte);
+            p.rect(
+                x + pad + cx,
+                y0 + cy + line.para.line_h * 0.15,
+                (u * 0.5).max(2.0),
+                line.para.line_h * 0.7,
+                [1.0, 1.0, 1.0, 0.9],
+            );
+        }
+        top += h;
+    }
+    Some(())
+}
+
+/// Chat: in real fonts when they are drawing, otherwise the bitmap fallback
+/// below — the first frames, and `HUDFONT=bitmap`.
 fn paint_chat(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) {
+    if p.kit.is_some() && paint_chat_rich(p, chat, u).is_some() {
+        return;
+    }
     let scale = u * 0.72;
     let line_h = 7.0 * scale + u * 2.0;
     let left = u * 6.0;
     let max_lines = 8;
-    // Anchor above the health panel
-    let bottom_y = p.height - u * 14.0;
+    // Anchor above the health panel: `y` is the top of the lowest line.
+    let bottom_y = chat_floor(p.height, u) - line_h;
     let mut y = bottom_y;
 
     if chat.open {
@@ -2050,18 +2322,18 @@ fn paint_chat(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) {
             crate::chat::ChatChannel::Team => [0.35, 0.85, 1.0, 0.95],
         };
         let prompt_str = format!("{}{}", prefix, &chat.input);
-        let prompt_w = (text_width(&prompt_str, scale) + scale * 4.0).max(u * 50.0);
+        let prompt_w = (p.text_width(&prompt_str, scale) + scale * 4.0).max(u * 50.0);
         let box_h = line_h + scale * 1.5;
 
         // Background box for active prompt
         p.panel(left - scale, y - scale * 0.5, prompt_w, box_h, scale * 1.2, Some(prefix_color));
-        let pre_w = text_width(prefix, scale);
+        let pre_w = p.text_width(prefix, scale);
         p.text(left, y, scale, prefix_color, prefix);
         p.text(left + pre_w, y, scale, WHITE, &chat.input);
 
         // Blinking cursor
         let cur_bound = chat.cursor.min(chat.input.len());
-        let cur_offset = text_width(&chat.input[..cur_bound], scale);
+        let cur_offset = p.text_width(&chat.input[..cur_bound], scale);
         let cursor_x = left + pre_w + cur_offset + 1.0;
         p.rect(cursor_x, y, 2.0, 7.0 * scale, [1.0, 1.0, 1.0, 0.9]);
 
@@ -2097,9 +2369,9 @@ fn paint_chat(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) {
         text_col[3] *= fade;
 
         let name_str = format!("{}: ", &msg.sender_name);
-        let pre_w = text_width(prefix, scale);
-        let name_w = text_width(&name_str, scale);
-        let text_w = text_width(&msg.text, scale);
+        let pre_w = p.text_width(prefix, scale);
+        let name_w = p.text_width(&name_str, scale);
+        let text_w = p.text_width(&msg.text, scale);
         let total_w = pre_w + name_w + text_w;
 
         // Panel backdrop for readability
@@ -2127,7 +2399,7 @@ fn paint_voice_indicator(p: &mut Painter, transmitting: bool, speakers: &[String
 
     if transmitting {
         let label = "[VOICE COMMS - TRANSMITTING (TEAM)]";
-        let w = text_width(label, scale) + u * 12.0;
+        let w = p.text_width(label, scale) + u * 12.0;
         let h = 7.0 * scale + scale * 2.5;
         let accent = [0.35, 0.95, 0.45, 0.95];
 
@@ -2135,7 +2407,7 @@ fn paint_voice_indicator(p: &mut Painter, transmitting: bool, speakers: &[String
         p.text(x + scale * 1.5, y + scale * 0.2, scale, accent, label);
 
         // Animated bouncing equalizer wave bars
-        let bar_x = x + text_width(label, scale) + scale * 3.0;
+        let bar_x = x + p.text_width(label, scale) + scale * 3.0;
         let bar_w = scale * 0.8;
         let base_h = 7.0 * scale;
         for i in 0..4 {
@@ -2154,14 +2426,14 @@ fn paint_voice_indicator(p: &mut Painter, transmitting: bool, speakers: &[String
 
     for speaker in speakers {
         let label = format!("[RADIO] {speaker}");
-        let w = text_width(&label, scale) + u * 8.0;
+        let w = p.text_width(&label, scale) + u * 8.0;
         let h = 7.0 * scale + scale * 2.5;
         let accent = [0.45, 0.85, 1.0, 0.95];
 
         p.panel(x, y, w, h, scale * 1.5, Some(accent));
         p.text(x + scale * 1.5, y + scale * 0.2, scale, accent, &label);
 
-        let tick_x = x + text_width(&label, scale) + scale * 2.5;
+        let tick_x = x + p.text_width(&label, scale) + scale * 2.5;
         for i in 0..3 {
             let h_tick = (i + 1) as f32 * scale * 0.8;
             p.rect(
@@ -2198,7 +2470,7 @@ fn paint_damage_numbers(p: &mut Painter, numbers: &[Placed], u: f32) {
             ([0.92, 0.94, 0.96, 1.0], u * 0.95)
         };
         let text = n.amount.to_string();
-        let w = text_width(&text, scale);
+        let w = p.num_width(&text, scale);
         let x = n.x - w * 0.5;
         if x + w < 0.0 || x > p.width || n.y + 7.0 * scale < 0.0 || n.y > p.height {
             continue;
@@ -2207,15 +2479,15 @@ fn paint_damage_numbers(p: &mut Painter, numbers: &[Placed], u: f32) {
         // head and 90 from a sniper to the chest are the same number and very
         // different shots.
         if n.head {
-            p.text(
-                x - text_width("+", scale) - scale,
+            p.num(
+                x - p.num_width("+", scale) - scale,
                 n.y,
                 scale,
                 [color[0], color[1], color[2], color[3] * n.fade],
                 "+",
             );
         }
-        p.text(
+        p.num(
             x,
             n.y,
             scale,
@@ -2279,7 +2551,7 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     } else {
         format!(" / {reserve}")
     };
-    let tail_w = text_width(&tail, small);
+    let tail_w = p.num_width(&tail, small);
     let ammo_color = if you.mag > 0 && you.ammo == 0 {
         RED
     } else {
@@ -2290,8 +2562,8 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     // block reads as one object the way the health side does.
     let name = view.weapon_name.to_uppercase();
     let sil_w = u * 15.0;
-    let content = (text_width(&name, small) + sil_w + u * 3.0)
-        .max(text_width(&ammo, big) + tail_w + sil_w + u * 3.0)
+    let content = (p.text_width(&name, small) + sil_w + u * 3.0)
+        .max(p.num_width(&ammo, big) + tail_w + sil_w + u * 3.0)
         .max(u * 38.0);
     let panel_left = right - content - u * 1.5;
     p.panel(
@@ -2319,9 +2591,9 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     );
 
     p.text_right(right, name_y, small, DIM, &name);
-    p.text_right(right - tail_w, ammo_y, big, ammo_color, &ammo);
+    p.num_right(right - tail_w, ammo_y, big, ammo_color, &ammo);
     if !tail.is_empty() {
-        p.text_right(right, ammo_y + 7.0 * big - 7.0 * small, small, DIM, &tail);
+        p.num_right(right, ammo_y + 7.0 * big - 7.0 * small, small, DIM, &tail);
     }
 
     // The magazine, one tick per round. A count says how many are left; the
@@ -2427,16 +2699,26 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
 /// and nothing failed — it just came out unreadable in a real match.
 ///
 /// Returns `(cell_w, cell_h, pad, label_scale, count_scale)`.
+#[cfg(test)]
 fn tray_metrics(labels: &[String], u: f32) -> (f32, f32, f32, f32, f32) {
+    tray_metrics_with(None, labels, u)
+}
+
+/// `tray_metrics`, measured in the faces the painter will draw with.
+fn tray_metrics_with(
+    kit: Option<&TextKit>,
+    labels: &[String],
+    u: f32,
+) -> (f32, f32, f32, f32, f32) {
     let label_scale = u * 0.7;
     let count_scale = u * 1.1;
     let pad = u * 1.2;
     let widest = labels
         .iter()
-        .map(|label| text_width(label, label_scale))
+        .map(|label| measure(kit, Face::Display, label, label_scale))
         .fold(0.0f32, f32::max)
         // A two-digit count, so a cell does not resize as a pouch fills.
-        .max(text_width("00", count_scale));
+        .max(measure(kit, Face::Display, "00", count_scale));
     let cell_w = widest + pad * 2.0;
     let cell_h = pad * 2.0 + 7.0 * label_scale + u * 0.8 + 7.0 * count_scale;
     (cell_w, cell_h, pad, label_scale, count_scale)
@@ -2455,7 +2737,7 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
         .enumerate()
         .map(|(i, slot)| format!("{} {}", i + 6, abbreviate(&slot.kind)))
         .collect();
-    let (cell_w, cell_h, pad, label_scale, count_scale) = tray_metrics(&labels, u);
+    let (cell_w, cell_h, pad, label_scale, count_scale) = tray_metrics_with(p.kit, &labels, u);
     let gap = u * 1.2;
     let right = p.width - u * 6.0;
 
@@ -2498,7 +2780,7 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
             if empty { color } else { DIM },
             &labels[i],
         );
-        p.text(
+        p.num(
             x + pad,
             y + pad + 7.0 * label_scale + u * 0.8,
             count_scale,
@@ -2551,7 +2833,7 @@ fn paint_movement(p: &mut Painter, view: &HudView, u: f32) {
     } else {
         DIM
     };
-    p.text(u * 6.0, y, scale, color, &line);
+    p.num(u * 6.0, y, scale, color, &line);
 }
 
 /// The roster, held open.
@@ -2622,7 +2904,7 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
         p.rect(hx + u * 3.5, hy + u * 2.5, u * 12.0, 1.5, our_col);
         p.text(hx + u * 4.8, hy + u * 3.0, scale * 0.82, our_col, if view.team == 0 { "CLA" } else { "RVSF" });
         let mine_str = mine.to_string();
-        p.text(hx + u * 18.0, hy + u * 2.0, scale * 1.55, our_col, &mine_str);
+        p.num(hx + u * 18.0, hy + u * 2.0, scale * 1.55, our_col, &mine_str);
         for i in 0..5 {
             p.rect(hx + u * 3.5 + i as f32 * u * 4.8, hy + u * 8.5, u * 3.8, u * 2.0, our_col);
         }
@@ -2634,7 +2916,7 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
         p.rect(hx + hw - u * 15.5, hy + u * 2.5, u * 12.0, 1.5, their_col);
         p.text(hx + hw - u * 14.2, hy + u * 3.0, scale * 0.82, their_col, if enemy_team == 0 { "CLA" } else { "RVSF" });
         let th_str = theirs.to_string();
-        p.text_right(hx + hw - u * 18.0, hy + u * 2.0, scale * 1.55, their_col, &th_str);
+        p.num_right(hx + hw - u * 18.0, hy + u * 2.0, scale * 1.55, their_col, &th_str);
         for i in 0..5 {
             p.rect(hx + hw - u * 3.5 - (i + 1) as f32 * u * 4.8 + u * 1.0, hy + u * 8.5, u * 3.8, u * 2.0, their_col);
         }
@@ -2656,7 +2938,7 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
                 } else {
                     format!("BOMB {:.1}", state.bomb.fuse_in.max(0.0))
                 };
-                p.center_text(py + u * 1.5, scale * 0.82, bomb_col, &bomb_text);
+                p.center_num(py + u * 1.5, scale * 0.82, bomb_col, &bomb_text);
             } else if state.bomb.state == "defused" {
                 p.rect(px, py, pw, 1.5, [0.22, 0.74, 0.98, 0.95]);
                 p.center_text(py + u * 1.5, scale * 0.82, [0.22, 0.74, 0.98, 0.95], "BOMB DEFUSED");
@@ -2674,7 +2956,7 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
                     [0.90, 0.92, 0.96, 0.90]
                 };
                 p.rect(px, py, pw, 1.2, clock_col);
-                p.center_text(py + u * 1.5, scale * 0.82, clock_col, &clock_text);
+                p.center_num(py + u * 1.5, scale * 0.82, clock_col, &clock_text);
             }
         }
 
@@ -2772,7 +3054,7 @@ fn paint_action_progress(p: &mut Painter, view: &HudView, u: f32) {
     let total_time = if mine.progress_kind == "defuse" { 5.0 } else { 3.0 };
     let time_left = (total_time * (1.0 - frac)).max(0.0);
     let time_str = format!("{time_left:.1}S");
-    p.center_text(cy - u * 2.0, u * 0.95, [0.95, 0.97, 1.0, 0.98], &time_str);
+    p.center_num(cy - u * 2.0, u * 0.95, [0.95, 0.97, 1.0, 0.98], &time_str);
 
     // Action tag beneath the ring
     let label = format!("[ {} ]", mine.progress_kind.to_uppercase());
@@ -2819,8 +3101,9 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
     // glance at while the game carries on behind it; this is a panel you are
     // pressing number keys at, and the crosshair and damage numbers showing
     // through a price list is a menu you can misread.
-    p.rect(x, y, width, height, [0.04, 0.05, 0.07, 0.97]);
-    p.rect(x, y, width, u * 0.4, [0.42, 0.72, 0.98, 0.9]);
+    p.rect(x, y, width, height, theme::panel(0.97));
+    p.grid(x, y, width, height, u * theme::GRID_CELL_UNITS, theme::GRID);
+    p.rect(x, y, width, u * 0.4, theme::ACCENT);
 
     let pad = u * 3.0;
     let title = open.map(|g| format!("BUY / {}", g.label)).unwrap_or_else(|| "BUY".to_string());
@@ -2834,13 +3117,7 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
     } else {
         [0.82, 0.72, 0.48, 0.8]
     };
-    p.text(
-        x + width - pad - text_width(&purse, scale),
-        y + u * 2.0,
-        scale,
-        purse_colour,
-        &purse,
-    );
+    p.num_right(x + width - pad, y + u * 2.0, scale, purse_colour, &purse);
     let notice = crate::buy_menu::notice(mine.can_buy, mine.buy_in, mine.in_buy_zone);
     let status = if notice.is_empty() {
         format!("CLOSES IN {}S", mine.buy_in.ceil() as i32)
@@ -2872,16 +3149,10 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
         for (i, g) in groups.iter().enumerate() {
             let row = y + header + line * i as f32;
             let colour = [0.92, 0.94, 0.98, 0.95];
-            p.text(x + pad, row, scale, colour, &format!("{}", i + 1));
+            p.num(x + pad, row, scale, AMBER, &format!("{}", i + 1));
             p.text(x + pad + u * 7.0, row, scale, colour, g.label);
             let count = format!("{}", g.rows.len());
-            p.text(
-                x + width - pad - text_width(&count, scale),
-                row,
-                scale,
-                [0.62, 0.66, 0.70, 0.75],
-                &count,
-            );
+            p.num_right(x + width - pad, row, scale, [0.62, 0.66, 0.70, 0.75], &count);
         }
         return;
     };
@@ -2905,7 +3176,7 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
         };
         // 1-based within the group, matching the key you press. The key column
         // is a fixed gutter wide: at `u * 4` the number and the name touched.
-        p.text(x + pad, row, scale, colour, &format!("{}", position + 1));
+        p.num(x + pad, row, scale, theme::faded(AMBER, colour[3]), &format!("{}", position + 1));
         p.text(x + pad + u * 7.0, row, scale, colour, &item.name);
         let price = if refundable {
             format!("SELL +${}", item.price)
@@ -2914,39 +3185,38 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
         } else {
             format!("${}", item.price)
         };
-        p.text(
-            x + width - pad - text_width(&price, scale),
-            row,
-            scale,
-            colour,
-            &price,
-        );
+        p.num_right(x + width - pad, row, scale, colour, &price);
     }
 }
 
 /// The purse, on screen in any mode with money, menu or no menu: a kill reward
 /// is something you watch arrive. Stacked on top of the health block, whose
 /// layout (`paint_health`, upwards from the movement line) this repeats.
-fn paint_purse(p: &mut Painter, view: &HudView, u: f32) {
+fn paint_purse(p: &mut Painter, view: &HudView, u: f32, roll: &Cell<Option<Rolling>>) {
     let Some(mine) = view.mode_self else { return };
     let Some(info) = view.mode else { return };
     if info.catalog.is_empty() {
         return;
     }
     let scale = u * 1.1;
-    let text = format!("${}", mine.money);
+    // Rolled to each new balance — a kill reward counts up, a purchase counts
+    // down — and shown as it is the first time it is seen.
+    let mut rolled = roll.get().unwrap_or_else(|| Rolling::new(mine.money as f32));
+    rolled.set(mine.money as f32);
+    roll.set(Some(rolled));
+    let text = format!("${}", rolled.shown());
     let floor = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - u * 1.8;
     let health_top = floor - u * 1.2 - u * 0.6 - u * 2.6 - u * 1.6 - 7.0 * (u * 2.4) - u * 1.8;
     let x = u * 6.0;
     let y = health_top - 9.0 * scale - u * 1.5;
-    p.rect(x - u, y - u, text_width(&text, scale) + u * 2.6, 9.0 * scale, [0.04, 0.05, 0.07, 0.72]);
+    p.rect(x - u, y - u, p.num_width(&text, scale) + u * 2.6, 9.0 * scale, theme::panel(0.72));
     p.rect(x - u, y - u, u * 0.5, 9.0 * scale, [0.42, 0.72, 0.98, 0.9]);
     let colour = if mine.can_buy {
         [0.62, 0.88, 0.68, 0.95]
     } else {
         [0.92, 0.94, 0.98, 0.9]
     };
-    p.text(x, y, scale, colour, &text);
+    p.num(x, y, scale, colour, &text);
 }
 
 /// How long an objective banner stays up.
@@ -3030,10 +3300,12 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
     // Opaque enough to read against a bright map. The scrim is the panel, not a
     // full-screen dim: the game keeps happening while this is held open, and
     // hiding all of it would make the key a liability.
-    p.rect(x, y, width, height, [0.04, 0.05, 0.07, 0.86]);
+    p.rect(x, y, width, height, theme::panel(0.86));
+    // The faint technical grid, under everything else on the board.
+    p.grid(x, y, width, height, u * theme::GRID_CELL_UNITS, theme::GRID);
     // A rule under the header, and a 2px accent along the top edge — the same
     // structural motif the rest of this HUD uses instead of a border all round.
-    p.rect(x, y, width, u * 0.4, [0.42, 0.72, 0.98, 0.9]);
+    p.rect(x, y, width, u * 0.4, theme::ACCENT);
     p.rect(
         x,
         y + header - u * 0.3,
@@ -3051,7 +3323,11 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
         "SCOREBOARD".to_string()
     };
     p.text(x + pad, head_y, scale, WHITE, &title);
-    p.text_right(right, head_y, scale * 0.8, DIM, "K   D");
+    // Column heads over the columns they head, measured in the figures' face.
+    let deaths_w = p.num_width("00", scale);
+    let kills_right = right - deaths_w - p.num_width("   ", scale);
+    p.text_right(right, head_y, scale * 0.8, DIM, "D");
+    p.text_right(kills_right, head_y, scale * 0.8, DIM, "K");
 
     // Compressed so the whole cascade fits in `BOARD_CASCADE` however many
     // players there are.
@@ -3103,7 +3379,9 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
         } else {
             WHITE
         });
-        let mut name = row.name.to_uppercase();
+        // As the player wrote it, in the body face, which has every script —
+        // the bitmap font had capitals only and dropped the rest.
+        let mut name = row.name.clone();
         if row.bot {
             name.push_str(" (BOT)");
         }
@@ -3120,15 +3398,15 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
                 [0.30, 0.55, 0.90, 0.9]
             }),
         );
-        p.text(x + pad + slide, ry, scale, text_color, &name);
-        p.text_right(
-            right - text_width("   D", scale * 0.8) - slide,
+        p.name(x + pad + slide, ry, scale, text_color, &name);
+        p.num_right(
+            kills_right - slide,
             ry,
             scale,
             text_color,
             &row.kills.to_string(),
         );
-        p.text_right(
+        p.num_right(
             right - slide,
             ry,
             scale,
@@ -3260,7 +3538,7 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
 
     let max_w = lines
         .iter()
-        .map(|l| text_width(l, scale))
+        .map(|l| p.num_width(l, scale))
         .fold(0.0f32, f32::max);
     let box_w = max_w + pad * 2.0;
     let box_h = line_h * lines.len() as f32 + pad * 1.5;
@@ -3272,7 +3550,7 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
 
     for (i, line) in lines.iter().enumerate() {
         let ly = y + pad * 0.75 + line_h * i as f32;
-        p.text(x + pad, ly, scale, if i == 0 { AMBER } else { DIM }, line);
+        p.num(x + pad, ly, scale, if i == 0 { AMBER } else { DIM }, line);
     }
 }
 
@@ -3310,6 +3588,16 @@ pub struct ConsoleHits {
     pub panel: Hit,
 }
 
+/// The console's size unit: the HUD's `height / 360`, rounded, and **not**
+/// scaled by the HUD-scale setting. That setting is for the in-match overlay;
+/// the console is a tool laid over everything, like the pause menu. It is also
+/// the fix for a real bug: the painter used to be handed the *scaled* unit while
+/// the mouse derived an unscaled one here, so at any HUD scale but 1.0 a click
+/// landed on the chip beside the one drawn.
+pub fn console_unit(height: f32) -> f32 {
+    (height / 360.0).round().max(2.0)
+}
+
 /// The console's geometry, from the window size alone.
 ///
 /// Takes the three pieces it actually measures rather than a whole
@@ -3324,7 +3612,20 @@ pub fn console_hits(
     width: f32,
     height: f32,
 ) -> ConsoleHits {
-    let u = (height / 360.0).round().max(2.0);
+    console_hits_with(None, quick, suggestions, has_detail, width, height)
+}
+
+/// `console_hits`, measured in the faces the painter will draw with — which the
+/// mouse has to agree with, or a click lands on the chip beside the one drawn.
+pub fn console_hits_with(
+    kit: Option<&TextKit>,
+    quick: &[crate::console::QuickAction],
+    suggestions: &[String],
+    has_detail: bool,
+    width: f32,
+    height: f32,
+) -> ConsoleHits {
+    let u = console_unit(height);
     let scale = u * 0.7;
     let line_h = scale * 9.0;
     let panel_h = (height * 0.55).max(line_h * 9.0);
@@ -3338,7 +3639,7 @@ pub fn console_hits(
             Some(state) => format!("{} {} {}", action.key, action.label, state),
             None => format!("{} {}", action.key, action.label),
         };
-        let w = text_width(&text, scale * 0.85) + scale * 3.0;
+        let w = measure(kit, Face::Display, &text, scale * 0.85) + scale * 3.0;
         if x + w > width - pad {
             break;
         }
@@ -3363,7 +3664,7 @@ pub fn console_hits(
     if !suggestions.is_empty() {
         let mut x = pad;
         for (i, item) in suggestions.iter().enumerate() {
-            let w = text_width(item, scale * 0.85) + scale * 2.0;
+            let w = measure(kit, Face::Mono, item, scale * 0.85) + scale * 2.0;
             rows.push((
                 i,
                 Hit {
@@ -3405,12 +3706,14 @@ pub fn console_hits(
 /// whatever is left between them. That is what keeps the caret and the newest
 /// line adjacent at any window size, which is the one property a console cannot
 /// trade away.
-fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
+fn paint_console(p: &mut Painter, c: &ConsoleView) {
+    let u = console_unit(p.height);
     let scale = u * 0.7;
     let line_h = scale * 9.0;
     let width = p.width;
     // The one layout, shared with the mouse. See `console_hits`.
-    let hits = console_hits(
+    let hits = console_hits_with(
+        p.kit,
         c.quick,
         c.suggestions,
         c.detail.is_some(),
@@ -3423,10 +3726,11 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     // Near-opaque, unlike every other panel here. The rest of the HUD sits over
     // a world you still need to see; a console does not, and a transparent one
     // makes a map's own geometry read as text.
-    p.rect(0.0, 0.0, width, height, [0.03, 0.04, 0.06, 0.93]);
+    p.rect(0.0, 0.0, width, height, theme::panel(0.93));
+    p.grid(0.0, 0.0, width, height, u * theme::GRID_CELL_UNITS, theme::GRID);
     // The one accent line, at the bottom edge — a border all the way round is
     // the "generic panel" look this UI deliberately avoids.
-    p.rect(0.0, height, width, u * 0.5, [0.29, 0.42, 0.94, 0.9]);
+    p.rect(0.0, height, width, u * 0.5, theme::ACCENT);
 
     // ---- the header ---------------------------------------------------------
     //
@@ -3461,7 +3765,7 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         // Never been told. See `ConsoleView::cheats`.
         None => "CHEATS ?",
     });
-    let status_x = pad + text_width(title, scale * 0.9) + scale * 4.0;
+    let status_x = pad + p.text_width(title, scale * 0.9) + scale * 4.0;
     p.text(status_x, pad, scale * 0.9, DIM, &status);
 
     p.text_right(
@@ -3491,7 +3795,7 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         let fill = if !action.honored {
             [0.35, 0.12, 0.12, 0.5]
         } else if action.active {
-            [0.29, 0.42, 0.94, 0.45]
+            theme::with_alpha(theme::ACCENT, 0.45)
         } else {
             [0.12, 0.14, 0.20, 0.7]
         };
@@ -3532,17 +3836,19 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     // so the newest line is always adjacent to the caret.
     let input_y = height - pad - line_h;
     let prompt = format!("] {}", c.input);
-    p.text(pad, input_y, scale, AMBER, &prompt);
-    // A block caret, positioned by measuring the text to its left — the only way
-    // to place it that stays correct at any scale, since the font is fixed-width
-    // in *units* and not in pixels.
-    let caret_x = pad + text_width(&format!("] {}", &c.input[..c.cursor]), scale) + scale;
+    p.num(pad, input_y, scale, AMBER, &prompt);
+    // A block caret one cell wide, positioned by measuring the text to its left
+    // in the face it is drawn in. The bitmap font's width leaves off the
+    // spacing column after the last glyph, so it gets that column back; a real
+    // font's run already includes the trailing space's advance.
+    let gap = if p.kit.is_some() { 0.0 } else { scale };
+    let caret_x = pad + p.num_width(&format!("] {}", &c.input[..c.cursor]), scale) + gap;
     p.rect(
         caret_x,
         input_y,
-        scale,
+        p.num_width("M", scale).max(scale),
         scale * 7.0,
-        [0.94, 0.83, 0.54, 0.55],
+        theme::with_alpha(theme::AMBER, 0.55),
     );
 
     let mut y = input_y - line_h;
@@ -3552,7 +3858,7 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     // glyphs with no room for either, so it is spelled out once for the selected
     // one — which is the half that was being read anyway.
     if let Some(detail) = c.detail {
-        p.text(pad, y, scale * 0.8, [0.55, 0.62, 0.75, 1.0], detail);
+        p.num(pad, y, scale * 0.8, [0.55, 0.62, 0.75, 1.0], detail);
         y -= line_h * 0.9;
     }
 
@@ -3561,9 +3867,9 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         for (i, rect) in &hits.suggestions {
             let selected = *i == c.suggestion;
             if selected {
-                p.rect(rect.x, rect.y, rect.w, rect.h, [0.29, 0.42, 0.94, 0.35]);
+                p.rect(rect.x, rect.y, rect.w, rect.h, theme::with_alpha(theme::ACCENT, 0.35));
             }
-            p.text(
+            p.num(
                 rect.x + scale,
                 y,
                 scale * 0.85,
@@ -3583,7 +3889,10 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     // `c.lines` is already filtered, so `scroll` counts visible lines and a tab
     // change cannot leave the view parked in the middle of nothing.
     let top = pad + line_h * 2.0;
-    let stamp_column = text_width("00:00", scale * 0.8) + scale * 1.5;
+    let stamp_column = p.num_width("00:00", scale * 0.8) + scale * 3.0;
+    // The stamp is smaller than the line; drop it so the two share a baseline
+    // instead of a top edge.
+    let stamp_drop = 7.0 * (scale - scale * 0.8);
     for entry in c.lines.iter().rev().skip(c.scroll) {
         if y < top {
             break;
@@ -3597,8 +3906,11 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         // The stamp is always dim, whatever the line is: it is not part of the
         // message, and a red timestamp on an error line reads as the time itself
         // being the problem.
-        p.text(pad, y, scale * 0.8, [0.35, 0.40, 0.50, 1.0], &entry.stamp());
-        p.text(pad + stamp_column, y, scale, color, &entry.text);
+        // Monospace, the way a terminal is: columns in tabular output line up,
+        // and a glyph is six vertices rather than the bitmap font's hundred —
+        // a full scrollback used to overrun the overlay's vertex cap.
+        p.num(pad, y + stamp_drop, scale * 0.8, [0.35, 0.40, 0.50, 1.0], &entry.stamp());
+        p.num(pad + stamp_column, y, scale, color, &entry.text);
         y -= line_h;
     }
 
@@ -3742,7 +4054,7 @@ fn paint_radar(p: &mut Painter, r: &RadarView, u: f32) {
         }
         let label = site.id.to_lowercase();
         let scale = (u * 0.75).max(1.0);
-        let w = text_width(&label, scale);
+        let w = p.text_width(&label, scale);
         p.text(cx + c.0 - w / 2.0, cy + c.1 - scale * 3.5, scale, rc::SITE_EDGE, &label);
     }
 
@@ -3756,7 +4068,7 @@ fn paint_radar(p: &mut Painter, r: &RadarView, u: f32) {
                 }
                 p.ring(cx + c.0, cy + c.1, br - u * 0.45, br, radar::faded(rc::ENEMY, 0.85 * m.life));
                 let scale = (br / 4.0).max(0.6);
-                let w = text_width("?", scale);
+                let w = p.text_width("?", scale);
                 p.text(cx + c.0 - w / 2.0, cy + c.1 - scale * 3.5, scale, radar::faded(rc::ENEMY, m.life), "?");
             }
             MarkKind::Heard => {
@@ -3872,6 +4184,10 @@ pub struct Painter<'a> {
     out: &'a mut Vec<OverlayVertex>,
     width: f32,
     height: f32,
+    /// Real fonts, when there are any. `None` (or a kit still loading) draws
+    /// the 5×7 bitmap font — which is also what every vertex-counting test
+    /// here sees, so those stay exact.
+    kit: Option<&'a TextKit>,
 }
 
 impl<'a> Painter<'a> {
@@ -3881,7 +4197,27 @@ impl<'a> Painter<'a> {
     /// normalized coordinates would stretch with the window, and a second
     /// painter would be a second set of rounding rules for the same font.
     pub fn new(out: &'a mut Vec<OverlayVertex>, width: f32, height: f32) -> Painter<'a> {
-        Painter { out, width, height }
+        Painter {
+            out,
+            width,
+            height,
+            kit: None,
+        }
+    }
+
+    /// `new`, with real fonts when `kit` has them.
+    pub fn with_text(
+        out: &'a mut Vec<OverlayVertex>,
+        width: f32,
+        height: f32,
+        kit: Option<&'a TextKit>,
+    ) -> Painter<'a> {
+        Painter {
+            out,
+            width,
+            height,
+            kit: kit.filter(|k| k.fonts_ready()),
+        }
     }
 
     pub fn width(&self) -> f32 {
@@ -3906,7 +4242,7 @@ impl<'a> Painter<'a> {
         let c = self.ndc(x + w, y + h);
         let d = self.ndc(x, y + h);
         for position in [a, b, c, a, c, d] {
-            self.out.push(OverlayVertex { position, color });
+            self.out.push(OverlayVertex::solid(position, color));
         }
     }
 
@@ -3960,6 +4296,13 @@ impl<'a> Painter<'a> {
                 (x + w - cut, y + h),
                 PANEL,
             );
+            // Only the cut edges are feathered. The others meet the body's
+            // rects, and a fringe there would double the alpha along a seam.
+            let k = std::f32::consts::FRAC_1_SQRT_2;
+            self.fringe((x, y + cut), (x + cut, y), (-k, -k), PANEL);
+            self.fringe((x + w - cut, y), (x + w, y + cut), (k, -k), PANEL);
+            self.fringe((x + cut, y + h), (x, y + h - cut), (-k, k), PANEL);
+            self.fringe((x + w, y + h - cut), (x + w - cut, y + h), (k, k), PANEL);
         }
         if let Some(accent) = accent {
             // Inset by the chamfer so the edge stops where the shape does,
@@ -3983,8 +4326,13 @@ impl<'a> Painter<'a> {
         let c = self.ndc(x1 - px, y1 - py);
         let d = self.ndc(x0 - px, y0 - py);
         for position in [a, b, c, a, c, d] {
-            self.out.push(OverlayVertex { position, color });
+            self.out.push(OverlayVertex::solid(position, color));
         }
+        // Feathered along both long sides: a diagonal hard edge is the one that
+        // stair-steps.
+        let (nx, ny) = (-dy / len, dx / len);
+        self.fringe((x0 + px, y0 + py), (x1 + px, y1 + py), (nx, ny), color);
+        self.fringe((x1 - px, y1 - py), (x0 - px, y0 - py), (-nx, -ny), color);
     }
 
     /// A wash around the four edges of the screen.
@@ -4121,10 +4469,11 @@ impl<'a> Painter<'a> {
                 self.ndc(cx + a0.cos() * outer, cy + a0.sin() * outer),
             ];
             for idx in [0usize, 1, 2, 0, 2, 3] {
-                self.out.push(OverlayVertex {
-                    position: quad[idx],
-                    color,
-                });
+                self.out.push(OverlayVertex::solid(quad[idx], color));
+            }
+            self.arc_fringe(cx, cy, outer, a0, a1, 1.0, color);
+            if inner >= 1.0 {
+                self.arc_fringe(cx, cy, inner, a0, a1, -1.0, color);
             }
         }
     }
@@ -4160,10 +4509,11 @@ impl<'a> Painter<'a> {
                 self.ndc(cx + a0.cos() * outer, cy + a0.sin() * outer),
             ];
             for idx in [0usize, 1, 2, 0, 2, 3] {
-                self.out.push(OverlayVertex {
-                    position: quad[idx],
-                    color,
-                });
+                self.out.push(OverlayVertex::solid(quad[idx], color));
+            }
+            self.arc_fringe(cx, cy, outer, a0, a1, 1.0, color);
+            if inner >= 1.0 {
+                self.arc_fringe(cx, cy, inner, a0, a1, -1.0, color);
             }
         }
     }
@@ -4186,7 +4536,10 @@ impl<'a> Painter<'a> {
                 self.ndc(cx + a0.cos() * r, cy + a0.sin() * r),
                 self.ndc(cx + a1.cos() * r, cy + a1.sin() * r),
             ] {
-                self.out.push(OverlayVertex { position, color });
+                self.out.push(OverlayVertex::solid(position, color));
+            }
+            if r >= 1.5 {
+                self.arc_fringe(cx, cy, r, a0, a1, 1.0, color);
             }
         }
     }
@@ -4196,11 +4549,163 @@ impl<'a> Painter<'a> {
     /// axis-aligned nor a segment.
     fn tri(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: [f32; 4]) {
         for (x, y) in [a, b, c] {
+            self.out.push(OverlayVertex::solid(self.ndc(x, y), color));
+        }
+    }
+
+    /// `tri` with every edge feathered — for a triangle that stands alone (an
+    /// arrow), not one of several that tile a shape: adjacent feathered edges
+    /// would double the alpha along their shared seam.
+    pub fn tri_aa(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: [f32; 4]) {
+        self.tri(a, b, c, color);
+        for (p, q, opposite) in [(a, b, c), (b, c, a), (c, a, b)] {
+            let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len <= 0.0 {
+                continue;
+            }
+            let (mut nx, mut ny) = (-dy / len, dx / len);
+            // Away from the third corner, whichever way the triangle is wound.
+            if (opposite.0 - p.0) * nx + (opposite.1 - p.1) * ny > 0.0 {
+                nx = -nx;
+                ny = -ny;
+            }
+            self.fringe(p, q, (nx, ny), color);
+        }
+    }
+
+    /// A one-pixel alpha ramp outside the edge `a`→`b`, along the unit normal
+    /// `n`: opaque at the edge, clear a pixel out. Not real anti-aliasing and it
+    /// does not need to be; it needs a slanted edge to stop being a staircase.
+    fn fringe(&mut self, a: (f32, f32), b: (f32, f32), n: (f32, f32), color: [f32; 4]) {
+        if color[3] <= 0.0 {
+            return;
+        }
+        const W: f32 = 1.0;
+        let clear = [color[0], color[1], color[2], 0.0];
+        let pa = self.ndc(a.0, a.1);
+        let pb = self.ndc(b.0, b.1);
+        let pa2 = self.ndc(a.0 + n.0 * W, a.1 + n.1 * W);
+        let pb2 = self.ndc(b.0 + n.0 * W, b.1 + n.1 * W);
+        for (position, c) in [
+            (pa, color),
+            (pb, color),
+            (pb2, clear),
+            (pa, color),
+            (pb2, clear),
+            (pa2, clear),
+        ] {
+            self.out.push(OverlayVertex::solid(position, c));
+        }
+    }
+
+    /// `fringe` along a circle's arc between two angles: outward (`dir` 1) or
+    /// inward (`dir` -1). Radial normals, so neighbouring segments' ramps meet.
+    #[allow(clippy::too_many_arguments)]
+    fn arc_fringe(&mut self, cx: f32, cy: f32, r: f32, a0: f32, a1: f32, dir: f32, color: [f32; 4]) {
+        if color[3] <= 0.0 {
+            return;
+        }
+        let r2 = (r + dir).max(0.0);
+        let clear = [color[0], color[1], color[2], 0.0];
+        let p0 = self.ndc(cx + a0.cos() * r, cy + a0.sin() * r);
+        let p1 = self.ndc(cx + a1.cos() * r, cy + a1.sin() * r);
+        let q1 = self.ndc(cx + a1.cos() * r2, cy + a1.sin() * r2);
+        let q0 = self.ndc(cx + a0.cos() * r2, cy + a0.sin() * r2);
+        for (position, c) in [
+            (p0, color),
+            (p1, color),
+            (q1, clear),
+            (p0, color),
+            (q1, clear),
+            (q0, clear),
+        ] {
+            self.out.push(OverlayVertex::solid(position, c));
+        }
+    }
+
+    /// A parallelogram slanted by `slant` pixels — the browser's notice shape
+    /// (`clip-path: polygon(s 0, 100% 0, calc(100% - s) 100%, 0 100%)`), with an
+    /// optional 2 px accent top edge. The slanted sides are feathered.
+    #[allow(clippy::too_many_arguments)]
+    pub fn banner(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        slant: f32,
+        fill: [f32; 4],
+        accent: Option<[f32; 4]>,
+    ) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let s = slant.clamp(0.0, w * 0.4);
+        let (tl, tr, br, bl) = ((x + s, y), (x + w, y), (x + w - s, y + h), (x, y + h));
+        self.tri(tl, tr, br, fill);
+        self.tri(tl, br, bl, fill);
+        let len = (s * s + h * h).sqrt().max(1e-3);
+        let (nx, ny) = (-h / len, -s / len);
+        self.fringe(bl, tl, (nx, ny), fill);
+        self.fringe(tr, br, (-nx, -ny), fill);
+        if let Some(accent) = accent {
+            // The top edge, following the slant so it stays on the shape.
+            let t = 2.0f32.min(h);
+            let dx = s * t / h;
+            self.tri(tl, tr, (x + w - dx, y + t), accent);
+            self.tri(tl, (x + w - dx, y + t), (x + s - dx, y + t), accent);
+        }
+    }
+
+    /// The faint technical grid over a rectangle: lines every `cell` pixels,
+    /// computed in the fragment shader so a grid costs one quad.
+    pub fn grid(&mut self, x: f32, y: f32, w: f32, h: f32, cell: f32, color: [f32; 4]) {
+        if w <= 0.0 || h <= 0.0 || color[3] <= 0.0 || cell < 2.0 {
+            return;
+        }
+        let uv = [GRID_MODE, cell];
+        let a = self.ndc(x, y);
+        let b = self.ndc(x + w, y);
+        let c = self.ndc(x + w, y + h);
+        let d = self.ndc(x, y + h);
+        for position in [a, b, c, a, c, d] {
             self.out.push(OverlayVertex {
-                position: self.ndc(x, y),
+                position,
                 color,
+                uv,
             });
         }
+    }
+
+    /// `panel`, with the grid over its body.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grid_panel(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        cut: f32,
+        accent: Option<[f32; 4]>,
+        u: f32,
+    ) {
+        self.panel(x, y, w, h, cut, accent);
+        let cut = cut.min(w * 0.5).min(h * 0.5).max(0.0);
+        self.grid(
+            x + cut,
+            y + 2.0,
+            w - cut * 2.0,
+            h - 2.0,
+            u * theme::GRID_CELL_UNITS,
+            theme::GRID,
+        );
+    }
+
+    /// A technical divider: a hairline with a short heavy tick at its start.
+    pub fn rule(&mut self, x: f32, y: f32, w: f32, color: [f32; 4], tick: [f32; 4]) {
+        self.rect(x, y, w, 1.0, color);
+        self.rect(x, y - 0.5, (w * 0.08).clamp(4.0, 24.0), 2.0, tick);
     }
 
     /// The sniper's sight: a vignette, two hairlines and the magnification.
@@ -4246,11 +4751,88 @@ impl<'a> Painter<'a> {
         } else {
             format!("{magnification:.1}X")
         };
-        let x = (self.width - text_width(&label, scale)) / 2.0;
+        let x = (self.width - self.text_width(&label, scale)) / 2.0;
         self.text(x, cy + sight * 0.72, scale, DIM, &label);
     }
 
+    /// Coloured spans laid out as one wrapped paragraph — see
+    /// `TextKit::paragraph`. `None` without real fonts.
+    pub fn paragraph(
+        &self,
+        face: Face,
+        spans: &[&str],
+        scale: f32,
+        max_w: f32,
+    ) -> Option<crate::text_kit::Paragraph> {
+        self.kit?.paragraph(face, spans, scale, max_w)
+    }
+
+    /// Draw a `paragraph` with its top-left at (`x`, `y`), span `i` in
+    /// `colors[i]`, everything faded by `alpha`.
+    pub fn draw_paragraph(
+        &mut self,
+        para: &crate::text_kit::Paragraph,
+        x: f32,
+        y: f32,
+        colors: &[[f32; 4]],
+        alpha: f32,
+    ) {
+        if let Some(kit) = self.kit {
+            let (w, h) = (self.width, self.height);
+            let ndc = |px: f32, py: f32| [px / w * 2.0 - 1.0, 1.0 - py / h * 2.0];
+            kit.emit_paragraph(para, x, y, colors, alpha, ndc, self.out);
+        }
+    }
+
+    /// A label in the display face, capitals `7 * scale` tall with their top at
+    /// `y`. Real fonts when the painter has them, the 5×7 bitmap otherwise.
     pub fn text(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        self.text_in(Face::Display, x, y, scale, color, s);
+    }
+
+    /// A number, stat or timer: the monospace face, so digits changing in
+    /// place do not shuffle sideways.
+    pub fn num(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        self.text_in(Face::Mono, x, y, scale, color, s);
+    }
+
+    /// A player's name or anything else a person wrote: the body face, which
+    /// has every script the system does.
+    pub fn name(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        self.text_in(Face::Body, x, y, scale, color, s);
+    }
+
+    /// Width of `s` as `text` draws it.
+    pub fn text_width(&self, s: &str, scale: f32) -> f32 {
+        self.width_in(Face::Display, s, scale)
+    }
+
+    /// Width of `s` as `num` draws it.
+    pub fn num_width(&self, s: &str, scale: f32) -> f32 {
+        self.width_in(Face::Mono, s, scale)
+    }
+
+    /// Width of `s` as `name` draws it.
+    pub fn name_width(&self, s: &str, scale: f32) -> f32 {
+        self.width_in(Face::Body, s, scale)
+    }
+
+    pub fn width_in(&self, face: Face, s: &str, scale: f32) -> f32 {
+        measure(self.kit, face, s, scale)
+    }
+
+    pub fn text_in(&mut self, face: Face, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        if let Some(kit) = self.kit {
+            let (w, h) = (self.width, self.height);
+            let ndc = |px: f32, py: f32| [px / w * 2.0 - 1.0, 1.0 - py / h * 2.0];
+            if kit.emit(face, x, y, scale, color, s, ndc, self.out) {
+                return;
+            }
+        }
+        self.bitmap_text(x, y, scale, color, s);
+    }
+
+    fn bitmap_text(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
         let mut cx = x;
         for ch in s.chars() {
             let glyph = glyph(ch);
@@ -4275,12 +4857,23 @@ impl<'a> Painter<'a> {
     }
 
     pub fn text_right(&mut self, right: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
-        self.text(right - text_width(s, scale), y, scale, color, s);
+        self.text(right - self.text_width(s, scale), y, scale, color, s);
     }
 
-    fn center_text(&mut self, y: f32, scale: f32, color: [f32; 4], s: &str) {
-        let x = (self.width - text_width(s, scale)) / 2.0;
+    /// `num`, right-aligned at `right`.
+    pub fn num_right(&mut self, right: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        self.num(right - self.num_width(s, scale), y, scale, color, s);
+    }
+
+    pub fn center_text(&mut self, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        let x = (self.width - self.text_width(s, scale)) / 2.0;
         self.text(x, y, scale, color, s);
+    }
+
+    /// `num`, centred on the screen.
+    pub fn center_num(&mut self, y: f32, scale: f32, color: [f32; 4], s: &str) {
+        let x = (self.width - self.num_width(s, scale)) / 2.0;
+        self.num(x, y, scale, color, s);
     }
 }
 
@@ -4288,6 +4881,13 @@ impl<'a> Painter<'a> {
 /// minus the trailing space so right-aligned text ends where it says it does.
 /// Seconds the thrower's flash readout stays up — the browser's `ASSIST_MS`.
 const FLASH_ASSIST_LIFE: f32 = 2.6;
+
+/// Width of `s` in `face` when `kit` has real fonts, in the bitmap font's
+/// metrics otherwise — the same choice `Painter::text_in` makes when drawing.
+pub fn measure(kit: Option<&TextKit>, face: Face, s: &str, scale: f32) -> f32 {
+    kit.and_then(|k| k.width(face, s, scale))
+        .unwrap_or_else(|| text_width(s, scale))
+}
 
 fn text_width(s: &str, scale: f32) -> f32 {
     let n = s.chars().count() as f32;
@@ -4706,6 +5306,7 @@ mod tests {
             chat: None,
             voice_transmitting: false,
             voice_speakers: &[],
+            text: None,
         }
     }
 
@@ -6119,11 +6720,7 @@ mod tests {
         // middle. Getting this backwards draws a HUD that is upside down but
         // otherwise perfect, which is a screenshot away from looking deliberate.
         let mut out = Vec::new();
-        let p = Painter {
-            out: &mut out,
-            width: 800.0,
-            height: 600.0,
-        };
+        let p = Painter::new(&mut out, 800.0, 600.0);
         assert_eq!(p.ndc(0.0, 0.0), [-1.0, 1.0]);
         assert_eq!(p.ndc(800.0, 600.0), [1.0, -1.0]);
         assert_eq!(p.ndc(400.0, 300.0), [0.0, 0.0]);
