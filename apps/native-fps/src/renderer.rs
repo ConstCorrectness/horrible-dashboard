@@ -91,7 +91,9 @@ pub const MAX_SMOKE_CHANNELS: usize = 16;
 #[repr(C)]
 #[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SmokeUniform {
-    /// x: how many of `channels` are live. The rest pads to 16 bytes.
+    /// x: how many of `channels` are live. y: the water clock, seconds wrapped
+    /// at `WATER_CLOCK_WRAP` — this pass's only per-frame uniform, and the
+    /// water is drawn in it. The rest pads to 16 bytes.
     pub head: [f32; 4],
     /// `[x, height, y, radius]`, render space.
     pub channels: [[f32; 4]; MAX_SMOKE_CHANNELS],
@@ -102,6 +104,12 @@ pub const MODE_CLOUD: f32 = 0.0;
 /// Volume shading: flat colour, for tracers, impacts and blast shells, which are
 /// *thin* and would be mottled to nothing by the cloud noise.
 pub const MODE_FLAT: f32 = 1.0;
+/// Volume shading: the water's surface — waves, fresnel and the map's
+/// environment (`water_surface` in `shader.wgsl`).
+pub const MODE_WATER: f32 = 2.0;
+/// The water clock wraps here: every wave's frequency divides 8 s, so the
+/// surface is the same at 0 and 64 s and the wrap does not show.
+pub const WATER_CLOCK_WRAP: f32 = 64.0;
 
 impl VolumeVertex {
     const ATTRS: [wgpu::VertexAttribute; 4] =
@@ -1109,11 +1117,13 @@ impl Renderer {
 
     /// This frame's bullet tunnels through smoke: `[x, height, y, radius]` in
     /// render space, the radius already scaled by how much of its life is left.
-    /// More than `MAX_SMOKE_CHANNELS` keeps the first ones.
-    pub fn set_smoke_channels(&mut self, channels: &[[f32; 4]]) {
+    /// More than `MAX_SMOKE_CHANNELS` keeps the first ones. `elapsed` is the
+    /// frame clock, for the water's waves.
+    pub fn set_smoke_channels(&mut self, channels: &[[f32; 4]], elapsed: f32) {
         let mut u = SmokeUniform::default();
         let n = channels.len().min(MAX_SMOKE_CHANNELS);
         u.head[0] = n as f32;
+        u.head[1] = elapsed.rem_euclid(WATER_CLOCK_WRAP);
         u.channels[..n].copy_from_slice(&channels[..n]);
         self.queue
             .write_buffer(&self.smoke_buffer, 0, bytemuck::cast_slice(&[u]));

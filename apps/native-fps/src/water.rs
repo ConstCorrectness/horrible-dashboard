@@ -11,9 +11,11 @@
 //! by the rock.
 //!
 //! It goes in the **volume pass** with the smoke and the tracers, because it is
-//! translucent and the body pass is not. `MODE_FLAT` rather than `MODE_CLOUD`:
-//! the cloud shading is interior noise, which on a surface this large would read
-//! as a rendering fault rather than as water.
+//! translucent and the body pass is not, in its own mode (`MODE_WATER`): the
+//! map's colour lit as Lambert, three travelling waves bending the normal, and
+//! the map's environment reflected by fresnel, which also raises the alpha at a
+//! grazing angle (`water_surface` in `shader.wgsl`; `water.ts` in the browser).
+//! The waves move the normal, never the plane.
 //!
 //! Emitted **both ways round** — two quads with opposite winding — because you
 //! spend real time under it. Seen from below the surface is the ceiling of the
@@ -24,7 +26,7 @@
 //! The colour is the **map's own** `watercolor`, not a constant: a mapper who
 //! chose green water meant it.
 
-use crate::renderer::{VolumeVertex, MODE_FLAT};
+use crate::renderer::{VolumeVertex, MODE_WATER};
 use crate::world::World;
 
 /// Fallback tint for a map whose `watercolor` is unset (every channel zero).
@@ -90,7 +92,7 @@ pub fn vertices(world: &World, elapsed: f32, out: &mut Vec<VolumeVertex>) {
                 position: corners[idx],
                 normal,
                 color: colour,
-                mode: MODE_FLAT,
+                mode: MODE_WATER,
             });
         }
     }

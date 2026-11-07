@@ -18,6 +18,8 @@
  */
 import type * as THREE from 'three';
 
+import { installLowTierBreakup, setBreakupDetail } from './surface-breakup';
+
 const twins = new WeakMap<THREE.Material, THREE.Material>();
 const ORIGINAL = 'hassaultPbrMaterial';
 
@@ -43,16 +45,21 @@ function lambertTwin(three: typeof THREE, m: THREE.MeshStandardMaterial): THREE.
       depthWrite: m.depthWrite,
       flatShading: m.flatShading,
     });
+    // The twin is Low: the grime only (`surface-breakup.ts`), as native Low.
+    installLowTierBreakup(three, twin, m);
     twins.set(m, twin);
   }
   return twin;
 }
 
-/** Swap `root`'s standard materials for Lambert twins (`cheap`) or back. */
+/** Swap `root`'s standard materials for Lambert twins (`cheap`) or back, and
+ * set how much of the surface breakup the standard ones draw (`breakup`, the
+ * tier's `TierSpec.breakup`). */
 export function setSurfaceQuality(
   three: typeof THREE,
   root: THREE.Object3D | null,
   cheap: boolean,
+  breakup: boolean,
 ): void {
   if (!root) return;
   root.traverse((child) => {
@@ -63,6 +70,9 @@ export function setSurfaceQuality(
       if (original) {
         mesh.material = original;
         delete mesh.userData[ORIGINAL];
+      }
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        setBreakupDetail(three, m, breakup);
       }
       return;
     }

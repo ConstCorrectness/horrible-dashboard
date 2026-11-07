@@ -85,6 +85,15 @@ export interface TierSpec {
    * generated tiles. A download and some VRAM; meaningless under Lambert, which
    * has no normal or roughness to put them in. */
   photos: boolean;
+  /**
+   * The surface breakup's anti-tiling and macro tint (`surface-breakup.ts`),
+   * High only, as native draws them at High and Ultra (`detail` 2). They move
+   * a colour either way round its mean, so leaving them out hides nothing, and
+   * on an integrated GPU they cost Medium a fifth of its frame rate. The grime
+   * is drawn at every tier: it darkens, and a tier without it would light the
+   * corners a player hides in, so this row cannot turn it off.
+   */
+  breakup: boolean;
 }
 
 /**
@@ -105,6 +114,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     anisotropy: 1,
     lambert: true,
     photos: false,
+    breakup: false,
   },
   medium: {
     pixelRatio: 1.5,
@@ -117,6 +127,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     anisotropy: 4,
     lambert: false,
     photos: true,
+    breakup: false,
   },
   high: {
     pixelRatio: 2,
@@ -129,6 +140,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     anisotropy: 16,
     lambert: false,
     photos: true,
+    breakup: true,
   },
 };
 
@@ -156,7 +168,15 @@ export const GRAPHICS_OPTIONS = {
  */
 export const SOFT_SHADOW_RADIUS = 2.5;
 
-export const GRAPHICS_TOGGLES = ['antialias', 'softShadows', 'sky', 'bloom', 'lambert', 'photos'] as const;
+export const GRAPHICS_TOGGLES = [
+  'antialias',
+  'softShadows',
+  'sky',
+  'bloom',
+  'lambert',
+  'photos',
+  'breakup',
+] as const;
 
 /** The lamp pool's size: the most any row can ask for. */
 export const MAX_LIGHTS = Math.max(...GRAPHICS_OPTIONS.lights);

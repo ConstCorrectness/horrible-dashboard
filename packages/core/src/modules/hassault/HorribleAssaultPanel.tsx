@@ -2399,7 +2399,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // Water and ladders belong to the map, not to its format: a modelled
         // map with a water level (facility, junkflea) used to draw none here,
         // while the native client and the physics both had it.
-        water = createWater(THREE, scene, world);
+        water = createWater(THREE, scene, world, served);
         ladders = createLadders(THREE, scene, world);
 
         if (world3d) {
@@ -2417,7 +2417,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }
           });
           filterSurfaces(world3dGroup);
-          setSurfaceQuality(THREE, world3dGroup, tier.lambert);
+          setSurfaceQuality(THREE, world3dGroup, tier.lambert, tier.breakup);
           upgradePhotos();
           // The map never moves (a shattered window is hidden, not moved), so
           // its matrices are composed once here rather than every frame. With
@@ -2513,7 +2513,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }
         applyAtmosphere(atmosphere, skyOpen);
         filterSurfaces(world3dGroup);
-        setSurfaceQuality(THREE, world3dGroup, tier.lambert);
+        setSurfaceQuality(THREE, world3dGroup, tier.lambert, tier.breakup);
         upgradePhotos();
         lampPool.forEach((lamp, i) => (lamp.visible = i < tier.lights));
         renderer.shadowMap.needsUpdate = true;

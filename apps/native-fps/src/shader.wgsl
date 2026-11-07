@@ -429,6 +429,112 @@ fn shade_physical(
     return color;
 }
 
+// ---------------------------------------------------------------------------
+// Surface breakup: what stops a photographed floor reading as one tile stamped
+// a thousand times. All of it is content — the same UVs, the same world
+// positions, the same baked AO on every machine — so it is the same picture at
+// every quality level and in both clients (`surface-breakup.ts` is the
+// browser's copy; `browser_parity.rs` pins the numbers).
+
+/// How often the anti-tiling's offset changes, per tile: a band every ~7 tiles.
+const ANTI_TILE_FREQ: f32 = 0.15;
+/// The macro tint's frequency in world units (a swell every ~22 cubes), and how
+/// far it moves a surface's albedo either way.
+const MACRO_FREQ: f32 = 0.045;
+const MACRO_AMOUNT: f32 = 0.10;
+/// Grime: full at or below this baked AO, none at or above the next, so it
+/// gathers where the bake already found wall bases, corners and undersides.
+const GRIME_AO_FULL: f32 = 0.55;
+const GRIME_AO_NONE: f32 = 0.95;
+const GRIME_STRENGTH: f32 = 0.55;
+const GRIME_TINT: vec3<f32> = vec3<f32>(0.62, 0.55, 0.47);
+
+/// Dave Hoskins' hash without sine: `sin` of a large argument is not the same
+/// number on every GPU, and both clients have to land on the same pattern.
+fn breakup_hash(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 = p3 + dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+/// Value noise over the hash, smoothstep-faded so the lattice does not show.
+fn breakup_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let w = f * f * (3.0 - 2.0 * f);
+    let a = breakup_hash(i);
+    let b = breakup_hash(i + vec2<f32>(1.0, 0.0));
+    let c = breakup_hash(i + vec2<f32>(0.0, 1.0));
+    let d = breakup_hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}
+
+/// Anti-tiling, Quílez's offset technique: a noise over the UV picks a band,
+/// each band shifts the tile by its own offset, and a pixel blends the two
+/// bands it falls between. Offsets only, never a rotation, so a normal map
+/// sampled at the same offsets stays a valid tangent-space normal.
+///
+/// The weight is the band's fraction alone. Quilez also nudges it by how the
+/// two samples differ, which bends the seam along the texture, but then the
+/// weight never quite reaches 0 or 1 at a band's edge, where one offset jumps.
+/// Saturated, the sample whose offset jumps has no weight there, so the
+/// implicit derivatives' one-pixel smallest-mip line is invisible, and every
+/// read stays a plain `textureSample` (`textureSampleGrad` here cost about
+/// 1 ms on an Intel iGPU at 1080p).
+struct AntiTile {
+    off_a: vec2<f32>,
+    off_b: vec2<f32>,
+    w: f32,
+}
+
+fn anti_tile(uv: vec2<f32>) -> AntiTile {
+    let k = breakup_noise(uv * ANTI_TILE_FREQ) * 8.0;
+    let i = floor(k);
+    return AntiTile(
+        sin(vec2<f32>(3.0, 7.0) * i),
+        sin(vec2<f32>(3.0, 7.0) * (i + 1.0)),
+        smoothstep(0.2, 0.8, k - i),
+    );
+}
+
+/// A tiled layer: at its two band offsets at High and Ultra (`detail` 2), one
+/// plain read below. `anti` is uniform (the level), so this branch costs
+/// nothing and the reads stay in uniform control flow per draw.
+fn sample_tiled(uv: vec2<f32>, layer: u32, tile: AntiTile, anti: bool) -> vec4<f32> {
+    if (anti) {
+        return mix(
+            textureSample(pbr_textures, pbr_sampler, uv + tile.off_a, i32(layer)),
+            textureSample(pbr_textures, pbr_sampler, uv + tile.off_b, i32(layer)),
+            tile.w,
+        );
+    }
+    return textureSample(pbr_textures, pbr_sampler, uv, i32(layer));
+}
+
+/// The macro tint and the grime, on an albedo that already carries its AO.
+///
+/// Only High and Ultra (`detail` 2) draw the tint, as only they anti-tile:
+/// both move a colour either way round its mean, so leaving them out hides
+/// nothing, and on an integrated GPU together they cost Medium a fifth of its
+/// frame rate. The grime darkens corners, so it is drawn at every level. A
+/// level without it would light the corners a player hides in.
+fn surface_breakup(albedo: vec3<f32>, world: vec3<f32>, ao: f32, macro_tint: bool) -> vec3<f32> {
+    // World xz, leaned on by height so a wall varies up its face as well.
+    let q = (world.xz + world.yy * vec2<f32>(0.37, 0.61)) * MACRO_FREQ;
+    var tinted = albedo;
+    if (macro_tint) {
+        let swell = breakup_noise(q) * 0.65 + breakup_noise(q * 2.7) * 0.35;
+        tinted = albedo * (1.0 + MACRO_AMOUNT * (swell * 2.0 - 1.0));
+    }
+    // Most of a map is unoccluded: only a corner pays for the grime's noise.
+    if (ao >= GRIME_AO_NONE) {
+        return tinted;
+    }
+    let patchy = 0.4 + 0.6 * smoothstep(0.2, 0.8, breakup_noise(q * 3.1 + vec2<f32>(17.0, 5.0)));
+    let dirt = (1.0 - smoothstep(GRIME_AO_FULL, GRIME_AO_NONE, ao)) * patchy;
+    return mix(tinted, tinted * GRIME_TINT, dirt * GRIME_STRENGTH);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Derivatives first, in uniform control flow: a photographed surface's normal
@@ -477,17 +583,27 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     var metalness = 0.04;
     if (mat_id > 0u) {
         let layer_idx = mat_id - 1u;
-        let pbr_sample = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx));
 
         if (layer_idx == 10u || layer_idx == 11u) {
+            // The site markings: a letter, so never anti-tiled.
+            let pbr_sample = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx));
             albedo = mix(albedo, pbr_sample.rgb, pbr_sample.a);
             roughness = 0.70;
             metalness = 0.04;
         } else if (layer_idx == 8u) {
+            let pbr_sample = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx));
             albedo = mix(albedo, pbr_sample.rgb, 0.45);
             roughness = 0.06;
             metalness = 0.15;
         } else {
+            // Every tiled surface, sampled at two offsets and blended
+            // (`anti_tile`), at High and Ultra.
+            let anti = detail > 1.5;
+            var tile = AntiTile(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), 0.0);
+            if (anti) {
+                tile = anti_tile(in.uv);
+            }
+            let pbr_sample = sample_tiled(in.uv, layer_idx, tile, anti);
             albedo = albedo * pbr_sample.rgb * 1.5;
             let props = get_pbr_properties(mat_id);
             roughness = props.x;
@@ -497,7 +613,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 // its detail layer is `PHOTO_COUNT` on from its
                 // albedo. Red and green are the normal's x and y (stored encoded
                 // in an sRGB array, so sampled back exactly), blue is roughness.
-                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 20u));
+                let d = sample_tiled(in.uv, layer_idx + 20u, tile, anti);
                 let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
                 let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
                 normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
@@ -506,7 +622,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             } else if (layer_idx < 18u && detail > 0.5) {
                 // Procedural generated surface detail layer (normal + micro-roughness at
                 // `GENERATED_DETAIL_BASE` = 18 + 2 * PHOTO_COUNT = 58, + layer_idx)
-                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 58u));
+                let d = sample_tiled(in.uv, layer_idx + 58u, tile, anti);
                 let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
                 let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
                 normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
@@ -518,6 +634,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // After the photograph is mixed in, as three multiplies a vertex colour
         // after its map, so the darkening survives layers 8, 10 and 11.
         albedo = albedo * ao;
+        // Weathering and the macro tint, on everything but glass. A glowing
+        // material carries an AO of 1 (`glow` is over it), so it gathers none.
+        if (layer_idx != 8u) {
+            albedo = surface_breakup(albedo, in.world_position, ao, detail > 1.5);
+        }
         // three's floor and geometric widening (`lights_physical_fragment`):
         // 0.0525 is the sharpest level a 256 PMREM resolves.
         roughness = min(max(roughness, 0.0525) + geometry_roughness, 1.0);
@@ -736,8 +857,63 @@ fn smoke_tunnel(world: vec3<f32>) -> f32 {
     return carved;
 }
 
+// ---------------------------------------------------------------------------
+// Water: the map's environment reflected off a surface ruffled by three waves,
+// by Schlick's fresnel. `water.ts` draws the same surface in the browser and
+// `browser_parity.rs` pins the numbers.
+
+/// Water's reflectance head-on (n = 1.33). Next to nothing: looking straight
+/// down into a pool shows the pool.
+const WATER_F0: f32 = 0.02;
+
+/// The slope of the surface at `p` (render x, z) at time `t`: three travelling
+/// waves, each `direction * slope * cos(phase)`. Their frequencies (0.25, 0.375
+/// and 0.5 Hz) all divide 8 s, so the clock wraps every 64 s without a seam.
+/// The waves only bend the normal: the plane does not move, because it is the
+/// line a player judges a jump against (`water.rs`).
+fn water_wave_slope(p: vec2<f32>, t: f32) -> vec2<f32> {
+    let tau = 6.2831853;
+    let d1 = vec2<f32>(0.80, 0.60);
+    let d2 = vec2<f32>(-0.60, 0.80);
+    let d3 = vec2<f32>(0.28, -0.96);
+    return d1 * (0.045 * cos(tau * (dot(d1, p) / 4.0 - 0.25 * t)))
+        + d2 * (0.035 * cos(tau * (dot(d2, p) / 2.3 - 0.375 * t)))
+        + d3 * (0.025 * cos(tau * (dot(d3, p) / 1.1 - 0.5 * t)));
+}
+
+/// The map's environment in direction `d`: its served sky above, `hemiGround`
+/// below, eased by `sqrt(|y|)` — `environment.rs` `radiance`, which the world's
+/// prefiltered cube is built from, evaluated here at roughness 0.
+fn environment_radiance(d: vec3<f32>) -> vec3<f32> {
+    let far = select(lights.hemi_ground.rgb, lights.sky_zenith.rgb, d.y >= 0.0);
+    return mix(lights.sky_horizon.rgb, far, sqrt(min(1.0, abs(d.y))));
+}
+
+fn water_surface(in: VolumeOut) -> vec4<f32> {
+    // `smoke.head.y` is the water clock, wrapped at 64 s (`set_smoke_channels`).
+    let slope = water_wave_slope(in.world_position.xz, smoke.head.y);
+    var n = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+    // The underside, seen from in the pool, faces down.
+    if (in.normal.y < 0.0) {
+        n = -n;
+    }
+    let v = normalize(lights.eye.xyz - in.world_position);
+    let fresnel = WATER_F0 + (1.0 - WATER_F0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+    // The body is the map's colour lit like any Lambert surface, as three lights
+    // the browser's `MeshLambertMaterial` — but unshadowed: this pass has no
+    // shadow map, and the browser's does.
+    let body = shade(in.color.rgb, n, in.world_position, camera.params.y, 1.0);
+    let rgb = mix(body, environment_radiance(reflect(-v, n)), fresnel);
+    // Grazing, a surface is a mirror rather than a window.
+    let alpha = mix(in.color.a, 1.0, fresnel);
+    return vec4<f32>(apply_fog(expose(rgb), in.view_depth, camera.params.x), alpha);
+}
+
 @fragment
 fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
+    if (in.mode > 1.5) {
+        return water_surface(in);
+    }
     // Flat: a tracer is a beam a few centimetres across, and cloud noise across
     // it would eat the line entirely rather than texture it. Fogged like
     // everything else, so a tracer across a long hall still fades with distance.

@@ -4999,7 +4999,7 @@ impl ApplicationHandler for App {
                 };
                 renderer.set_bodies(&verts);
                 renderer.set_volumes(&self.volume_verts);
-                renderer.set_smoke_channels(&self.nades.tunnels());
+                renderer.set_smoke_channels(&self.nades.tunnels(), self.elapsed);
                 renderer.set_reveal(self.reveal);
                 if let Some(squad) = self.squad.as_ref() {
                     renderer.set_characters(squad.poses());

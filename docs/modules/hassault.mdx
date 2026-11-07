@@ -1384,12 +1384,13 @@ data** at every level and changes only how much of it is drawn
 | Sky dome | no | yes | yes |
 | Anisotropy | 1 | 4 | 16 |
 | Surfaces | Lambert, generated tiles | PBR, photographed | PBR, photographed |
+| Surface variation (anti-tiling, macro tint) | off | off | on |
 | Fog density | the map's own | the map's own | the map's own |
 
 **A level is a preset, and every row is its own setting**, as on the native
 client's video page. Picking a level sets every row. A row changed afterwards
 (the Advanced rows in Settings: resolution, anti-aliasing, surfaces, texture
-filtering, shadow map, soft shadows, map lamps, sky) is kept as an override on
+filtering, shadow map, soft shadows, map lamps, sky, bloom, surface variation) is kept as an override on
 top of the level, and the level shows `CUSTOM`. Moving a row back to the level's
 own value drops the override, and picking a level clears them all. The overrides
 are one JSON string under `hassault.graphics.custom` (or `localStorage` in the
@@ -10602,6 +10603,95 @@ shadow cast from one direction and a Lambert term computed from another gives
 surfaces lit from one side and shadowed from the other.) The camera is fitted
 round the sphere of the render vertices' bounds, the rule the browser shares
 (see the browser's graphics tier).
+
+#### Surface breakup
+
+`shader.wgsl` (`surface_breakup`, `anti_tile_offsets`, `tile_weight`) and
+`packages/core/src/modules/hassault/surface-breakup.ts`, the same three steps in
+both clients. All three read content only (the UVs, the world position, the
+baked AO), so two players on the same tier see the same picture.
+`tests/browser_parity.rs` pins every number and expression in one against the
+other.
+
+**Only High and up draw all three.** Low and Medium draw the grime only: native
+`detail` below 2, and the browser's `TierSpec.breakup`, which is off at Low and
+Medium and is the "Surface variation" row (Low's Lambert twin gets the
+grime-only patch). Native has no such row: it follows the level. The anti-tiling and the macro tint
+each move a colour either way round its mean, so leaving them out hides nothing.
+On an Intel iGPU at 1080p they cost Medium 3.5–4 ms of GPU time, a fifth of its
+frame rate (Dust II 71 → 56 fps, Bank 56 → 46). The grime only darkens, so it
+stays at every tier, under the house rule that no level changes what a player can
+see. A level without it would light the corners a player hides in.
+
+Measured with `--bench`, interleaved against the build before the breakup:
+
+| GPU | Level | Map | GPU p50 before → after (ms) | fps |
+| --- | --- | --- | --- | --- |
+| integrated | Low | Dust II | 5.6 → 6.2 | 118 → 111 |
+| integrated | Low | Bank | 6.3 → 7.1 | 110 → 101 |
+| integrated | Medium | Dust II | 11.1 → 11.7 | 72 → 69 |
+| integrated | Medium | Bank | 15.1 → 15.2 | 56 → 55 |
+| discrete | High | Dust II | 0.55 → 0.71 | 652 → 636 |
+| discrete | High | Bank | 0.99 → 1.33 | 463 → 424 |
+
+What Low and Medium still pay is the grime and a larger shader. On Intel, a
+bigger shader can cost occupancy even where its branches are skipped.
+
+- **Anti-tiling** (Quílez's offset technique). A value noise over the UV picks
+  one of eight bands; each band shifts the tile by `sin((3, 7) · band)`, and a
+  pixel blends the two bands it falls between, with the seam nudged by how the
+  two samples differ. The colour, normal and roughness maps are all read at the
+  **same two offsets with the same weight**. Offsets only, never a rotation, so
+  the normal map stays a valid tangent-space normal.
+  The weight is the band's fraction alone. Quílez also nudges it by how the two
+  samples differ, which bends the seam along the texture, but then it never
+  quite reaches 0 or 1 at a band edge, where one offset jumps. That jump makes
+  implicit derivatives see extreme minification and draw a one-pixel line of
+  the smallest mip. Explicit gradients (`textureSampleGrad`) avoided the line,
+  but cost about 1 ms on an Intel iGPU at 1080p. With the weight saturated, the
+  jumping sample has no weight there, and plain `textureSample` is invisible
+  on the line.
+  Glass is left alone, and the site letters are never offset: an offset letter
+  is a different letter.
+- **Macro tint.** A slow two-octave noise in world space (leaned on by height,
+  so a wall varies up its face too) moves albedo ±10%.
+- **Grime.** Where the baked AO falls below 0.95 (full at 0.55), the albedo is
+  pulled towards a dirt colour, broken up by a third noise that only an occluded
+  pixel evaluates. It is applied after
+  the AO multiply, so a corner gets darker *and* browner. The plan also named
+  height above the floor. There is no floor height to read per pixel on a
+  multi-level map, and the AO bake is already darkest at the foot of every wall,
+  which is the place that term would have weathered.
+
+The noise is Dave Hoskins' hash without sine. `sin` of a large argument is not
+the same number on every GPU, and a hash that differs per vendor is a pattern
+that differs per vendor.
+
+In the browser it is one `onBeforeCompile` per map material, installed in
+`applyGlbSurface`. `setSurfaceQuality` switches each physical material between the full patch and
+the grime only on a tier change (`setBreakupDetail`, a recompile), and gives each
+Lambert twin the grime-only patch (`installLowTierBreakup`). The program cache key
+(`hd-breakup-2[-tile][-tint][-grime]`) is what lets three share one program
+across every material with the same patch. `surface-breakup.test.ts` runs the
+patch over three's own shader sources and fails if an `#include` anchor it needs
+has moved. A missing anchor is not an error in three, just an unpatched material.
+
+#### Water
+
+`shader.wgsl` `water_surface` (the volume pass, `MODE_WATER`) and `water.ts`.
+Three travelling waves bend the **normal** and never the plane, because the plane
+is the line a player judges a jump against. The waves have wavelengths 4, 2.3
+and 1.1 cubes, at 0.25, 0.375 and 0.5 Hz. Their periods all divide 8 s, so the
+clock wraps at 64 s (`WATER_CLOCK_WRAP`) without a seam. The map's environment is
+reflected by Schlick's fresnel (F0 0.02): its served sky above, `hemiGround`
+below, the same function the prefiltered environment is built from. The same
+fresnel raises the alpha at a grazing angle, where water is a mirror rather than
+a window.
+
+There is no sun glint. The volume pass has no shadow map, so a glint would shine
+on indoor pools. For the same reason the native water body is unshadowed, and the
+browser's Lambert body is shadowed. That is a small, known difference under a
+roof.
 
 #### Looking at it
 

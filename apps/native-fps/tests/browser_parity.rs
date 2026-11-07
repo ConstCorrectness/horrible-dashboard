@@ -1337,3 +1337,138 @@ fn both_clients_shade_the_maps_with_their_exported_normals() {
     assert!(!WORLD3D_TS.contains("\n    geom.computeVertexNormals();"), "the browser recomputes the map's normals again");
     assert!(WORLD3D_RS.contains(".read_normals()"));
 }
+
+/// The browser's surface breakup, the native `surface_breakup` and anti-tiling.
+const BREAKUP_TS: &str = include_str!("../../../packages/core/src/modules/hassault/surface-breakup.ts");
+
+/// A TS `export const NAME = n;` as a float.
+fn ts_const(source: &str, name: &str) -> f32 {
+    between(source, &format!("export const {name} = "), ";")
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} is not a plain number"))
+}
+
+/// A WGSL `const NAME: f32 = n;` as a float.
+fn wgsl_const(name: &str) -> f32 {
+    between(SHADER_WGSL, &format!("const {name}: f32 = "), ";")
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} is not a plain number"))
+}
+
+#[test]
+fn both_clients_break_up_a_surface_with_the_same_numbers() {
+    // Content, not a setting: every tier and both clients draw the same tile
+    // offsets, the same tint and the same grime, so nobody's wall is cleaner.
+    for name in [
+        "ANTI_TILE_FREQ",
+        "MACRO_FREQ",
+        "MACRO_AMOUNT",
+        "GRIME_AO_FULL",
+        "GRIME_AO_NONE",
+        "GRIME_STRENGTH",
+    ] {
+        assert_eq!(ts_const(BREAKUP_TS, name), wgsl_const(name), "{name}");
+    }
+    let tint: Vec<f32> = between(BREAKUP_TS, "GRIME_TINT: readonly [number, number, number] = [", "]")
+        .split(',')
+        .map(|p| p.trim().parse().expect("a float"))
+        .collect();
+    let native = between(SHADER_WGSL, "const GRIME_TINT: vec3<f32> = vec3<f32>(", ")");
+    let native: Vec<f32> = native.split(',').map(|p| p.trim().parse().expect("a float")).collect();
+    assert_eq!(tint, native, "GRIME_TINT");
+
+    // The hash and noise are the same function: the same constants, the same
+    // fade. A different hash is a different pattern, not a slightly different one.
+    for both in ["* 0.1031)", "+ 33.33)", "f * f * (3.0 - 2.0 * f)"] {
+        assert!(BREAKUP_TS.contains(both), "browser lost {both:?}");
+    }
+    for both in ["* 0.1031)", "+ 33.33)", "f * f * (3.0 - 2.0 * f)"] {
+        assert!(SHADER_WGSL.contains(both), "native lost {both:?}");
+    }
+
+    // The anti-tiling bands, their offsets and the blend.
+    assert!(BREAKUP_TS.contains("* 8.0;") && SHADER_WGSL.contains("* ANTI_TILE_FREQ) * 8.0;"));
+    assert!(BREAKUP_TS.contains("sin(vec2(3.0, 7.0) * i)") && BREAKUP_TS.contains("sin(vec2(3.0, 7.0) * (i + 1.0))"));
+    assert!(SHADER_WGSL.contains("sin(vec2<f32>(3.0, 7.0) * i)") && SHADER_WGSL.contains("sin(vec2<f32>(3.0, 7.0) * (i + 1.0))"));
+    // The weight is the band's fraction alone, saturating where an offset jumps,
+    // which is what makes implicit-derivative reads safe in both.
+    assert!(BREAKUP_TS.contains("hdTileW = smoothstep(0.2, 0.8, k - i);"));
+    assert!(SHADER_WGSL.contains("smoothstep(0.2, 0.8, k - i),"));
+    assert!(!BREAKUP_TS.contains("textureGrad") && !SHADER_WGSL.contains("textureSampleGrad(pbr_textures"));
+    // Grime's noise only where the AO can grime.
+    assert!(BREAKUP_TS.contains("if (ao >= ${f(GRIME_AO_NONE)}) return tinted;"));
+    assert!(SHADER_WGSL.contains("if (ao >= GRIME_AO_NONE) {"));
+
+    // The tiers: only High and up anti-tile and tint (mean-preserving detail,
+    // a fifth of Medium's frame rate on an iGPU); every tier keeps the grime (a
+    // darkening: a tier without it would light the corners). Native's High and
+    // Ultra are `detail` 2; the browser's is `TierSpec.breakup`, and its Low is
+    // the Lambert twin, grime only.
+    const SETTINGS_RS: &str = include_str!("../src/settings.rs");
+    assert!(SETTINGS_RS.contains("Quality::High | Quality::Ultra => 2.0,"));
+    assert!(SHADER_WGSL.contains("let anti = detail > 1.5;"));
+    assert!(SHADER_WGSL.contains("albedo = surface_breakup(albedo, in.world_position, ao, detail > 1.5);"));
+    const SURFACE_QUALITY_TS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/surface-quality.ts");
+    const TIERS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    assert_eq!(TIERS_TS.matches("breakup: true").count(), 1, "the full breakup is High's alone");
+    assert!(between(TIERS_TS, "high: {", "}").contains("breakup: true"));
+    assert!(SURFACE_QUALITY_TS.contains("setBreakupDetail(three, m, breakup);"));
+    assert_eq!(PANEL_TSX.matches("setSurfaceQuality(THREE, world3dGroup, tier.lambert, tier.breakup);").count(), 2);
+    assert!(SURFACE_QUALITY_TS.contains("installLowTierBreakup(three, twin, m);"));
+    assert!(BREAKUP_TS.contains("setPatch(three, twin, false, false, true);"));
+    assert!(BREAKUP_TS.contains("else if (spec.breakup) setPatch(three, material, false, false, true);"));
+    assert_eq!(TIERS_TS.matches("lambert: true").count(), 1, "the Lambert twin is Low's alone");
+    assert!(between(TIERS_TS, "low: {", "}").contains("lambert: true"));
+
+    // The tint and grime, expression for expression.
+    for (ts, wgsl) in [
+        ("(world.xz + world.yy * vec2(0.37, 0.61))", "(world.xz + world.yy * vec2<f32>(0.37, 0.61))"),
+        ("hdNoise(q) * 0.65 + hdNoise(q * 2.7) * 0.35", "breakup_noise(q) * 0.65 + breakup_noise(q * 2.7) * 0.35"),
+        ("0.4 + 0.6 * smoothstep(0.2, 0.8, hdNoise(q * 3.1 + vec2(17.0, 5.0)))", "0.4 + 0.6 * smoothstep(0.2, 0.8, breakup_noise(q * 3.1 + vec2<f32>(17.0, 5.0)))"),
+    ] {
+        assert!(BREAKUP_TS.contains(ts), "browser lost {ts:?}");
+        assert!(SHADER_WGSL.contains(wgsl), "native lost {wgsl:?}");
+    }
+
+    // Glass is left alone and a site letter is never offset, in both.
+    assert!(BREAKUP_TS.contains("if (kind === 'glass') return { antiTile: false, breakup: false };"));
+    assert!(BREAKUP_TS.contains("if (kind === 'site_a' || kind === 'site_b') return { antiTile: false, breakup: true };"));
+    assert!(SHADER_WGSL.contains("if (layer_idx != 8u) {"), "native breaks up glass");
+}
+
+#[test]
+fn both_clients_draw_the_same_water_surface() {
+    assert_eq!(ts_const(WATER_TS, "WATER_F0"), wgsl_const("WATER_F0"));
+    const RENDERER_RS: &str = include_str!("../src/renderer.rs");
+    let wrap: f32 = between(RENDERER_RS, "pub const WATER_CLOCK_WRAP: f32 = ", ";").parse().unwrap();
+    assert_eq!(ts_const(WATER_TS, "WATER_CLOCK_WRAP"), wrap);
+
+    // The three waves, term for term (the vec2 spelling aside).
+    for wave in [
+        "d1 * (0.045 * cos(tau * (dot(d1, p) / 4.0 - 0.25 * t)))",
+        "d2 * (0.035 * cos(tau * (dot(d2, p) / 2.3 - 0.375 * t)))",
+        "d3 * (0.025 * cos(tau * (dot(d3, p) / 1.1 - 0.5 * t)))",
+        "float tau = 6.2831853;",
+    ] {
+        let native = wave.replace("float tau", "let tau");
+        assert!(WATER_TS.contains(wave), "browser lost {wave:?}");
+        assert!(SHADER_WGSL.contains(&native), "native lost {native:?}");
+    }
+    for (name, dir) in [("d1", "0.80, 0.60"), ("d2", "-0.60, 0.80"), ("d3", "0.28, -0.96")] {
+        assert!(WATER_TS.contains(&format!("vec2 {name} = vec2({dir});")), "browser {name}");
+        assert!(SHADER_WGSL.contains(&format!("let {name} = vec2<f32>({dir});")), "native {name}");
+    }
+
+    // The environment: horizon to zenith above, horizon to ground below.
+    assert!(WATER_TS.contains("mix(hdSkyHorizon, far, sqrt(min(1.0, abs(d.y))))"));
+    assert!(SHADER_WGSL.contains("mix(lights.sky_horizon.rgb, far, sqrt(min(1.0, abs(d.y))))"));
+    // Schlick, and the alpha it raises.
+    assert!(WATER_TS.contains("pow(1.0 - max(dot(hdN, hdV), 0.0), 5.0)"));
+    assert!(SHADER_WGSL.contains("pow(1.0 - max(dot(n, v), 0.0), 5.0)"));
+    assert!(WATER_TS.contains("diffuseColor.a = mix(diffuseColor.a, 1.0, hdF);"));
+    assert!(SHADER_WGSL.contains("let alpha = mix(in.color.a, 1.0, fresnel);"));
+    // Fed the map's served colours, linearised the same way.
+    assert!(WATER_TS.contains("srgbHexToLinear(atmosphere.skyZenith)"));
+    assert!(WATER_TS.contains("srgbHexToLinear(atmosphere.hemiGround)"));
+}

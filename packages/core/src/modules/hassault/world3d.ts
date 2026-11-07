@@ -34,6 +34,7 @@ import {
   withoutTransmission,
 } from './glb-surfaces';
 import { glbNodeCollides, isDecorNode } from './glb-colliders';
+import { installSurfaceBreakup } from './surface-breakup';
 import { getCachedAssetUrl } from './models/assetCache';
 
 export interface SpawnPoint {
@@ -1941,6 +1942,9 @@ function applyGlbSurface(three: typeof import('three'), m: THREE.Material): void
   // `withoutTransmission`. GLTFLoader makes these `MeshPhysicalMaterial`.
   if (m instanceof three.MeshPhysicalMaterial && withoutTransmission(m)) m.needsUpdate = true;
   const kind = classifySurface(m.name || '');
+  // Anti-tiling, the macro tint and grime (`surface-breakup.ts`), on every
+  // tier: content, the same for every machine.
+  installSurfaceBreakup(three, m, kind);
   const pbr = glbSurfacePbrMaps(three, kind, DETAIL_MEAN);
   if (!pbr) {
     const tex = glbSurfaceTexture(three, kind, DETAIL_MEAN);

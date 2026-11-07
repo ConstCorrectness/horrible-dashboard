@@ -440,6 +440,13 @@ export function GraphicsRows() {
             options={ON_OFF}
             onPick={(v) => set('bloom', v)}
           />
+          <ChoiceRow
+            label="Surface variation"
+            hint="Breaks up repeating textures with shifted tiles and a slow colour drift. Corner grime is always on."
+            value={spec.breakup}
+            options={ON_OFF}
+            onPick={(v) => set('breakup', v)}
+          />
         </>
       )}
     </>
