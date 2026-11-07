@@ -29,7 +29,9 @@ there without a second sign-in.
 The frontend calls `probeHub()` (`packages/core/src/hosted.ts`) before any `/api`
 request. Signed out it renders `HubLogin` — the shared `SignInCard` routed to the
 hub via `setSignInViaHub`. Signed in it waits for the instance (`waitForInstance`)
-before loading settings. Without a hub, `/hub/me` 404s (or returns Vite's HTML) and
+before loading settings. Both run as boot steps ("Checking sign-in", "Starting your
+workspace") on the already-mounted boot splash, so a waking instance shows a ticking
+step with a hint rather than a blank window. Without a hub, `/hub/me` 404s (or returns Vite's HTML) and
 nothing changes.
 
 ## Instances

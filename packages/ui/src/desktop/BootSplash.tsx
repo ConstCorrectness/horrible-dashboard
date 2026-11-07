@@ -13,9 +13,13 @@ import { bootStore } from '@horrible/core';
 /** After this long the step list appears on its own. See below. */
 const DETAIL_AFTER_MS = 1200;
 
+/** A running step shows its age once it is older than this. */
+const ELAPSED_AFTER_MS = 2000;
+
 export function BootSplash() {
   const state = useSyncExternalStore(bootStore.subscribe, bootStore.getSnapshot);
   const [showDetail, setShowDetail] = useState(false);
+  const [now, setNow] = useState(() => performance.now());
 
   useEffect(() => {
     // A fast boot should be a logo and a fade, not a wall of log lines — but a
@@ -27,6 +31,17 @@ export function BootSplash() {
 
   const failed = state.steps.filter((s) => s.error);
   const current = state.steps.find((s) => s.ms === undefined);
+  const running = state.phase === 'starting' && current !== undefined;
+
+  // A step that takes tens of seconds (a hosted workspace waking) has to visibly
+  // tick, or a still screen reads as a hang. Only while something is running.
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(performance.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+
+  const age = (startedAt: number) => Math.max(0, now - startedAt);
 
   return (
     <div className="os-boot" role="status" aria-live="polite">
@@ -39,7 +54,10 @@ export function BootSplash() {
             <pre className="os-boot-trace">{state.fatal}</pre>
           </>
         ) : (
-          <p className="os-boot-step">{current?.label ?? 'Starting…'}</p>
+          <>
+            <p className="os-boot-step">{current?.label ?? 'Starting…'}</p>
+            {current?.hint && <p className="os-boot-hint">{current.hint}</p>}
+          </>
         )}
         <div className={`os-boot-bar${state.phase === 'failed' ? ' is-failed' : ''}`}>
           {/* Indeterminate on purpose: the number of steps is known but their
@@ -58,7 +76,13 @@ export function BootSplash() {
                   {s.error ? '!' : s.ms === undefined ? '·' : '✓'}
                 </span>
                 <span className="os-boot-label">{s.label}</span>
-                {s.ms !== undefined && <span className="os-boot-ms">{s.ms} ms</span>}
+                {s.ms !== undefined ? (
+                  <span className="os-boot-ms">{s.ms} ms</span>
+                ) : (
+                  age(s.startedAt) >= ELAPSED_AFTER_MS && (
+                    <span className="os-boot-ms">{Math.floor(age(s.startedAt) / 1000)} s</span>
+                  )
+                )}
                 {s.error && <span className="os-boot-error">{s.error}</span>}
               </li>
             ))}

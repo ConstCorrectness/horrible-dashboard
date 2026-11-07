@@ -8,7 +8,26 @@
     <title>horrible-dashboard</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- A static copy of the boot splash (BootSplash.tsx), styled by the same
+         stylesheet, for the seconds before the bundle has run. React replaces it
+         on its first render, which is the splash itself, so nothing jumps. -->
+    <div id="root">
+      <div class="os-boot" role="status" aria-live="polite" data-static-splash>
+        <div class="os-boot-center">
+          <img
+            class="os-boot-logo"
+            src="/logo.svg"
+            alt=""
+            aria-hidden="true"
+            width="56"
+            height="56"
+          />
+          <h1 class="os-boot-title">horrible-dashboard</h1>
+          <p class="os-boot-step">Loading…</p>
+          <div class="os-boot-bar"><span class="os-boot-bar-fill"></span></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

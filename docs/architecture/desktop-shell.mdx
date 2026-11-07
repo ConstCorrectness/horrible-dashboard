@@ -443,6 +443,16 @@ deliberately **indeterminate**: the step count is known but their durations are 
 remotely comparable, so a real percentage would sit at 90% through the one step that
 actually takes time.
 
+A step that can legitimately run long passes a `hint` to `bootStep` (shown under the
+label while it runs), and every running step shows its age in seconds once it is two
+seconds old — a still screen during a 45-second wait reads as a hang. The splash is
+mounted **before anything is awaited**, including the hosted hub probe; it used to
+mount after the hosted instance wait, which left the window black for that whole
+wait. `apps/web/index.html` carries a static copy of the splash (same `os-boot`
+classes, marked `data-static-splash`) for the seconds before the bundle has run;
+React replaces it on first render, and the boot-failure fallback treats a surviving
+static copy as "React never rendered".
+
 First run (`desktop.oobeComplete` unset) goes through a three-step wizard — who you
 are, what it looks like, what it can reach — before the desktop. The third step is
 the **existing** `SetupCard`, not a copy of it: model / account / connectors already

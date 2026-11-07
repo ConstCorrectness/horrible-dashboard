@@ -131,13 +131,24 @@ async function boot(): Promise<void> {
   const reactRoot = createRoot(root);
   const desktop = isDesktopShell();
 
+  // Before the hub probe too: hosted, the wait for a stopped instance to wake is
+  // the longest step of the whole boot (tens of seconds on a cold machine), and
+  // it used to run with nothing mounted at all — a black window until it ended.
+  reactRoot.render(
+    <StrictMode>
+      <AppRoot appTitle="horrible-dashboard" />
+    </StrictMode>,
+  );
+
   // Behind the hosted hub (backend/hub/), signed out means every /api call 401s:
   // show the sign-in screen instead of booting over the user's real settings.
   // A plain backend has no /hub/me, so this is a no-op for `pnpm dev` and desktop.
   if (!desktop) {
     initWsOrigin((import.meta.env.VITE_WS_ORIGIN as string | undefined) ?? null);
-    const hub = await probeHub();
-    if (hub.mode === 'signedOut') {
+    // probeHub never rejects (unreachable = local), so `undefined` cannot happen;
+    // treating it as local keeps that true if it ever does.
+    const hub = await bootStep('hub', 'Checking sign-in', () => probeHub());
+    if (hub?.mode === 'signedOut') {
       reactRoot.render(
         <StrictMode>
           <HubLogin />
@@ -145,20 +156,21 @@ async function boot(): Promise<void> {
       );
       return;
     }
-    if (hub.mode === 'signedIn') {
+    if (hub?.mode === 'signedIn') {
       // Opening the page is input: report it first, so an instance the hub stopped
       // for idleness starts now. Then wait for it before loading anything from it.
-      await reportActivity();
-      const up = await waitForInstance();
+      const up = await bootStep(
+        'instance',
+        'Starting your workspace',
+        async () => {
+          await reportActivity();
+          return waitForInstance();
+        },
+        { hint: 'A workspace that has been idle can take up to a minute to wake.' },
+      );
       if (!up) throw new Error('Your dashboard instance did not start. Reload to retry.');
     }
   }
-
-  reactRoot.render(
-    <StrictMode>
-      <AppRoot appTitle="horrible-dashboard" />
-    </StrictMode>,
-  );
 
   // Under the desktop shell it spawns the backend and tells us its origin; in the
   // browser the origin stays null (relative paths through the Vite proxy).
@@ -376,7 +388,9 @@ void boot().catch((err: unknown) => {
   const detailText = err instanceof Error ? (err.stack ?? err.message) : String(err);
   bootFailed(detailText);
   const root = document.getElementById('root');
-  if (root && !root.firstChild) {
+  // index.html's static splash counts as empty: it is only ever there when React
+  // never rendered, and left alone it would animate forever over a dead boot.
+  if (root && (!root.firstChild || root.querySelector('[data-static-splash]'))) {
     const detail = detailText;
     root.innerHTML =
       '<pre style="padding:16px;color:#f88;white-space:pre-wrap;font:13px/1.5 monospace">' +

@@ -40,6 +40,14 @@
   color: var(--text-dim);
 }
 
+.os-boot-hint {
+  margin: -6px 0 0;
+  max-width: 340px;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+
 .os-boot-bar {
   width: 220px;
   height: 3px;

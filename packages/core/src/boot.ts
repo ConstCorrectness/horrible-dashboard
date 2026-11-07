@@ -16,6 +16,13 @@ export type BootPhase = 'starting' | 'ready' | 'failed';
 export interface BootStep {
   id: string;
   label: string;
+  /**
+   * One line under the label while the step runs — for a step that can
+   * legitimately take a long time, so the wait reads as expected, not as a hang.
+   */
+  hint?: string;
+  /** `performance.now()` when the step began, so a running step can show its age. */
+  startedAt: number;
   /** Milliseconds the step took. Absent while it is still running. */
   ms?: number;
   /**
@@ -63,9 +70,13 @@ export async function bootStep<T>(
   id: string,
   label: string,
   work: () => T | Promise<T>,
+  options: { hint?: string } = {},
 ): Promise<T | undefined> {
   const started = performance.now();
-  publish({ ...state, steps: [...state.steps, { id, label }] });
+  publish({
+    ...state,
+    steps: [...state.steps, { id, label, hint: options.hint, startedAt: started }],
+  });
   const finish = (patch: Partial<BootStep>) => {
     publish({
       ...state,
