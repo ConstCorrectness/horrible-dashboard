@@ -177,19 +177,6 @@ impl Vertex {
     }
 }
 
-impl OverlayVertex {
-    const ATTRS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
-
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<OverlayVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRS,
-        }
-    }
-}
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct CameraUniform {
@@ -283,9 +270,8 @@ const MAX_VIEWMODEL_VERTS: usize = 4096;
 
 /// How many overlay vertices the HUD can hold.
 ///
-/// The HUD is drawn as geometry, and its font is one quad per *lit pixel* — a
-/// full kill feed plus every counter is a few thousand quads at worst. Generous,
-/// and still under a megabyte.
+/// Shapes plus one quad per glyph (one per *lit pixel* while the bitmap font is
+/// drawing, before the OS fonts load). Generous, and two megabytes.
 const MAX_OVERLAY_VERTS: usize = 65536;
 
 /// The view model's own near plane. It lives about 1.4 cubes from the eye and a
@@ -295,6 +281,14 @@ const VIEWMODEL_NEAR: f32 = 0.02;
 const VIEWMODEL_FAR: f32 = 50.0;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// The scene's colour: **linear light, pre-exposed, unclamped**, in half
+/// floats. Everything that draws into the scene (world, volumes, sky, props,
+/// characters) targets this; the tone curve is applied once, by the post
+/// pass's `display`, on the way to the swapchain. An 8-bit target here would
+/// clip every lit floor at 1.0 before the curve could roll it off. The overlay
+/// and the post pass's output stay on the surface's own format.
+pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -363,11 +357,7 @@ pub struct Renderer {
     viewmodel_verts: u32,
     viewmodel_camera_buffer: wgpu::Buffer,
     viewmodel_bind_group: wgpu::BindGroup,
-    overlay_pipeline: wgpu::RenderPipeline,
-    overlay_buffer: wgpu::Buffer,
-    overlay_verts: u32,
-    /// Chat in real fonts, drawn after the HUD — see `textquad.rs`.
-    text: crate::textquad::TextQuad,
+    overlay: crate::overlay_gpu::OverlayGpu,
     pub backend: String,
     pub adapter_name: String,
     /// Kept for one reason: switching vsync re-reads the surface's present
@@ -396,6 +386,10 @@ pub struct Renderer {
     detail_bind_group_3d: wgpu::BindGroup,
     shadow: crate::shadow::ShadowMap,
     pbr: crate::textures3d::PbrResources,
+    /// The image-based light the world's physical surfaces read, bound in
+    /// `pbr`'s group. Its textures are rewritten in place for a new map, so
+    /// the group never needs rebuilding for it.
+    environment: crate::environment::Environment,
     /// A texture-quality rebuild in flight on a worker thread; swapped into
     /// `pbr` by the first frame after it lands. See `set_video`.
     pbr_pending: Option<std::sync::mpsc::Receiver<(wgpu::BindGroup, wgpu::Texture)>>,
@@ -549,14 +543,14 @@ impl Renderer {
         crate::gpu::set_sample_counts(crate::gpu::supported_sample_counts(
             &adapter,
             adapter_specific,
-            &[format, DEPTH_FORMAT],
+            &[format, SCENE_FORMAT, DEPTH_FORMAT],
         ));
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            // Let the driver decide: the mesher's colours are ordinary sRGB and
-            // there is no HDR content to opt into.
+            // Let the driver decide: the scene is HDR only up to the post pass,
+            // which tone maps it into an ordinary sRGB picture.
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -653,11 +647,15 @@ impl Renderer {
             video.shadow_level.quality(),
         );
 
+        // The modelled map's sky and ground, prefiltered for every roughness
+        // (`environment.rs`); rebuilt by `set_lighting` when a map's differ.
+        let environment = crate::environment::Environment::new(&device, &queue, &lighting.atmosphere);
         let pbr = crate::textures3d::PbrResources::with_quality(
             &device,
             &queue,
             video.textures.size(),
             video.anisotropy,
+            &crate::textures3d::EnvironmentViews::of(&environment),
         );
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -673,7 +671,7 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let pipeline = world_pipeline(&device, &pipeline_layout, &shader, format, video.samples());
+        let pipeline = world_pipeline(&device, &pipeline_layout, &shader, SCENE_FORMAT, video.samples());
         let world_layout = pipeline_layout;
 
         let body_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -729,7 +727,7 @@ impl Renderer {
             immediate_size: 0,
         });
         let volume_pipeline =
-            volume_pipeline(&device, &volume_layout, &shader, format, video.samples());
+            volume_pipeline(&device, &volume_layout, &shader, SCENE_FORMAT, video.samples());
 
         let viewmodel_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewmodel"),
@@ -808,69 +806,18 @@ impl Renderer {
             &lights_buffer,
             "hands-bind-group",
         );
-        let props = crate::props_gpu::Props::new(&device, &camera_layout, format, video.samples());
+        let props = crate::props_gpu::Props::new(&device, &camera_layout, SCENE_FORMAT, video.samples());
 
-        // The HUD's own pipeline: no camera, no depth, and **alpha blending**,
-        // which is the one state that differs from everything else drawn here.
-        // Without it a panel behind the kill feed is opaque black rather than a
-        // wash, and a fading note vanishes at full brightness instead.
-        let overlay_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("overlay-layout"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
-
-        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("overlay-pipeline"),
-            layout: Some(&overlay_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_overlay"),
-                buffers: &[Some(OverlayVertex::layout())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_overlay"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // **No culling.** The world and the bodies are closed shapes
-                // wound outward; the HUD is flat quads, and a quad has no
-                // outside. Culling here would drop whichever half of the layout
-                // happened to be wound the other way, silently.
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let overlay_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("overlay"),
-            size: (MAX_OVERLAY_VERTS * std::mem::size_of::<OverlayVertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // The HUD: shapes and glyphs in one stream, one atlas, one draw.
+        let overlay = crate::overlay_gpu::OverlayGpu::new(&device, format, MAX_OVERLAY_VERTS);
 
         let scene = create_scene(&device, &config, video.render_scale, video.samples());
 
-        // The stretch into the window, with bloom and sharpening on the way.
+        // The stretch into the window, with bloom, the curve, FXAA and
+        // sharpening on the way.
         let mut post = crate::post::Post::new(&device, format);
         post.resize(&device, scene.sampled(), scene.width, scene.height);
-        post.set(&queue, video.bloom, video.sharpen);
+        post.set(&device, &queue, video.bloom, video.sharpen, video.fxaa);
 
         // The sky: its own tiny uniform (the inverse view projection) at binding
         // 0 and the lights at binding 1, so it can use the camera layout as it is.
@@ -891,8 +838,7 @@ impl Renderer {
             bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
-        let sky_pipeline = sky_pipeline(&device, &sky_layout, &shader, format, video.samples());
-        let text = crate::textquad::TextQuad::new(&device, format);
+        let sky_pipeline = sky_pipeline(&device, &sky_layout, &shader, SCENE_FORMAT, video.samples());
 
         let gpu_timer = crate::gpu_timer::GpuTimer::new(&device, &queue);
         Ok(Renderer {
@@ -931,10 +877,7 @@ impl Renderer {
             viewmodel_verts: 0,
             viewmodel_camera_buffer,
             viewmodel_bind_group,
-            overlay_pipeline,
-            overlay_buffer,
-            overlay_verts: 0,
-            text,
+            overlay,
             backend: format!("{:?}", info.backend),
             adapter_name: info.name.clone(),
             adapter,
@@ -946,6 +889,7 @@ impl Renderer {
             detail_bind_group_3d,
             shadow,
             pbr,
+            environment,
             pbr_pending: None,
             video,
             scene,
@@ -1003,7 +947,7 @@ impl Renderer {
             operator,
             &self.camera_layout,
             &self.shadow.layout,
-            self.config.format,
+            SCENE_FORMAT,
             self.video.samples(),
         ));
     }
@@ -1020,7 +964,7 @@ impl Renderer {
             op_ct,
             &self.camera_layout,
             &self.shadow.layout,
-            self.config.format,
+            SCENE_FORMAT,
             self.video.samples(),
         ));
         self.characters_t = Some(crate::characters_gpu::Characters::new(
@@ -1029,7 +973,7 @@ impl Renderer {
             op_t,
             &self.camera_layout,
             &self.shadow.layout,
-            self.config.format,
+            SCENE_FORMAT,
             self.video.samples(),
         ));
     }
@@ -1128,6 +1072,7 @@ impl Renderer {
     /// shadow, which is cast from the sun and so is re-baked here.
     pub fn set_lighting(&mut self, lighting: crate::atmosphere::Lighting) {
         let sun_moved = lighting.atmosphere.sun_dir != self.lighting.atmosphere.sun_dir;
+        self.environment.update(&self.queue, &lighting.atmosphere);
         self.lighting = lighting;
         if sun_moved {
             self.rebake_shadow();
@@ -1268,35 +1213,14 @@ impl Renderer {
         }
     }
 
-    /// This frame's chat panel, or `None` for none. Uploads only on change.
-    pub fn set_text_layer(&mut self, image: Option<(&crate::textlayer::ChatImage, bool)>) {
-        let screen = (self.config.width, self.config.height);
-        self.text.set(&self.device, &self.queue, image, screen);
-    }
-
     /// Replace the HUD geometry for this frame.
     pub fn set_overlay(&mut self, vertices: &[OverlayVertex]) {
-        // Truncated rather than grown, like the bodies: a HUD that reallocated
-        // mid-frame would stutter, and the vertices past the cap are the tail of
-        // a kill feed nobody can read at that length anyway.
-        //
-        // **Reported, like the bodies and the volumes are.** Truncating in
-        // silence is how a HUD loses its last panel on a full server and nobody
-        // finds out: the frame still draws, at the right frame rate, simply
-        // missing whatever was laid out last. The font here is one quad per lit
-        // *pixel*, so this cap is closer than it looks.
-        if vertices.len() > MAX_OVERLAY_VERTS {
-            crate::divergence::note_overflow("overlay", vertices.len(), MAX_OVERLAY_VERTS);
-        }
-        let count = vertices.len().min(MAX_OVERLAY_VERTS);
-        self.overlay_verts = count as u32;
-        if count > 0 {
-            self.queue.write_buffer(
-                &self.overlay_buffer,
-                0,
-                bytemuck::cast_slice(&vertices[..count]),
-            );
-        }
+        self.overlay.set_vertices(&self.queue, vertices);
+    }
+
+    /// New glyph rows for the HUD's text atlas.
+    pub fn upload_hud_atlas(&mut self, upload: &crate::text_kit::AtlasUpload) {
+        self.overlay.upload_atlas(&self.queue, upload);
     }
 
     /// Swap in a texture-quality rebuild if its worker has finished. A worker
@@ -1525,9 +1449,12 @@ impl Renderer {
                         // hard edge against the void. On a map open to the sky
                         // the dome covers this whole clear anyway; with the sky
                         // off it is the flat horizon the dome would have drawn.
+                        // Run backwards through the tone curve, so it reaches
+                        // the window as the map's own hex — the browser never
+                        // tone maps its clear colour either.
                         load: wgpu::LoadOp::Clear({
                             let a = &self.lighting.atmosphere;
-                            let c = crate::atmosphere::srgb_hex_to_linear(if self.is_3d {
+                            let c = crate::atmosphere::display_hex_to_scene(if self.is_3d {
                                 a.sky_horizon
                             } else {
                                 a.fog_color
@@ -1699,7 +1626,7 @@ impl Renderer {
         // nothing next to the world it is copying.
         self.post.encode(&mut encoder, &view);
 
-        if self.overlay_verts > 0 {
+        if self.overlay.has_vertices() {
             // Last, over everything, with no depth attachment at all: the HUD is
             // not in the world and has nothing to be behind.
             //
@@ -1722,31 +1649,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.overlay_pipeline);
-            pass.set_vertex_buffer(0, self.overlay_buffer.slice(..));
-            pass.draw(0..self.overlay_verts, 0..1);
-        }
-
-        if self.text.visible() {
-            // Its own pass, after the HUD's: chat is over the HUD, and the HUD
-            // pass is skipped outright on a frame with no overlay geometry.
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("text"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.text.draw(&mut pass);
+            self.overlay.draw(&mut pass);
         }
 
         if let Some(timer) = self.gpu_timer.as_mut() {
@@ -1814,7 +1717,7 @@ impl Renderer {
         self.video = video;
 
         // Uniform data: written now, read next frame, nothing rebuilt.
-        self.post.set(&self.queue, video.bloom, video.sharpen);
+        self.post.set(&self.device, &self.queue, video.bloom, video.sharpen, video.fxaa);
         if shadow_changed {
             self.rebake_shadow();
         }
@@ -1833,9 +1736,16 @@ impl Renderer {
             let queue = self.queue.clone();
             let layout = self.pbr.layout.clone();
             let (size, anisotropy) = (video.textures.size(), video.anisotropy);
+            let environment = crate::textures3d::EnvironmentViews::of(&self.environment);
             let build = move || {
-                let (bind_group, texture, _) =
-                    crate::textures3d::bind_group_with(&device, &queue, &layout, size, anisotropy);
+                let (bind_group, texture) = crate::textures3d::bind_group_around(
+                    &device,
+                    &queue,
+                    &layout,
+                    size,
+                    anisotropy,
+                    &environment,
+                );
                 let _ = tx.send((bind_group, texture));
             };
             match std::thread::Builder::new()
@@ -1856,7 +1766,7 @@ impl Renderer {
                 &self.device,
                 &self.world_layout,
                 &self.shader,
-                self.config.format,
+                SCENE_FORMAT,
                 video.samples(),
             );
             // The translucent volumes draw **inside the same pass** — see the
@@ -1869,7 +1779,7 @@ impl Renderer {
                 &self.device,
                 &self.volume_layout,
                 &self.shader,
-                self.config.format,
+                SCENE_FORMAT,
                 video.samples(),
             );
             // The sky draws first in that same pass, so it moves with it.
@@ -1877,7 +1787,7 @@ impl Renderer {
                 &self.device,
                 &self.sky_layout,
                 &self.shader,
-                self.config.format,
+                SCENE_FORMAT,
                 video.samples(),
             );
             // The character pass draws into the same attachment, so its
@@ -1888,7 +1798,7 @@ impl Renderer {
                     &self.device,
                     &self.camera_layout,
                     &self.shadow.layout,
-                    self.config.format,
+                    SCENE_FORMAT,
                     video.samples(),
                 );
             }
@@ -1897,7 +1807,7 @@ impl Renderer {
                     &self.device,
                     &self.camera_layout,
                     &self.shadow.layout,
-                    self.config.format,
+                    SCENE_FORMAT,
                     video.samples(),
                 );
             }
@@ -1908,7 +1818,7 @@ impl Renderer {
             self.props.rebuild(
                 &self.device,
                 &self.camera_layout,
-                self.config.format,
+                SCENE_FORMAT,
                 video.samples(),
             );
         }
@@ -2117,7 +2027,7 @@ fn create_scene(
             mip_level_count: 1,
             sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
-            format: config.format,
+            format: SCENE_FORMAT,
             // `TEXTURE_BINDING` even when multisampled: it costs nothing, and a
             // usage flag missing at 4× only shows up when somebody selects High.
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -2132,7 +2042,7 @@ fn create_scene(
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: config.format,
+                format: SCENE_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -2387,17 +2297,6 @@ mod tests {
             bytes,
             &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0]
         );
-    }
-
-    #[test]
-    fn an_overlay_vertex_is_laid_out_the_way_the_shader_reads_it() {
-        assert_eq!(std::mem::size_of::<OverlayVertex>(), 6 * 4);
-        let v = OverlayVertex {
-            position: [1.0, 2.0],
-            color: [3.0, 4.0, 5.0, 6.0],
-        };
-        let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&v));
-        assert_eq!(floats, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 
     #[test]

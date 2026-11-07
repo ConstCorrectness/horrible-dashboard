@@ -43,6 +43,7 @@ pub const KEY_LEGACY_FOV: &str = "hassault.fov";
 /// `KEY_MSAA` is absent, so a bag saved before the count existed keeps its choice.
 pub const KEY_ANTIALIAS: &str = "hassault.video.antialias";
 pub const KEY_MSAA: &str = "hassault.video.msaa";
+pub const KEY_FXAA: &str = "hassault.video.fxaa";
 pub const KEY_ANISOTROPY: &str = "hassault.video.anisotropy";
 pub const KEY_TEXTURES: &str = "hassault.video.textureQuality";
 pub const KEY_SHADOW_QUALITY: &str = "hassault.video.shadowQuality";
@@ -84,10 +85,10 @@ pub const KEY_CONTROLS: &str = "hassault.controls";
 /// changed afterwards leaves the level where it was and the menu shows `CUSTOM`,
 /// so the preset never shadows a choice.
 ///
-/// **High is the browser's picture**: its light rig, 4× MSAA and a 2048 shadow
-/// map, which is what the pane draws. Ultra is where this client goes past the
-/// browser — bloom, every map light, finer shadows and textures — and Low and
-/// Medium trade detail for fill rate on a laptop. **No level changes what a
+/// **High is the browser's picture**: its light rig, 4× MSAA and a 4096 shadow
+/// map, which is what the browser's High draws. Ultra is where this client goes
+/// past the browser — stronger bloom, every map light, finer textures — and Low
+/// and Medium trade detail for fill rate on a laptop. **No level changes what a
 /// player can see**: the fog, smoke, flashes and props are the same at all four.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Quality {
@@ -152,6 +153,7 @@ impl Quality {
         match self {
             Quality::Low => Preset {
                 msaa: 1,
+                fxaa: false,
                 anisotropy: 4,
                 textures: TextureQuality::Low,
                 shadows: ShadowLevel::Low,
@@ -161,24 +163,29 @@ impl Quality {
             },
             Quality::Medium => Preset {
                 msaa: 1,
+                fxaa: true,
                 anisotropy: 8,
                 textures: TextureQuality::Medium,
                 shadows: ShadowLevel::Medium,
-                bloom: 0.0,
+                bloom: MODERATE_BLOOM,
                 map_lights: 8,
                 sky: true,
             },
             Quality::High => Preset {
                 msaa: 4,
+                fxaa: false,
                 anisotropy: 16,
                 textures: TextureQuality::Medium,
-                shadows: ShadowLevel::High,
-                bloom: 0.0,
+                // 4096, as the browser's High (`TIERS.high.shadowSize`). The
+                // levels keep their sizes, so a saved `high` still means 2048.
+                shadows: ShadowLevel::Ultra,
+                bloom: MODERATE_BLOOM,
                 map_lights: 16,
                 sky: true,
             },
             Quality::Ultra => Preset {
                 msaa: 8,
+                fxaa: false,
                 anisotropy: 16,
                 textures: TextureQuality::High,
                 shadows: ShadowLevel::Ultra,
@@ -197,6 +204,7 @@ impl Quality {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Preset {
     msaa: u32,
+    fxaa: bool,
     anisotropy: u16,
     textures: TextureQuality,
     shadows: ShadowLevel,
@@ -262,7 +270,8 @@ impl TextureQuality {
 ///
 /// The map is rendered **once per map** (see `shadow.rs`), so resolution costs
 /// memory and a moment at load rather than frame time; the taps are the
-/// per-pixel cost. High is the browser's 2048.
+/// per-pixel cost. The High *preset* takes `Ultra`'s 4096, the browser High's
+/// edge; the levels themselves keep the sizes they were saved with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShadowLevel {
     Low,
@@ -377,6 +386,10 @@ pub struct Video {
     /// which is what crashed the client on the first frame when 2× was a
     /// constant (see `gpu::snap_samples`).
     pub msaa: u32,
+    /// FXAA in the final pass: edges smoothed from the finished image, for the
+    /// cost of one full-screen pass rather than of multisampling every draw.
+    /// Medium's anti-aliasing (its MSAA is 1); High and Ultra multisample.
+    pub fxaa: bool,
     /// Anisotropic filtering on the world's surfaces: 1 (off), 2, 4, 8 or 16.
     pub anisotropy: u16,
     pub textures: TextureQuality,
@@ -387,9 +400,9 @@ pub struct Video {
     /// where the cost lives.
     pub shadows: bool,
     pub shadow_level: ShadowLevel,
-    /// Bloom strength, 0 (off) to 1. Only emissive surfaces and the brightest
-    /// highlights pass its threshold, so it is a glow on lamps, screens and
-    /// muzzle flashes rather than a haze over the scene.
+    /// Bloom strength, 0 (off) to 1. Only light brighter than white passes its
+    /// threshold (`post.rs`) — emissive lamps, screens and LEDs, the sun's
+    /// disc — so it is a glow on those rather than a haze over the scene.
     pub bloom: f32,
     /// How many of the map's point lights shade a frame, nearest first. 0 turns
     /// them off; the browser's High draws 8.
@@ -429,6 +442,7 @@ impl Video {
         let p = quality.preset();
         self.quality = quality;
         self.msaa = p.msaa;
+        self.fxaa = p.fxaa;
         self.anisotropy = p.anisotropy;
         self.textures = p.textures;
         self.shadow_level = p.shadows;
@@ -442,6 +456,7 @@ impl Video {
     pub fn matches_preset(&self) -> bool {
         let p = self.quality.preset();
         self.msaa == p.msaa
+            && self.fxaa == p.fxaa
             && self.anisotropy == p.anisotropy
             && self.textures == p.textures
             && self.shadow_level == p.shadows
@@ -452,9 +467,10 @@ impl Video {
 
     /// The keys `apply_preset` writes, for persisting a preset whole: saving only
     /// the level would bring it back next session over the old rows.
-    pub const PRESET_KEYS: [&'static str; 8] = [
+    pub const PRESET_KEYS: [&'static str; 9] = [
         KEY_QUALITY,
         KEY_MSAA,
+        KEY_FXAA,
         KEY_ANISOTROPY,
         KEY_TEXTURES,
         KEY_SHADOW_QUALITY,
@@ -482,6 +498,10 @@ pub const MSAA_COUNTS: [u32; 4] = [1, 2, 4, 8];
 pub const ANISOTROPY_LEVELS: [u16; 5] = [1, 2, 4, 8, 16];
 pub const MAP_LIGHT_COUNTS: [u32; 5] = [0, 8, 16, 32, 64];
 pub const BLOOM_RANGE: (f32, f32) = (0.0, 1.0);
+/// Medium's and High's bloom: a glow you notice on a lamp and not on a wall.
+/// On the menu's 0.25 steps. The schema's default (`settings_schema.py`) and
+/// the browser's (`index.ts`) are this, because Medium is the default level.
+pub const MODERATE_BLOOM: f32 = 0.25;
 pub const SHARPEN_RANGE: (f32, f32) = (0.0, 1.0);
 pub const BRIGHTNESS_RANGE: (f32, f32) = (0.6, 1.6);
 pub const FRAME_LATENCY_RANGE: (u32, u32) = (1, 3);
@@ -502,6 +522,7 @@ impl Default for Video {
             vsync: false,
             fov: 75.0,
             msaa: 1,
+            fxaa: true,
             anisotropy: 16,
             textures: TextureQuality::default(),
             shadows: true,
@@ -675,6 +696,9 @@ impl Settings {
         } else if let Some(v) = flag(KEY_ANTIALIAS) {
             s.video.msaa = if v { 4 } else { 1 };
         }
+        if let Some(v) = flag(KEY_FXAA) {
+            s.video.fxaa = v;
+        }
         if let Some(v) = num(KEY_ANISOTROPY) {
             s.video.anisotropy = snap(&ANISOTROPY_LEVELS, v);
         }
@@ -764,6 +788,7 @@ impl Settings {
             KEY_MSAA => json!(v.msaa),
             // Kept in step for anything still reading the old row.
             KEY_ANTIALIAS => json!(v.msaa > 1),
+            KEY_FXAA => json!(v.fxaa),
             KEY_ANISOTROPY => json!(v.anisotropy),
             KEY_TEXTURES => json!(v.textures.key()),
             KEY_SHADOWS => json!(v.shadows),
@@ -1108,6 +1133,7 @@ mod tests {
         let mut original = Settings::default();
         original.video.apply_preset(Quality::Ultra);
         original.video.msaa = 2;
+        original.video.fxaa = true;
         original.video.anisotropy = 4;
         original.video.textures = TextureQuality::Low;
         original.video.shadow_level = ShadowLevel::Extreme;
@@ -1126,6 +1152,7 @@ mod tests {
         let keys = [
             KEY_QUALITY,
             KEY_MSAA,
+            KEY_FXAA,
             KEY_ANISOTROPY,
             KEY_TEXTURES,
             KEY_SHADOW_QUALITY,
@@ -1148,8 +1175,8 @@ mod tests {
         let read = Settings::from_values(&serde_json::Value::Object(bag));
         let (a, b) = (&read.video, &original.video);
         assert_eq!(
-            (a.msaa, a.anisotropy, a.textures),
-            (b.msaa, b.anisotropy, b.textures)
+            (a.msaa, a.fxaa, a.anisotropy, a.textures),
+            (b.msaa, b.fxaa, b.anisotropy, b.textures)
         );
         assert_eq!(a.shadow_level, b.shadow_level);
         assert_eq!(

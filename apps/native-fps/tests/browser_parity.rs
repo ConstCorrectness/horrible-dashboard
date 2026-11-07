@@ -983,8 +983,11 @@ fn baked_ambient_occlusion_is_content_on_the_world_and_never_a_setting() {
     const WORLD3D_TS: &str = include_str!("../../../packages/core/src/modules/hassault/world3d.ts");
     const GRAPHICS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
     const SETTINGS_RS: &str = include_str!("../src/settings.rs");
-    assert!(SHADER_WGSL.contains("albedo = albedo * in.ao;"), "textured world surfaces lost their AO");
-    assert!(SHADER_WGSL.contains("* DETAIL_GAIN * in.ao"), "untextured world surfaces lost their AO");
+    // The attribute also carries a glowing material's strength over 1
+    // (`world3d.rs`); the occlusion is what is clamped to 1.
+    assert!(SHADER_WGSL.contains("let ao = min(in.ao, 1.0);"), "the AO is no longer split from the glow");
+    assert!(SHADER_WGSL.contains("albedo = albedo * ao;"), "textured world surfaces lost their AO");
+    assert!(SHADER_WGSL.contains("* DETAIL_GAIN * ao"), "untextured world surfaces lost their AO");
     assert!(!SKIN_WGSL.contains(".ao") && !LIGHTING_WGSL.contains(".ao"), "AO reached the characters");
     assert!(WORLD3D_TS.contains("merged.setAttribute('color'"), "the browser drops COLOR_0 when it batches");
     for (name, src) in [("graphics.ts", GRAPHICS_TS), ("settings.rs", SETTINGS_RS)] {
@@ -1007,8 +1010,8 @@ fn both_clients_bloom_and_sharpen_with_the_same_numbers() {
     // in both, so the load-bearing pieces are pinned.
     for (native, browser) in [
         ("const LEVELS: usize = 5;", "export const LEVELS = 5;"),
-        ("const THRESHOLD: f32 = 0.82;", "export const THRESHOLD = 0.82;"),
-        ("const KNEE: f32 = 0.12;", "export const KNEE = 0.12;"),
+        ("const THRESHOLD: f32 = 1.4;", "export const THRESHOLD = 1.4;"),
+        ("const KNEE: f32 = 0.5;", "export const KNEE = 0.5;"),
     ] {
         assert!(POST_RS.contains(native), "post.rs lost `{native}`");
         assert!(POST_CHAIN_TS.contains(browser), "post-chain.ts lost `{browser}`");
@@ -1023,11 +1026,314 @@ fn both_clients_bloom_and_sharpen_with_the_same_numbers() {
         // CAS: the lobe's range, and the headroom term.
         "mix(8.0, 5.0, amount)",
         "(1.0) - hi",
-        // The soft knee and the screen blend.
+        // The soft knee.
         "soft * soft / (4.0 *",
-        "(1.0) - (vec3",
+        // The dither: interleaved gradient noise, twice, for a triangular
+        // distribution of one output step.
+        "52.9829189",
+        "0.06711056, 0.00583715",
+        "47.0, 17.0",
     ] {
         assert!(POST_WGSL.contains(needle), "post.wgsl lost `{needle}`");
         assert!(POST_CHAIN_TS.contains(needle), "post-chain.ts lost `{needle}`");
     }
+}
+
+#[test]
+fn both_clients_tone_map_once_with_three_s_aces() {
+    // The native scene is linear light in a half-float target, tone mapped
+    // once in `post.wgsl`'s `display`; the browser's chain renders to a
+    // half-float target and runs `DISPLAY`, and its materials run three's
+    // `ACESFilmicToneMapping`. The CPU copy in `atmosphere.rs` runs the curve
+    // backwards for the clear and fog colours. Four copies of one curve: the
+    // fit, both matrices and three's `/ 0.6` are pinned in all of them, so a
+    // slip in one shows here and not as a map that is a shade off in one
+    // client. (Native once used Narkowicz's fit here, and its mid-tones sat
+    // about a fifth above the browser's for the same light.)
+    const ATMOSPHERE_RS: &str = include_str!("../src/atmosphere.rs");
+    const RENDERER_RS: &str = include_str!("../src/renderer.rs");
+    for needle in [
+        "0.0245786",
+        "0.000090537",
+        "0.983729",
+        "0.432951",
+        "0.238081",
+        "/ 0.6",
+        // ACESInputMat, column by column.
+        "0.59719", "0.07600", "0.02840",
+        "0.35458", "0.90834", "0.13383",
+        "0.04823", "0.01566", "0.83777",
+        // ACESOutputMat.
+        "1.60475", "-0.10208", "-0.00327",
+        "-0.53108", "1.10813", "-0.07276",
+        "-0.07367", "-0.00605", "1.07602",
+    ] {
+        assert!(POST_WGSL.contains(needle), "post.wgsl lost `{needle}`");
+        assert!(POST_CHAIN_TS.contains(needle), "post-chain.ts lost `{needle}`");
+        assert!(ATMOSPHERE_RS.contains(needle), "atmosphere.rs lost `{needle}`");
+    }
+    // Once, at the end: no scene shader tone maps on its own again, and the
+    // scene target is half float in both.
+    assert!(!LIGHTING_WGSL.contains("fn tonemap"), "a scene shader tone maps again");
+    assert!(
+        RENDERER_RS.contains("SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float"),
+        "the native scene is no longer half float"
+    );
+    assert!(POST_CHAIN_TS.contains("t.HalfFloatType"), "the browser's chain target is no longer half float");
+}
+
+#[test]
+fn both_clients_fog_in_linear_light_before_the_curve() {
+    // The order the plan settled: fog is mixed into the scene's linear light,
+    // before the tone curve, with its colour run backwards through the curve
+    // so a fully fogged wall comes out as the map's hex. Native always draws
+    // that way; the browser does whenever its chain is on (with it off, three
+    // mixes fog after its encode, which also lands on the hex). A client that
+    // forgets the inverse fogs into a lifted grey.
+    const ATMOSPHERE_RS: &str = include_str!("../src/atmosphere.rs");
+    const RENDERER_RS: &str = include_str!("../src/renderer.rs");
+    assert!(
+        ATMOSPHERE_RS.contains("fog_color: with(display_hex_to_scene(a.fog_color), 0.0)"),
+        "native fog colour is no longer pre-inverted"
+    );
+    assert!(
+        RENDERER_RS.contains("crate::atmosphere::display_hex_to_scene(if self.is_3d"),
+        "native clear colour is no longer pre-inverted"
+    );
+    assert!(
+        POST_CHAIN_TS.contains("if (fog) fog.color.copy(toScene(fog.color));"),
+        "the browser's chain no longer pre-inverts the fog colour"
+    );
+    assert!(
+        POST_CHAIN_TS.contains("scene.background = toScene(background as THREE.Color);"),
+        "the browser's chain no longer pre-inverts the clear colour"
+    );
+}
+
+// --- Image-based light and GGX (G6) ------------------------------------------
+
+const ENVIRONMENT_TS: &str =
+    include_str!("../../../packages/core/src/modules/hassault/environment.ts");
+const SHADER_WGSL: &str = include_str!("../src/shader.wgsl");
+
+/// A file of three's own source, read at test time from the core package's
+/// `node_modules` (not `include_str!`, so a checkout without node_modules still
+/// builds): `None` when it is not installed, and the caller skips.
+fn three_source(relative: &str) -> Option<String> {
+    let path = format!(
+        "{}/../../packages/core/node_modules/three/src/{relative}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(&path).ok()
+}
+
+#[test]
+fn both_clients_read_three_s_dfg_table() {
+    // `dfg_lut.rs` is a copy of three's table, value for value, so both
+    // clients' split-sum specular is one table rather than two fits. A three
+    // upgrade that retunes it fails here; regenerate the copy from the file.
+    let Some(js) = three_source("renderers/shaders/DFGLUTData.js") else {
+        eprintln!("skipping: three is not installed under packages/core/node_modules");
+        return;
+    };
+    let body = between(&js, "new Uint16Array( [", "] );");
+    let three: Vec<u16> = body
+        .split(',')
+        .map(str::trim)
+        .filter(|v| v.starts_with("0x"))
+        .map(|v| u16::from_str_radix(&v[2..], 16).expect("hex"))
+        .collect();
+    assert_eq!(three.len(), (hassault_native::dfg_lut::SIZE * hassault_native::dfg_lut::SIZE * 2) as usize);
+    assert_eq!(three.as_slice(), hassault_native::dfg_lut::DATA.as_slice(), "three's DFG table changed");
+}
+
+#[test]
+fn both_clients_shade_with_three_s_ggx() {
+    // The native physical path is a port of MeshStandardMaterial's: the same
+    // Fresnel fit, the same multiscatter average and the same roughness floor
+    // and geometric widening. Each constant is checked against three's own
+    // chunk when three is installed, and against the port always.
+    for (constant, chunk) in [
+        ("-5.55473 * dot_vh - 6.98316", "renderers/shaders/ShaderChunk/common.glsl.js"),
+        ("0.047619", "renderers/shaders/ShaderChunk/lights_physical_pars_fragment.glsl.js"),
+        ("0.0525", "renderers/shaders/ShaderChunk/lights_physical_fragment.glsl.js"),
+    ] {
+        assert!(SHADER_WGSL.contains(constant), "shader.wgsl no longer has three's {constant}");
+        if let Some(three) = three_source(chunk) {
+            let spelled = constant.replace("-5.55473 * dot_vh - 6.98316", "- 5.55473 * dotVH - 6.98316");
+            assert!(three.contains(&spelled), "three's {chunk} no longer has {spelled}");
+        }
+    }
+    assert!(
+        SHADER_WGSL.contains("roughness = min(max(roughness, 0.0525) + geometry_roughness, 1.0);"),
+        "native roughness no longer floors and widens as three's does"
+    );
+}
+
+#[test]
+fn both_clients_light_the_world_with_the_map_s_own_sky_and_ground() {
+    // One environment function, written twice: the horizon, eased toward the
+    // zenith above it and toward the hemisphere's ground below it by
+    // sqrt(|y|), with no sun disc (the sun is a light). The native palette is
+    // probed at its ends and midpoint; the browser's spelling is pinned.
+    use hassault_native::atmosphere::Atmosphere;
+    use hassault_native::environment::Palette;
+    let a = Atmosphere {
+        sky_zenith: 0x2e6cc7,
+        sky_horizon: 0xd6dce0,
+        hemi_ground: 0xb58c5c,
+        ..Atmosphere::GLTF
+    };
+    let linear = |hex: u32| hex_channels(&format!("0x{hex:06x}")).map(srgb_to_linear);
+    let palette = Palette::of(&a);
+    assert_close("straight up", palette.radiance(1.0), linear(a.sky_zenith), 1e-5);
+    assert_close("level", palette.radiance(0.0), linear(a.sky_horizon), 1e-5);
+    assert_close("straight down", palette.radiance(-1.0), linear(a.hemi_ground), 1e-5);
+    let (h, z) = (linear(a.sky_horizon), linear(a.sky_zenith));
+    let quarter_up = [0, 1, 2].map(|i| h[i] + (z[i] - h[i]) * 0.5);
+    assert_close("a quarter up eases by sqrt", palette.radiance(0.25), quarter_up, 1e-5);
+
+    assert!(
+        ENVIRONMENT_TS.contains("const far = srgbHexToLinear(y >= 0 ? a.skyZenith : a.hemiGround);"),
+        "the browser's environment no longer reaches for the zenith above and the ground below"
+    );
+    assert!(
+        ENVIRONMENT_TS.contains("const t = Math.sqrt(Math.min(1, Math.abs(y)));"),
+        "the browser's environment no longer eases by sqrt(|y|)"
+    );
+    assert!(
+        PANEL_TSX.contains("mapEnvironment = createMapEnvironment(THREE, renderer, served);")
+            && PANEL_TSX.contains("scene.environment = mapEnvironment.texture;"),
+        "the browser no longer lights a modelled map with its own served sky"
+    );
+}
+
+// --- AA, bloom and dither (G6) -----------------------------------------------
+
+#[test]
+fn both_clients_bloom_linear_light_before_the_curve() {
+    // The bloom is thresholded on the scene's linear light and added back into
+    // it, and the curve runs after: native in `frame_from_scene`, the browser
+    // in `DISPLAY`. The old order (threshold and screen-blend after the curve)
+    // could not tell a lamp at 8 from one at 1.
+    assert!(
+        POST_WGSL.contains("light = light + textureSample(bloom, source_sampler, uv).rgb * intensity;")
+            && POST_WGSL.contains("return display(light);"),
+        "native no longer adds the bloom before the curve"
+    );
+    assert!(
+        POST_WGSL.contains("var c = scene_linear(in.uv + texel * vec2<f32>(-0.5, -0.5));"),
+        "native's prefilter no longer reads linear light"
+    );
+    assert!(
+        POST_CHAIN_TS.contains("if (intensity > 0.001) light += texture2D(bloom, vUv).rgb * intensity;")
+            && POST_CHAIN_TS.contains("gl_FragColor = vec4(srgb(aces(light)), 1.0);"),
+        "the browser no longer adds the bloom before the curve"
+    );
+    assert!(
+        POST_CHAIN_TS.contains("c *= 0.25 * exposure;"),
+        "the browser's prefilter no longer thresholds exposed light, as native's scene is"
+    );
+}
+
+#[test]
+fn moderate_bloom_is_medium_and_high_in_both_clients_and_off_at_low() {
+    // One default in four places: native's presets, the browser's chain, the
+    // server's schema and the dashboard's setting. Low draws none in either
+    // client: native's Low preset writes 0, the browser's Low tier row is off.
+    const SETTINGS_RS: &str = include_str!("../src/settings.rs");
+    const GRAPHICS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    const INDEX_TS: &str = include_str!("../../../packages/core/src/modules/hassault/index.ts");
+    const SCHEMA_PY: &str = include_str!("../../../backend/modules/hassault/settings_schema.py");
+    assert!(SETTINGS_RS.contains("pub const MODERATE_BLOOM: f32 = 0.25;"));
+    assert!(POST_CHAIN_TS.contains("export const MODERATE_BLOOM = 0.25;"));
+    assert!(SCHEMA_PY.contains(r#"_num("hassault.video.bloom", 0.25, "machine", 0, 1, native=True)"#));
+    assert!(between(INDEX_TS, "key: 'hassault.video.bloom'", "}").contains("default: 0.25,"));
+    let video = |q| {
+        let mut v = hassault_native::settings::Video::default();
+        v.apply_preset(q);
+        v
+    };
+    use hassault_native::settings::Quality;
+    assert_eq!(video(Quality::Low).bloom, 0.0);
+    assert_eq!(video(Quality::Medium).bloom, 0.25);
+    assert_eq!(video(Quality::High).bloom, 0.25);
+    let low = between(GRAPHICS_TS, "low: {", "},");
+    assert!(low.contains("bloom: false,"), "the browser's Low draws bloom");
+    for tier in ["medium: {", "high: {"] {
+        assert!(between(GRAPHICS_TS, tier, "},").contains("bloom: true,"), "the browser's {tier} has no bloom");
+    }
+}
+
+#[test]
+fn native_medium_anti_aliases_with_fxaa_and_the_rest_multisample() {
+    // The browser's Medium multisamples its canvas; native's Medium has MSAA
+    // 1 for fill rate and smooths its edges with FXAA instead. High and Ultra
+    // multisample in both.
+    use hassault_native::settings::{Quality, Video};
+    for (q, msaa, fxaa) in [
+        (Quality::Low, 1, false),
+        (Quality::Medium, 1, true),
+        (Quality::High, 4, false),
+        (Quality::Ultra, 8, false),
+    ] {
+        let mut v = Video::default();
+        v.apply_preset(q);
+        assert_eq!((v.msaa, v.fxaa), (msaa, fxaa), "{q:?}");
+    }
+    assert!(Video::default().fxaa, "the default level is Medium, which has FXAA");
+}
+
+#[test]
+fn a_glowing_material_emits_in_both_clients() {
+    // Every map's lamps, screens and LEDs are `KHR_materials_emissive_strength`
+    // materials at 4-10. three adds `emissive * emissiveIntensity` to the light
+    // leaving the surface; native carries the strength in the AO attribute as
+    // `1 + strength` and adds `color * glow` before the exposure, so the HDR
+    // bloom has the same lamps to find in both.
+    const WORLD3D_RS: &str = include_str!("../src/world3d.rs");
+    assert!(WORLD3D_RS.contains("prim.material().emissive_strength().unwrap_or(1.0)"));
+    assert!(WORLD3D_RS.contains("return 1.0 + glow;"));
+    assert!(SHADER_WGSL.contains("let glow = max(in.ao - 1.0, 0.0);"));
+    assert!(SHADER_WGSL.contains("radiance = radiance + in.color * glow;"));
+}
+
+// --- Shadows and normals (G6) ------------------------------------------------
+
+#[test]
+fn both_clients_fit_the_sun_shadow_round_what_is_drawn_at_4096_on_high() {
+    // One fit in both: a sphere round the bounds of the drawn geometry (native
+    // `shadow.rs` `fit` over the render vertices, the browser's `shadowSphere`
+    // over `drawnBounds`). The browser used to fit `MAP_CONFIGS`' hand-written
+    // extent, which was coarser than native on eight maps and narrower than
+    // Junk Flea. Both shadow maps render once per map, so there is no texel
+    // snapping to keep in step: nothing moves under the camera.
+    const SHADOW_RS: &str = include_str!("../src/shadow.rs");
+    const SHADOW_FIT_TS: &str = include_str!("../../../packages/core/src/modules/hassault/shadow-fit.ts");
+    const PANEL_TSX: &str = include_str!("../../../packages/core/src/modules/hassault/HorribleAssaultPanel.tsx");
+    const GRAPHICS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    assert!(SHADOW_RS.contains("let radius = ((max - min) * 0.5).length().max(1.0);"));
+    assert!(SHADOW_RS.contains("Mat4::orthographic_rh(-radius, radius, -radius, radius,"));
+    assert!(SHADOW_FIT_TS.contains("radius: Math.max(1, Math.sqrt(dx * dx + dy * dy + dz * dz) / 2),"));
+    assert!(PANEL_TSX.contains("? shadowSphere(drawn.min, drawn.max)"), "the browser's modelled maps no longer fit the drawn bounds");
+    assert!(PANEL_TSX.contains("cam.left = -radius;") && PANEL_TSX.contains("cam.top = radius;"));
+
+    use hassault_native::settings::{Quality, Video};
+    let mut v = Video::default();
+    v.apply_preset(Quality::High);
+    assert_eq!(v.shadow_level.quality().size, 4096, "native High's shadow map");
+    assert!(between(GRAPHICS_TS, "high: {", "},").contains("shadowSize: 4096,"), "the browser High's shadow map");
+}
+
+#[test]
+fn both_clients_shade_the_maps_with_their_exported_normals() {
+    // The export keeps creases hard (`mark_sharp_edges`) and smooths the rest;
+    // native reads those normals, and the browser now keeps them too rather than
+    // averaging every face round each vertex (`computeVertexNormals`), which
+    // moved 20% of vertices by over a degree.
+    const WORLD3D_TS: &str = include_str!("../../../packages/core/src/modules/hassault/world3d.ts");
+    const WORLD3D_RS: &str = include_str!("../src/world3d.rs");
+    assert!(WORLD3D_TS.contains("if (!geom.attributes.normal) geom.computeVertexNormals();"));
+    assert!(!WORLD3D_TS.contains("\n    geom.computeVertexNormals();"), "the browser recomputes the map's normals again");
+    assert!(WORLD3D_RS.contains(".read_normals()"));
 }

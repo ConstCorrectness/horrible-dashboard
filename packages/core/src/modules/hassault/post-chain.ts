@@ -1,34 +1,58 @@
 /**
- * What happens between the scene and the canvas: bloom, then sharpening.
+ * What happens between the scene and the canvas: bloom, the tone curve,
+ * sharpening and a dither.
  *
  * **The native client's chain, pass for pass** (`apps/native-fps/src/post.wgsl`,
  * `post.rs`): the same threshold and knee, the same five-level 13-tap
- * downsample and 3×3 tent upsample, the same screen blend, the same
- * contrast-adaptive sharpening. `browser_parity.rs` pins the numbers in both.
+ * downsample and 3×3 tent upsample, the same contrast-adaptive sharpening, the
+ * same dither. `browser_parity.rs` pins the numbers in both. Native also has
+ * FXAA, for its Medium level; the browser's Medium multisamples instead.
  *
- * **On display-referred light**, as native has it: what passes the threshold
- * is what is already near white (lamps, screens, the sun, a muzzle flash), not
- * a sunlit wall. three tone maps inside each material only when drawing to the
- * canvas, so with the chain on the scene goes to a linear half-float target and
- * `DISPLAY` applies three's own ACES and sRGB curve to it, the same arithmetic
- * the materials would have done. Fog, sky and every material are untouched.
+ * **HDR bloom.** three tone maps inside each material only when drawing to the
+ * canvas, so with the chain on the scene goes to a linear half-float target.
+ * The bloom is thresholded on that linear light (times the exposure), so what
+ * glows is what is brighter than white — a lamp's emissive at 6, the sun, a
+ * screen, the sun's disc — by how far over it is, and a sunlit wall (about 0.95)
+ * does not. (The muzzle flash is unlit at 1 and has its own wider cone.)
+ * `DISPLAY` then adds the glow to the scene and applies three's own ACES and
+ * sRGB curve, the arithmetic the materials would have done, so the glow rolls
+ * off into the curve's shoulder with the light it came from. Every material is
+ * untouched; the clear colour and the fog colour are run backwards through the
+ * curve for the length of the scene render (`sceneColoursForChain`), because
+ * inside a render target three mixes fog in linear light *before* the curve —
+ * the order native uses always.
  *
  * **Off costs nothing.** With bloom and sharpening both at zero the chain is
  * skipped and the frame is the plain `renderer.render` it always was, canvas
  * MSAA included.
  *
  * Settings are the native client's (`hassault.video.bloom`, `hassault.video.sharpen`),
- * machine-scoped, 0 by default at every browser tier, as at every native tier
- * below Ultra.
+ * machine-scoped. Bloom defaults to 0.25 (native `MODERATE_BLOOM`, Medium's and
+ * High's), and the browser draws it where its tier's `bloom` row is on — off at
+ * Low, so Low still skips the chain.
  */
 import type * as THREE from 'three';
 
+/** `hassault.video.bloom`'s default: native `MODERATE_BLOOM`, Medium's and High's. */
+export const MODERATE_BLOOM = 0.25;
+
 /** Bloom mips below the half-resolution first one (native `LEVELS`). */
 export const LEVELS = 5;
-/** What passes the threshold, on the display-referred image (native `THRESHOLD`). */
-export const THRESHOLD = 0.82;
-/** The soft knee around it (native `KNEE`). */
-export const KNEE = 0.12;
+/** What passes the threshold, in exposed linear light (native `THRESHOLD`). */
+export const THRESHOLD = 1.4;
+/** The soft knee's half-width around it (native `KNEE`). */
+export const KNEE = 0.5;
+
+/**
+ * The share of a colour of luminance `l` the prefilter keeps: `PREFILTER`'s
+ * soft-knee arithmetic on the CPU, so the threshold can be tested against the
+ * scenes it was tuned on.
+ */
+export function bloomShare(l: number, threshold = THRESHOLD, knee = KNEE): number {
+  const k = Math.max(knee, 1e-4);
+  const soft = Math.min(Math.max(l - threshold + k, 0), 2 * k);
+  return Math.max(0, Math.max((soft * soft) / (4 * k), l - threshold) / Math.max(l, 1e-4));
+}
 
 const VERTEX = /* glsl */ `
 varying vec2 vUv;
@@ -37,11 +61,15 @@ void main() {
   gl_Position = vec4(position.xy, 0.0, 1.0);
 }`;
 
-/** three's own ACES (`tonemapping_pars_fragment`) and sRGB OETF, verbatim, so
- * the chain's image is the canvas's. */
+/** The scene plus its bloom, through three's own ACES (`tonemapping_pars_fragment`)
+ * and sRGB OETF, verbatim, so the chain's image is the canvas's. The exposure
+ * is applied to the scene here rather than inside `aces`, because the bloom was
+ * taken from exposed light already. */
 const DISPLAY = /* glsl */ `
 uniform sampler2D source;
+uniform sampler2D bloom;
 uniform float exposure;
+uniform float intensity;
 varying vec2 vUv;
 vec3 RRTAndODTFit(vec3 v) {
   vec3 a = v * (v + 0.0245786) - 0.000090537;
@@ -57,7 +85,7 @@ vec3 aces(vec3 color) {
     vec3(1.60475, -0.10208, -0.00327),
     vec3(-0.53108, 1.10813, -0.07276),
     vec3(-0.07367, -0.00605, 1.07602));
-  color *= exposure / 0.6;
+  color = color / 0.6;
   color = ACESInputMat * color;
   color = RRTAndODTFit(color);
   color = ACESOutputMat * color;
@@ -67,7 +95,9 @@ vec3 srgb(vec3 v) {
   return mix(pow(v, vec3(0.41666)) * 1.055 - vec3(0.055), v * 12.92, vec3(lessThanEqual(v, vec3(0.0031308))));
 }
 void main() {
-  gl_FragColor = vec4(srgb(aces(texture2D(source, vUv).rgb)), 1.0);
+  vec3 light = texture2D(source, vUv).rgb * exposure;
+  if (intensity > 0.001) light += texture2D(bloom, vUv).rgb * intensity;
+  gl_FragColor = vec4(srgb(aces(light)), 1.0);
 }`;
 
 /** `fs_prefilter`: half resolution, four taps, a quadratic soft knee. */
@@ -76,13 +106,15 @@ uniform sampler2D source;
 uniform vec2 texel;
 uniform float threshold;
 uniform float knee;
+uniform float exposure;
 varying vec2 vUv;
 void main() {
   vec3 c = texture2D(source, vUv + texel * vec2(-0.5, -0.5)).rgb;
   c += texture2D(source, vUv + texel * vec2(0.5, -0.5)).rgb;
   c += texture2D(source, vUv + texel * vec2(-0.5, 0.5)).rgb;
   c += texture2D(source, vUv + texel * vec2(0.5, 0.5)).rgb;
-  c *= 0.25;
+  // Exposed, as native's scene already is.
+  c *= 0.25 * exposure;
   float k = max(knee, 1e-4);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   float soft = clamp(l - threshold + k, 0.0, 2.0 * k);
@@ -117,14 +149,16 @@ void main() {
   gl_FragColor = vec4(o / 16.0, 1.0);
 }`;
 
-/** `fs_composite`: contrast-adaptive sharpening, then the bloom by screen blend. */
+/** `fs_composite`: contrast-adaptive sharpening, then the dither. */
 const COMPOSITE = /* glsl */ `
 uniform sampler2D source;
-uniform sampler2D bloom;
 uniform vec2 texel;
-uniform float intensity;
 uniform float amount;
 varying vec2 vUv;
+// Interleaved gradient noise (Jimenez), as native's \`ign\`.
+float ign(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 void main() {
   vec3 color = texture2D(source, vUv).rgb;
   if (amount > 0.001) {
@@ -140,11 +174,11 @@ void main() {
     vec3 wgt = adapt * peak;
     color = clamp((color + (n + s + w + e) * wgt) / (vec3(1.0) + 4.0 * wgt), vec3(0.0), vec3(1.0));
   }
-  if (intensity > 0.001) {
-    vec3 g = texture2D(bloom, vUv).rgb * intensity;
-    color = vec3(1.0) - (vec3(1.0) - color) * (vec3(1.0) - g);
-  }
-  gl_FragColor = vec4(color, 1.0);
+  // One step of triangular noise on the 8-bit canvas, so a sky or a fogged
+  // corridor quantises as grain rather than bands. \`color\` is already
+  // sRGB-encoded here (DISPLAY did it), so the step is 1/255 as it stands.
+  color += (ign(gl_FragCoord.xy) + ign(gl_FragCoord.xy + vec2(47.0, 17.0)) - 1.0) / 255.0;
+  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }`;
 
 /** three's ACES (column-major, as GLSL reads its `mat3`), for the inverse. */
@@ -213,6 +247,39 @@ export function inverseAces(target: Vec3, exposure: number): Vec3 {
   return mul(ACES_IN_INV, v).map((x) => Math.max(0, (x * 0.6) / exposure)) as Vec3;
 }
 
+/**
+ * Put the scene's clear and fog colours into the chain's space for one render,
+ * and return the function that puts them back.
+ *
+ * Both are colours the player has to *see* exactly: the canvas never tone maps
+ * the background, and on the canvas three mixes fog after its colour-space
+ * encode, so a fully fogged wall is the map's hex. Inside the chain's target
+ * both go through `DISPLAY`'s curve with everything else — and fog is mixed in
+ * linear light first — so unswapped, the sky would come back lifted and the
+ * far end of a corridor would recede into grey instead of the map's colour.
+ * Native does the same to its uniforms (`display_hex_to_scene`, `atmosphere.rs`).
+ */
+export function sceneColoursForChain(
+  three: typeof THREE,
+  scene: THREE.Scene,
+  exposure: number,
+): () => void {
+  const toScene = (c: THREE.Color): THREE.Color => {
+    const [r, g, b] = inverseAces([c.r, c.g, c.b].map((x) => Math.min(1, x)) as Vec3, exposure);
+    return new three.Color(r, g, b);
+  };
+  const background = scene.background;
+  const swapBackground = background && (background as THREE.Color).isColor;
+  if (swapBackground) scene.background = toScene(background as THREE.Color);
+  const fog = scene.fog;
+  const fogColor = fog ? fog.color.clone() : null;
+  if (fog) fog.color.copy(toScene(fog.color));
+  return () => {
+    if (swapBackground) scene.background = background;
+    if (fog && fogColor) fog.color.copy(fogColor);
+  };
+}
+
 export interface PostSettings {
   /** 0..1, `hassault.video.bloom`. */
   bloom: number;
@@ -266,20 +333,24 @@ export class PostChain {
       });
     const v2 = () => ({ value: new three.Vector2() });
     this.materials = {
-      display: make(DISPLAY, { source: { value: null }, exposure: { value: 1 } }),
+      display: make(DISPLAY, {
+        source: { value: null },
+        bloom: { value: null },
+        exposure: { value: 1 },
+        intensity: { value: 0 },
+      }),
       prefilter: make(PREFILTER, {
         source: { value: null },
         texel: v2(),
         threshold: { value: THRESHOLD },
         knee: { value: KNEE },
+        exposure: { value: 1 },
       }),
       down: make(DOWN, { source: { value: null }, texel: v2() }),
       up: make(UP, { source: { value: null }, texel: v2() }),
       composite: make(COMPOSITE, {
         source: { value: null },
-        bloom: { value: null },
         texel: v2(),
-        intensity: { value: 0 },
         amount: { value: 0 },
       }),
     };
@@ -365,35 +436,25 @@ export class PostChain {
     const prior = r.getRenderTarget();
     const autoClear = r.autoClear;
 
-    // The clear colour, pre-distorted so that tone mapping it gives back the
-    // colour the canvas would have cleared to (`inverseAces`).
-    const background = scene.background;
-    const swapped =
-      background && (background as THREE.Color).isColor
-        ? (background as THREE.Color).clone()
-        : null;
-    if (swapped) {
-      const want = swapped.clone();
-      const [r0, g0, b0] = inverseAces(
-        [want.r, want.g, want.b].map((c) => Math.min(1, c)) as Vec3,
-        r.toneMappingExposure,
-      );
-      scene.background = new this.three.Color(r0, g0, b0);
+    // The clear and fog colours, pre-distorted so that tone mapping them gives
+    // back the colours the canvas would have shown (`inverseAces`).
+    const restore = sceneColoursForChain(this.three, scene, r.toneMappingExposure);
+    try {
+      r.setRenderTarget(sceneTarget);
+      r.render(scene, camera);
+    } finally {
+      restore();
     }
-    r.setRenderTarget(sceneTarget);
-    r.render(scene, camera);
-    if (swapped) scene.background = background;
     r.autoClear = true;
 
     const m = this.materials;
-    m.display.uniforms.source.value = sceneTarget.texture;
-    m.display.uniforms.exposure.value = r.toneMappingExposure;
-    this.pass(m.display, display);
-
+    const exposure = r.toneMappingExposure;
     const bloom = Math.min(1, Math.max(0, settings.bloom));
     if (bloom > 0.001 && this.mips.length > 0) {
-      m.prefilter.uniforms.source.value = display.texture;
-      m.prefilter.uniforms.texel.value.set(1 / display.width, 1 / display.height);
+      // From the scene's linear light, before the curve.
+      m.prefilter.uniforms.source.value = sceneTarget.texture;
+      m.prefilter.uniforms.texel.value.set(1 / sceneTarget.width, 1 / sceneTarget.height);
+      m.prefilter.uniforms.exposure.value = exposure;
       this.pass(m.prefilter, this.mips[0]);
       for (let i = 1; i < this.mips.length; i += 1) {
         const from = this.mips[i - 1];
@@ -412,10 +473,14 @@ export class PostChain {
       r.autoClear = true;
     }
 
+    m.display.uniforms.source.value = sceneTarget.texture;
+    m.display.uniforms.bloom.value = this.mips[0]?.texture ?? null;
+    m.display.uniforms.exposure.value = exposure;
+    m.display.uniforms.intensity.value = bloom > 0.001 ? bloom : 0;
+    this.pass(m.display, display);
+
     m.composite.uniforms.source.value = display.texture;
-    m.composite.uniforms.bloom.value = this.mips[0]?.texture ?? null;
     m.composite.uniforms.texel.value.set(1 / display.width, 1 / display.height);
-    m.composite.uniforms.intensity.value = bloom;
     m.composite.uniforms.amount.value = Math.min(1, Math.max(0, settings.sharpen));
     this.pass(m.composite, prior);
     r.autoClear = autoClear;

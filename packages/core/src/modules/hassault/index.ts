@@ -380,9 +380,17 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.bloom',
       title: 'Bloom',
       description:
-        '0 (off) to 1. A glow on what is already near white — lamps, screens, the sun, a muzzle flash — not a haze over the scene.',
+        '0 (off) to 1. A glow on light brighter than white — lamps, screens, LEDs, the sun — not a haze over the scene. 0.25 is the Medium and High default; the browser draws it where its graphics level’s Bloom row is on.',
       type: 'number',
-      default: 0,
+      default: 0.25,
+    },
+    {
+      key: 'hassault.video.fxaa',
+      title: 'Native client: FXAA',
+      description:
+        'Smooths edges from the finished image in one full-screen pass. Native Medium’s anti-aliasing, where MSAA is off; High and Ultra multisample instead.',
+      type: 'boolean',
+      default: true,
     },
     {
       key: 'hassault.video.sky',

@@ -276,8 +276,12 @@ export function createPropEnvironment(
   const sky = { r: 0xbf, g: 0xd4, b: 0xff };
   const ground = { r: 0x33, g: 0x30, b: 0x2c };
   for (let y = 0; y < H; y++) {
-    // Row 0 is the top of an equirect map, which is up.
-    const t = y / (H - 1);
+    // Row 0 is the **bottom**: a `DataTexture` uploads with `flipY` off, so
+    // row 0 is `v = 0`, and three's `equirectUv` puts `v = 0` straight down.
+    // This loop once assumed the opposite and lit every gun from below — a
+    // mirror sphere reflected #595c64 at its top and #9fafcf at its bottom.
+    // `rowHeight` in `environment.ts` is the mapping, tested.
+    const t = 1 - y / (H - 1);
     const r = Math.round(sky.r + (ground.r - sky.r) * t);
     const g = Math.round(sky.g + (ground.g - sky.g) * t);
     const b = Math.round(sky.b + (ground.b - sky.b) * t);

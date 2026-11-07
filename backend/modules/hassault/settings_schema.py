@@ -216,6 +216,8 @@ SCHEMA: tuple[SettingSpec, ...] = (
     _flag("hassault.video.vsync", False, "machine", native=True),
     # The preset rows: defaults are what `medium` writes.
     _num("hassault.video.msaa", 1, "machine", 1, 8, choices=(1, 2, 4, 8), native=True),
+    # Medium's anti-aliasing, where MSAA is 1 (native `Video::fxaa`).
+    _flag("hassault.video.fxaa", True, "machine", native=True),
     _flag("hassault.video.antialias", False, "machine", native=True),
     _num(
         "hassault.video.anisotropy",
@@ -250,7 +252,8 @@ SCHEMA: tuple[SettingSpec, ...] = (
         choices=(0, 8, 16, 32, 64),
         native=True,
     ),
-    _num("hassault.video.bloom", 0, "machine", 0, 1, native=True),
+    # 0.25 is Medium's and High's (native `MODERATE_BLOOM`): Medium is the default.
+    _num("hassault.video.bloom", 0.25, "machine", 0, 1, native=True),
     _flag("hassault.video.sky", True, "machine", native=True),
     _num("hassault.video.sharpen", 0, "machine", 0, 1, native=True),
     _num("hassault.video.brightness", 1, "machine", 0.6, 1.6, native=True),

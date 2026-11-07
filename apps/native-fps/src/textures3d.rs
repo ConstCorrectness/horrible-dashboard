@@ -1410,112 +1410,50 @@ pub fn build_pbr_texture_array(
 
     (texture, view, sampler)
 }
-/// Generates a 128x64 prefiltered equirectangular sky-to-ground environment map,
-/// matching Three.js `createPropEnvironment`.
-pub fn build_environment_map(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
-    const W: u32 = 128;
-    const H: u32 = 64;
-    let mut data = vec![0u8; (W * H * 4) as usize];
-    let sky = [0xbf as f32, 0xd4 as f32, 0xff as f32];
-    let ground = [0x33 as f32, 0x30 as f32, 0x2c as f32];
+/// The environment the pbr group binds next to the surface array: the map's
+/// prefiltered sky cube, the DFG table and their sampler (`environment.rs`).
+/// Cloned into the texture-quality worker, which rebuilds the group around a
+/// new array and must keep the same environment.
+#[derive(Clone)]
+pub struct EnvironmentViews {
+    pub cube: wgpu::TextureView,
+    pub sampler: wgpu::Sampler,
+    pub lut: wgpu::TextureView,
+}
 
-    for y in 0..H {
-        let t = y as f32 / (H - 1) as f32;
-        let r = (sky[0] + (ground[0] - sky[0]) * t).round() as u8;
-        let g = (sky[1] + (ground[1] - sky[1]) * t).round() as u8;
-        let b = (sky[2] + (ground[2] - sky[2]) * t).round() as u8;
-        for x in 0..W {
-            let i = ((y * W + x) * 4) as usize;
-            data[i] = r;
-            data[i + 1] = g;
-            data[i + 2] = b;
-            data[i + 3] = 255;
+impl EnvironmentViews {
+    pub fn of(environment: &crate::environment::Environment) -> EnvironmentViews {
+        EnvironmentViews {
+            cube: environment.cube_view.clone(),
+            sampler: environment.sampler.clone(),
+            lut: environment.lut_view.clone(),
         }
     }
-
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("env_map_texture"),
-        size: wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(W * 4),
-            rows_per_image: Some(H),
-        },
-        wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    let view = texture.create_view(&wgpu::TextureViewDescriptor {
-        label: Some("env_map_view"),
-        ..Default::default()
-    });
-
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("env_map_sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
-
-    (texture, view, sampler)
 }
 
 pub struct PbrResources {
     pub layout: wgpu::BindGroupLayout,
     pub bind_group: wgpu::BindGroup,
     pub _pbr_texture: wgpu::Texture,
-    pub _env_texture: wgpu::Texture,
 }
 
 impl PbrResources {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        Self::with_quality(device, queue, TEXTURE_SIZE, crate::mipmap::ANISOTROPY)
-    }
-
-    /// At the texture-quality setting's edge and the filtering row's anisotropy.
+    /// At the texture-quality setting's edge and the filtering row's anisotropy,
+    /// around the map's environment.
     pub fn with_quality(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         size: u32,
         anisotropy: u16,
+        environment: &EnvironmentViews,
     ) -> Self {
         let layout = bind_group_layout(device);
-        let (bind_group, pbr_texture, env_texture) =
-            bind_group_with(device, queue, &layout, size, anisotropy);
+        let (bind_group, pbr_texture) =
+            bind_group_around(device, queue, &layout, size, anisotropy, environment);
         Self {
             layout,
             bind_group,
             _pbr_texture: pbr_texture,
-            _env_texture: env_texture,
         }
     }
 }
@@ -1540,12 +1478,13 @@ pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // The map's prefiltered environment cube (`environment.rs`).
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
+                    view_dimension: wgpu::TextureViewDimension::Cube,
                     multisampled: false,
                 },
                 count: None,
@@ -1556,34 +1495,54 @@ pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // three's DFG table (`dfg_lut.rs`), read with the same sampler.
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     })
 }
 
+/// The group at the default texture quality, around an environment built from
+/// the modelled maps' default sky: for the preview examples, which draw one map
+/// and have no atmosphere of their own to hand. The bind group keeps the
+/// environment's textures alive; the third value is that environment, for a
+/// caller that wants to point it at another sky.
 pub fn bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
-) -> (wgpu::BindGroup, wgpu::Texture, wgpu::Texture) {
-    bind_group_with(
+) -> (wgpu::BindGroup, wgpu::Texture, crate::environment::Environment) {
+    let environment =
+        crate::environment::Environment::new(device, queue, &crate::atmosphere::Atmosphere::GLTF);
+    let (bind_group, texture) = bind_group_around(
         device,
         queue,
         layout,
         TEXTURE_SIZE,
         crate::mipmap::ANISOTROPY,
-    )
+        &EnvironmentViews::of(&environment),
+    );
+    (bind_group, texture, environment)
 }
 
-pub fn bind_group_with(
+/// Generate the surface array at `size` and bind it with `environment`.
+pub fn bind_group_around(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     size: u32,
     anisotropy: u16,
-) -> (wgpu::BindGroup, wgpu::Texture, wgpu::Texture) {
+    environment: &EnvironmentViews,
+) -> (wgpu::BindGroup, wgpu::Texture) {
     let (pbr_tex, pbr_view, pbr_sampler) = build_pbr_texture_array(device, queue, size, anisotropy);
-    let (env_tex, env_view, env_sampler) = build_environment_map(device, queue);
-
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("pbr-bind-group"),
         layout,
@@ -1598,16 +1557,19 @@ pub fn bind_group_with(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(&env_view),
+                resource: wgpu::BindingResource::TextureView(&environment.cube),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::Sampler(&env_sampler),
+                resource: wgpu::BindingResource::Sampler(&environment.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&environment.lut),
             },
         ],
     });
-
-    (bg, pbr_tex, env_tex)
+    (bg, pbr_tex)
 }
 
 #[cfg(test)]

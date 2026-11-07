@@ -42,7 +42,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// **Resolution is almost free per frame** — the map is rendered once, at load —
 /// so what it costs is memory (8192² of `Depth32Float` is 256 MB) and the time of
 /// that one pass. The taps are the per-fragment cost. 2048 with 16 taps is the
-/// browser's `sun.shadow.mapSize` and the old fixed setting.
+/// old fixed setting; 4096 is the browser's High `sun.shadow.mapSize`, and the
+/// browser fits its camera with this file's `fit` (`shadow-fit.ts`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShadowQuality {
     pub size: u32,

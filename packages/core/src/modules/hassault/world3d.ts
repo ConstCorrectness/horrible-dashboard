@@ -2184,7 +2184,14 @@ export function buildWorld3DFromGLTF(
       }
       geom.index.needsUpdate = true;
     }
-    geom.computeVertexNormals();
+    // The exported normals, carried through `applyMatrix4` above (which runs
+    // them through the normal matrix, Z flip included). Every map's export sets
+    // them — Blender's smoothing with `mark_sharp_edges` keeping creases hard —
+    // and native reads the same ones (`world3d.rs`). Recomputing them averaged
+    // every face round each vertex instead: on Dust II, Bank and Office 20% of
+    // vertices moved by over a degree and 2–4% by over ten, softening edges
+    // the export had kept sharp. Only a mesh without them is computed.
+    if (!geom.attributes.normal) geom.computeVertexNormals();
 
     const matList = Array.isArray(obj.material) ? obj.material : [obj.material];
     const matNames: string[] = [];

@@ -17,7 +17,7 @@ fn test_measure_prop_preload_and_upload_stall() {
     let camera_layout = hassault_native::atmosphere::camera_layout(&device);
     let _lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
 
-    let mut props = Props::new(&device, &camera_layout, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
+    let mut props = Props::new(&device, &camera_layout, hassault_native::renderer::SCENE_FORMAT, 1);
 
     println!("\n=== TIMING PROP PARSE & GPU UPLOAD BREAKDOWN ===");
     let mut total_upload_time = std::time::Duration::ZERO;

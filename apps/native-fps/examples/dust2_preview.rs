@@ -1,7 +1,7 @@
 //! Render a modelled map (Dust II unless `PREVIEW_MAP` names another: the real GLB,
 //! the real world shader, the photographed surfaces)
 //! from a camera you choose, offscreen to a PNG. For looking at textures and
-//! normal maps in place; the lighting is the default cube sun, not the game's.
+//! normal maps in place, lit by the map's served atmosphere (`served_atmosphere`).
 //!
 //! ```text
 //! cargo run --release --example dust2_preview -- out.png x y z yaw pitch [fov]
@@ -17,7 +17,10 @@ use wgpu::util::DeviceExt;
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 900;
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+// What every scene pipeline draws into: the client's own linear half-float
+// target, tone mapped afterwards by its post pass into `OUT_FORMAT`.
+const FORMAT: wgpu::TextureFormat = hassault_native::renderer::SCENE_FORMAT;
+const OUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +36,43 @@ fn main() {
         fov: num(6, 80.0),
     };
     pollster::block_on(run(&path, camera));
+}
+
+/// The final pass's optional steps, from the environment: `PREVIEW_BLOOM=0.25`,
+/// `PREVIEW_SHARPEN=0.3`, `PREVIEW_FXAA=1`, `PREVIEW_DITHER=1`. All off unset,
+/// which is `display_once`.
+fn preview_look() -> hassault_native::post::PostLook {
+    let num = |key: &str| std::env::var(key).ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+    let flag = |key: &str| std::env::var(key).map(|v| v == "1").unwrap_or(false);
+    hassault_native::post::PostLook {
+        bloom: num("PREVIEW_BLOOM"),
+        sharpen: num("PREVIEW_SHARPEN"),
+        fxaa: flag("PREVIEW_FXAA"),
+        dither: flag("PREVIEW_DITHER"),
+    }
+}
+
+/// `backend/modules/hassault/maps/<map>.json`'s `atmosphere` block, or the
+/// modelled maps' default when the file or the block is missing.
+fn served_atmosphere(map_name: &str) -> hassault_native::atmosphere::Atmosphere {
+    let path = format!(
+        "{}/../../backend/modules/hassault/maps/{map_name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let served = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|map| serde_json::from_value(map.get("atmosphere")?.clone()).ok());
+    match served {
+        Some(atmosphere) => {
+            println!("atmosphere: served by {map_name}.json");
+            atmosphere
+        }
+        None => {
+            println!("atmosphere: the modelled maps' default");
+            hassault_native::atmosphere::Atmosphere::GLTF
+        }
+    }
 }
 
 async fn run(path: &str, camera: Camera) {
@@ -69,13 +109,28 @@ async fn run(path: &str, camera: Camera) {
         .expect("device");
 
     let camera_layout = hassault_native::atmosphere::camera_layout(&device);
-    let lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
+    // The atmosphere the node serves for this map, read from the map's JSON in
+    // the backend (the modelled maps' default if it has none): the sun, the
+    // hemisphere and the image-based light all come from it, so a preview lit
+    // by the default would show a map nobody plays.
+    let atmosphere = served_atmosphere(map_name);
+    // Seen from the preview's own eye: the physical surfaces' highlights and
+    // reflections depend on where the eye is.
+    let lights_buffer = {
+        use wgpu::util::DeviceExt;
+        let lighting = hassault_native::atmosphere::Lighting::new(atmosphere, &[]);
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("lights"),
+            contents: bytemuck::cast_slice(&[lighting.uniform(camera.eye(), 0, 1.0)]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        })
+    };
 
     let vp = camera.view_projection(WIDTH, HEIGHT);
 
     let mut camera_uniform = [0.0f32; 40];
     camera_uniform[0..16].copy_from_slice(vp.as_ref());
-    camera_uniform[16] = 0.0055; // fog density
+    camera_uniform[16] = atmosphere.fog_density;
     camera_uniform[17] = 2.0;    // detail (sun + fill + hemisphere)
     camera_uniform[18] = 0.0;    // height
     camera_uniform[19] = 1.0;    // receives shadow
@@ -122,15 +177,21 @@ async fn run(path: &str, camera: Camera) {
             glam::Vec3::new(world.bounds.min[0], world.bounds.min[1], world.bounds.min[2]),
             glam::Vec3::new(world.bounds.max[0], world.bounds.max[1], world.bounds.max[2]),
         ),
-        hassault_native::atmosphere::Atmosphere::CUBE.sun_direction(),
-        hassault_native::shadow::ShadowQuality::default(),
+        atmosphere.sun_direction(),
+        // `PREVIEW_SHADOW=4096` for the High preset's edge; 2048 unset.
+        hassault_native::shadow::ShadowQuality {
+            size: std::env::var("PREVIEW_SHADOW").ok().and_then(|v| v.parse().ok()).unwrap_or(2048),
+            ..Default::default()
+        },
     );
 
     let detail_layout = hassault_native::detail::bind_group_layout(&device);
     let detail_group = hassault_native::detail::bind_group(&device, &queue, &detail_layout);
 
     let pbr_layout = hassault_native::textures3d::bind_group_layout(&device);
-    let (pbr_group, _, _) = hassault_native::textures3d::bind_group(&device, &queue, &pbr_layout);
+    let (pbr_group, _pbr_texture, mut environment) =
+        hassault_native::textures3d::bind_group(&device, &queue, &pbr_layout);
+    environment.update(&queue, &atmosphere);
 
     let world_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("world-pbr"),
@@ -203,11 +264,23 @@ async fn run(path: &str, camera: Camera) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
+        format: OUT_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
+    let scene_view = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let depth = device
         .create_texture(&wgpu::TextureDescriptor {
@@ -236,7 +309,7 @@ async fn run(path: &str, camera: Camera) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("map-render"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &color_view,
+                view: &scene_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -271,6 +344,17 @@ async fn run(path: &str, camera: Camera) {
         pass.draw(0..verts.len() as u32, 0..1);
     }
 
+    hassault_native::post::display_with(
+        &device,
+        &queue,
+        &mut encoder,
+        &scene_view,
+        size.width,
+        size.height,
+        &color_view,
+        OUT_FORMAT,
+        preview_look(),
+    );
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &color,

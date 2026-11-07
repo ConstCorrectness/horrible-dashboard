@@ -4,6 +4,8 @@ version = "0.2.1"
 edition = "2021"
 
 [dependencies]
+# f32 -> f16 for the environment cube (already in the tree through naga).
+half = "2"
 # Blocking WebSocket. Blocking on purpose: one reader thread owns the socket and
 # the game loop drains a channel, which needs no async runtime at all.
 tungstenite = { version = "0.21", features = ["handshake"] }
@@ -29,7 +31,7 @@ cpal = "0.18.2"
 # feature pulls the `image` crate in to decode textures for us, and it does not
 # handle the webp the GLB actually carries — so images are decoded below
 # instead, and this stays a document+buffer parser.
-gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength"] }
 # Texture decoding, webp and png.
 image = { version = "0.25", default-features = false, features = ["webp", "png"] }
 # Fast, deterministic 3D physics for character controllers, raycasts, and colliders.

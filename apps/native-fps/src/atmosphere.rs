@@ -251,7 +251,10 @@ impl Lighting {
             sun_color: with(srgb_hex_to_linear(a.sun_color), a.sun_intensity),
             fill_dir: dir(a.fill_dir),
             fill_color: with(srgb_hex_to_linear(a.fill_color), a.fill_intensity),
-            fog_color: with(srgb_hex_to_linear(a.fog_color), 0.0),
+            // Already run backwards through the tone curve: fog is mixed in
+            // the scene's linear light, before `display`, and a fully fogged
+            // pixel has to come out as the map's colour, not a lifted grey.
+            fog_color: with(display_hex_to_scene(a.fog_color), 0.0),
             sky_zenith: with(
                 srgb_hex_to_linear(a.sky_zenith),
                 if a.sun_disc { 1.0 } else { 0.0 },
@@ -302,6 +305,88 @@ pub fn default_lights_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     })
 }
 
+// --- the tone curve, on the CPU --------------------------------------------
+//
+// The scene is drawn in **pre-exposed linear light** into a half-float target
+// (the map's exposure times the player's brightness is applied in each shader,
+// `expose` in `lighting.wgsl.inc`), and tone mapped once, in `post.wgsl`'s
+// `display`. Two colours have to survive that curve unchanged — the clear
+// colour, which the browser never tone maps, and the fog colour, which a fully
+// fogged pixel must come out as — so they are handed to the GPU already run
+// backwards through it. `post-chain.ts` does the same to the browser's clear
+// colour (`inverseAces`); these are that function and its forward, ported.
+
+/// three's ACES (`ACESFilmicToneMapping`, `tonemapping_pars_fragment`),
+/// column-major as GLSL reads its `mat3`. `post.wgsl` and `post-chain.ts` carry
+/// the same numbers, and `browser_parity.rs` pins all three.
+pub const ACES_IN: [f32; 9] = [
+    0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777,
+];
+pub const ACES_OUT: [f32; 9] = [
+    1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602,
+];
+
+fn mul3(m: &[f32; 9], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0] * v[0] + m[3] * v[1] + m[6] * v[2],
+        m[1] * v[0] + m[4] * v[1] + m[7] * v[2],
+        m[2] * v[0] + m[5] * v[1] + m[8] * v[2],
+    ]
+}
+
+fn invert3(m: &[f32; 9]) -> [f32; 9] {
+    let [a, b, c, d, e, f, g, h, i] = m.map(|x| x as f64);
+    let ca = e * i - f * h;
+    let cb = -(d * i - f * g);
+    let cc = d * h - e * g;
+    let det = a * ca + b * cb + c * cc;
+    [
+        ca / det,
+        (c * h - b * i) / det,
+        (b * f - c * e) / det,
+        cb / det,
+        (a * i - c * g) / det,
+        (c * d - a * f) / det,
+        cc / det,
+        (b * g - a * h) / det,
+        (a * e - b * d) / det,
+    ]
+    .map(|x| x as f32)
+}
+
+/// three's ACES on a pre-exposed linear colour (exposure already applied),
+/// before the sRGB encode: what `post.wgsl`'s `display` computes.
+pub fn aces(color: [f32; 3]) -> [f32; 3] {
+    let v = mul3(&ACES_IN, color.map(|c| c / 0.6));
+    let fit = v.map(|x| (x * (x + 0.0245786) - 0.000090537) / (x * (0.983729 * x + 0.432951) + 0.238081));
+    mul3(&ACES_OUT, fit).map(|x| x.clamp(0.0, 1.0))
+}
+
+/// The pre-exposed linear colour `aces` maps to `target` (a linear display
+/// colour). Past the curve's ceiling there is no answer, and the brightest
+/// finite value stands in — `inverseAces` in `post-chain.ts`, which this is.
+pub fn inverse_aces(target: [f32; 3]) -> [f32; 3] {
+    let fit = mul3(&invert3(&ACES_OUT), target.map(|c| c.min(1.0)));
+    let v = fit.map(|y| {
+        // a(v)/b(v) = y, rearranged: (1 - 0.983729y)v² + (0.0245786 -
+        // 0.432951y)v - (0.000090537 + 0.238081y) = 0; the positive root.
+        let qa = 1.0 - 0.983729 * y;
+        let qb = 0.0245786 - 0.432951 * y;
+        let qc = -(0.000090537 + 0.238081 * y);
+        if qa <= 1e-6 {
+            return 1e3;
+        }
+        (-qb + (qb * qb - 4.0 * qa * qc).max(0.0).sqrt()) / (2.0 * qa)
+    });
+    mul3(&invert3(&ACES_IN), v).map(|x| (x * 0.6).max(0.0))
+}
+
+/// The scene-space colour a map's hex has to be written as for the window to
+/// show that hex: the clear colour, and the fog a distant wall fades into.
+pub fn display_hex_to_scene(hex: u32) -> [f32; 3] {
+    inverse_aces(srgb_hex_to_linear(hex))
+}
+
 /// A group-0 bind group: a camera-shaped uniform at 0, the lights at 1.
 pub fn camera_bind_group(
     device: &wgpu::Device,
@@ -328,6 +413,33 @@ pub fn camera_bind_group(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_inverse_tone_curve_round_trips_the_map_colours() {
+        // Every clear and fog colour a map serves has to come back out of the
+        // display pass as itself, or the far end of a corridor and the sky
+        // behind it stop matching the browser's.
+        for hex in [0x11161f, 0x9cbde8, 0x2a3040, 0xd8c8a8, 0x000000, 0xffffff] {
+            let want = super::srgb_hex_to_linear(hex);
+            let got = super::aces(super::display_hex_to_scene(hex));
+            for k in 0..3 {
+                // White sits at the curve's ceiling, where there is no exact
+                // preimage; everything a map actually uses is well under it.
+                let tol = if hex == 0xffffff { 0.02 } else { 2e-3 };
+                assert!((got[k] - want[k]).abs() < tol, "{hex:06x}[{k}]: {} vs {}", got[k], want[k]);
+            }
+        }
+    }
+
+    #[test]
+    fn mid_grey_lands_where_three_puts_it() {
+        // 0.18 at exposure 1.15, through three 0.184's `ACESFilmicToneMapping`:
+        // a reference value computed from the shader's own arithmetic, so a
+        // transcription slip in a coefficient shows up here.
+        let out = super::aces([0.18 * 1.15; 3]);
+        assert!((out[0] - 0.2525).abs() < 2e-3, "{out:?}");
+        assert!((out[0] - out[1]).abs() < 1e-3 && (out[1] - out[2]).abs() < 1e-3, "grey stays grey: {out:?}");
+    }
+
     use super::*;
 
     #[test]

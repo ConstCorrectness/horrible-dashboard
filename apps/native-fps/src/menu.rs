@@ -19,6 +19,8 @@
 
 use crate::controls::{self, Controls};
 use crate::hud::{OverlayVertex, Painter};
+use crate::text_kit::TextKit;
+use crate::ui_theme as theme;
 use crate::radar;
 use crate::settings::Settings;
 
@@ -161,6 +163,7 @@ pub enum Action {
     Vsync,
     Fov,
     Msaa,
+    Fxaa,
     Anisotropy,
     Textures,
     Shadows,
@@ -328,18 +331,38 @@ impl RowRect {
     }
 }
 
+// Sizes at 1080p. Everything is multiplied by `zoom(height)`, so the menu is
+// the same fraction of the screen at 720p and at 4K — it used to be fixed
+// pixels, a third the size at 4K.
 const PANEL_W: f32 = 460.0;
 const ROW_H: f32 = 34.0;
 const HEADER: f32 = 64.0;
 const FOOTER: f32 = 40.0;
 
-pub(crate) const TEXT: [f32; 4] = [0.88, 0.91, 0.94, 0.95];
-pub(crate) const TEXT_DIM: [f32; 4] = [0.62, 0.66, 0.70, 0.85];
-pub(crate) const ACCENT: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
-pub(crate) const PANEL_BG: [f32; 4] = [0.04, 0.05, 0.07, 0.96];
+/// The menu's scale: the HUD's own unit (`height / 360`, rounded) over its
+/// 1080p value. Not the HUD scale setting: that is for the in-match overlay,
+/// and a menu that shrank with it could shrink below what can be clicked.
+pub fn zoom(height: f32) -> f32 {
+    (height / 360.0).round().max(2.0) / 3.0
+}
+
+/// Whether a value reads as a figure — set in the monospace face, so a column
+/// of them lines up and a stepping number does not shuffle sideways.
+fn is_figure(value: &str) -> bool {
+    value.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-' || c == '+')
+        && value.chars().all(|c| c.is_ascii_digit() || ".,-+%x ms".contains(c))
+}
+
+// The menu's roles, over the shared palette (`ui_theme`). Menu text is a
+// little more opaque than the HUD's: it sits on a solid panel, not over the
+// world.
+pub(crate) const TEXT: [f32; 4] = theme::with_alpha(theme::TEXT, 0.95);
+pub(crate) const TEXT_DIM: [f32; 4] = theme::with_alpha(theme::TEXT_DIM, 0.85);
+pub(crate) const ACCENT: [f32; 4] = theme::ACCENT;
+pub(crate) const PANEL_BG: [f32; 4] = theme::panel(0.96);
 const ROW_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
-const SELECTED_BG: [f32; 4] = [0.49, 0.91, 0.53, 0.14];
-pub(crate) const SCRIM: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+const SELECTED_BG: [f32; 4] = theme::with_alpha(theme::ACCENT, 0.14);
+pub(crate) const SCRIM: [f32; 4] = theme::SCRIM;
 
 #[derive(Default)]
 pub struct Menu {
@@ -678,6 +701,7 @@ impl Menu {
                     },
                     Action::MapLights,
                 ),
+                row("FXAA", on_off(settings.video.fxaa), Action::Fxaa),
                 row("BLOOM", percent_or_off(settings.video.bloom), Action::Bloom),
                 row("SKY", on_off(settings.video.sky), Action::Sky),
                 row(
@@ -867,15 +891,16 @@ impl Menu {
 
     /// Where every row lands, in window pixels.
     pub fn rows_at(&self, count: usize, width: f32, height: f32) -> Vec<RowRect> {
-        let panel_h = HEADER + count as f32 * ROW_H + FOOTER;
-        let x = (width - PANEL_W) / 2.0;
+        let k = zoom(height);
+        let panel_h = (HEADER + count as f32 * ROW_H + FOOTER) * k;
+        let x = (width - PANEL_W * k) / 2.0;
         let y = (height - panel_h) / 2.0;
         (0..count)
             .map(|i| RowRect {
-                x: x + 16.0,
-                y: y + HEADER + i as f32 * ROW_H,
-                w: PANEL_W - 32.0,
-                h: ROW_H,
+                x: x + 16.0 * k,
+                y: y + (HEADER + i as f32 * ROW_H) * k,
+                w: (PANEL_W - 32.0) * k,
+                h: ROW_H * k,
             })
             .collect()
     }
@@ -923,6 +948,7 @@ impl Menu {
         in_match: bool,
         width: f32,
         height: f32,
+        text: Option<&TextKit>,
         out: &mut Vec<OverlayVertex>,
     ) {
         if !self.open {
@@ -930,32 +956,47 @@ impl Menu {
         }
         let rows = self.rows(settings, keys, in_match);
         let rects = self.rows_at(rows.len(), width, height);
-        let mut p = Painter::new(out, width, height);
+        let mut p = Painter::with_text(out, width, height, text);
 
         // The world is still being drawn behind this and still moving — a scrim
         // is what makes the text readable over it without hiding that the game
         // is there.
         p.rect(0.0, 0.0, width, height, SCRIM);
 
-        let panel_h = HEADER + rows.len() as f32 * ROW_H + FOOTER;
-        let px = (width - PANEL_W) / 2.0;
+        let k = zoom(height);
+        let panel_w = PANEL_W * k;
+        let panel_h = (HEADER + rows.len() as f32 * ROW_H + FOOTER) * k;
+        let px = (width - panel_w) / 2.0;
         let py = (height - panel_h) / 2.0;
-        p.rect(px, py, PANEL_W, panel_h, PANEL_BG);
-        // A rule under the title rather than a border all round: the panel edge
-        // is already given by the fill, and a full outline on a translucent panel
-        // reads as a dialog box from another decade.
-        p.rect(px, py, PANEL_W, 2.0, ACCENT);
+        // An angular sheet: chamfered top-right like the browser's buy menu, a
+        // faint grid under the rows, and a 2px accent along the top edge rather
+        // than a border all round — a full outline on a translucent panel reads
+        // as a dialog box from another decade.
+        let cut = 14.0 * k;
+        p.rect(px, py + cut, panel_w, panel_h - cut, PANEL_BG);
+        p.rect(px, py, panel_w - cut, cut, PANEL_BG);
+        p.tri_aa(
+            (px + panel_w - cut, py),
+            (px + panel_w, py + cut),
+            (px + panel_w - cut, py + cut),
+            PANEL_BG,
+        );
+        p.grid(px, py, panel_w, panel_h, 18.0 * k, theme::GRID);
+        p.rect(px, py, panel_w - cut, 2.0, ACCENT);
 
-        p.text(px + 16.0, py + 18.0, 2.6, TEXT, self.title());
-        p.text(px + 16.0, py + 42.0, 1.3, TEXT_DIM, self.hint());
+        // The page title: the display face, tracked and heavy, the hint in the
+        // muted token under it.
+        p.text(px + 16.0 * k, py + 16.0 * k, 2.6 * k, TEXT, self.title());
+        p.text(px + 16.0 * k, py + 42.0 * k, 1.3 * k, TEXT_DIM, self.hint());
 
+        let label_scale = 1.7 * k;
         for (i, (row, rect)) in rows.iter().zip(rects.iter()).enumerate() {
             let selected = i == self.cursor;
             p.rect(
                 rect.x,
-                rect.y + 2.0,
+                rect.y + 2.0 * k,
                 rect.w,
-                rect.h - 4.0,
+                rect.h - 4.0 * k,
                 if selected { SELECTED_BG } else { ROW_BG },
             );
             if selected {
@@ -963,37 +1004,71 @@ impl Menu {
                 // highlight colour on the text: the text has to stay readable,
                 // and a row whose label changes colour when picked reads as
                 // disabled to about half the people who see it.
-                p.rect(rect.x, rect.y + 2.0, 3.0, rect.h - 4.0, ACCENT);
+                p.rect(rect.x, rect.y + 2.0 * k, 3.0 * k, rect.h - 4.0 * k, ACCENT);
             }
-            let text_y = rect.y + rect.h / 2.0 - 5.0;
+            let text_y = rect.y + (rect.h - 7.0 * label_scale) / 2.0;
             p.text(
-                rect.x + 14.0,
+                rect.x + 14.0 * k,
                 text_y,
-                1.7,
+                label_scale,
                 if selected { TEXT } else { TEXT_DIM },
                 &row.label,
             );
             if !row.value.is_empty() {
-                p.text_right(
-                    rect.x + rect.w - 14.0,
-                    text_y,
-                    1.7,
-                    if selected { ACCENT } else { TEXT_DIM },
-                    &row.value,
+                // The value as a chip: a figure in the monospace face, a word in
+                // the display face, and the stepping arrows only on the row they
+                // would act on.
+                let figure = is_figure(&row.value);
+                let vw = if figure {
+                    p.num_width(&row.value, label_scale)
+                } else {
+                    p.text_width(&row.value, label_scale)
+                };
+                let arrows = 9.0 * k;
+                let right = rect.x + rect.w - 10.0 * k;
+                let chip_x = right - vw - arrows * 2.0 - 8.0 * k;
+                p.rect(
+                    chip_x,
+                    rect.y + 6.0 * k,
+                    right - chip_x,
+                    rect.h - 12.0 * k,
+                    if selected { [1.0, 1.0, 1.0, 0.06] } else { [1.0, 1.0, 1.0, 0.025] },
                 );
+                let colour = if selected { ACCENT } else { TEXT_DIM };
+                let vx = right - arrows - 4.0 * k - vw;
+                if figure {
+                    p.num(vx, text_y, label_scale, colour, &row.value);
+                } else {
+                    p.text(vx, text_y, label_scale, colour, &row.value);
+                }
+                if selected {
+                    let cy = rect.y + rect.h / 2.0;
+                    let a = 3.5 * k;
+                    let lx = chip_x + 4.0 * k;
+                    p.tri_aa((lx + a, cy - a), (lx + a, cy + a), (lx, cy), ACCENT);
+                    let rx = right - 4.0 * k;
+                    p.tri_aa((rx - a, cy - a), (rx - a, cy + a), (rx, cy), ACCENT);
+                }
             }
         }
 
         if self.page == Page::Crosshair {
-            self.preview(&mut p, settings, px + PANEL_W + 12.0, py);
+            self.preview(&mut p, settings, px + panel_w + 12.0 * k, py);
         }
 
-        let footer_y = py + panel_h - FOOTER + 12.0;
-        p.text(px + 16.0, footer_y, 1.3, TEXT_DIM, "< > CHANGES A VALUE");
+        let footer_y = py + panel_h - FOOTER * k + 14.0 * k;
+        p.rule(
+            px + 16.0 * k,
+            footer_y - 8.0 * k,
+            panel_w - 32.0 * k,
+            [1.0, 1.0, 1.0, 0.10],
+            ACCENT,
+        );
+        p.text(px + 16.0 * k, footer_y, 1.3 * k, TEXT_DIM, "< > CHANGES A VALUE");
         p.text_right(
-            px + PANEL_W - 16.0,
+            px + panel_w - 16.0 * k,
             footer_y,
-            1.3,
+            1.3 * k,
             TEXT_DIM,
             "SAVED ON THE NODE",
         );
@@ -1008,26 +1083,28 @@ impl Menu {
     /// Drawn by `Painter::crosshair_at`, the HUD's own reticle, at the HUD's own
     /// unit, so what this shows is what the match will show.
     fn preview(&self, p: &mut Painter, settings: &Settings, x: f32, y: f32) {
-        const TILE: f32 = 120.0;
+        let k = zoom(p.height());
+        let tile = 120.0 * k;
         const SURFACES: [(&str, [f32; 4]); 3] = [
             ("SKY", [0.66, 0.80, 0.90, 1.0]),
             ("SANDSTONE", [0.78, 0.62, 0.40, 1.0]),
             ("SHADOW", [0.10, 0.11, 0.13, 1.0]),
         ];
-        let (w, h) = (TILE * 3.0 + 4.0 + 32.0, HEADER + TILE + 74.0);
+        let (w, h) = (tile * 3.0 + 4.0 * k + 32.0 * k, (HEADER + 74.0) * k + tile);
         let x = x.min(p.width() - w - 8.0).max(8.0);
         p.rect(x, y, w, h, PANEL_BG);
+        p.grid(x, y, w, h, 18.0 * k, theme::GRID);
         p.rect(x, y, w, 2.0, ACCENT);
-        p.text(x + 16.0, y + 18.0, 2.0, TEXT, "PREVIEW");
+        p.text(x + 16.0 * k, y + 18.0 * k, 2.0 * k, TEXT, "PREVIEW");
         let unit = crate::crosshair::hud_unit(p.height() as f64, settings.video.hud_scale as f64);
         for (i, (label, color)) in SURFACES.iter().enumerate() {
-            let tx = x + 16.0 + i as f32 * (TILE + 2.0);
-            let ty = y + HEADER - 12.0;
-            p.rect(tx, ty, TILE, TILE, *color);
-            p.text(tx + 6.0, ty + TILE - 14.0, 1.1, TEXT_DIM, label);
+            let tx = x + 16.0 * k + i as f32 * (tile + 2.0 * k);
+            let ty = y + (HEADER - 12.0) * k;
+            p.rect(tx, ty, tile, tile, *color);
+            p.text(tx + 6.0 * k, ty + tile - 14.0 * k, 1.1 * k, TEXT_DIM, label);
             p.crosshair_at(
-                tx + TILE / 2.0,
-                ty + TILE / 2.0,
+                tx + tile / 2.0,
+                ty + tile / 2.0,
                 &settings.crosshair,
                 0.012,
                 unit as f32,
@@ -1036,13 +1113,14 @@ impl Menu {
             );
         }
         let code = crate::crosshair::encode(settings.crosshair);
-        let below = y + HEADER - 12.0 + TILE + 14.0;
-        p.text(x + 16.0, below, 1.5, ACCENT, &code);
+        let below = y + (HEADER - 12.0 + 14.0) * k + tile;
+        // The share code is an identifier: monospace, so it can be read back.
+        p.num(x + 16.0 * k, below, 1.5 * k, ACCENT, &code);
         if let Some((note, ok)) = &self.note {
             p.text(
-                x + 16.0,
-                below + 22.0,
-                1.2,
+                x + 16.0 * k,
+                below + 22.0 * k,
+                1.2 * k,
                 if *ok { TEXT_DIM } else { [0.97, 0.32, 0.28, 0.95] },
                 note,
             );
@@ -1305,6 +1383,10 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::Sky => {
             settings.video.sky = !settings.video.sky;
             vec![KEY_SKY]
+        }
+        Action::Fxaa => {
+            settings.video.fxaa = !settings.video.fxaa;
+            vec![KEY_FXAA]
         }
         Action::Sharpen => {
             settings.video.sharpen = step_value(
@@ -1694,7 +1776,7 @@ mod tests {
         ] {
             m.page = page;
             let mut out = Vec::new();
-            m.build(&s, &Controls::default(), false, 1920.0, 1080.0, &mut out);
+            m.build(&s, &Controls::default(), false, 1920.0, 1080.0, None, &mut out);
             assert!(!out.is_empty(), "{page:?} drew nothing");
             // Every vertex inside clip space, or the panel is off screen.
             assert!(out
@@ -1703,7 +1785,7 @@ mod tests {
         }
         m.close();
         let mut out = Vec::new();
-        m.build(&s, &Controls::default(), false, 1920.0, 1080.0, &mut out);
+        m.build(&s, &Controls::default(), false, 1920.0, 1080.0, None, &mut out);
         assert!(out.is_empty());
     }
 

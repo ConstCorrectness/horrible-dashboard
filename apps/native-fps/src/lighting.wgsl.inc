@@ -111,10 +111,10 @@ fn point_light(i: u32, n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     return light.color.rgb * point_attenuation(distance, light.position_range.w) * ndotl;
 }
 
-/// The irradiance the map's point lights put on a surface: the slots in use
-/// this frame, narrowed by `point_mask`, one set bit at a time.
-fn point_irradiance(n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
-    var sum = vec3<f32>(0.0);
+/// The point-light slots this fragment works through, low and high 32 bits:
+/// the slots in use this frame, narrowed by `point_mask`. Shared by the
+/// Lambert sum below and the physical one in `shader.wgsl`.
+fn point_slots() -> vec2<u32> {
     let count = u32(lights.eye.w);
     // Slots at and past `count` are not this frame's. Built with `select`
     // rather than a shift by `count`: a shift by 32 or more is not "all ones"
@@ -125,8 +125,16 @@ fn point_irradiance(n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
         0xffffffffu,
         count >= 64u,
     );
-    var low = point_mask.x & low_used;
-    var high = point_mask.y & high_used;
+    return vec2<u32>(point_mask.x & low_used, point_mask.y & high_used);
+}
+
+/// The irradiance the map's point lights put on a surface, one set bit of
+/// `point_slots` at a time.
+fn point_irradiance(n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let slots = point_slots();
+    var low = slots.x;
+    var high = slots.y;
     while (low != 0u) {
         sum = sum + point_light(firstTrailingBit(low), n, world_position);
         low = low & (low - 1u);
@@ -301,24 +309,22 @@ fn shade(
     return albedo * irradiance * RECIPROCAL_PI;
 }
 
-// --- tone mapping ---------------------------------------------------------
+// --- exposure ---------------------------------------------------------------
 //
-// ACES rather than a clip, and it is not decoration: the sun plus a hemisphere
-// light puts lit floors above 1.0, and clipping flattens everything past that
-// into the same white — which is exactly where a bright surface loses the grain
-// the detail texture exists to give it.
+// **The scene is linear light, and the tone curve is applied once, at the
+// end** (`display` in `post.wgsl`). Every pass that draws into the scene writes
+// *pre-exposed* radiance into a half-float target: this, the map's exposure
+// (1.15 unless it says otherwise, the browser's `toneMappingExposure`) times
+// the player's brightness setting. Nothing here clamps — a lit floor above 1.0
+// stays above 1.0 until the curve rolls it off.
 //
-// Narkowicz's fit, which is what three's `ACESFilmicToneMapping` is. The
-// exposure is the map's (1.15 unless it says otherwise, the browser's
-// `toneMappingExposure`) times the player's brightness setting.
-fn tonemap(color: vec3<f32>) -> vec3<f32> {
-    let x = color * lights.sky_horizon.w;
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+// It used to be a tone map in every fragment shader, which had two costs: what
+// blended over the scene (smoke, water, tracers) blended display-referred
+// colours instead of light, and the curve was Narkowicz's fit where three's
+// `ACESFilmicToneMapping` is Hill's — the native mid-tones were about a fifth
+// brighter than the browser's for the same light.
+fn expose(color: vec3<f32>) -> vec3<f32> {
+    return color * lights.sky_horizon.w;
 }
 
 // --- fog ------------------------------------------------------------------
@@ -336,19 +342,15 @@ fn tonemap(color: vec3<f32>) -> vec3<f32> {
 // never had. `FogExp2(0x11161f, 0.0055)` is what `HorribleAssaultPanel.tsx`
 // sets, and `Quality::fog_density` returns exactly 0.0055 at High.
 //
-// The colour is that hex **decoded to linear**, because this is applied before
-// the surface's sRGB target encodes it. three mixes its fog in *after* the
-// colour-space encode (`fog_fragment` follows `colorspace_fragment` in every
-// three material) while still handing the shader a linearised uniform, so the
-// one thing that cannot be matched here without encoding by hand and giving up
-// the sRGB target is the blend *space* — mid-distance comes out a shade deeper
-// here than in the browser. The colour and the curve are the parts that read.
-//
-// Applied **after** tone mapping: fogging before it means the tone curve then
-// lifts the fog itself, and the far end of a corridor comes back grey instead
-// of receding.
-//
-// The colour is the map's `fogColor`, decoded to linear on the CPU.
+// **Mixed in the scene's linear light, before the tone curve** — the order the
+// browser has whenever its post chain is on, and the only one a linear scene
+// allows. The curve would then lift the fog itself, and the far end of a
+// corridor would come back grey instead of receding, so the colour is handed
+// over **already run backwards through the curve** (`display_hex_to_scene` in
+// `atmosphere.rs`): a fully fogged pixel comes out of `display` as exactly the
+// map's `fogColor`. What differs from the browser's chain-off path, where three
+// mixes fog after its colour-space encode, is only the blend space part way
+// along — the two ends, and the curve's shape, are the same.
 
 /// How much fog stands between the eye and something `view_depth` away.
 ///

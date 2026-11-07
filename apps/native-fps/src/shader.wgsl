@@ -39,11 +39,14 @@ struct Shadow {
 @group(2) @binding(1) var shadow_map: texture_depth_2d;
 @group(2) @binding(2) var shadow_sampler: sampler_comparison;
 
-// Procedural PBR materials & IBL environment reflection map
+// The surface layers, and the image-based light a modelled map's physical
+// surfaces read: the map's prefiltered sky cube (`environment.rs`) and three's
+// DFG table (`dfg_lut.rs`), both through one clamped, trilinear sampler.
 @group(3) @binding(0) var pbr_textures: texture_2d_array<f32>;
 @group(3) @binding(1) var pbr_sampler: sampler;
-@group(3) @binding(2) var env_map: texture_2d<f32>;
+@group(3) @binding(2) var env_cube: texture_cube<f32>;
 @group(3) @binding(3) var env_sampler: sampler;
+@group(3) @binding(4) var dfg_lut: texture_2d<f32>;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -248,6 +251,184 @@ fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
     }
 }
 
+// --- three's MeshStandardMaterial ---------------------------------------------
+//
+// What the browser draws a modelled map with, ported from three r184's
+// `lights_physical_pars_fragment`, `lights_physical_fragment` and
+// `envmap_physical_pars_fragment` line for line: GGX with Smith-correlated
+// visibility and Epic's Schlick for the sun, the fill and every lamp, with
+// three's multiple-scattering compensation; the hemisphere as indirect diffuse;
+// and the map's environment (`environment.rs`, `environment.ts`) as the
+// split-sum specular and as irradiance, energy-conserved against the diffuse
+// the way `RE_IndirectSpecular_Physical` does it. A cube map stays Lambert
+// (`shade`), as the browser keeps `MeshLambertMaterial` there.
+
+/// `environment::LEVELS`: roughness 0 at mip 0 to 1 at the last.
+const ENV_LEVELS: f32 = 6.0;
+const PI: f32 = 3.141592653589793;
+const EPSILON: f32 = 1e-6;
+
+struct PhysicalSurface {
+    // `diffuseContribution`: the albedo less what a metal does not diffuse.
+    contribution: vec3<f32>,
+    // `diffuseColor`, the metal's tint.
+    diffuse: vec3<f32>,
+    // `specularColorBlended`: 0.04 for a dielectric, the albedo for a metal.
+    specular: vec3<f32>,
+    metalness: f32,
+    roughness: f32,
+    // The view's half of the multiscatter terms, the same for every light:
+    // `dfg(roughness, dot_nv)` read once per fragment instead of once per light
+    // (and again, twice, by the environment).
+    dot_nv: f32,
+    dfg_v: vec2<f32>,
+    f_avg: vec3<f32>,
+};
+
+/// three's `textureCubeUV(envMap, direction, roughness)`, on a cube whose
+/// levels are prefiltered for evenly spaced roughness.
+fn env_sample(direction: vec3<f32>, roughness: f32) -> vec3<f32> {
+    return textureSampleLevel(env_cube, env_sampler, direction, roughness * (ENV_LEVELS - 1.0)).rgb;
+}
+
+/// The DFG table at (`roughness`, `cos_theta`): scale in x, bias in y.
+fn dfg(roughness: f32, cos_theta: f32) -> vec2<f32> {
+    return textureSampleLevel(dfg_lut, env_sampler, vec2<f32>(roughness, cos_theta), 0.0).rg;
+}
+
+fn f_schlick(f0: vec3<f32>, f90: f32, dot_vh: f32) -> vec3<f32> {
+    let fresnel = exp2((-5.55473 * dot_vh - 6.98316) * dot_vh);
+    return f0 * (1.0 - fresnel) + f90 * fresnel;
+}
+
+fn v_ggx_smith_correlated(alpha: f32, dot_nl: f32, dot_nv: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let gv = dot_nl * sqrt(a2 + (1.0 - a2) * dot_nv * dot_nv);
+    let gl = dot_nv * sqrt(a2 + (1.0 - a2) * dot_nl * dot_nl);
+    return 0.5 / max(gv + gl, EPSILON);
+}
+
+fn d_ggx(alpha: f32, dot_nh: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let denom = dot_nh * dot_nh * (a2 - 1.0) + 1.0;
+    return RECIPROCAL_PI * a2 / (denom * denom);
+}
+
+/// `BRDF_GGX_Multiscatter`: the single-scattering lobe plus Turquin's
+/// compensation for the energy it loses at high roughness.
+fn brdf_ggx(l: vec3<f32>, v: vec3<f32>, n: vec3<f32>, s: PhysicalSurface) -> vec3<f32> {
+    let alpha = s.roughness * s.roughness;
+    let h = normalize(l + v);
+    let dot_nl = saturate(dot(n, l));
+    let dot_nv = saturate(dot(n, v));
+    let dot_nh = saturate(dot(n, h));
+    let dot_vh = saturate(dot(v, h));
+    let single = f_schlick(s.specular, 1.0, dot_vh)
+        * (v_ggx_smith_correlated(alpha, dot_nl, dot_nv) * d_ggx(alpha, dot_nh));
+    let dfg_l = dfg(s.roughness, dot_nl);
+    let fss_ess_v = s.specular * s.dfg_v.x + s.dfg_v.y;
+    let fss_ess_l = s.specular * dfg_l.x + dfg_l.y;
+    let ems_v = 1.0 - (s.dfg_v.x + s.dfg_v.y);
+    let ems_l = 1.0 - (dfg_l.x + dfg_l.y);
+    let f_avg = s.f_avg;
+    let f_ms = fss_ess_v * fss_ess_l * f_avg / (1.0 - ems_v * ems_l * f_avg + EPSILON);
+    return single + f_ms * (ems_v * ems_l);
+}
+
+/// `RE_Direct_Physical`: one light's diffuse and specular, from its colour at
+/// the surface (`radiance`, already attenuated and shadowed).
+fn direct_physical(l: vec3<f32>, radiance: vec3<f32>, n: vec3<f32>, v: vec3<f32>, s: PhysicalSurface) -> vec3<f32> {
+    let irradiance = saturate(dot(n, l)) * radiance;
+    return irradiance * (brdf_ggx(l, v, n, s) + s.contribution * RECIPROCAL_PI);
+}
+
+/// `computeMultiscattering`'s single-scattering output for one F0, from the
+/// view's DFG texel (`fab`); `multiscatter_ms` is its second output.
+fn multiscatter_ss(f0: vec3<f32>, fab: vec2<f32>) -> vec3<f32> {
+    return f0 * fab.x + fab.y;
+}
+
+fn multiscatter_ms(f0: vec3<f32>, fab: vec2<f32>) -> vec3<f32> {
+    let ems = 1.0 - (fab.x + fab.y);
+    let f_avg = f0 + (1.0 - f0) * 0.047619;
+    return multiscatter_ss(f0, fab) * f_avg / (1.0 - ems * f_avg) * ems;
+}
+
+/// A physical surface under the map's rig and environment: what the browser's
+/// `MeshStandardMaterial` returns before tone mapping. `detail` gates the fill
+/// as `shade` does; `shadow` attenuates only the sun.
+fn shade_physical(
+    albedo: vec3<f32>,
+    metalness: f32,
+    roughness: f32,
+    normal: vec3<f32>,
+    world_position: vec3<f32>,
+    detail: f32,
+    shadow: f32,
+) -> vec3<f32> {
+    let n = normalize(normal);
+    let v = normalize(lights.eye.xyz - world_position);
+    var s: PhysicalSurface;
+    s.diffuse = albedo;
+    s.contribution = albedo * (1.0 - metalness);
+    s.specular = mix(vec3<f32>(0.04), albedo, metalness);
+    s.metalness = metalness;
+    s.roughness = roughness;
+    s.dot_nv = saturate(dot(n, v));
+    s.dfg_v = dfg(roughness, s.dot_nv);
+    s.f_avg = s.specular + (1.0 - s.specular) * 0.047619;
+
+    var color = direct_physical(
+        lights.sun_dir.xyz,
+        lights.sun_color.rgb * lights.sun_color.w * shadow,
+        n, v, s,
+    );
+    if (detail >= 2.0) {
+        color = color + direct_physical(lights.fill_dir.xyz, lights.fill_color.rgb * lights.fill_color.w, n, v, s);
+    }
+    let slots = point_slots();
+    var low = slots.x;
+    var high = slots.y;
+    loop {
+        var i: u32;
+        if (low != 0u) {
+            i = firstTrailingBit(low);
+            low = low & (low - 1u);
+        } else if (high != 0u) {
+            i = 32u + firstTrailingBit(high);
+            high = high & (high - 1u);
+        } else {
+            break;
+        }
+        let light = lights.point[i];
+        let to_light = light.position_range.xyz - world_position;
+        let distance = length(to_light);
+        if (distance < light.position_range.w) {
+            let radiance = light.color.rgb * point_attenuation(distance, light.position_range.w);
+            color = color + direct_physical(to_light / max(distance, 1e-4), radiance, n, v, s);
+        }
+    }
+
+    // The hemisphere: indirect diffuse (`RE_IndirectDiffuse_Physical`).
+    let hemi = mix(lights.hemi_ground.rgb, lights.hemi_sky.rgb, n.y * 0.5 + 0.5) * lights.hemi_sky.w;
+    color = color + hemi * s.contribution * RECIPROCAL_PI;
+
+    // The environment (`getIBLRadiance`, `getIBLIrradiance`,
+    // `RE_IndirectSpecular_Physical`).
+    let r2 = s.roughness * s.roughness;
+    let reflected = normalize(mix(reflect(-v, n), n, r2 * r2));
+    let radiance = env_sample(reflected, s.roughness);
+    let irradiance = PI * env_sample(n, 1.0);
+    let dielectric_ss = multiscatter_ss(vec3<f32>(0.04), s.dfg_v);
+    let dielectric_ms = multiscatter_ms(vec3<f32>(0.04), s.dfg_v);
+    let single = mix(dielectric_ss, multiscatter_ss(s.diffuse, s.dfg_v), s.metalness);
+    let multi = mix(dielectric_ms, multiscatter_ms(s.diffuse, s.dfg_v), s.metalness);
+    let diffuse_ibl = s.contribution * (1.0 - (dielectric_ss + dielectric_ms));
+    let cosine_weighted = irradiance * RECIPROCAL_PI;
+    color = color + radiance * single + multi * cosine_weighted + diffuse_ibl * cosine_weighted;
+    return color;
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Derivatives first, in uniform control flow: a photographed surface's normal
@@ -256,6 +437,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let dp_y = dpdy(in.world_position);
     let duv_x = dpdx(in.uv);
     let duv_y = dpdy(in.uv);
+    // three's `geometryRoughness`: how fast the unperturbed normal turns across
+    // the pixel, added to a physical surface's roughness so a curve that is
+    // smaller than a pixel does not sparkle.
+    let dn = max(abs(dpdx(in.normal)), abs(dpdy(in.normal)));
+    let geometry_roughness = max(max(dn.x, dn.y), dn.z);
     // A vertex that has not arrived is not drawn at all, so the world *builds*
     // rather than fading up. Discarded before any lighting work, both because
     // there is no point shading a fragment that is thrown away and because a
@@ -266,6 +452,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
     let detail = camera.params.y;
     var albedo = in.color;
+    // The AO attribute carries a glowing material's strength as `1 + strength`
+    // (`world3d.rs`): the occlusion is what is at or under 1, the glow what is over.
+    let ao = min(in.ao, 1.0);
+    let glow = max(in.ao - 1.0, 0.0);
     // The shading normal: the face's, unless a photographed surface's map bends it.
     var normal = normalize(in.normal);
     // What the lighting is given: the interpolated normal as it always was, so no
@@ -277,16 +467,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // brightness, which stopped being possible the moment the sun became a
     // property of the map — see `viewmodel::MATERIAL_UNLIT`.
     if (in.material < -0.5) {
-        return vec4<f32>(tonemap(albedo), 1.0);
+        return vec4<f32>(expose(albedo), 1.0);
     }
 
     let mat_id = u32(round(in.material));
+    // A modelled map's surface is physical (three's `MeshStandardMaterial`);
+    // a cube map's stays Lambert.
+    var roughness = 0.70;
+    var metalness = 0.04;
     if (mat_id > 0u) {
         let layer_idx = mat_id - 1u;
         let pbr_sample = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx));
-
-        var roughness = 0.70;
-        var metalness = 0.04;
 
         if (layer_idx == 10u || layer_idx == 11u) {
             albedo = mix(albedo, pbr_sample.rgb, pbr_sample.a);
@@ -326,25 +517,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
         // After the photograph is mixed in, as three multiplies a vertex colour
         // after its map, so the darkening survives layers 8, 10 and 11.
-        albedo = albedo * in.ao;
-        let N = normal;
-        // From the **eye**. This used to be built from the build-in's centre at
-        // a fixed height of 1.8 — `camera.reveal.yz` is where the map is
-        // revealed *from*, not where anybody is standing — so every reflection
-        // on the map was the one you would see from its middle, at knee height.
-        let V = normalize(lights.eye.xyz - in.world_position);
-        let R = reflect(-V, N);
-
-        let pi = 3.14159265359;
-        let env_u = atan2(R.z, R.x) / (2.0 * pi) + 0.5;
-        let env_v = clamp(0.5 - asin(clamp(R.y, -1.0, 1.0)) / pi, 0.0, 1.0);
-        let env_refl = textureSample(env_map, env_sampler, vec2<f32>(env_u, env_v)).rgb;
-
-        let f0 = mix(vec3<f32>(0.04), albedo, metalness);
-        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - max(dot(N, V), 0.0), 0.0, 1.0), 5.0);
-        let env_lighting = env_refl * fresnel * (1.0 - roughness * 0.7) * 1.55;
-
-        albedo = mix(albedo, env_lighting, metalness * 0.8 + (1.0 - roughness) * 0.25);
+        albedo = albedo * ao;
+        // three's floor and geometric widening (`lights_physical_fragment`):
+        // 0.0525 is the sharpest level a 256 PMREM resolves.
+        roughness = min(max(roughness, 0.0525) + geometry_roughness, 1.0);
     } else {
         // Fallback grain multiplier for legacy/untextured geometry
         var grain_uv = detail_uv(in.world_position, in.normal);
@@ -356,7 +532,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             detail_sampler,
             grain_uv,
         ).r;
-        albedo = albedo * grain * DETAIL_GAIN * in.ao;
+        albedo = albedo * grain * DETAIL_GAIN * ao;
     }
 
     // A pass that does not receive the shadow is fully lit, not fully dark —
@@ -374,7 +550,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
     }
     point_mask = in.point_mask;
-    let lit = tonemap(shade(albedo, shade_normal, in.world_position, detail, occlusion));
+    var radiance: vec3<f32>;
+    if (mat_id > 0u && detail >= 1.0) {
+        radiance = shade_physical(albedo, metalness, roughness, shade_normal, in.world_position, detail, occlusion);
+    } else {
+        radiance = shade(albedo, shade_normal, in.world_position, detail, occlusion);
+    }
+    // Emitted light, as three's `totalEmissiveRadiance`: the emissive colour
+    // times its strength, on top of what the surface reflects and under the
+    // fog, at every quality level. At 4–10 it is well past white, which is
+    // what the bloom's threshold is for.
+    radiance = radiance + in.color * glow;
+    let lit = expose(radiance);
     var out_color = vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);
     // The frontier glow, added over the final lit colour so cubes land hot and
     // cool into their normal shading. Last, after the tone curve and the fog,
@@ -432,42 +619,11 @@ fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let far = sky_camera.inverse_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
     let direction = far.xyz / far.w - lights.eye.xyz;
-    return vec4<f32>(tonemap(sky_radiance(direction)), 1.0);
+    return vec4<f32>(expose(sky_radiance(direction)), 1.0);
 }
 
-// ---------------------------------------------------------------------------
-// The overlay: the HUD, in clip space already.
-//
-// A second pair of entry points rather than a second file, because it shares
-// nothing with the world but the module. There is no camera here on purpose —
-// `hud.rs` lays the HUD out in *pixels* and converts once, since a HUD placed in
-// normalized coordinates stretches with the window and a stretched crosshair
-// misreports the spread it is drawing.
-
-struct OverlayIn {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-struct OverlayOut {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-};
-
-@vertex
-fn vs_overlay(in: OverlayIn) -> OverlayOut {
-    var out: OverlayOut;
-    // z of 0 is the near plane in wgpu's 0..1 clip space. The overlay pass has
-    // no depth attachment at all, so this only has to be inside the frustum.
-    out.clip_position = vec4<f32>(in.position, 0.0, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs_overlay(in: OverlayOut) -> @location(0) vec4<f32> {
-    return in.color;
-}
+// (The overlay — the HUD — has its own module in `overlay_gpu.rs`: it binds a
+// glyph atlas, which nothing else here does.)
 
 // ---------------------------------------------------------------------------
 // Volumes: smoke and fire.
@@ -590,7 +746,7 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
         // distance to divide by — see `fog_amount`, which this pass got wrong
         // and which made everything here invisible past one cube.
         let far_fog = fog_amount(in.view_depth, camera.params.x);
-        return vec4<f32>(tonemap(in.color.rgb), in.color.a * (1.0 - far_fog));
+        return vec4<f32>(expose(in.color.rgb), in.color.a * (1.0 - far_fog));
     }
     // Two octaves is enough at this scale and costs sixteen hashes; a third
     // buys nothing you can see through a cloud you are meant to be blinded by.
@@ -618,5 +774,5 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     // not sit as a hard disc against the haze.
     let fog = fog_amount(in.view_depth, camera.params.x);
     alpha = alpha * (1.0 - fog);
-    return vec4<f32>(tonemap(shaded), alpha);
+    return vec4<f32>(expose(shaded), alpha);
 }

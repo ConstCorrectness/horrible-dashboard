@@ -11,6 +11,7 @@
 //!
 //! See `physics.rs` for what the three implementations are and why.
 
+pub mod anim;
 pub mod animator;
 pub mod api;
 pub mod arc;
@@ -35,11 +36,13 @@ pub mod decals;
 pub mod demo;
 pub mod detail;
 pub mod display;
+pub mod dfg_lut;
 pub mod divergence;
 pub mod drill_hud;
 pub mod drills;
 pub mod editor;
 pub mod effects;
+pub mod environment;
 pub mod eye;
 pub mod flashbang;
 pub mod geometry;
@@ -48,6 +51,7 @@ pub mod gpu_timer;
 pub mod hands;
 pub mod held;
 pub mod hud;
+pub mod overlay_gpu;
 pub mod interp;
 pub mod inspects;
 pub mod items;
@@ -81,6 +85,6 @@ pub mod water;
 pub mod world;
 pub mod world3d;
 pub mod world_chunks;
-pub mod textlayer;
-pub mod textquad;
+pub mod text_kit;
 pub mod textures3d;
+pub mod ui_theme;

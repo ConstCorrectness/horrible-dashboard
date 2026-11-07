@@ -52,7 +52,11 @@ export interface TierSpec {
   pixelRatio: number;
   /** The context's own MSAA. A creation flag, so it applies on the next load. */
   antialias: boolean;
-  /** The sun's shadow map edge. High is the old fixed 2048. */
+  /**
+   * The sun's shadow map edge. High is 4096, as native High: the map is drawn
+   * once per map, so the edge costs memory and a moment at load, not frame
+   * time (see `shadow-fit.ts` for how its texels are spent).
+   */
   shadowSize: number;
   /**
    * A wider shadow filter (`SOFT_SHADOW_RADIUS`). The shadow-map *type* is PCF
@@ -65,6 +69,13 @@ export interface TierSpec {
   lights: number;
   /** The sky dome on maps open to the sky; off is the flat horizon colour. */
   sky: boolean;
+  /**
+   * Whether the post chain draws the bloom (`hassault.video.bloom` is how
+   * strong). Off at Low, where it would put the chain — five half-float mips
+   * and two full-screen passes — on an integrated GPU; native's Low preset
+   * writes a bloom of 0 for the same reason.
+   */
+  bloom: boolean;
   /** Anisotropic filtering on the surface tiles, capped by the GPU's maximum. */
   anisotropy: number;
   /** Map surfaces as Lambert instead of PBR (see surface-quality.ts). The
@@ -78,7 +89,7 @@ export interface TierSpec {
 
 /**
  * The levels. **High is the native client's High** for everything the two share:
- * the map's own fog, a 2048 shadow map, eight lights is what the native Medium
+ * the map's own fog, a 4096 shadow map, eight lights is what the native Medium
  * shades and High draws sixteen — the browser pays per light in shader cost, and
  * eight nearest is the knee of that curve.
  */
@@ -90,6 +101,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     softShadows: false,
     lights: 0,
     sky: false,
+    bloom: false,
     anisotropy: 1,
     lambert: true,
     photos: false,
@@ -101,6 +113,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     softShadows: false,
     lights: 4,
     sky: true,
+    bloom: true,
     anisotropy: 4,
     lambert: false,
     photos: true,
@@ -108,10 +121,11 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
   high: {
     pixelRatio: 2,
     antialias: true,
-    shadowSize: 2048,
+    shadowSize: 4096,
     softShadows: true,
     lights: 8,
     sky: true,
+    bloom: true,
     anisotropy: 16,
     lambert: false,
     photos: true,
@@ -142,7 +156,7 @@ export const GRAPHICS_OPTIONS = {
  */
 export const SOFT_SHADOW_RADIUS = 2.5;
 
-export const GRAPHICS_TOGGLES = ['antialias', 'softShadows', 'sky', 'lambert', 'photos'] as const;
+export const GRAPHICS_TOGGLES = ['antialias', 'softShadows', 'sky', 'bloom', 'lambert', 'photos'] as const;
 
 /** The lamp pool's size: the most any row can ask for. */
 export const MAX_LIGHTS = Math.max(...GRAPHICS_OPTIONS.lights);

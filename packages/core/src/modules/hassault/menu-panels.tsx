@@ -433,6 +433,13 @@ export function GraphicsRows() {
             options={ON_OFF}
             onPick={(v) => set('sky', v)}
           />
+          <ChoiceRow
+            label="Bloom"
+            hint="A glow on lamps, screens and the sun — light brighter than white. How strong is the Bloom setting."
+            value={spec.bloom}
+            options={ON_OFF}
+            onPick={(v) => set('bloom', v)}
+          />
         </>
       )}
     </>

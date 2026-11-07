@@ -13,7 +13,10 @@ use hassault_native::renderer::DEPTH_FORMAT;
 
 const WIDTH: u32 = 1200;
 const HEIGHT: u32 = 280;
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+// What every scene pipeline draws into: the client's own linear half-float
+// target, tone mapped afterwards by its post pass into `OUT_FORMAT`.
+const FORMAT: wgpu::TextureFormat = hassault_native::renderer::SCENE_FORMAT;
+const OUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 fn main() {
     let path = std::env::args().nth(1).unwrap_or("native_knives_preview.png".into());
@@ -51,11 +54,23 @@ async fn run(path: &str) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
+        format: OUT_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
+    let scene_view = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
     let depth_view = device
         .create_texture(&wgpu::TextureDescriptor {
@@ -147,18 +162,24 @@ async fn run(path: &str) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("knife-preview"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
+                    view: &scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: if cleared {
                             wgpu::LoadOp::Load
                         } else {
-                            wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.07,
-                                g: 0.08,
-                                b: 0.10,
-                                a: 1.0,
+                            wgpu::LoadOp::Clear({
+                                // A near-black backdrop, run backwards through the tone curve
+                                // so the readback holds exactly these bytes —
+                                // the coverage count below keys on them.
+                                let [r, g, b] = hassault_native::atmosphere::display_hex_to_scene(0x121419);
+                                wgpu::Color {
+                                    r: r as f64,
+                                    g: g as f64,
+                                    b: b as f64,
+                                    a: 1.0,
+                                }
                             })
                         },
                         store: wgpu::StoreOp::Store,
@@ -193,6 +214,16 @@ async fn run(path: &str) {
     }
 
     let mut encoder = device.create_command_encoder(&Default::default());
+    hassault_native::post::display_once(
+        &device,
+        &queue,
+        &mut encoder,
+        &scene_view,
+        size.width,
+        size.height,
+        &color_view,
+        OUT_FORMAT,
+    );
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &color,

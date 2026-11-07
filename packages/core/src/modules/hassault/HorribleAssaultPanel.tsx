@@ -48,7 +48,7 @@ import { restoreGeneratedSurfaces, upgradePhotoSurfaces } from './photo-surfaces
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu, MoneyCounter } from './panels/BuyMenu';
-import { PostChain } from './post-chain';
+import { MODERATE_BLOOM, PostChain } from './post-chain';
 import { BenchRun, benchPath, type BenchResult } from './bench';
 import { FrameStats, GpuTimer, type PerfProbe } from './perf-stats';
 import { channelTraffic } from '../../ws';
@@ -191,6 +191,8 @@ import {
   resolveAtmosphere,
   unit,
 } from './atmosphere';
+import { createMapEnvironment } from './environment';
+import { drawnBounds, shadowSphere, type ShadowSphere } from './shadow-fit';
 import {
   MAX_LIGHTS,
   SOFT_SHADOW_RADIUS,
@@ -887,7 +889,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * settings, read live by the render loop. Both 0 skips the chain entirely. */
   const postRef = useRef({ bloom: 0, sharpen: 0 });
   postRef.current = {
-    bloom: Number(useSetting<number>('hassault.video.bloom') ?? 0) || 0,
+    bloom: Number(useSetting<number>('hassault.video.bloom') ?? MODERATE_BLOOM) || 0,
     sharpen: Number(useSetting<number>('hassault.video.sharpen') ?? 0) || 0,
   };
   brightnessRef.current = clampBrightness(useSetting<number>(BRIGHTNESS_KEY));
@@ -2059,6 +2061,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         resolveTier(graphicsChoiceRef.current, hints),
         graphicsOverridesRef.current,
       );
+      /** The chain's settings this frame: the bloom only where the tier draws it. */
+      const postSettings = () => ({
+        bloom: tier.bloom ? postRef.current.bloom : 0,
+        sharpen: postRef.current.sharpen,
+      });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
       // ACES rather than the default clip: the sun plus a hemisphere light puts
       // lit floors above 1.0, and `NoToneMapping` flattens everything past that
@@ -2201,24 +2208,28 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }
       };
 
-      /** Aim the sun along the map's direction, fitted to its bounds, and re-bake. */
-      const aimSun = (cx: number, cz: number, extent: number) => {
+      /**
+       * Aim the sun along the map's direction, fitted to a sphere around what
+       * the map draws (`shadow-fit.ts`, native `shadow.rs` `fit`), and re-bake.
+       */
+      const aimSun = ({ center, radius }: ShadowSphere) => {
         const d = unit(atmosphere.sunDir);
-        const reach = extent * 2;
-        sun.position.set(cx + d[0] * reach, d[1] * reach, cz + d[2] * reach);
-        sun.target.position.set(cx, 0, cz);
+        const reach = radius * 2;
+        sun.position.set(center[0] + d[0] * reach, center[1] + d[1] * reach, center[2] + d[2] * reach);
+        sun.target.position.set(center[0], center[1], center[2]);
         sun.target.updateMatrixWorld();
         const cam = sun.shadow.camera;
-        cam.left = -extent * 1.1;
-        cam.right = extent * 1.1;
-        cam.top = extent * 1.1;
-        cam.bottom = -extent * 1.1;
+        cam.left = -radius;
+        cam.right = radius;
+        cam.top = radius;
+        cam.bottom = -radius;
         // Fitted around the map rather than left at 1..far: the depth range is
         // what the shadow's precision is spent on, and a near plane at 1 for a
-        // light 170 units away throws most of it away.
-        const distance = sun.position.distanceTo(sun.target.position);
-        cam.near = Math.max(1, distance - extent * 1.4);
-        cam.far = distance + extent * 1.4;
+        // light 170 units away throws most of it away. The sphere is 1 radius
+        // either side of the target; 1.4 leaves the margin the bias was tuned
+        // with.
+        cam.near = Math.max(1, reach - radius * 1.4);
+        cam.far = reach + radius * 1.4;
         cam.updateProjectionMatrix();
         // The world is static and so is the sun, so this is the only frame that
         // pays for shadows. `autoUpdate` stays off; anything that moves — the
@@ -2342,18 +2353,26 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           renderer,
           root,
           camera,
-          post.sceneTarget(postRef.current, canvasAntialias),
+          post.sceneTarget(postSettings(), canvasAntialias),
           scene,
           uploadPaced,
         ),
       );
-      // The weapon props are physically-based and metallic; the world is not.
-      // Confined to the view model rather than set as `scene.environment`
-      // precisely so the map's Lambert surfaces and the operator keep the look
-      // the shared light rig gives them — this exists to stop the gun in your
-      // hands rendering as a black silhouette, not to relight the game.
+      // The weapon props are physically-based and metallic, and reflect the
+      // hemisphere's own gradient (`createPropEnvironment`) — this exists to
+      // stop the gun in your hands rendering as a black silhouette. A modelled
+      // map's surfaces take their own map's sky instead (`mapEnvironment`).
       const propEnvironment = createPropEnvironment(THREE, renderer);
       viewmodel.setEnvironment(propEnvironment);
+      // The modelled map's image-based light: its own sky above, its ground
+      // below (`environment.ts`), rebuilt per map and disposed with it. The
+      // native client lights its world from the same function.
+      let mapEnvironment: import('three').WebGLRenderTarget | null = null;
+      const dropMapEnvironment = () => {
+        scene.environment = null;
+        mapEnvironment?.dispose();
+        mapEnvironment = null;
+      };
       if (typeof window !== 'undefined') {
         (window as any).__VM = viewmodel;
         (window as any).__SHOTS = shotsRef.current;
@@ -2368,14 +2387,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (world3dGroup) {
           scene.remove(world3dGroup);
           world3dGroup = null;
-          scene.environment = null;
         }
+        dropMapEnvironment();
         water?.dispose();
         ladders?.dispose();
         // The map's served light rig, sky, fog and lamps — the same numbers the
         // native window draws. See `atmosphere.ts`.
         mapLights = world.info.lights ?? [];
-        applyAtmosphere(resolveAtmosphere(world.info), !!world3d);
+        const served = resolveAtmosphere(world.info);
+        applyAtmosphere(served, !!world3d);
         // Water and ladders belong to the map, not to its format: a modelled
         // map with a water level (facility, junkflea) used to draw none here,
         // while the native client and the physics both had it.
@@ -2383,7 +2403,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         ladders = createLadders(THREE, scene, world);
 
         if (world3d) {
-          scene.environment = propEnvironment;
+          mapEnvironment = createMapEnvironment(THREE, renderer, served);
+          scene.environment = mapEnvironment.texture;
           world3dGroup = world3d.scene;
           world3dGroup.traverse((child) => {
             const m = child as import('three').Mesh;
@@ -2421,11 +2442,18 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
           reveal.complete();
           backdrop.fit([cx, cz], extent * 2);
-          aimSun(cx, cz, extent);
+          // The shadow around what is drawn, not around `extent`: that is the
+          // playable area, written by hand, and on Junk Flea it was narrower
+          // than the map (see `shadow-fit.ts`).
+          const drawn = drawnBounds(THREE, world3dGroup);
+          aimSun(
+            drawn
+              ? shadowSphere(drawn.min, drawn.max)
+              : { center: [cx, 0, cz], radius: extent * 1.1 },
+          );
           return world3d.collision.triangles;
         }
 
-        scene.environment = null;
         const data = buildWorldMesh(world);
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
@@ -2458,7 +2486,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // for the same reason the camera is: a map's grid is mostly empty
         // border, so a grid-sized shadow camera spends most of its texels on
         // nothing and leaves the level itself blocky.
-        aimSun(cx, cz, extent);
+        aimSun(
+          sphere
+            ? { center: [sphere.center.x, sphere.center.y, sphere.center.z], radius: Math.max(sphere.radius, 1) }
+            : { center: [cx, 0, cz], radius: extent },
+        );
         return data.triangles;
       };
 
@@ -3482,7 +3514,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         avatars.animate(viewFrustum);
         renderer.info.reset();
         gpuTimer?.begin();
-        post.render(scene, camera, postRef.current, canvasAntialias);
+        post.render(scene, camera, postSettings(), canvasAntialias);
         gpuTimer?.end();
         // Straight after the render, in the same frame: the afterimage is a copy
         // of the canvas just drawn, and the drawing buffer is gone by the next task.
@@ -3633,7 +3665,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         backdrop,
         camera: camera as never,
         prewarm: async () => {
-          const target = post.sceneTarget(postRef.current, canvasAntialias);
+          const target = post.sceneTarget(postSettings(), canvasAntialias);
           // The operators alongside the map: on the range the dummies appear
           // the moment the map does, and the first body drawn would otherwise
           // compile its programs on that frame. Waited for only so long — a
@@ -3713,6 +3745,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           (sky.material as import('three').Material).dispose();
         }
         for (const lamp of lampPool) lamp.dispose();
+        dropMapEnvironment();
         material.dispose();
         detail.dispose();
         post.dispose();

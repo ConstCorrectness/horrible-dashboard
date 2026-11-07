@@ -89,7 +89,7 @@ describe('graphics tiers', () => {
   });
 
   it('high draws the map the way the native client does at High', () => {
-    expect(TIERS.high.shadowSize).toBe(2048);
+    expect(TIERS.high.shadowSize).toBe(4096);
     // Every tier draws the same sky, fog and lamps — fewer lamps, never others.
     expect(TIERS.low.lights).toBeLessThan(TIERS.medium.lights);
     expect(TIERS.medium.lights).toBeLessThan(TIERS.high.lights);

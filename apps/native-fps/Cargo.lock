@@ -1000,6 +1000,7 @@ dependencies = [
  "cpal",
  "glam",
  "gltf",
+ "half",
  "image",
  "naga",
  "png",

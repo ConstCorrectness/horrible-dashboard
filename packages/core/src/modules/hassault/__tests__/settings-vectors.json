@@ -355,6 +355,13 @@
    "native": true
   },
   {
+   "key": "hassault.video.fxaa",
+   "type": "boolean",
+   "default": true,
+   "scope": "machine",
+   "native": true
+  },
+  {
    "key": "hassault.video.antialias",
    "type": "boolean",
    "default": false,
@@ -429,7 +436,7 @@
   {
    "key": "hassault.video.bloom",
    "type": "number",
-   "default": 0,
+   "default": 0.25,
    "scope": "machine",
    "min": 0,
    "max": 1,

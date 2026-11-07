@@ -1,15 +1,23 @@
-// After the scene: bloom, then the composite into the window with sharpening.
+// After the scene: bloom, the tone curve, anti-aliasing and sharpening, then a
+// dithered write into the window.
 //
-// The scene arrives **already tone mapped** — every pass that draws into it
-// shades, tone maps and fogs in its own fragment shader, which is what keeps it
-// the browser's picture. So this bloom is on display-referred light: what passes
-// the threshold is what is already close to white, which is lamps, screens, the
-// sun's disc and a muzzle flash, and not a sunlit wall. A physically-based bloom
-// would need the scene in linear HDR, which would mean moving the tone curve out
-// of every shader in the client; the glow on the things that should glow is
-// what this is for, and it does not need that.
+// The scene arrives in **pre-exposed linear light**, in a half-float target:
+// every pass that draws into it shades, fogs and multiplies by the exposure
+// (`expose`), and none of them tone maps. The bloom is taken from that light
+// and added back into it, and only then does the curve run, once — `display`,
+// three's own `ACESFilmicToneMapping`. The browser's chain (`post-chain.ts`)
+// runs the same passes in the same order.
 //
-// Three passes and a composite, all fullscreen triangles:
+// **Bloom is HDR.** The threshold is on linear light, so what glows is what is
+// brighter than white — a lamp, a screen, the sun's disc — by how much
+// it is brighter, not everything the curve has squeezed up near 1. A sunlit
+// wall sits under the threshold (about 0.95 on Dust II against 1.4), and a
+// lamp at 8 glows eight times as hard as one at 1, which a display-referred
+// bloom (the old one, thresholded after the curve) could not tell apart. The
+// glow is added before the curve, so it rolls off into the shoulder like the
+// light it came from instead of being screened on top.
+//
+// The passes, all fullscreen triangles:
 //
 // 1. `fs_prefilter` — the scene at half resolution, keeping only what is over the
 //    threshold, with a soft knee so the edge of a lamp is not a hard ring.
@@ -17,8 +25,10 @@
 //    the Call of Duty bloom talk) that does not flicker as bright pixels move.
 // 3. `fs_up` — back up the chain with a 3×3 tent, **added** onto each larger mip,
 //    which is what gives a bloom its wide soft tail.
-// 4. `fs_composite` — the scene plus the bloom, then contrast-adaptive
-//    sharpening (AMD's CAS, simplified) into the swapchain.
+// 4. `fs_tonemap` — only with FXAA on: the scene plus the bloom through the
+//    curve, into a display-referred image FXAA can read many taps of.
+// 5. `fs_composite` — FXAA (when on), contrast-adaptive sharpening (AMD's CAS,
+//    simplified), the flashbang's ghost and the dither, into the swapchain.
 
 struct FullscreenOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -37,9 +47,12 @@ fn vs_fullscreen(@builtin(vertex_index) index: u32) -> FullscreenOut {
 }
 
 struct Post {
-    // x: bloom intensity. y: sharpening 0..1. z: bloom threshold. w: knee.
+    // x: bloom intensity (the setting times `BLOOM_SCALE`). y: sharpening 0..1.
+    // z: bloom threshold. w: knee. Both in linear light.
     params: vec4<f32>,
-    // x: the flashbang afterimage's strength, 0..1.
+    // x: the flashbang afterimage's strength, 0..1. y: 1 when `source` is
+    // `fs_tonemap`'s display-referred image (FXAA on), 0 when it is the scene.
+    // z: 1 to dither the write. w: 1 when the output encodes sRGB on write.
     flash: vec4<f32>,
 };
 
@@ -55,15 +68,73 @@ fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
+// three's `ACESFilmicToneMapping` (Stephen Hill's fit, `tonemapping_pars_fragment`
+// in three 0.184), verbatim, on light that is already exposed — the `/ 0.6` is
+// three's own. `post-chain.ts`'s `DISPLAY` and `atmosphere.rs`'s `aces` carry
+// the same coefficients; `browser_parity.rs` pins all three. The output is
+// linear: the swapchain's sRGB format encodes it, where the browser encodes by
+// hand.
+fn rrt_odt_fit(v: vec3<f32>) -> vec3<f32> {
+    let a = v * (v + 0.0245786) - 0.000090537;
+    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return a / b;
+}
+
+fn display(color: vec3<f32>) -> vec3<f32> {
+    let aces_in = mat3x3<f32>(
+        vec3<f32>(0.59719, 0.07600, 0.02840),
+        vec3<f32>(0.35458, 0.90834, 0.13383),
+        vec3<f32>(0.04823, 0.01566, 0.83777),
+    );
+    let aces_out = mat3x3<f32>(
+        vec3<f32>(1.60475, -0.10208, -0.00327),
+        vec3<f32>(-0.53108, 1.10813, -0.07276),
+        vec3<f32>(-0.07367, -0.00605, 1.07602),
+    );
+    let c = rrt_odt_fit(aces_in * (color / 0.6));
+    return clamp(aces_out * c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// The scene's linear light at `uv`.
+fn scene_linear(uv: vec2<f32>) -> vec3<f32> {
+    return textureSample(source, source_sampler, uv).rgb;
+}
+
+// The scene at `uv`, tone mapped, without the bloom: what the afterimage keeps.
+fn scene_at(uv: vec2<f32>) -> vec3<f32> {
+    return display(scene_linear(uv));
+}
+
+// The frame at `uv` as the player sees it before the composite's own steps:
+// the scene plus its bloom, through the curve. With FXAA on, `fs_tonemap` has
+// already done this and `source` *is* that image.
+fn frame_at(uv: vec2<f32>) -> vec3<f32> {
+    if (post.flash.y > 0.5) {
+        return textureSample(source, source_sampler, uv).rgb;
+    }
+    return frame_from_scene(uv);
+}
+
+// The scene plus its bloom through the curve, from the scene itself: what
+// `fs_tonemap` writes, and what `frame_at` is with FXAA off.
+fn frame_from_scene(uv: vec2<f32>) -> vec3<f32> {
+    var light = scene_linear(uv);
+    let intensity = post.params.x;
+    if (intensity > 0.001) {
+        light = light + textureSample(bloom, source_sampler, uv).rgb * intensity;
+    }
+    return display(light);
+}
+
 @fragment
 fn fs_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
     let texel = 1.0 / vec2<f32>(textureDimensions(source));
     // Four taps, one per source pixel under this half-resolution one, so a
     // single bright pixel is not lost between samples.
-    var c = textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.5, -0.5)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.5, -0.5)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.5, 0.5)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.5, 0.5)).rgb;
+    var c = scene_linear(in.uv + texel * vec2<f32>(-0.5, -0.5));
+    c = c + scene_linear(in.uv + texel * vec2<f32>(0.5, -0.5));
+    c = c + scene_linear(in.uv + texel * vec2<f32>(-0.5, 0.5));
+    c = c + scene_linear(in.uv + texel * vec2<f32>(0.5, 0.5));
     c = c * 0.25;
 
     // A quadratic soft knee around the threshold.
@@ -81,10 +152,10 @@ fn fs_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_capture(in: FullscreenOut) -> @location(0) vec4<f32> {
     let texel = 1.0 / vec2<f32>(textureDimensions(source));
-    var c = textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.75, -0.75)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.75, -0.75)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(-0.75, 0.75)).rgb;
-    c = c + textureSample(source, source_sampler, in.uv + texel * vec2<f32>(0.75, 0.75)).rgb;
+    var c = scene_at(in.uv + texel * vec2<f32>(-0.75, -0.75));
+    c = c + scene_at(in.uv + texel * vec2<f32>(0.75, -0.75));
+    c = c + scene_at(in.uv + texel * vec2<f32>(-0.75, 0.75));
+    c = c + scene_at(in.uv + texel * vec2<f32>(0.75, 0.75));
     return vec4<f32>(c * 0.25, 1.0);
 }
 
@@ -130,9 +201,97 @@ fn fs_up(in: FullscreenOut) -> @location(0) vec4<f32> {
     return vec4<f32>(out / 16.0, 1.0);
 }
 
+// The frame through the curve, for FXAA to read: the composite's `frame_at`,
+// written out once so the filter's taps do not each run the curve. Alpha is
+// unused.
+@fragment
+fn fs_tonemap(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(frame_from_scene(in.uv), 1.0);
+}
+
+// FXAA's edge measure: perceptual, as the filter was tuned on gamma-encoded
+// luma. The square root is close enough to sRGB for finding edges.
+fn fxaa_luma(c: vec3<f32>) -> f32 {
+    return sqrt(luminance(c));
+}
+
+// FXAA in its compact form (Lottes' FXAA 3.11 "PC console" variant): five luma
+// taps find the edge's direction, then two or four taps along it blend across.
+// Reads `source`, which with FXAA on is `fs_tonemap`'s image.
+//
+// The local-contrast test comes first, with FXAA 3.11's default quality
+// thresholds: a pixel whose neighbourhood spans less than a sixth of its
+// brightest luma (or less than 1/12 absolute, for dark corners) is not on an
+// edge and is returned untouched. Without it the filter runs on every pixel
+// and blurs the photographed surfaces' grain along with the stairs.
+const FXAA_EDGE_THRESHOLD: f32 = 0.166;
+const FXAA_EDGE_THRESHOLD_MIN: f32 = 0.0833;
+const FXAA_REDUCE_MIN: f32 = 0.0078125;
+const FXAA_REDUCE_MUL: f32 = 0.125;
+const FXAA_SPAN_MAX: f32 = 8.0;
+
+fn fxaa(uv: vec2<f32>) -> vec3<f32> {
+    let t = 1.0 / vec2<f32>(textureDimensions(source));
+    let rgb_m = textureSample(source, source_sampler, uv).rgb;
+    let nw = fxaa_luma(textureSample(source, source_sampler, uv + vec2<f32>(-1.0, -1.0) * t).rgb);
+    let ne = fxaa_luma(textureSample(source, source_sampler, uv + vec2<f32>(1.0, -1.0) * t).rgb);
+    let sw = fxaa_luma(textureSample(source, source_sampler, uv + vec2<f32>(-1.0, 1.0) * t).rgb);
+    let se = fxaa_luma(textureSample(source, source_sampler, uv + vec2<f32>(1.0, 1.0) * t).rgb);
+    let m = fxaa_luma(rgb_m);
+    let luma_min = min(m, min(min(nw, ne), min(sw, se)));
+    let luma_max = max(m, max(max(nw, ne), max(sw, se)));
+    if (luma_max - luma_min < max(FXAA_EDGE_THRESHOLD_MIN, luma_max * FXAA_EDGE_THRESHOLD)) {
+        return rgb_m;
+    }
+
+    var dir = vec2<f32>(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    let reduce = max((nw + ne + sw + se) * (0.25 * FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);
+    let rcp_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * rcp_min, vec2<f32>(-FXAA_SPAN_MAX), vec2<f32>(FXAA_SPAN_MAX)) * t;
+
+    let a = 0.5 * (
+        textureSample(source, source_sampler, uv + dir * (1.0 / 3.0 - 0.5)).rgb
+        + textureSample(source, source_sampler, uv + dir * (2.0 / 3.0 - 0.5)).rgb
+    );
+    let b = a * 0.5 + 0.25 * (
+        textureSample(source, source_sampler, uv + dir * -0.5).rgb
+        + textureSample(source, source_sampler, uv + dir * 0.5).rgb
+    );
+    let luma_b = fxaa_luma(b);
+    if (luma_b < luma_min || luma_b > luma_max) {
+        return a;
+    }
+    return b;
+}
+
+// Interleaved gradient noise (Jimenez), 0..1, from a pixel position.
+fn ign(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// Triangular dither, -1..1 of one output step: two independent samples summed,
+// so the noise is the same strength at every level and does not itself band.
+// `post-chain.ts` runs the same function on `gl_FragCoord`.
+fn dither_noise(p: vec2<f32>) -> f32 {
+    return ign(p) + ign(p + vec2<f32>(47.0, 17.0)) - 1.0;
+}
+
+fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+}
+
+fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
-    var color = textureSample(source, source_sampler, in.uv).rgb;
+    var color: vec3<f32>;
+    if (post.flash.y > 0.5) {
+        color = fxaa(in.uv);
+    } else {
+        color = frame_at(in.uv);
+    }
 
     // Contrast-adaptive sharpening: a negative-lobe cross whose weight falls as
     // local contrast rises, so edges gain definition and already-sharp detail
@@ -141,10 +300,10 @@ fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
     let amount = post.params.y;
     if (amount > 0.001) {
         let t = 1.0 / vec2<f32>(textureDimensions(source));
-        let n = textureSample(source, source_sampler, in.uv + vec2<f32>(0.0, -t.y)).rgb;
-        let s = textureSample(source, source_sampler, in.uv + vec2<f32>(0.0, t.y)).rgb;
-        let w = textureSample(source, source_sampler, in.uv + vec2<f32>(-t.x, 0.0)).rgb;
-        let e = textureSample(source, source_sampler, in.uv + vec2<f32>(t.x, 0.0)).rgb;
+        let n = frame_at(in.uv + vec2<f32>(0.0, -t.y));
+        let s = frame_at(in.uv + vec2<f32>(0.0, t.y));
+        let w = frame_at(in.uv + vec2<f32>(-t.x, 0.0));
+        let e = frame_at(in.uv + vec2<f32>(t.x, 0.0));
         let lo = min(color, min(min(n, s), min(w, e)));
         let hi = max(color, max(max(n, s), max(w, e)));
         // Headroom to the nearer end of 0..1: little room means a strong edge,
@@ -160,15 +319,6 @@ fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
         );
     }
 
-    let intensity = post.params.x;
-    if (intensity > 0.001) {
-        let glow = textureSample(bloom, source_sampler, in.uv).rgb;
-        // Screen, not add: the scene is display-referred and already near 1 where
-        // the glow is strongest, and adding would clip the lamp into a flat disc.
-        let g = glow * intensity;
-        color = vec3<f32>(1.0) - (vec3<f32>(1.0) - color) * (vec3<f32>(1.0) - g);
-    }
-
     // The flashbang's ghost, under the HUD's white. Brightened like the
     // browser's (`brightness(1.35)` on its canvas copy): a burned-in image is
     // brighter than the scene it came from.
@@ -176,6 +326,19 @@ fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
     if (ghost > 0.001) {
         let after = min(textureSample(afterimage, source_sampler, in.uv).rgb * 1.35, vec3<f32>(1.0));
         color = mix(color, after, ghost);
+    }
+
+    // Dither: one output step of triangular noise, so a sky gradient or a
+    // fogged corridor quantises to 8 bits as grain rather than as bands. In
+    // the encoded space, because that is where the steps are; the sRGB
+    // swapchain re-encodes what this returns.
+    if (post.flash.z > 0.5) {
+        let n = dither_noise(in.clip_position.xy) / 255.0;
+        if (post.flash.w > 0.5) {
+            color = srgb_decode(clamp(srgb_encode(color) + n, vec3<f32>(0.0), vec3<f32>(1.0)));
+        } else {
+            color = clamp(color + n, vec3<f32>(0.0), vec3<f32>(1.0));
+        }
     }
     return vec4<f32>(color, 1.0);
 }

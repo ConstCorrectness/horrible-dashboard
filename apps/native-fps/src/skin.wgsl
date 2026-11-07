@@ -148,7 +148,7 @@ fn fs_skin(in: VertexOut) -> @location(0) vec4<f32> {
         shadow.params.y,
         shadow.params.z,
     );
-    let lit = tonemap(
+    let lit = expose(
         shade(albedo, in.normal, in.world_position, 2.0, occlusion) + albedo * CHARACTER_FLOOR,
     );
     return vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);

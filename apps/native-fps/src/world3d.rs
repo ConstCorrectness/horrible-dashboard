@@ -2416,6 +2416,18 @@ fn walk_glb_node(
             } else {
                 [base_color[0], base_color[1], base_color[2]]
             };
+            // A glowing material's strength (`KHR_materials_emissive_strength`,
+            // 4–10 on the maps' lamps, screens and LEDs), carried in the AO
+            // attribute as `1 + strength`: AO is never above 1, so the shader can
+            // tell them apart, and the world vertex does not widen for a number
+            // a dozen materials use (`Vertex::ao`). three adds `emissive *
+            // emissiveIntensity` to the light leaving the surface; so does
+            // `fs_main`, and that is what the HDR bloom picks up.
+            let glow = if emissive != [0.0, 0.0, 0.0] {
+                prim.material().emissive_strength().unwrap_or(1.0)
+            } else {
+                0.0
+            };
 
             let is_collider = collides;
 
@@ -2513,7 +2525,12 @@ fn walk_glb_node(
                     render_uvs.extend_from_slice(&uv1);
 
                     render_materials.extend_from_slice(&[mat_id, mat_id, mat_id]);
-                    let ao_at = |i: usize| ao.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(1.0);
+                    let ao_at = |i: usize| {
+                        if glow > 0.0 {
+                            return 1.0 + glow;
+                        }
+                        ao.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(1.0)
+                    };
                     render_ao.extend_from_slice(&[ao_at(i0), ao_at(i2), ao_at(i1)]);
                 }
 

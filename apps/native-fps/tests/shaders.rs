@@ -86,6 +86,7 @@ fn the_post_shader_parses_validates_and_names_its_passes() {
         "fs_prefilter",
         "fs_down",
         "fs_up",
+        "fs_tonemap",
         "fs_composite",
     ] {
         assert!(
@@ -129,8 +130,6 @@ fn every_entry_point_a_pipeline_names_exists() {
         "fs_main",
         "vs_volume",
         "fs_volume",
-        "vs_overlay",
-        "fs_overlay",
         "vs_sky",
         "fs_sky",
     ] {

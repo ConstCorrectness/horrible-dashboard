@@ -1277,6 +1277,98 @@ in a uniform beside the camera, at group 0 binding 1, because the downlevel limi
 is four bind groups. The skinned and prop shaders include the same `shade()`, so
 operators and weapons are lit by the map's lamps too. Lights cast no shadows.
 
+### A modelled map's sky is its image-based light
+
+On a modelled map both clients light the world with an environment built from
+the **served atmosphere**, not from a generic gradient. Above the horizon it is
+the sky the map draws: the horizon colour, eased toward the zenith. Below the
+horizon it is the hemisphere's ground colour. The easing is `sqrt(|y|)` in both
+directions, and the result depends on height only.
+
+There is **no sun disc** in it. The sun is already a light; a disc in the
+environment would light every glossy surface with it twice.
+
+A cube map has no environment. Its sky is a dark sealed ceiling, and it keeps
+Lambert.
+
+**Browser.**
+- `environment.ts` `createMapEnvironment` writes the function into a 256×128
+  half-float equirectangular source and prefilters it with `PMREMGenerator`.
+- `setMesh` makes it `scene.environment`. It is rebuilt per map and disposed on
+  the next map or on unmount.
+- World materials are `MeshStandardMaterial` at `envMapIntensity` 1, so every
+  photographed surface reads it with three's own split-sum.
+
+**Native.**
+- `environment.rs` prefilters the **same function** on the CPU. It writes a
+  128² `Rgba16Float` cube with 6 levels, where level `n` is roughness `n / 5`,
+  GGX importance sampled with 256 Hammersley samples per texel.
+- It sits in the pbr group (group 3, bindings 2–4) beside `dfg_lut.rs`. That is
+  three's `DFGLUTData.js` copied value for value, not a fit of it.
+- `set_lighting` rewrites the cube in place when a map's palette differs, so the
+  bind group is never rebuilt for it.
+
+**`shade_physical` in `shader.wgsl`** ports `MeshStandardMaterial`'s physical
+path:
+- Smith-correlated visibility, `D_GGX`, and the Epic Fresnel fit;
+- Turquin multiscatter compensation from the DFG table, for the sun, the fill
+  and the map's lamps;
+- the hemisphere as indirect diffuse, plus the environment's irradiance and its
+  split-sum specular;
+- a roughness floor of 0.0525, widened by the normal's screen derivatives, as
+  three does.
+
+It runs for the photographed surfaces (`mat_id > 0`) at Medium and above. The
+cube maps' Lambert `shade()` is unchanged, and Low stays flat.
+
+**Where the two are not identical.**
+- PMREM's prefilter and its piecewise roughness-to-mip mapping are three's.
+  Native prefilters on the CPU and maps roughness linearly onto its levels.
+  Both are GGX, at slightly different blurs.
+- Native props and operators (`prop.wgsl`, `skin.wgsl`) are still Lambert with
+  no environment, where the browser's are Standard.
+- The browser's view model keeps its own generic gradient (see the next note).
+- The browser's Low tier is Lambert, and three r184 adds environment irradiance
+  to Lambert. Native Low is flat.
+
+**What it changed.**
+- **Shade is lighter on modelled maps, in both clients.** Native drew no
+  environment at all before this.
+- The browser's world was already getting environment diffuse, but from the
+  generic gradient drawn **upside down** (next note), which lit floors with its
+  dark ground.
+- Native Dust II under its served sky:
+
+  | Pixel | Before | After |
+  | --- | --- | --- |
+  | Barrel side in shadow | (17, 10, 6) | (62, 49, 43) |
+  | Floor in shadow | 81 grey | 125, faintly sky-tinted |
+  | Sunlit floor | (201, 185, 159) | (214, 206, 199), nothing clipped |
+
+**What it costs** (`hassault_bench_native.py`, the physical build interleaved
+with the same build forced onto Lambert):
+
+| GPU and tier | Map | GPU p50 | fps |
+| --- | --- | --- | --- |
+| Discrete, Medium | Dust II | 0.25 → 0.33 ms | CPU-bound either way |
+| Discrete, High | Bank | 0.55 → 0.73–1.07 ms | CPU-bound either way |
+| Integrated (RaptorLake), Medium | Dust II | 7.2 → 9.1–9.6 ms | ~99 → ~83 |
+| Integrated (RaptorLake), Medium | Bank | 9.7 → 13.2 ms | ~81 → ~63 |
+
+Low, the integrated GPU's target tier, is untouched. The arithmetic is the cost,
+not the table: reading the view's DFG texel once per fragment instead of once per
+light changed no pixel and saved about 0.2 ms on Bank. Bank pays most because
+every lamp runs the full GGX lobe.
+
+**Pinned** by `browser_parity.rs`:
+- `both_clients_read_three_s_dfg_table` reads three's file at test time;
+- `both_clients_shade_with_three_s_ggx` checks the Fresnel, multiscatter and
+  roughness constants against three's chunks;
+- `both_clients_light_the_world_with_the_map_s_own_sky_and_ground` probes the
+  native palette and pins the browser's spelling and panel wiring.
+
+`environment.test.ts` checks the browser's decode and row orientation.
+
 ### The browser's graphics tier
 
 `hassault.graphics` is `auto`, `low`, `medium` or `high`. It draws the **same map
@@ -1287,7 +1379,7 @@ data** at every level and changes only how much of it is drawn
 | --- | --- | --- | --- |
 | Pixel ratio cap | 1 | 1.5 | 2 |
 | Anti-aliasing | off | on | on |
-| Shadow map | 1024, hard | 2048, hard | 2048, soft |
+| Shadow map | 1024, hard | 2048, hard | 4096, soft |
 | Map lights | 0 | 4 nearest | 8 nearest |
 | Sky dome | no | yes | yes |
 | Anisotropy | 1 | 4 | 16 |
@@ -1314,6 +1406,48 @@ Every lit program compiled before that point was compiled again, and every
 and soft shadows widens `sun.shadow.radius` to `SOFT_SHADOW_RADIUS` (2.5
 shadow-map texels, against 1). That is a uniform, so switching it recompiles
 nothing.
+
+**The sun's shadow is fitted to what the map draws, as native fits it.** Both
+clients render the shadow map once per map (the world and the sun are static),
+so it never moves under the camera and there is nothing to shimmer: the texel
+snapping a camera-following shadow needs has nothing to do here. How sharp the
+shadow is depends only on how many texels each unit of map gets, which is the
+fit.
+- The browser used to fit `MAP_CONFIGS`' `extent` (the playable area, written
+  by hand) at ±1.1. Its texels were 1.1–1.7× the size of native's on eight of
+  the ten maps, worst on Aim, Assault and Bank.
+- On Junk Flea that frustum was narrower than the map: the sun comes in on a
+  diagonal, where a 239-unit square is about 338 units across, against a
+  250-unit frustum. So the corners of the map had no shadows.
+- Now `shadow-fit.ts` takes the bounds of every drawn mesh (`drawnBounds`, which
+  skips hidden collision and clip nodes) and fits the camera round their sphere
+  (`shadowSphere`), the rule `shadow.rs` `fit` applies to native's render
+  vertices. Loaded in headless Chromium, every map's radius comes out within 1%
+  of native's (Dust II 185.6).
+- High's map went from 2048 to 4096 in both clients (native's High preset takes
+  the `ultra` shadow level; saved levels keep their sizes). On Dust II that is
+  a texel of 0.09 units, about 3 cm, against 0.18. Edges are crisper, shadows
+  meet the foot of the thing casting them, and a wire across the market now
+  casts a line it was too thin to cast before (1.1% of a Dust II frame changes,
+  all on shadow edges). Native scales its depth bias with the map's resolution
+  (`0.0015 · √(2048 / size)`), so the finer map shows no acne.
+- What it costs: memory and a moment at load, since the map is drawn once, plus
+  per-frame sampling of a texture four times the size.
+  Benched on the discrete GPU at High (`--set` back to `high` for 2048, runs
+  alternated), GPU p50 went 0.54 → 0.55–0.56 ms on Dust II and Mirage: within
+  the noise. Medium and Low are unchanged.
+
+**The browser keeps the map's exported normals.** It used to call
+`computeVertexNormals()` on every map mesh after loading it, averaging every
+face round each vertex. The export already writes normals (Blender's smoothing,
+with `mark_sharp_edges` keeping creases hard), native reads those
+(`world3d.rs`), and on Dust II, Bank and Office 20% of vertices moved by over a
+degree and 2–4% by over ten. `applyMatrix4` carries them through the Z flip by
+the normal matrix. Loaded in headless Chromium, every map has them on every
+mesh, and on 99.98–100% of triangles they face the way the triangle winds.
+`browser_parity.rs` pins both (`both_clients_fit_the_sun_shadow_round_what_is_drawn_at_4096_on_high`,
+`both_clients_shade_the_maps_with_their_exported_normals`); `shadow-fit.test.ts`
+checks the sphere and that hidden nodes are skipped.
 
 There is deliberately **no shadows-off row**. Turning off the sun's shadow lights
 a player standing in shade, which is a visibility change, so the rows offer
@@ -3607,16 +3741,22 @@ round:
   lit by it had zero non-black pixels. 128×64 prefilters to a sane pyramid.
 - **It is prefiltered.** A raw texture assigned as an environment ignores
   roughness, so a matte grip comes out as shiny as a barrel.
+- **Row 0 is straight down.** A `DataTexture` uploads with `flipY` off, so row 0
+  is `v = 0`, and three's `equirectUv` puts `v = 0` at the nadir. The gradient
+  was first written sky-first and lit every gun from below: a sphere under it
+  measured (89, 92, 100) on top and (159, 175, 207) underneath. It now runs
+  `t = 1 - y / (H - 1)`, and `environment.ts` `rowHeight` is the same inverse,
+  pinned by `environment.test.ts`.
 
 `PROP_ENV_INTENSITY` is 1.55 because that is the scene's hemisphere intensity and
 the environment encodes its colours at 1.0 — the factor that puts the two on the
 same footing, not a number picked because it looked better. Nothing clips at it,
 or at 2.2: the headroom is real and the weapons are simply dark.
 
-It is applied to the **view model only**, never as `scene.environment`. The map's
-Lambert surfaces and the operator keep exactly the look the shared rig gives
-them; this exists to stop the gun rendering as a silhouette, not to relight the
-game.
+It is applied to the **view model only**. On a modelled map, `scene.environment`
+is the map's own sky and ground (see "A modelled map's sky is its image-based
+light"); a cube map has none. This gradient exists to stop the gun rendering as a
+silhouette, not to relight the game.
 
 #### The native side is a third pipeline
 
@@ -4240,19 +4380,73 @@ and the rating").
 
 ## The native HUD
 
-`apps/native-fps/src/hud.rs` is a vertex buffer and a hand-rolled 5×7 bitmap font.
-`OverlayVertex` is position and colour — **no UVs, no textures** — and `glyph()`
-emits one quad per lit *pixel*. Everything below is built from `rect`, `line`,
-`tri`, `ring`, `arc`, `disc` and `panel`, and the whole layout is derived from one
-unit, `u = height / 360`.
+`apps/native-fps/src/hud.rs` is one vertex stream and one draw. `OverlayVertex`
+is position, colour and a `uv` whose sign carries a mode: negative is a solid
+fill, `-2` is a grid pattern computed in the fragment shader (cell size in
+`uv.y`), anything else samples the **glyph atlas**. Shapes and text go into the
+same buffer, so the draw order *is* the call order — a label sits on its panel,
+and the pause menu covers chat, with no pass ordering to get wrong. Everything is
+built from `rect`, `line`, `tri`, `ring`, `arc`, `disc`, `panel`, `banner`,
+`grid` and `rule`, and the whole layout is derived from one unit,
+`u = height / 360`. The pipeline and its WGSL live in `overlay_gpu.rs`, shared by
+the client and the `hud_preview` example so the preview cannot draw a HUD the game
+would not.
 
-That constraint is why the house style here is angular rather than soft: this
-painter has no anti-aliasing, so a "rounded" corner made of quads is a staircase,
-while a 45° chamfer is exact at every size. `Painter::panel` is the one place that
-style is expressed — a chamfered container with a **2 px accent top edge**, never a
-full perimeter, because a border all the way round competes with the crosshair and
-a single heavy edge gives a stack of panels a reading order. Restyling the HUD is
-editing that function.
+The house style is angular rather than soft: a 45° chamfer is exact at every size,
+and a **2 px accent top edge**, never a full perimeter, gives a stack of panels a
+reading order without competing with the crosshair. Large panels (scoreboard, buy
+menu, pause menu, the post-match and drill cards, the console) carry a faint
+technical grid; centre notices are slanted `banner`s that slide in. Outer edges of
+rings, arcs, discs, lines and chamfers get a **1 px alpha fringe** — anti-aliasing
+without MSAA on the overlay — but edges where two tiled shapes meet do not, or the
+fringe would draw a seam between them. The palette is `ui_theme.rs`, taken from
+the browser (panels `rgb(13,17,23)`, accent `#6ea8fe`); the radar's colours are
+not in it, because they are pinned to the browser by their own fixture.
+
+### Type
+
+Three faces, all the operating system's — nothing is bundled (`text_kit.rs`):
+
+| Face | Windows | Used for |
+| --- | --- | --- |
+| Display | Bahnschrift, tracked | labels, headings, weapon names |
+| Mono | Cascadia Mono, then Consolas | every figure: HP, ammo, money, clocks, K/D, the console |
+| Body | Segoe UI | player names and chat — the face with every script |
+
+Elsewhere each falls back to the system sans or mono. Strings are shaped once by
+`cosmic-text` and cached; glyphs are rasterised by `swash` into one 2048² atlas
+(shelf-packed, dirty rows uploaded, cleared at the next frame if it ever fills).
+Faces are **sized by cap height**: every layout here reserved a `7 * scale` box
+for the old 5×7 font, so a real face is sized to make its capitals exactly that
+tall and drops into the same space. A busy HUD went from about 25,000 overlay
+vertices (one quad per lit *pixel*) to about 5,000 (one per glyph); a console full
+of scrollback, which used to overrun the 65,536 cap and lose its tail silently,
+is about 14,000.
+
+Benched on Dust II at Medium (2026-11-06, RTX 4080 Laptop, `HUDFONT=bitmap` as
+the control): the `hud` phase is about 0.07 ms either way and GPU time moves by
+about 0.04 ms. Capped at 240 fps the two are indistinguishable (p99 frame 4.9 ms
+both). Uncapped, a first pair of runs suggested fonts cost 10–20% fps, all of it
+in `acquire` (the swapchain wait) with every CPU phase equal; interleaving the
+modes six runs deep showed that was run order, not fonts — 735–761 fps with
+fonts, 753–760 with bitmap, and `acquire` swinging 0.17–0.48 ms within one mode.
+At 700+ fps uncapped and windowed, compare modes interleaved or not at all.
+
+The 5×7 bitmap font is still there, as the fallback: for the few hundred
+milliseconds the fonts take to load on their thread, and on demand with
+`HUDFONT=bitmap` for an A/B comparison. Unit tests build a bitmap-mode painter,
+so their vertex counts stay exact on any machine.
+
+Figures roll rather than jump (`anim.rs`): HP, armour and money ease to a new value
+over 420 ms, **seeded at their final value** and snapped on first sight, so a tile
+never reads `0` when it means `62`. Kill-feed rows and the post-match card's cells
+arrive with a short staggered slide, capped so a long list is not late.
+
+The pause menu, post-match card and drill card scale with the window too: the
+menu by whole HUD units (`menu::zoom`), so its hit-tested rows stay on whole
+pixels, the cards by a clamped `height / 800`. Values in the menu are chips —
+figures in the mono face, words in the display face — with stepping arrows on the
+selected row.
 
 ### What the blocks say that a number alone does not
 
@@ -4308,7 +4502,11 @@ None of the above would fail a unit test. `cargo run --example hud_preview` rend
 the HUD offscreen to a PNG, the same way `weapon_preview` and `operator_preview` do
 for the models — it takes an optional path and a `WIDTHxHEIGHT`, and the size is a
 parameter precisely because the layout is derived from the window height, so a HUD
-that reads at 1080p can be a smear at 720p and overlapping at 1440p.
+that reads at 1080p can be a smear at 720p and overlapping at 1440p. Flags after
+the size add a layer: `summary`, `defuse` or `ctf`, `radar`, `menu`, `menu-video`,
+`menu-crosshair`, `drill`, `chat` (emoji, CJK, Arabic, a wrapping line and an
+open prompt) and `console` (a full scrollback). Run one with `HUDFONT=bitmap` to
+see the fallback font against the same frame.
 
 Two things about that harness are deliberate. It draws a **mid-grey backdrop with a
 bright band**, not black, because a HUD checked against black passes with
@@ -5286,22 +5484,28 @@ While the box is open it owns the keyboard, ahead of even the console's
 backquote. Tab switches between everyone and team, and a line fades nine
 seconds after it arrives.
 
-**The native client** draws chat in real fonts (`textlayer.rs` and
-`textquad.rs`). The HUD's 5×7 bitmap font turned every emoji and non-Latin
-character into blank space. Chat is laid out with `cosmic-text` and rasterised
-with `swash`, which draws COLR and bitmap emoji in colour, using the **OS's own
-fonts**: Segoe UI and Segoe UI Emoji on Windows, Apple Color Emoji on macOS, Noto
-on Linux. Nothing is bundled.
+**The native client** draws chat in real fonts, through the same glyph atlas as
+the rest of the HUD (see [Type](#type)). Each line is a `Paragraph` from
+`text_kit.rs`: laid out by `cosmic-text` (wrapping, bidi, fallback to the emoji
+font) and rasterised by `swash`, which draws COLR and bitmap emoji in colour, using
+the **OS's own fonts**: Segoe UI and Segoe UI Emoji on Windows, Apple Color Emoji
+on macOS, Noto on Linux. Nothing is bundled.
 
 - **Fonts load on a thread.** Discovery takes a few hundred milliseconds, and the
   bitmap font covers chat until it lands.
-- **Each line is its own buffer, faded while compositing.** `swash` ignores the
-  alpha of a glyph's colour, so one old line could not fade inside a shared
-  layout.
-- **Re-rasterised only on change.** The panel is re-rasterised only when the
-  chat's `revision` or a line's eight-step fade changes, then uploaded to one
-  sRGB texture and drawn as one pixel-snapped quad after the HUD, but never over
-  the menu or the console.
+- **Colour is chosen at draw time, not at layout.** Each span's attributes carry
+  its index as cosmic-text metadata, which every glyph it shapes inherits, and the
+  span colours are supplied when the line is drawn. So a line is shaped once
+  however long it is on screen, and fading it is a vertex alpha — emoji fade with
+  it, since a colour glyph takes only the alpha.
+- **In the HUD's vertex stream, not over it.** Chat used to be a CPU-composited
+  texture drawn after the HUD (`textlayer.rs`, `textquad.rs`, both gone), which
+  covered whatever it overlapped and therefore hid whenever the menu, the summary
+  card or the console was open. Drawn into the overlay before the console, it is
+  simply under all three. It sits on top of the health panel, whose rows come from
+  the same `health_rows` the panel is drawn from.
+- **Names and messages are isolated** with U+2068/U+2069, so a right-to-left name
+  cannot reorder the tag or the text around it — the `bdi` element in the browser.
 - **Grapheme editing.** Caret, backspace and delete step by grapheme cluster
   (`unicode-segmentation`), so one backspace removes a whole family emoji, and
   the prompt enforces the server's limits.
@@ -5312,10 +5516,10 @@ on Linux. Nothing is bundled.
 
 Two platform limits, not bugs: Windows' emoji font has no flag glyphs, so 🇺🇸
 reads as "us" (Chrome on Windows does the same), and a machine with no colour
-emoji font shows the text font's monochrome glyph. `textlayer`'s tests rasterise
-with the real system fonts and assert that an emoji comes out *in colour* and that
-Japanese, Cyrillic and Arabic produce ink. The colour check is skipped on a
-machine with no colour emoji font.
+emoji font shows the text font's monochrome glyph. `text_kit`'s tests lay a line
+out with the real system fonts, draw it, and read the atlas texels its quads cover:
+an emoji has to come out *in colour*, and Japanese, Cyrillic and Arabic have to
+produce ink. The colour check is skipped on a machine with no colour emoji font.
 
 #### An invite names a person, and the two authorities it has to cross
 
@@ -7511,11 +7715,11 @@ at all — the HUD is not in the world and has nothing to be behind.
 
 Four decisions in it are load-bearing:
 
-- **The font is synthesized, like the sounds and the maps.** A 5×7 bitmap written
-  as binary literals, so every glyph is drawn in the source that defines it —
-  which is the only review a hand-made font gets. Shipping a TTF would mean
-  shipping someone else's licence for the sake of four numbers on a screen.
-  Uppercase only: a 5×7 cell has no room for descenders, and a HUD has no prose.
+- **No font is shipped, like the sounds and the maps.** The HUD draws in the
+  operating system's own faces (see [Type](#type)); shipping a TTF would mean
+  shipping someone else's licence. The fallback is a 5×7 bitmap written as binary
+  literals, so every glyph of it is drawn in the source that defines it — which is
+  the only review a hand-made font gets.
 - **Layout is in pixels and converted to clip space once.** A HUD laid out in
   normalized coordinates stretches with the window, and a crosshair whose arms
   differ in length by aspect ratio is a crosshair that lies about the spread it is
@@ -8040,12 +8244,13 @@ rows underneath it.
 | Shading | flat | hemisphere + sun | + fill | + fill |
 | Fog | the map's own | the map's own | the map's own | the map's own |
 | MSAA | off | off | 4× | 8×, where supported |
+| FXAA | off | on | off | off |
 | Anisotropy | 4× | 8× | 16× | 16× |
 | Textures (per layer) | 128 | 256 | 256 | 512 |
-| Shadows | 1024, 4 taps | 2048, 8 taps | 2048, 16 taps | 4096, 16 taps |
+| Shadows | 1024, 4 taps | 2048, 8 taps | 4096, 16 taps | 4096, 16 taps |
 | Map lights | 0 | 8 | 16 | 64 |
 | Sky dome | no | yes | yes | yes |
-| Bloom | off | off | off | 50% |
+| Bloom | off | 25% | 25% | 50% |
 
 **Every level uses the map's own fog density.** Low and Medium used to thicken
 it (×2 and ×1.36) to save fill rate, which let a player on a weak GPU lose a
@@ -8064,6 +8269,8 @@ four that no preset touches:
 
 - **Anti-aliasing** (`msaa`): off, 2×, 4× or 8×, offered only where the GPU
   supports it (see below).
+- **FXAA** (`fxaa`): edges smoothed from the finished image, in the final pass.
+  Medium's anti-aliasing, where MSAA is off.
 - **Anisotropy** (`anisotropy`): 1× to 16×.
 - **Texture quality** (`textureQuality`): 128, 256 or 512 texels per layer. The
   procedural surface array is regenerated with a full mip chain.
@@ -8074,22 +8281,157 @@ four that no preset touches:
 - **Sky** (`sky`): the dome on open maps, drawn from the served atmosphere with the
   same formula as the browser's.
 - **Bloom** (`bloom`): a five-level chain in `post.rs`, a 13-tap downsample and a
-  tent upsample over the tone-mapped scene. The threshold is 0.82, so only
-  lamps, flames and sunlit highlights glow.
+  tent upsample, thresholded on the scene's **linear** light at 1.4 with a
+  0.5 knee and added back into it before the curve. Only light brighter than
+  white glows: the maps' emissive lamps, screens and LEDs (strength 4–10), and
+  the sun's disc. A sunlit wall (about 0.95) does not.
 - **Sharpening** (`sharpen`): contrast-adaptive, in the final composite. Most
   useful below a render scale of 100%.
 
 **The browser runs the same chain** (`post-chain.ts`), from the same two
 settings: the same threshold, knee and five levels, the same 13-tap down and
-tent up, the same screen blend and CAS, which `browser_parity.rs` pins in both
-sources. three tone maps inside each material only when drawing to the canvas,
-so with the chain on the scene goes to a linear half-float target and a display
-pass applies three's own ACES and sRGB curve. The clear colour is the one thing
-three never tone maps on the canvas, so the chain pre-distorts it
-(`inverseAces`) and the sky comes out unchanged: verified pixel-exact against
-the plain render in a browser. With both settings at 0, the default at every
-browser tier as at every native tier below Ultra, the chain is skipped and the
-frame is the plain `renderer.render` it always was.
+tent up, the same CAS and the same dither, which `browser_parity.rs` pins in
+both sources. three tone maps inside each material only when drawing to the
+canvas, so with the chain on the scene goes to a linear half-float target. The
+bloom is taken from that target times the exposure, and the display pass adds
+it to the scene and applies three's own ACES and sRGB curve. The clear colour
+is the one thing three never tone maps on the canvas, so the chain pre-distorts
+it (`inverseAces`) and the sky comes out unchanged: verified pixel-exact against
+the plain render in a browser.
+
+**Bloom is on by default at Medium and High, in both clients.** The shared
+setting defaults to 0.25 (`MODERATE_BLOOM` in `settings.rs` and
+`post-chain.ts`, and the default in the schema and the manifest). Native's Low
+preset writes 0. The browser's tiers have a **Bloom** row (`TierSpec.bloom`),
+off at Low, so Low still skips the chain and draws the plain `renderer.render`.
+The chain runs whenever bloom or sharpening is above zero.
+
+**Why HDR bloom.** The old bloom thresholded the tone-mapped image at 0.82 and
+screen-blended the glow on top. Thresholding after ACES cannot tell a lamp at 8
+from one at 1, since both are near white there. Now both clients take the glow
+from linear light and add it before the curve, so it grows with how bright the
+source is and rolls off in the curve's shoulder.
+
+Measured on native Bank (`dust2_preview`, `PREVIEW_MAP=hd_bank`): at 0.25 the
+chandelier's region gains 44 levels on average and the walls gain none; 4% of
+the frame moves by more than 4 levels. On sunlit Dust II with no lantern in
+view, not one pixel changes. The browser's chain, run on a scene with a quad
+emitting at 6 and one at 0.95 in headless Chromium, does the same:
+- the lamp gains a halo (180, 130, 84, 43 at 10–30 px out, from 0);
+- the wall's centre is 225 with the chain on or off, so the chain's display is
+  three's canvas exactly.
+
+**Emissive light, natively.** Every modelled map's lamps, screens and LEDs are
+`KHR_materials_emissive_strength` materials at 4–10. three adds
+`emissive × emissiveIntensity` to the light leaving the surface. Native used to
+draw them as an ordinary surface tinted the emissive colour, which no
+threshold could find.
+- `world3d.rs` reads the strength (the gltf crate's
+  `KHR_materials_emissive_strength` feature).
+- It carries the strength in the AO attribute as `1 + strength`. AO never
+  exceeds 1, so the world vertex does not widen for a dozen materials.
+- `fs_main` splits the attribute back into the occlusion and the glow, and
+  adds `color × glow` before the exposure and fog, at every quality level.
+
+**FXAA, natively at Medium.** Medium has no MSAA, for fill rate, and the
+browser's Medium multisamples, so native's Medium had jagged edges the browser
+did not. With FXAA on:
+- `fs_tonemap` writes the scene plus its bloom through the curve into a
+  half-float target. It is half float so a sky gradient is not cut to 8 bits
+  before the dither.
+- The composite runs FXAA 3.11's compact "PC console" form on that target:
+  five luma taps for the direction, then two or four taps along it.
+- The filter first runs FXAA 3.11's local-contrast test (0.166 relative,
+  0.0833 absolute). Without it, every pixel is filtered and the photographed
+  surfaces' grain blurs along with the stairs.
+
+On Dust II it touches 8.4% of the pixels, all on edges. The target is
+allocated only while FXAA is on.
+
+**The dither.** One output step of triangular noise, from two interleaved
+gradient noise samples (Jimenez), in the final write of both clients. Natively
+it is added in sRGB-encoded space, because that is where the swapchain's steps
+are, and decoded back for the sRGB target to re-encode. In the browser the
+composite's colour is already encoded. It moves pixels by at most one level: on
+Dust II, 58% of pixels by exactly one. The previews leave it off
+(`display_once`), because their coverage statistics count exact clear-colour
+bytes; `PREVIEW_DITHER=1` turns it on.
+
+**What it costs** (`hassault_bench_native.py`, 1080p, this build's presets
+interleaved with the previous build's, which had no FXAA and no bloom below
+Ultra):
+
+| GPU | Map | Level | GPU p50 before → after (ms) | GPU p99 | fps |
+| --- | --- | --- | --- | --- | --- |
+| discrete | Dust II | Medium | 0.32 → 0.43 | 0.41 → 0.75 | 642 → 642 |
+| discrete | Dust II | High | 0.49 → 0.55 | 0.89 → 0.91 | 673 → 630 |
+| discrete | Bank | Medium | 0.53 → 0.62 | 1.05 → 1.10 | 656 → 594 |
+| discrete | Bank | High | 1.00 → 1.00 | 2.21 → 2.19 | 568 → 548 |
+| integrated | Dust II | Medium | 10.31 → 11.73 | 14.66 → 16.23 | 75 → 69 |
+| integrated | Bank | Medium | 13.20 → 15.12 | 18.50 → 20.79 | 63 → 56 |
+
+Each row is the mean of two runs, except discrete Dust II Medium after, which
+is one. On the discrete GPU the frame stays limited by the CPU (`acquire`), so
+its fps column is noise and the GPU time is the number to read: a tenth of a
+millisecond at most.
+
+On the integrated GPU (Intel, `powerPreference=low`) the slice costs about
+1.4–1.9 ms at Medium, and Bank Medium falls from 63 to 56 fps. Bank Medium,
+benched with each part switched off in turn (`--set`):
+
+| Bank Medium, integrated | GPU p50 (ms) | fps |
+| --- | --- | --- |
+| Both on (the preset) | 15.09 | 56 |
+| FXAA off | 14.27 | 58 |
+| Bloom 0 | 14.22 | 59 |
+| Both off | 13.51 | 62 |
+
+So the bloom chain costs about 0.9 ms there and FXAA about 0.8 ms; the
+emissive and the dither are within the noise. Low has neither, so the
+iGPU's Low target is untouched. If Medium must hold 60 on an iGPU, FXAA or
+bloom is the setting to turn off there.
+
+**Pinned** by `browser_parity.rs`:
+- `both_clients_bloom_and_sharpen_with_the_same_numbers` covers the threshold,
+  knee and dither constants;
+- `both_clients_bloom_linear_light_before_the_curve`;
+- `moderate_bloom_is_medium_and_high_in_both_clients_and_off_at_low`;
+- `native_medium_anti_aliases_with_fxaa_and_the_rest_multisample`;
+- `a_glowing_material_emits_in_both_clients`.
+
+`post-chain.test.ts` checks the knee against the measured cases (`bloomShare`).
+
+**The native scene is HDR, and tone mapped once.** Every pass that draws into
+the scene (world, volumes, sky, props, characters) writes pre-exposed linear
+light — `expose` in `lighting.wgsl.inc`, the map's exposure times Brightness —
+into an `Rgba16Float` target (`SCENE_FORMAT` in `renderer.rs`). The tone curve
+is applied once, as `display` in `post.wgsl`, which every post pass reads the
+scene through; this runs whether bloom and sharpening are on or not. The curve
+is three's own `ACESFilmicToneMapping` (Hill's fit, its two matrices and the
+`/ 0.6`), the same as the browser's materials and its `DISPLAY` pass;
+`browser_parity.rs` pins the coefficients in `post.wgsl`, `post-chain.ts` and
+`atmosphere.rs`. Before this, every native shader tone mapped on its own with
+Narkowicz's fit. That is a different curve, and it put native mid-tones about
+a fifth above the browser's: 0.18 grey at exposure 1.15 came out at 0.311
+against three's 0.2525.
+
+The cost is bandwidth, and it shows only with MSAA. Medium has no MSAA and
+moved by about 0.01 ms of GPU time. High's 4× MSAA samples are now twice as
+wide, and High rose by 0.06–0.09 ms: Dust II's GPU p50 went from 0.35 to
+0.43 ms, Bank's from 0.52 to 0.59 (`--bench`, 1080p, interleaved runs against
+the previous build). The frame stays CPU-bound either way.
+
+**Fog is mixed in linear light, before the curve, in both clients.** That is
+the only order a linear scene allows, and the browser has it whenever its chain
+is on (inside a render target, three fogs before tone mapping). Unadjusted,
+though, the curve would then lift the fog colour itself, and a corridor would
+recede into grey instead of the map's colour. So both clients hand over the
+fog colour **already run backwards through the curve**, and the clear colour
+too: `display_hex_to_scene` in `atmosphere.rs` on native, and
+`sceneColoursForChain` in `post-chain.ts`, swapped for the length of the scene
+render. A fully fogged pixel and the empty sky then come out as exactly the
+map's hex. Bloom is taken from the same linear light and added before the
+curve, in both clients (see the bloom notes above).
 - **Brightness** (`brightness`): a multiplier on the map's exposure.
 - **Frame latency** (`frameLatency`): 1 to 3 frames queued, passed to the surface
   as `desired_maximum_frame_latency`. One is the lowest input lag, three the
@@ -9751,7 +10093,7 @@ copy is not a build error but a console offering a command the server has never
 heard of.
 
 What differs is the *surface*: the pane is a React panel with a toolbar you
-click, and this is 5×7 glyphs drawn by the HUD painter while the mouse is aiming
+click, and this is monospace text drawn by the HUD painter while the mouse is aiming
 a weapon. So every capability arrives by a different route, which is worth
 writing down because the useful half of a toolbar button is usually not the
 click.
@@ -9788,7 +10130,12 @@ surface whose job is to echo back exactly what was typed, next to CVar names tha
 are lowercase everywhere else in this app. The lowercase cell is the fiddly half
 of a 5×7 font: x-height letters occupy rows 2–6, ascenders the full seven, and
 descenders (`g j p q y`) shift up to rows 1–6 because there is no eighth row to
-hang a tail in.
+hang a tail in. That cell is now the fallback: the console draws in the system's
+monospace face, so it accepts any printable character — an accented name typed
+into `say` shows as typed — where it used to drop anything the 5×7 set lacked.
+Its geometry comes from `console_unit`, which ignores the HUD-scale setting in the
+painter and the hit test alike; the two used to disagree, so at any HUD scale but
+1.0 a click landed on the chip beside the one drawn.
 
 Six of those carry a decision worth keeping:
 
@@ -10115,7 +10462,10 @@ which is correct and always was. What the native side was missing was *shape*:
   pink. It reads as the palette being wrong rather than the exposure.
 - **ACES tone mapping** at the browser's 1.15 exposure. The sun plus a hemisphere
   light puts lit floors above 1.0, and clipping flattens everything past that
-  into the same white — exactly where a bright surface loses the grain.
+  into the same white — exactly where a bright surface loses the grain. It is
+  now three's exact curve, applied once in the post pass over a half-float scene
+  (see the Video settings' note on the HDR scene); it began as Narkowicz's fit in
+  every shader, which ran native mid-tones about a fifth brighter.
 - **The surface grain** (`detail.rs`, a port of `surfaces.ts`): one small
   seamless tile of value noise and cube seams, generated at runtime from nothing
   and used as a multiplier over the vertex tints. Its UVs are in **cube units**,
@@ -10186,15 +10536,17 @@ its length, so near geometry the browser left untouched came out hazed and the f
 end of a long corridor arrived at the ramp's end as an edge the browser never had.
 `Quality::fog_density` now returns the browser's exact density at High.
 
-The colour is that hex **decoded to linear**, because it is applied before the
-sRGB target encodes it — a raw hex here comes out three shades too pale and reads
-as the density being wrong. One difference genuinely remains and is not worth what
-closing it would cost: three mixes its fog *after* the colour-space encode
-(`fog_fragment` follows `colorspace_fragment` in every three material) while still
-handing the shader a linearised uniform, so the blend **space** differs and
-mid-distance comes out a shade deeper natively. Matching it would mean encoding by
-hand and giving up the sRGB target. The colour and the curve are the parts that
-read.
+The colour is that hex **decoded to linear and then run backwards through the
+tone curve** (`display_hex_to_scene`). The scene is linear light now and the curve
+comes last, so the fog is mixed before it, and a fully fogged pixel has to come
+out of the curve as the hex. A raw hex comes out three shades too pale, and an
+un-inverted linear one comes out lifted; either reads as the density being wrong.
+The browser does the same whenever its post chain is on (`sceneColoursForChain`).
+With the chain off, three mixes fog *after* its colour-space encode
+(`fog_fragment` follows `colorspace_fragment` in every three material). The two
+ends of the ramp still match; what differs is the blend space part way along,
+so mid-distance can come out a shade different. The colour and the curve are the
+parts that read.
 
 :::note A screenshot of the pane is dimmer than the game
 The browser panel lays `rgba(13,17,23,0.72)` over the whole canvas whenever it is
@@ -10243,11 +10595,13 @@ Four things are load-bearing:
   angle to the sun, and a constant bias big enough to stop acne on a floor lit
   head-on detaches the shadow from the foot of every wall.
 
-The sun's direction is declared twice — once in `shadow.rs` to build the light
-camera and once in `lighting.wgsl.inc` to shade with. A test pins them equal: a
+The sun's direction is the map's served one, used both to build the light
+camera and to shade with, so the two cannot disagree. (It used to be a constant
+in `shadow.rs` and another in `lighting.wgsl.inc`, pinned equal by a test: a
 shadow cast from one direction and a Lambert term computed from another gives
-surfaces lit from one side and shadowed from the other, which looks like broken
-geometry rather than a mismatched constant.
+surfaces lit from one side and shadowed from the other.) The camera is fitted
+round the sphere of the render vertices' bounds, the rule the browser shares
+(see the browser's graphics tier).
 
 #### Looking at it
 
