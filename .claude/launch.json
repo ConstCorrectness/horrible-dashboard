@@ -21,7 +21,16 @@
     {
       "name": "backend-b",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8200"],
+      "runtimeArgs": [
+        "run",
+        "--no-sync",
+        "uvicorn",
+        "backend.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8200"
+      ],
       "port": 8200,
       "env": {
         "HORRIBLE_DATA_DIR": ".data-node-b"
@@ -140,7 +149,14 @@
     {
       "name": "share-relay-loadtest",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.share_relay.app:app", "--port", "9101"],
+      "runtimeArgs": [
+        "run",
+        "--no-sync",
+        "uvicorn",
+        "backend.share_relay.app:app",
+        "--port",
+        "9101"
+      ],
       "port": 9101,
       "env": {
         "SHARE_RELAY_KEY": "",
@@ -149,6 +165,12 @@
         "CLOUDFLARE_TURN_API_TOKEN": "",
         "SHARE_RELAY_MAX_VIEWERS": "40"
       }
+    },
+    {
+      "name": "backend-bench",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8123"],
+      "port": 8123
     }
   ]
 }
