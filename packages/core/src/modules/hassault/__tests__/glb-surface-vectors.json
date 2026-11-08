@@ -211,7 +211,7 @@
     },
     {
       "name": "Mat_Assault_Office_Ceiling_Detail",
-      "kind": "plaster"
+      "kind": "ceiling_tile"
     },
     {
       "name": "Mat_Assault_Office_Floor",
@@ -323,11 +323,11 @@
     },
     {
       "name": "Mat_Assault_Steel_Dark",
-      "kind": "vault_steel"
+      "kind": "painted_metal"
     },
     {
       "name": "Mat_Assault_Steel_Truss_Detail",
-      "kind": "vault_steel"
+      "kind": "painted_metal"
     },
     {
       "name": "Mat_Assault_Toolbox_Red",
@@ -339,7 +339,7 @@
     },
     {
       "name": "Mat_Assault_Train_Rail_Detail",
-      "kind": "vault_steel"
+      "kind": "rust_iron"
     },
     {
       "name": "Mat_Assault_Train_Rust",
@@ -355,7 +355,7 @@
     },
     {
       "name": "Mat_Assault_Truck_Trailer",
-      "kind": "vault_steel"
+      "kind": "painted_metal"
     },
     {
       "name": "Mat_Assault_UFO_LED_Glow",
@@ -363,7 +363,7 @@
     },
     {
       "name": "Mat_Assault_Vent_Duct",
-      "kind": "vault_steel"
+      "kind": "brushed_steel"
     },
     {
       "name": "Mat_Assault_Wallpack_Bronze_Detail",
@@ -375,7 +375,7 @@
     },
     {
       "name": "Mat_Assault_Warehouse_Roof",
-      "kind": "vault_steel"
+      "kind": "corrugated"
     },
     {
       "name": "Mat_Assault_Warehouse_Wall",
@@ -399,7 +399,7 @@
     },
     {
       "name": "Mat_Assault_Wood_Pallet",
-      "kind": "wood"
+      "kind": "souk_crate"
     },
     {
       "name": "Mat_Assault_Wood_Workbench",
@@ -507,7 +507,7 @@
     },
     {
       "name": "Mat_Bank_Deposit_Box_Steel",
-      "kind": "vault_steel"
+      "kind": "brushed_steel"
     },
     {
       "name": "Mat_Bank_Emergency_Blue_Glow",
@@ -575,19 +575,19 @@
     },
     {
       "name": "Mat_Bank_Limestone_Dark",
-      "kind": "masonry"
+      "kind": "limestone_block"
     },
     {
       "name": "Mat_Bank_Limestone_Facade",
-      "kind": "masonry"
+      "kind": "limestone_block"
     },
     {
       "name": "Mat_Bank_Mahogany_Dark",
-      "kind": "wood"
+      "kind": "polished_wood"
     },
     {
       "name": "Mat_Bank_Mahogany_Polished",
-      "kind": "wood"
+      "kind": "polished_wood"
     },
     {
       "name": "Mat_Bank_Marble_Black",
@@ -639,7 +639,7 @@
     },
     {
       "name": "Mat_Bank_Perimeter_Concrete",
-      "kind": "concrete"
+      "kind": "cast_concrete"
     },
     {
       "name": "Mat_Bank_Picture_Frame_Gold",
@@ -691,7 +691,7 @@
     },
     {
       "name": "Mat_Bank_Steel_Structural",
-      "kind": "vault_steel"
+      "kind": "painted_metal"
     },
     {
       "name": "Mat_Bank_Storefront_Bronze",
@@ -707,11 +707,11 @@
     },
     {
       "name": "Mat_Bank_Vault_Steel",
-      "kind": "vault_steel"
+      "kind": "brushed_steel"
     },
     {
       "name": "Mat_Bank_Vault_Steel_Dark",
-      "kind": "vault_steel"
+      "kind": "brushed_steel"
     },
     {
       "name": "Mat_Bank_Velvet_Crimson",
@@ -726,219 +726,223 @@
       "kind": "none"
     },
     {
-      "name": "Mat_CRT_Phosphor_Green",
+      "name": "Mat_Facility_CRT_Phosphor_Green",
       "kind": "none"
     },
     {
-      "name": "Mat_Cast_Iron_Dark",
-      "kind": "vault_steel"
+      "name": "Mat_Facility_Concrete_Bunker_Dark",
+      "kind": "cast_concrete"
     },
     {
-      "name": "Mat_Chrome_Galv",
-      "kind": "vault_steel"
+      "name": "Mat_Facility_Concrete_Floor_Epoxy",
+      "kind": "slab_concrete"
     },
     {
-      "name": "Mat_Concrete_Bunker_Dark",
-      "kind": "concrete"
+      "name": "Mat_Facility_Concrete_Pit_Damp",
+      "kind": "slab_concrete"
     },
     {
-      "name": "Mat_Concrete_Floor_Epoxy",
-      "kind": "concrete"
-    },
-    {
-      "name": "Mat_Concrete_Pit_Damp",
-      "kind": "concrete"
-    },
-    {
-      "name": "Mat_Concrete_Stained",
-      "kind": "concrete"
-    },
-    {
-      "name": "Mat_Concrete_Wall",
-      "kind": "concrete"
-    },
-    {
-      "name": "Mat_Container_Blue",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Container_Frame",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Container_Green",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Container_Orange",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Container_Red",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Coolant_Fluid_Glow",
+      "name": "Mat_Facility_Coolant_Fluid_Glow",
       "kind": "none"
     },
     {
-      "name": "Mat_Corrugated_Steel_Rusted",
-      "kind": "container"
-    },
-    {
-      "name": "Mat_Diamond_Plate",
+      "name": "Mat_Facility_Drum_Bio_Blue",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Drum_Bio_Blue",
+      "name": "Mat_Facility_Drum_Hazmat_Yellow",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Drum_Blue",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Drum_Hazmat",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Drum_Hazmat_Yellow",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Drum_Rust",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Emergency_Siren_Red",
+      "name": "Mat_Facility_Emergency_Siren_Red",
       "kind": "none"
     },
     {
-      "name": "Mat_Fluorescent_Troffer",
+      "name": "Mat_Facility_Fluorescent_Troffer",
       "kind": "none"
     },
     {
-      "name": "Mat_Gravel_Mud_Wet",
-      "kind": "concrete"
-    },
-    {
-      "name": "Mat_Hazard_Black",
+      "name": "Mat_Facility_Hazard_Yellow",
       "kind": "hazard"
     },
     {
-      "name": "Mat_Hazard_Yellow",
+      "name": "Mat_Facility_Hydraulic_Chrome",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Facility_LED_Amber_Glow",
+      "kind": "none"
+    },
+    {
+      "name": "Mat_Facility_LED_Green_Glow",
+      "kind": "none"
+    },
+    {
+      "name": "Mat_Facility_Pipe_Industrial_Green",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Facility_Server_Cabinet_Matte",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Facility_Server_Faceplate_Dark",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Facility_Steel_Cast_Iron",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Facility_Steel_Diamond_Plate",
+      "kind": "tread_plate"
+    },
+    {
+      "name": "Mat_Facility_Steel_Grate_Perforated",
+      "kind": "tread_plate"
+    },
+    {
+      "name": "Mat_Facility_Steel_Stainless_Brushed",
+      "kind": "brushed_steel"
+    },
+    {
+      "name": "Mat_Facility_Steel_Structural_Dark",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Facility_Valve_Red",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Cast_Iron_Dark",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Chrome_Galv",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Concrete_Stained",
+      "kind": "slab_concrete"
+    },
+    {
+      "name": "Mat_Junkflea_Concrete_Wall",
+      "kind": "cast_concrete"
+    },
+    {
+      "name": "Mat_Junkflea_Container_Blue",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Container_Frame",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Container_Green",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Container_Orange",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Container_Red",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Corrugated_Steel_Rusted",
+      "kind": "corrugated"
+    },
+    {
+      "name": "Mat_Junkflea_Diamond_Plate",
+      "kind": "tread_plate"
+    },
+    {
+      "name": "Mat_Junkflea_Drum_Blue",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Drum_Hazmat",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Drum_Rust",
+      "kind": "vault_steel"
+    },
+    {
+      "name": "Mat_Junkflea_Gravel_Mud_Wet",
+      "kind": "wet_mud"
+    },
+    {
+      "name": "Mat_Junkflea_Hazard_Black",
       "kind": "hazard"
     },
     {
-      "name": "Mat_Hydraulic_Chrome",
-      "kind": "vault_steel"
+      "name": "Mat_Junkflea_Hazard_Yellow",
+      "kind": "hazard"
     },
     {
-      "name": "Mat_LED_Amber_Glow",
-      "kind": "none"
-    },
-    {
-      "name": "Mat_LED_Green_Glow",
-      "kind": "none"
-    },
-    {
-      "name": "Mat_Pipe_Industrial_Green",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Placard_White_Detail",
+      "name": "Mat_Junkflea_Placard_White_Detail",
       "kind": "concrete"
     },
     {
-      "name": "Mat_Rubber_Tire",
+      "name": "Mat_Junkflea_Rubber_Tire",
       "kind": "none"
     },
     {
-      "name": "Mat_Scrap_Car_Blue",
+      "name": "Mat_Junkflea_Scrap_Car_Blue",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Scrap_Car_Red",
+      "name": "Mat_Junkflea_Scrap_Car_Red",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Scrap_Car_Yellow",
+      "name": "Mat_Junkflea_Scrap_Car_Yellow",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Scrap_Metal_Mangled",
+      "name": "Mat_Junkflea_Scrap_Metal_Mangled",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Server_Cabinet_Matte",
-      "kind": "vault_steel"
+      "name": "Mat_Junkflea_Sheet_Pile",
+      "kind": "corrugated"
     },
     {
-      "name": "Mat_Server_Faceplate_Dark",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Sheet_Pile",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Sodium_Floodlight_Glow",
+      "name": "Mat_Junkflea_Sodium_Floodlight_Glow",
       "kind": "none"
     },
     {
-      "name": "Mat_Steel_Cast_Iron",
+      "name": "Mat_Junkflea_Steel_IBeam_Yellow",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Junkflea_Steel_Rusted",
+      "kind": "rust_iron"
+    },
+    {
+      "name": "Mat_Junkflea_Steel_Structural",
+      "kind": "painted_metal"
+    },
+    {
+      "name": "Mat_Junkflea_Steel_Wire_Bale_Detail",
       "kind": "vault_steel"
     },
     {
-      "name": "Mat_Steel_Diamond_Plate",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Grate_Perforated",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_IBeam_Yellow",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Rusted",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Stainless_Brushed",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Structural",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Structural_Dark",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Steel_Wire_Bale_Detail",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Strobe_Amber_Glow",
+      "name": "Mat_Junkflea_Strobe_Amber_Glow",
       "kind": "none"
     },
     {
-      "name": "Mat_Trench_Mud_Dark",
-      "kind": "concrete"
+      "name": "Mat_Junkflea_Trench_Mud_Dark",
+      "kind": "wet_mud"
     },
     {
-      "name": "Mat_Valve_Red",
-      "kind": "vault_steel"
-    },
-    {
-      "name": "Mat_Water_Slick_Detail",
+      "name": "Mat_Junkflea_Water_Slick_Detail",
       "kind": "none"
     },
     {
-      "name": "Mat_Wood_Pallet",
+      "name": "Mat_Junkflea_Wood_Pallet",
       "kind": "wood"
     },
     {
@@ -1219,7 +1223,7 @@
     },
     {
       "name": "mat_office_black_metal",
-      "kind": "vault_steel"
+      "kind": "painted_metal"
     },
     {
       "name": "mat_office_cardboard_box",
@@ -1231,7 +1235,7 @@
     },
     {
       "name": "mat_office_ceiling_tile",
-      "kind": "plaster"
+      "kind": "ceiling_tile"
     },
     {
       "name": "mat_office_fluorescent",
@@ -1239,7 +1243,7 @@
     },
     {
       "name": "mat_office_mahogany",
-      "kind": "wood"
+      "kind": "polished_wood"
     },
     {
       "name": "mat_office_marble_floor",
@@ -1267,7 +1271,7 @@
     },
     {
       "name": "mat_office_stainless",
-      "kind": "vault_steel"
+      "kind": "brushed_steel"
     },
     {
       "name": "mat_office_wall_accent",

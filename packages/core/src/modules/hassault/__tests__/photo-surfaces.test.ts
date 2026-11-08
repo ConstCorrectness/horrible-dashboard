@@ -50,7 +50,7 @@ describe('photo surface kinds', () => {
   it('are exactly the twenty promised, each with a stand-in', () => {
     // Nine for the desert and Italian maps, five for Nuke's concrete and steel,
     // six for Office's, Bank's and Assault's interiors and yard.
-    expect(PHOTO_KINDS).toHaveLength(20);
+    expect(PHOTO_KINDS).toHaveLength(25);
     for (const kind of PHOTO_KINDS) {
       expect(isPhotoKind(kind)).toBe(true);
       expect(PHOTO_FALLBACK[kind], kind).toBeTruthy();
@@ -132,6 +132,20 @@ describe('photo surface kinds', () => {
     expect(classifySurface('Mat_Assault_Steel_Catwalk')).toBe('tread_plate');
     expect(isPhotoKind(classifySurface('mat_office_fluorescent'))).toBe(false);
     expect(isPhotoKind(classifySurface('Mat_Bank_Fluorescent_Troffer_Glow'))).toBe(false);
+    // G7: the big surfaces left on a generated tile, and Facility's and Junk Flea's own.
+    expect(classifySurface('mat_office_ceiling_tile')).toBe('ceiling_tile');
+    expect(classifySurface('mat_office_stainless')).toBe('brushed_steel');
+    expect(classifySurface('mat_office_black_metal')).toBe('painted_metal');
+    expect(classifySurface('Mat_Bank_Limestone_Facade')).toBe('limestone_block');
+    expect(classifySurface('Mat_Bank_Perimeter_Concrete')).toBe('cast_concrete');
+    expect(classifySurface('Mat_Bank_Mahogany_Dark')).toBe('polished_wood');
+    expect(classifySurface('Mat_Assault_Warehouse_Roof')).toBe('corrugated');
+    expect(classifySurface('Mat_Facility_Concrete_Bunker_Dark')).toBe('cast_concrete');
+    expect(classifySurface('Mat_Facility_Steel_Diamond_Plate')).toBe('tread_plate');
+    expect(classifySurface('Mat_Junkflea_Gravel_Mud_Wet')).toBe('wet_mud');
+    expect(classifySurface('Mat_Junkflea_Container_Blue')).toBe('corrugated');
+    expect(isPhotoKind(classifySurface('Mat_Facility_Coolant_Fluid_Glow'))).toBe(false);
+    expect(isPhotoKind(classifySurface('Mat_Junkflea_Water_Slick_Detail'))).toBe(false);
     // Mirage and the rest reuse these names, minus the infix, and must not change.
     for (const other of [
       'mat_sandstone_ochre',
@@ -168,6 +182,8 @@ describe('photo surface kinds', () => {
             lower.includes('office_') ||
             lower.includes('bank_') ||
             lower.includes('assault_') ||
+            lower.includes('facility_') ||
+            lower.includes('junkflea_') ||
             lower.includes('aim_'),
           row.name,
         ).toBe(true);

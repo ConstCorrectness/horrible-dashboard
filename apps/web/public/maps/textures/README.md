@@ -30,6 +30,11 @@ attribution required. They are credited here anyway.
 | `polished_marble`          | Marble012           | Office's floor, Bank's marble    |
 | `red_brick`                | Bricks085           | Bank's and Assault's brick       |
 | `wall_plaster`             | PaintedPlaster017   | Office, Bank, Assault walls      |
+| `ceiling_tile`             | OfficeCeiling001    | Office and Assault ceilings      |
+| `brushed_steel`            | Metal009            | stainless, vault steel, ducts    |
+| `limestone_block`          | Tiles143            | Bank's limestone facade          |
+| `polished_wood`            | Wood066             | Office and Bank mahogany         |
+| `wet_mud`                  | Ground036           | Junk Flea's mud and trenches     |
 
 Each set is the 1K JPG download, cut down by `tools/hassault_process_textures.py`
 to three 512 px WebP files per kind: `<kind>_c.webp` (albedo, normalised so a
@@ -39,4 +44,14 @@ edit `KINDS` in that script, and run it again (naming kinds after the output
 directory processes only those, so the other sets need not be downloaded).
 
 They are matched only by a map's own infixed material names (`dust2_`, `mirage_`,
-`inferno_`, `nuke_`, `office_`, `bank_`, `assault_`), so no other map changes. See "The modelled maps" in `docs/modules/hassault.mdx`.
+`inferno_`, `nuke_`, `office_`, `bank_`, `assault_`, `facility_`, `junkflea_`), so no
+other map changes. See "The modelled maps" in `docs/modules/hassault.mdx`.
+
+## 1024 px variants
+
+Every kind also has `<kind>_c_1k.webp`, `<kind>_n_1k.webp` and `<kind>_r_1k.webp`: the
+same processing at the set's full 1K resolution (`hassault_process_textures.py --size
+1024`), for the High quality level. Nothing loads them yet — the 512 px files are what
+both clients use today, and what the native client embeds. A client that wants them
+swaps the suffix in `photoTexturePath`; the albedo normalisation, normal convention and
+roughness channel are identical.

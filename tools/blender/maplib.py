@@ -306,6 +306,13 @@ SOFTEN_BY_KIND = {
     "polished_marble": (0.03, 0.15),
     "red_brick": (0.06, 0.2),
     "wall_plaster": (0.12, 0.25),
+    # G7's: ceiling tile was plaster, brushed steel vault steel, limestone
+    # block masonry, polished wood wood, and wet mud unclassified (the default).
+    "ceiling_tile": (0.12, 0.25),
+    "brushed_steel": (0.025, 0.15),
+    "limestone_block": (0.15, 0.25),
+    "polished_wood": (0.04, 0.2),
+    "wet_mud": (0.04, 0.2),
 }
 #: A material the table does not classify.
 SOFTEN_DEFAULT = (0.04, 0.2)
