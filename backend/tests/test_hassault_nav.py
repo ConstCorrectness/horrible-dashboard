@@ -134,6 +134,60 @@ def test_a_bot_walks_the_graph_to_a_door_it_used_to_miss(name, label):
     )
 
 
+def _walk(name: str, end: int, x: float, y: float, limit: float) -> float:
+    """How close one bot from the map's `end` spawns gets to `(x, y)`."""
+    world, cgz = _world(name)
+    starts = [s for s in cgz.spawns() if s.attr2 == end]
+    room = MatchRoom("nav", name, world, starts)
+    (bot,) = bots.add_bots(room, 1, skill="normal", team=end)
+    best = math.inf
+    for _ in range(int(limit * 20)):
+        bot.brain.roam = (x, y)
+        bot.brain.roam_in = 60.0
+        bot.brain.investigate = None
+        room.simulate(1 / 20)
+        room.noises.clear()
+        best = min(best, math.hypot(bot.state.x - x, bot.state.y - y))
+        if best < 4:
+            break
+    return best
+
+
+def _target(name: str, label: str) -> tuple[float, float]:
+    if label.startswith("site "):
+        world, cgz = _world(name)
+        site = next(s for s in objectives.place(world, cgz).sites if s.id == label[5:])
+        return site.x, site.y
+    x, y, _ = next(n for n in bots.TACTICAL_COVER_NODES[name] if n[2] == label)
+    return x, y
+
+
+@pytest.mark.parametrize(
+    ("name", "end", "label"),
+    [
+        # Dust II's A sits up a ramp from both ends. Before the builder's reach
+        # used the walk it routes over, its graph snapped `site_A` to the floor
+        # *below* the platform and a bot from either end circled under it.
+        ("hd_dust2", 0, "site A"),
+        ("hd_dust2", 1, "site A"),
+        # B is up a strip of steps the waypoints used to be popped short of.
+        ("hd_dust2", 1, "site B"),
+        # Inferno's Banana: neither node was reached in a baseline soak, because
+        # both stood on props (moved to the floor beside them in G8).
+        ("hd_inferno", 1, "banana_car_cover"),
+        ("hd_inferno", 1, "banana_sandbags"),
+        ("hd_inferno", 0, "banana_car_cover"),
+    ],
+)
+def test_a_bot_reaches_a_target_up_a_ramp_or_down_banana(name, end, label):
+    x, y = _target(name, label)
+    best = _walk(name, end, x, y, 45.0)
+    assert best < 4, (
+        f"{name}: a bot from end {end} heading for {label} got no closer than "
+        f"{best:.1f} cubes"
+    )
+
+
 def test_standable_cells_include_every_graph_node():
     for name in GRAPHS:
         world, _ = _world(name)

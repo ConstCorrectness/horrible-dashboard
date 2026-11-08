@@ -27,12 +27,14 @@ See docs/modules/hassault.mdx.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from backend.modules.hassault import grenades, nav, physics, weapons
+from backend.modules.hassault import grenades, mapsource, nav, physics, weapons
 from backend.modules.hassault.modes import Goal
 from backend.modules.hassault.weapons import PLAYER_EYE_HEIGHT
 
@@ -150,8 +152,10 @@ LINE_CHECK = 0.5
 # How long a planned route is trusted before it is planned again from wherever
 # the bot has got to — a fight or a dodge can carry it well off the route.
 REPLAN = 3.0
-# A waypoint this close counts as reached.
+# A waypoint this close counts as reached, if the next one is walkable from
+# where the bot stands; this close, whatever.
 WAYPOINT_REACHED = 2.5
+WAYPOINT_EXACT = 0.8
 # A destination that moves less than this keeps the route already planned.
 SAME_DESTINATION = 3.0
 
@@ -182,9 +186,9 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (150.0, 138.0, "catwalk_overlook"),
     ],
     "hd_inferno": [
-        (63.0, 108.0, "banana_car_cover"),
+        (63.5, 112.5, "banana_car_cover"),
         (54.0, 129.0, "banana_sandbags"),
-        (68.0, 186.0, "site_b_fountain"),
+        (72.5, 185.5, "site_b_fountain"),
         (75.0, 192.0, "site_b_coffins"),
         (126.0, 114.0, "boiler_room_door"),
         (165.0, 150.0, "apts_balcony"),
@@ -235,7 +239,7 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
     ],
     "hd_bank": [
         (96.0, 102.0, "hall_compass"),
-        (96.0, 73.5, "front_door"),
+        (95.5, 69.5, "front_door"),
         (40.5, 72.0, "west_side_door"),
         (151.5, 72.0, "east_side_door"),
         (145.5, 142.5, "vault_corridor"),
@@ -287,6 +291,453 @@ BOT_LOADOUTS: dict[str, dict[str, str]] = {
     "support": {"primary": "raider", "secondary": "pistol"},
     "balanced": {"primary": "assault", "secondary": "pistol"},
 }
+
+
+# -- team play --------------------------------------------------------------
+#
+# Each bot used to decide alone: attackers split across the sites by a hash of
+# their id, defenders walked to a site and stood on its centre, and a sound was
+# investigated by whichever bot happened to hear it. `Tactics` is the team's
+# shared head, one per room. Attackers pick one site a round and go together
+# (an execute, a split over two approaches, and a lurker); defenders spread
+# over hold spots and rotate together on a call. It decides *where*; each
+# `BotBrain` still decides how to walk there, what to shoot and when.
+
+#: Seconds into a live round by which the attackers go even if not everybody
+#: has reached the staging point — somebody always gets caught on the way.
+EXECUTE_BY = 30.0
+#: Seconds into the round a lurker holds its spot before joining the site.
+LURK_UNTIL = 50.0
+#: An attacker this close to its staging point counts as staged.
+STAGED = 6.0
+#: Something seen or heard this close to a site is a call for that site.
+CALL_RADIUS = 40.0
+#: How long a call stands, in seconds.
+CALL_TTL = 15.0
+#: Cover nodes this close to a site are hold spots for its defenders.
+HOLD_RADIUS = 32.0
+#: How close a bot stands to a lineup's spot before throwing it, and how close
+#: its aim has to be, in cubes and radians. A cube off moves the landing about a
+#: cube, which a ten-cube smoke forgives.
+LINEUP_STAND = 0.8
+LINEUP_AIM = 0.02
+#: A team goal is re-asked this often, so the plan moving on reaches the bots.
+TEAM_GOAL_TTL = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class Lineup:
+    """A grenade thrown from a spot at an angle, declared in the map JSON.
+
+    `lineups: [{"id", "site", "kind", "from": [x, y], "yaw", "pitch", "route",
+    "land": [x, y]}]`, angles in degrees with the spawns' convention (0 = +x,
+    90 = +y; pitch up is positive). Thrown by an attacker staging for `site`
+    along `route`, through the same `Command.throw` a player sends — so where it
+    lands is wherever the grenade physics puts it, which
+    `tools/hassault_lineups.py` and `test_hassault_bot_teamplay.py` check
+    against `land`.
+    """
+
+    id: str
+    site: str
+    kind: str
+    x: float
+    y: float
+    yaw: float
+    pitch: float
+    route: str
+    land: tuple[float, float]
+    power: float | None = None
+
+    @property
+    def slot(self) -> int:
+        return grenades.GRENADES.index(grenades.BY_ID[self.kind])
+
+
+@lru_cache(maxsize=32)
+def lineups(map_name: str) -> tuple[Lineup, ...]:
+    """The map's lineups, or none. Read beside the map, like the nav graph."""
+    path = mapsource.source_path(map_name.lower())
+    if path is None:
+        return ()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")).get("lineups", [])
+    except (OSError, ValueError):
+        return ()
+    out = []
+    for row in raw if isinstance(raw, list) else []:
+        try:
+            if row["kind"] not in grenades.BY_ID:
+                continue
+            out.append(
+                Lineup(
+                    id=str(row["id"]),
+                    site=str(row["site"]),
+                    kind=str(row["kind"]),
+                    x=float(row["from"][0]),
+                    y=float(row["from"][1]),
+                    yaw=math.radians(float(row["yaw"])),
+                    pitch=math.radians(float(row["pitch"])),
+                    route=str(row.get("route", "")),
+                    land=(float(row["land"][0]), float(row["land"][1])),
+                    power=float(row["power"]) if "power" in row else None,
+                )
+            )
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    return tuple(out)
+
+
+@dataclass(slots=True)
+class Call:
+    """Where the enemy was last seen or heard near a site, for one team."""
+
+    site: str
+    x: float
+    y: float
+    until: float
+
+
+class Tactics:
+    """One room's shared bot plan. See the comment above `EXECUTE_BY`."""
+
+    def __init__(self, seed: int) -> None:
+        self.rng = random.Random(seed)
+        #: Seconds of room time, advanced by `hear`.
+        self.clock = 0.0
+        #: Which round the plan below is for: `(round, attackers)`.
+        self.key: tuple[int, int] | None = None
+        self.site: str | None = None
+        self.style = "execute"
+        #: Attacker bot id -> "execute" | "lurk".
+        self.roles: dict[str, str] = {}
+        #: Attacker bot id -> where it waits for the group before the site.
+        self.stage: dict[str, tuple[float, float]] = {}
+        #: Bot id -> the lineup it throws on the way.
+        self.lineup: dict[str, Lineup] = {}
+        #: Lineup ids thrown (or given up on) this round.
+        self.thrown: set[str] = set()
+        self.lurk: tuple[float, float] | None = None
+        self.go = False
+        #: Defender bot id -> (x, y, site id) it holds, and its site's anchor.
+        self.holds: dict[str, tuple[float, float, str]] = {}
+        self.anchors: set[str] = set()
+        self.calls: dict[int, Call] = {}
+        #: Last tick's noises, kept past the broadcast that empties
+        #: `room.noises` — bots think at the *top* of the next tick, by which
+        #: time the room's own list is always empty.
+        self.heard: list = []
+
+    # -- information --------------------------------------------------------
+
+    def report(self, room: MatchRoom, team: int, x: float, y: float) -> None:
+        """`team` saw or heard an enemy at `(x, y)`: a call if it is near a site."""
+        sites = getattr(room.mode, "sites", None) or []
+        near = min(sites, key=lambda s: math.hypot(s.x - x, s.y - y), default=None)
+        if near is None or math.hypot(near.x - x, near.y - y) > CALL_RADIUS:
+            return
+        self.calls[team] = Call(near.id, x, y, self.clock + CALL_TTL)
+
+    def call(self, team: int) -> Call | None:
+        c = self.calls.get(team)
+        return c if c is not None and c.until > self.clock else None
+
+    # -- the round plan -----------------------------------------------------
+
+    def plan(self, room: MatchRoom, state, sites) -> None:
+        """Make this round's plan once, when the round changes."""
+        key = (state.round, state.attackers)
+        if key == self.key:
+            return
+        self.key = key
+        self.thrown.clear()
+        self.calls.clear()
+        self.go = False
+        self.roles.clear()
+        self.stage.clear()
+        self.lineup.clear()
+        self.holds.clear()
+        self.anchors.clear()
+        self.lurk = None
+        if not sites:
+            return
+        name = _map_name(room)
+        team_bots = {
+            t: sorted(
+                (
+                    p
+                    for p in room.players.values()
+                    if p.brain is not None and p.team == t
+                ),
+                key=lambda p: p.id,
+            )
+            for t in (0, 1)
+        }
+        attackers = team_bots.get(state.attackers, [])
+        defenders = team_bots.get(1 - state.attackers, [])
+
+        target = self.rng.choice(sites)
+        self.site = target.id
+        mine = [lu for lu in lineups(name) if lu.site == target.id]
+        routes = sorted({lu.route for lu in mine})
+        self.rng.shuffle(routes)
+        self.style = (
+            "split"
+            if len(routes) >= 2 and len(attackers) >= 4 and self.rng.random() < 0.4
+            else "execute"
+        )
+        movers = list(attackers)
+        others = [s for s in sites if s.id != target.id]
+        snipers = [p for p in movers if p.brain.archetype == "sniper"]
+        if snipers and len(attackers) >= 3 and others:
+            lurker = snipers[0]
+            movers.remove(lurker)
+            self.roles[lurker.id] = "lurk"
+            self.lurk = self._lurk_spot(name, others[0], target)
+        taken: dict[str, int] = {}
+        for i, p in enumerate(movers):
+            self.roles[p.id] = "execute"
+            route = (
+                routes[i % 2]
+                if self.style == "split"
+                else (routes[0] if routes else "")
+            )
+            group = [lu for lu in mine if lu.route == route]
+            if not group:
+                continue
+            k = taken.get(route, 0)
+            taken[route] = k + 1
+            if k < len(group):
+                self.lineup[p.id] = group[k]
+            spot = group[min(k, len(group) - 1)]
+            self.stage[p.id] = (spot.x, spot.y)
+
+        # Defenders: spread over the sites, anchors first, then over each
+        # site's hold spots — its centre and the cover nodes round it.
+        order = sorted(defenders, key=lambda p: (p.brain.archetype != "anchor", p.id))
+        per_site: dict[str, list] = {s.id: [] for s in sites}
+        for i, p in enumerate(order):
+            per_site[sites[i % len(sites)].id].append(p)
+        cover = TACTICAL_COVER_NODES.get(name, [])
+        for site in sites:
+            spots = [plant_spot(room, site)] + [
+                (x, y)
+                for x, y, _ in cover
+                if math.hypot(x - site.x, y - site.y) <= HOLD_RADIUS
+            ]
+            self.rng.shuffle(spots)
+            for k, p in enumerate(per_site[site.id]):
+                x, y = spots[k % len(spots)]
+                self.holds[p.id] = (x, y, site.id)
+                if k == 0:
+                    self.anchors.add(p.id)
+
+    def _lurk_spot(self, name: str, other, target) -> tuple[float, float]:
+        """A cover node near the site not being hit, to catch the rotation."""
+        cover = [
+            (x, y)
+            for x, y, _ in TACTICAL_COVER_NODES.get(name, [])
+            if math.hypot(x - target.x, y - target.y) > HOLD_RADIUS
+        ]
+        if not cover:
+            return (other.x, other.y)
+        cover.sort(key=lambda c: math.hypot(c[0] - other.x, c[1] - other.y))
+        return self.rng.choice(cover[:2])
+
+    def update(self, room: MatchRoom, round_t: float) -> None:
+        """Whether the attackers go: everybody staged and the utility out, or
+        `EXECUTE_BY`."""
+        if self.go:
+            return
+        if round_t >= EXECUTE_BY:
+            self.go = True
+            return
+        staged = True
+        for bot_id, (x, y) in self.stage.items():
+            p = room.players.get(bot_id)
+            if p is None or not p.alive:
+                continue
+            if math.hypot(p.state.x - x, p.state.y - y) > STAGED:
+                staged = False
+                break
+        pending = [
+            lu
+            for bot_id, lu in self.lineup.items()
+            if lu.id not in self.thrown
+            and (p := room.players.get(bot_id)) is not None
+            and p.alive
+        ]
+        self.go = staged and not pending
+
+
+def tactics(room: MatchRoom) -> Tactics:
+    """The room's shared plan, made on first use."""
+    t = getattr(room, "bot_tactics", None)
+    if t is None:
+        t = Tactics(room.rng.randrange(1 << 30))
+        room.bot_tactics = t
+    return t
+
+
+def hear(room: MatchRoom, elapsed: float) -> None:
+    """End of a room tick: what each team heard, before the broadcast empties it.
+
+    A noise near a site that a living bot of the other team was in earshot of
+    becomes that team's call, which is how a defender two rooms away rotates
+    on a teammate's footsteps rather than on its own ears alone.
+    """
+    if not any(p.brain is not None for p in room.players.values()):
+        return
+    t = tactics(room)
+    t.clock += elapsed
+    t.heard = list(room.noises)
+    for n in t.heard:
+        if n.source_team < 0:
+            continue
+        for p in room.players.values():
+            if (
+                p.brain is not None
+                and p.alive
+                and p.team != n.source_team
+                and math.hypot(p.state.x - n.x, p.state.y - n.y) <= n.loudness
+            ):
+                t.report(room, p.team, n.x, n.y)
+                break
+
+
+def defuse_goal(room: MatchRoom, me: MatchPlayer, mode) -> Goal | None:
+    """Where the team plan puts this bot in a bomb round with no bomb down.
+
+    Called by `Defuse.bot_goal` after the planted and dropped cases, which
+    stay every bot's business whatever the plan says.
+    """
+    state = mode.state
+    sites = mode.sites
+    if not sites:
+        return None
+    t = tactics(room)
+    t.plan(room, state, sites)
+    from backend.modules.hassault.modes import defuse as _defuse
+
+    round_t = (
+        _defuse.ROUND_TIME - state.remaining if state.phase == _defuse.LIVE else 0.0
+    )
+    t.update(room, round_t)
+    by_id = {s.id: s for s in sites}
+    target = by_id.get(t.site or "", sites[0])
+
+    if me.team == state.attackers:
+        px, py = plant_spot(room, target)
+        site_goal = Goal(
+            x=px,
+            y=py,
+            z=target.z,
+            use=state.bomb.carrier == me.id,
+            radius=target.radius * 0.6,
+            expires_in=TEAM_GOAL_TTL,
+        )
+        role = t.roles.get(me.id, "execute")
+        # The bomb never lurks: a lurker who picked it up (or was handed it)
+        # would hold it at the other site for most of the round.
+        if (
+            role == "lurk"
+            and t.lurk is not None
+            and round_t < LURK_UNTIL
+            and state.bomb.carrier != me.id
+        ):
+            others = [s for s in sites if s.id != target.id] or [target]
+            return Goal(
+                x=t.lurk[0],
+                y=t.lurk[1],
+                z=target.z,
+                radius=3.0,
+                hold=True,
+                face=(others[0].x, others[0].y),
+                expires_in=TEAM_GOAL_TTL,
+            )
+        stage = t.stage.get(me.id)
+        if stage is not None and not t.go:
+            lu = t.lineup.get(me.id)
+            throwing = lu is not None and lu.id not in t.thrown
+            return Goal(
+                x=stage[0],
+                y=stage[1],
+                z=target.z,
+                radius=LINEUP_STAND * 0.5 if throwing else STAGED,
+                hold=not throwing,
+                face=(target.x, target.y),
+                expires_in=TEAM_GOAL_TTL,
+            )
+        return site_goal
+
+    call = t.call(me.team)
+    hold = t.holds.get(me.id)
+    if call is not None and (
+        hold is None or (hold[2] != call.site and me.id not in t.anchors)
+    ):
+        site = by_id.get(call.site, target)
+        px, py = plant_spot(room, site)
+        return Goal(
+            x=px,
+            y=py,
+            z=site.z,
+            radius=site.radius * 0.6,
+            hold=True,
+            face=(call.x, call.y),
+            expires_in=TEAM_GOAL_TTL,
+        )
+    if hold is None:
+        site = sites[hash(me.id) % len(sites)]
+        px, py = plant_spot(room, site)
+        return Goal(x=px, y=py, z=site.z, radius=site.radius)
+    site = by_id[hold[2]]
+    face = _enemy_side(room, me, site)
+    return Goal(
+        x=hold[0],
+        y=hold[1],
+        z=site.z,
+        radius=2.5,
+        hold=True,
+        face=face,
+        expires_in=TEAM_GOAL_TTL,
+    )
+
+
+def plant_spot(room: MatchRoom, site) -> tuple[float, float]:
+    """Where to send a bot for `site`: its nearest walkable point.
+
+    The map's nav graph snaps its `site_<id>` node to the nearest cell a body
+    walks onto, and a site's centre is often not one (Office A's is under the
+    boardroom table). Sent at the centre, a carrier stopped short of the goal
+    radius and stood a step away from planting for the whole round.
+    """
+    graph = nav.load(_map_name(room))
+    if graph is not None:
+        for x, y, label in graph.nodes:
+            if (
+                label == f"site_{site.id}"
+                and math.hypot(x - site.x, y - site.y) <= site.radius * 0.8
+            ):
+                return (x, y)
+    return (site.x, site.y)
+
+
+def _enemy_side(room: MatchRoom, me: MatchPlayer, site) -> tuple[float, float]:
+    """Where a defender on `site` should look: towards the enemy spawns.
+
+    By the mode's `spawn_end`: in a bomb round the spawns belong to the
+    attacking *role*, not to a team, so a half-time swap moves both."""
+    spawn_end = getattr(room.mode, "spawn_end", None)
+    end = spawn_end(1 - me.team) if spawn_end else 1 - me.team
+    enemy = [
+        (s.x + 0.5, s.y + 0.5) for s in room.spawns if getattr(s, "attr2", None) == end
+    ]
+    if not enemy:
+        return (site.x, site.y)
+    return (
+        sum(e[0] for e in enemy) / len(enemy),
+        sum(e[1] for e in enemy) / len(enemy),
+    )
 
 
 class BotBrain:
@@ -423,6 +874,9 @@ class BotBrain:
             return current
         if best.id != self.target_id:
             self.target_id = best.id
+            # A sighting is the team's, not just this bot's: near a site it is a
+            # call the others rotate on.
+            tactics(room).report(room, me.team, best.state.x, best.state.y)
             # The reaction delay is charged from the moment of acquisition, so a
             # bot that walks into the open is shootable before it shoots.
             self.seen_at = 0.0
@@ -475,9 +929,10 @@ class BotBrain:
             # Close enough to steer the rest: the point itself may be one no
             # body fits at (a door's frame, a site under its table).
             return math.atan2(y - me.state.y, x - me.state.x)
-        if self.route_to is None or math.hypot(
-            x - self.route_to[0], y - self.route_to[1]
-        ) > SAME_DESTINATION:
+        if (
+            self.route_to is None
+            or math.hypot(x - self.route_to[0], y - self.route_to[1]) > SAME_DESTINATION
+        ):
             self.route_to = (x, y)
             self.route = []
             self.line_in = 0.0
@@ -495,12 +950,30 @@ class BotBrain:
                 room.world, *here, *self.route[1]
             ):
                 self.route.pop(0)
-        while (
-            len(self.route) > 1
+        # A waypoint is passed when the bot is near it *and* can walk on from
+        # here: some are gateways a step wide (Dust II's one-cube strip up to
+        # B), and popping one from 2.5 cubes off left the bot below a ledge it
+        # could not climb, walking at it for the rest of the round.
+        while len(self.route) > 1:
+            gap = math.hypot(self.route[0][0] - here[0], self.route[0][1] - here[1])
+            if gap >= WAYPOINT_REACHED or (
+                gap > WAYPOINT_EXACT
+                and not nav.walkable(room.world, *here, *self.route[1])
+            ):
+                break
+            self.route.pop(0)
+        if (
+            len(self.route) == 1
+            and not self.direct
+            and math.hypot(x - self.route[0][0], y - self.route[0][1])
+            > SAME_DESTINATION
             and math.hypot(self.route[0][0] - here[0], self.route[0][1] - here[1])
             < WAYPOINT_REACHED
         ):
-            self.route.pop(0)
+            # At the end of a route that stops short (the nearest node to a goal
+            # no walk ends at): steer straight on and let a wedge's hop do the
+            # rest, rather than stand on the node until the goal expires.
+            return math.atan2(y - me.state.y, x - me.state.x)
         tx, ty = self.route[0] if self.route and not self.direct else (x, y)
         return math.atan2(ty - me.state.y, tx - me.state.x)
 
@@ -730,7 +1203,10 @@ class BotBrain:
             if self.investigate_in <= 0:
                 self.investigate = None
             if self.investigate is None and hasattr(room, "noises"):
-                for noise in getattr(room, "noises", []):
+                # The room's own list is empty by the time a bot thinks on a
+                # live server (the broadcast clears it after the tick that made
+                # it), so last tick's noises come from the team's `heard`.
+                for noise in [*room.noises, *tactics(room).heard]:
                     if noise.source != me.id:
                         other_p = room.players.get(noise.source)
                         if other_p and other_p.team != me.team and other_p.alive:
@@ -743,12 +1219,25 @@ class BotBrain:
                                 break
 
         # -- where to walk --------------------------------------------------
+        #: Holding a spot (the team plan's `Goal.hold`) or lining up a throw:
+        #: no movement keys, look at `face`.
+        stand = False
+        walk = False
+        face: tuple[float, float] | None = None
         self.strafe_in -= dt
         if self.strafe_in <= 0:
             self.strafe_in = 0.7 + self.rng.random() * 1.1
             self.strafe_dir = -self.strafe_dir
 
-        if target is not None:
+        # The bomb carrier keeps walking its objective through a fight it is not
+        # in close: the duel steering below advances on a far target, and on an
+        # open map that walked the bomb away from the site for a minute at a time
+        # (measured on Inferno: five of nine rounds timed out with the carrier
+        # alive and trading shots 100+ cubes from either site). It still aims
+        # and fires — this only changes its feet.
+        carrying = getattr(getattr(room.mode, "state", None), "bomb", None)
+        carrying = carrying is not None and carrying.carrier == me.id
+        if target is not None and not (carrying and distance > CLOSE_RANGE):
             bearing = math.atan2(
                 target.state.y - me.state.y, target.state.x - me.state.x
             )
@@ -776,8 +1265,15 @@ class BotBrain:
         else:
             goal = self._objective(room, me, dt)
             if goal is not None:
-                if math.hypot(goal.x - me.state.x, goal.y - me.state.y) <= goal.radius:
+                gap = math.hypot(goal.x - me.state.x, goal.y - me.state.y)
+                if gap <= goal.radius:
                     self.goal_in = 0.0
+                    if goal.hold:
+                        stand = True
+                        face = goal.face
+                if gap < 3.0 and goal.radius < 1.0:
+                    # Closing on a lineup spot: walk, so it stops on it.
+                    walk = True
                 wanted_heading = self._toward(room, me, goal.x, goal.y, dt)
             elif self.investigate is not None:
                 # Steer towards investigated sound source
@@ -814,6 +1310,26 @@ class BotBrain:
             gap = math.hypot(objective.x - me.state.x, objective.y - me.state.y)
             use = use or gap <= objective.radius
 
+        # -- a lineup -------------------------------------------------------
+        #
+        # On the spot of the grenade the team plan gave it: stop, turn to the
+        # lineup's angle and throw it through `Command.throw`, like a player.
+        lineup: Lineup | None = None
+        if target is None and me.flash < grenades.FLASH_BLIND:
+            plan = tactics(room)
+            lu = plan.lineup.get(me.id)
+            if (
+                lu is not None
+                and lu.id not in plan.thrown
+                and math.hypot(lu.x - me.state.x, lu.y - me.state.y) <= LINEUP_STAND
+            ):
+                if me.nades.has(lu.slot):
+                    lineup = lu
+                    stand = True
+                else:
+                    # Nothing to throw: the group goes without it.
+                    plan.thrown.add(lu.id)
+
         heading = self._steer(room, me, wanted_heading)
         self.avoid_bias *= 0.9
 
@@ -824,6 +1340,10 @@ class BotBrain:
         )
         self.last_pos = (me.state.x, me.state.y)
         jump = False
+        if stand:
+            # Standing still on purpose is not being wedged.
+            self.stuck_in = STUCK_WINDOW
+            self.moved = 0.0
         if self.stuck_in <= 0:
             if self.moved < STUCK_DISTANCE:
                 # Wedged on geometry the probe was happy with — a lip, a corner,
@@ -873,8 +1393,16 @@ class BotBrain:
         # produces the twitch.
         if target is None:
             limit = self.skill.turn_rate * dt
-            yaw = yaw + _clamp(_wrap(heading - yaw), -limit, limit)
-            pitch = pitch - _clamp(pitch, -limit, limit)
+            if lineup is not None:
+                yaw = yaw + _clamp(_wrap(lineup.yaw - yaw), -limit, limit)
+                pitch = pitch + _clamp(lineup.pitch - pitch, -limit, limit)
+            elif stand and face is not None:
+                look = math.atan2(face[1] - me.state.y, face[0] - me.state.x)
+                yaw = yaw + _clamp(_wrap(look - yaw), -limit, limit)
+                pitch = pitch - _clamp(pitch, -limit, limit)
+            else:
+                yaw = yaw + _clamp(_wrap(heading - yaw), -limit, limit)
+                pitch = pitch - _clamp(pitch, -limit, limit)
         if me.flash < grenades.FLASH_BLIND and target is None:
             self.last_seen = None
 
@@ -882,8 +1410,8 @@ class BotBrain:
         # one way and walking another — which is most of a firefight — needs the
         # heading rotated into it.
         relative = _wrap(heading - yaw)
-        forward = math.cos(relative)
-        strafe = math.sin(relative)
+        forward = 0.0 if stand else math.cos(relative)
+        strafe = 0.0 if stand else math.sin(relative)
 
         # -- scope ----------------------------------------------------------
         #
@@ -919,7 +1447,18 @@ class BotBrain:
                 has_primary = any(
                     weapons.WEAPONS[slot].slot == "primary" for slot in owned_weapons
                 )
-                if not has_primary:
+                # The grenade the team plan has this bot throw comes first once
+                # there is a gun, or when there is no money for one anyway.
+                planned = tactics(room).lineup.get(me.id)
+                if (
+                    planned is not None
+                    and not me.nades.has(planned.slot)
+                    and (has_primary or me.money < 1800)
+                    and index_of(planned.kind) >= 0
+                    and me.money >= 300
+                ):
+                    buy_item = index_of(planned.kind)
+                elif not has_primary:
                     if (
                         me.money >= 4750
                         and self.skill.name in ("hard", "expert")
@@ -952,8 +1491,12 @@ class BotBrain:
         if self.throw_in <= 0 and target is not None:
             if 10.0 < distance < 38.0 and self.rng.random() < 0.12:
                 counts = getattr(me.nades, "counts", {})
+                # Not the one the team plan has this bot carry to a lineup.
+                plan = tactics(room)
+                kept = plan.lineup.get(me.id)
+                reserved = kept.slot if kept and kept.id not in plan.thrown else -1
                 for slot_idx in (1, 2, 0):  # Flashbang, Smoke, Frag
-                    if counts.get(slot_idx, 0) > 0:
+                    if slot_idx != reserved and counts.get(slot_idx, 0) > 0:
                         throw = True
                         throw_nade = slot_idx
                         self.throw_in = 6.0 + self.rng.random() * 4.0
@@ -968,6 +1511,26 @@ class BotBrain:
                     pitch = _clamp(pitch + 0.45, -1.5, 1.5)
                     self.avert_in = spec.fuse + 0.25
                     self.avert_yaw = yaw + math.pi
+
+        throw_power: float | None = None
+        if (
+            lineup is not None
+            and not throw
+            and abs(_wrap(lineup.yaw - yaw)) <= LINEUP_AIM
+            and abs(lineup.pitch - pitch) <= LINEUP_AIM
+            and math.hypot(me.state.vel_x, me.state.vel_y) < 1.0
+        ):
+            # Aimed and settled: the angle is the lineup's to within
+            # `LINEUP_AIM`, and the body nearly still, since a throw inherits
+            # some of the thrower's velocity.
+            throw = True
+            throw_nade = lineup.slot
+            throw_power = lineup.power
+            tactics(room).thrown.add(lineup.id)
+            if lineup.kind == "flash":
+                spec = grenades.BY_ID["flash"]
+                self.avert_in = spec.fuse + 0.25
+                self.avert_yaw = yaw + math.pi
 
         # -- look away from your own flash ----------------------------------
         #
@@ -997,6 +1560,8 @@ class BotBrain:
             scoped=scoped,
             throw=throw,
             nade=throw_nade,
+            throw_power=throw_power,
+            walk=walk,
             use=use,
             buy=buy_item,
             # No rewind: a bot's input is produced here, on this tick, so the

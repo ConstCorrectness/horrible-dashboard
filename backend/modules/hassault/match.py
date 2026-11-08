@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from backend.modules.hassault import (
     afk,
     assets,
+    bots,
     grenades,
     modes,
     noise,
@@ -1386,6 +1387,9 @@ class MatchRoom:
         # reset that teleports everybody happens before the positions those
         # bodies will be rewound to are written down.
         self.mode.tick(self, elapsed, now)
+        # Bots hear this tick's noises now, while they still exist: the
+        # broadcast empties `noises` before the next tick's `_think` reads it.
+        bots.hear(self, elapsed)
 
         self.history.record(
             now_ms,

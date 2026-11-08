@@ -5839,5 +5839,57 @@
     {"x": 144, "y": 24, "z": 0, "yaw": 90, "team": 1}
   ],
   "collisionSource": "18773467a787330e",
-  "collisionBaked": "18773467a787330e"
+  "collisionBaked": "18773467a787330e",
+  "lineups": [
+    {
+      "id": "a_vault_corridor_smoke",
+      "site": "A",
+      "kind": "smoke",
+      "route": "vault_corridor",
+      "from": [146.5, 126.5],
+      "yaw": 150.9,
+      "pitch": 34.38,
+      "land": [128.0, 133.9]
+    },
+    {
+      "id": "a_vault_corridor_flash",
+      "site": "A",
+      "kind": "flash",
+      "route": "vault_corridor",
+      "from": [146.5, 126.5],
+      "yaw": 47.5,
+      "pitch": -6.53,
+      "land": [156.8, 159.6]
+    },
+    {
+      "id": "b_b_hall_door_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "b_hall_door",
+      "from": [38.5, 140.5],
+      "yaw": 35.14,
+      "pitch": 27.85,
+      "land": [78.8, 168.9]
+    },
+    {
+      "id": "b_b_hall_door_flash",
+      "site": "B",
+      "kind": "flash",
+      "route": "b_hall_door",
+      "from": [38.5, 140.5],
+      "yaw": 98.15,
+      "pitch": 25.1,
+      "land": [35.3, 163.7]
+    },
+    {
+      "id": "b_rear_corridor_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "rear_corridor",
+      "from": [73.5, 162.5],
+      "yaw": 8.03,
+      "pitch": 3.78,
+      "land": [84.7, 167.5]
+    }
+  ]
 }

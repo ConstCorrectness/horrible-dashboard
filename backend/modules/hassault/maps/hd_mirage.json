@@ -4423,5 +4423,67 @@
   },
   "collision": "baked",
   "collisionSource": "d8537b55ac0a63b7",
-  "collisionBaked": "d8537b55ac0a63b7"
+  "collisionBaked": "d8537b55ac0a63b7",
+  "lineups": [
+    {
+      "id": "a_palace_balcony_smoke",
+      "site": "A",
+      "kind": "smoke",
+      "route": "palace_balcony",
+      "from": [167.5, 165.5],
+      "yaw": 93.59,
+      "pitch": 39.53,
+      "land": [164.7, 210.0]
+    },
+    {
+      "id": "a_palace_balcony_flash",
+      "site": "A",
+      "kind": "flash",
+      "route": "palace_balcony",
+      "from": [167.5, 165.5],
+      "yaw": 73.14,
+      "pitch": 51.91,
+      "land": [177.5, 198.5]
+    },
+    {
+      "id": "a_palace_balcony_2_smoke",
+      "site": "A",
+      "kind": "smoke",
+      "route": "palace_balcony_2",
+      "from": [186.5, 171.5],
+      "yaw": 119.9,
+      "pitch": 32.31,
+      "land": [163.9, 210.8]
+    },
+    {
+      "id": "b_site_b_van_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "site_b_van",
+      "from": [85.5, 172.5],
+      "yaw": 64.98,
+      "pitch": 1.03,
+      "land": [99.5, 202.4]
+    },
+    {
+      "id": "b_site_b_van_flash",
+      "site": "B",
+      "kind": "flash",
+      "route": "site_b_van",
+      "from": [85.5, 172.5],
+      "yaw": 112.11,
+      "pitch": 51.91,
+      "land": [72.5, 204.4]
+    },
+    {
+      "id": "b_mid_window_room_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "mid_window_room",
+      "from": [101.5, 185.5],
+      "yaw": 91.44,
+      "pitch": -10.66,
+      "land": [100.8, 200.7]
+    }
+  ]
 }

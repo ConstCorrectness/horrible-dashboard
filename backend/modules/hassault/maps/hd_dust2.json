@@ -7602,5 +7602,37 @@
   },
   "collision": "baked",
   "collisionSource": "6ea7af38fb93835c",
-  "collisionBaked": "6ea7af38fb93835c"
+  "collisionBaked": "6ea7af38fb93835c",
+  "lineups": [
+    {
+      "id": "a_long_ledge_ramp_flash",
+      "site": "A",
+      "kind": "flash",
+      "route": "long_ledge_ramp",
+      "from": [153.5, 181.5],
+      "yaw": 40.43,
+      "pitch": 50.53,
+      "land": [180.5, 204.5]
+    },
+    {
+      "id": "b_site_b_window_smoke",
+      "site": "B",
+      "kind": "smoke",
+      "route": "site_b_window",
+      "from": [81.5, 203.5],
+      "yaw": 54.43,
+      "pitch": 35.41,
+      "land": [86.5, 218.1]
+    },
+    {
+      "id": "b_site_b_window_flash",
+      "site": "B",
+      "kind": "flash",
+      "route": "site_b_window",
+      "from": [81.5, 203.5],
+      "yaw": 163.74,
+      "pitch": 62.22,
+      "land": [56.5, 210.8]
+    }
+  ]
 }

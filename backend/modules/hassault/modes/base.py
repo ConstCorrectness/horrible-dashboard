@@ -75,6 +75,12 @@ class Goal:
     use: bool = False
     radius: float = 2.0
     expires_in: float = 12.0
+    #: Stand still once inside `radius` rather than walking on to the point: a
+    #: defender holding an angle, an attacker waiting for its group. Without it
+    #: five bots given one point push into each other on top of it.
+    hold: bool = False
+    #: Where to look while holding, `(x, y)`; `None` keeps the walking heading.
+    face: tuple[float, float] | None = None
 
 
 class GameMode:
