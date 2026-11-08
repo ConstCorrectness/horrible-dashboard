@@ -995,6 +995,60 @@ fn baked_ambient_occlusion_is_content_on_the_world_and_never_a_setting() {
     }
 }
 
+#[test]
+fn baked_bounce_light_is_content_on_the_world_in_both_clients_alike() {
+    // A map's GLB carries its second bounce in COLOR_1 (`tools/blender/
+    // bake_bounce.py`), declared in `asset.extras.hassaultBounce`. Both clients
+    // read the declaration rather than a constant, refuse an encoding they do
+    // not know, decode `scale · c²` once at load, and add it to the irradiance
+    // before the Lambert divide — where three puts a light map. Like the AO it
+    // is the same bake for everyone: it never reaches a character, every tier
+    // that lights draws it (Low's Lambert twin included), and no setting
+    // names it.
+    const WORLD3D_RS: &str = include_str!("../src/world3d.rs");
+    const SKIN_WGSL: &str = include_str!("../src/skin.wgsl");
+    const PROP_WGSL: &str = include_str!("../src/prop.wgsl");
+    const BOUNCE_TS: &str = include_str!("../../../packages/core/src/modules/hassault/bounce-light.ts");
+    const WORLD3D_TS: &str = include_str!("../../../packages/core/src/modules/hassault/world3d.ts");
+    const OPERATOR_TS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/models/operator.ts");
+    const GRAPHICS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/graphics.ts");
+    const SETTINGS_RS: &str = include_str!("../src/settings.rs");
+
+    // The encoding, read from the GLB, the same way.
+    assert!(WORLD3D_RS.contains(r#"if attribute != "COLOR_1" || curve != "square" || !(scale > 0.0) {"#));
+    assert!(BOUNCE_TS.contains("if (attribute !== 'COLOR_1' || curve !== 'square' || typeof scale !== 'number' || !(scale > 0)) {"));
+    assert!(WORLD3D_RS.contains("c.map(|c| self.scale * c * c)"), "native decodes bounce differently");
+    assert!(BOUNCE_TS.contains("return encoding.scale * c * c;"), "the browser decodes bounce differently");
+
+    // Added to the irradiance before `albedo / PI`: the Lambert path and the
+    // physical one natively, three's light-map slot in the browser.
+    assert!(LIGHTING_WGSL.contains("irradiance = irradiance + bounce_irradiance;"));
+    assert!(SHADER_WGSL.contains("color = color + (hemi + bounce_irradiance) * s.contribution * RECIPROCAL_PI;"));
+    assert!(BREAKUP_TS.contains("#include <lights_fragment_maps>
+#if defined( RE_IndirectDiffuse )
+  irradiance += vHdBounce;"));
+
+    // Only the world sets it; nothing a character is drawn with does.
+    assert_eq!(SHADER_WGSL.matches("bounce_irradiance = in.bounce;").count(), 1);
+    for (name, src) in [("skin.wgsl", SKIN_WGSL), ("prop.wgsl", PROP_WGSL)] {
+        assert!(!src.contains("bounce"), "{name} gathers the map's bounce");
+    }
+    assert!(!OPERATOR_TS.contains("Bounce"), "the operators gather the map's bounce");
+
+    // Every tier: the Lambert twin is patched even where it has no grime, and
+    // the browser keeps the attribute through its static-batch merge.
+    assert!(BREAKUP_TS.contains("setPatch(three, twin, false, false, spec.breakup);"));
+    assert!(
+        WORLD3D_TS.contains("merged.setAttribute(
+      BOUNCE_ATTRIBUTE,"),
+        "the browser drops bounce when it batches"
+    );
+    for (name, src) in [("graphics.ts", GRAPHICS_TS), ("settings.rs", SETTINGS_RS)] {
+        assert!(!src.to_lowercase().contains("bounce"), "{name} has a bounce setting");
+    }
+}
+
 // -- the post chain ------------------------------------------------------------
 
 const POST_CHAIN_TS: &str =
@@ -1416,7 +1470,8 @@ fn both_clients_break_up_a_surface_with_the_same_numbers() {
     assert!(SURFACE_QUALITY_TS.contains("setBreakupDetail(three, m, breakup);"));
     assert_eq!(PANEL_TSX.matches("setSurfaceQuality(THREE, world3dGroup, tier.lambert, tier.breakup);").count(), 2);
     assert!(SURFACE_QUALITY_TS.contains("installLowTierBreakup(three, twin, m);"));
-    assert!(BREAKUP_TS.contains("setPatch(three, twin, false, false, true);"));
+    // The twin's grime is its source's (`spec.breakup`); glass has none.
+    assert!(BREAKUP_TS.contains("setPatch(three, twin, false, false, spec.breakup);"));
     assert!(BREAKUP_TS.contains("else if (spec.breakup) setPatch(three, material, false, false, true);"));
     assert_eq!(TIERS_TS.matches("lambert: true").count(), 1, "the Lambert twin is Low's alone");
     assert!(between(TIERS_TS, "low: {", "}").contains("lambert: true"));

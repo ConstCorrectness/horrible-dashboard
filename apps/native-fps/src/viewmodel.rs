@@ -1443,6 +1443,7 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
         uv: v.uv,
         material: v.material,
         ao: v.ao,
+        bounce: v.bounce,
     }
 }
 

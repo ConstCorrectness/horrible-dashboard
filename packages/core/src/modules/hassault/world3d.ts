@@ -34,6 +34,12 @@ import {
   withoutTransmission,
 } from './glb-surfaces';
 import { glbNodeCollides, isDecorNode } from './glb-colliders';
+import {
+  BOUNCE_ATTRIBUTE,
+  type BounceEncoding,
+  installBounceAttribute,
+  readBounce,
+} from './bounce-light';
 import { installSurfaceBreakup } from './surface-breakup';
 import { getCachedAssetUrl } from './models/assetCache';
 
@@ -2030,6 +2036,7 @@ function buildIndexedBatchGeometry(
   uvIn: Float32Array,
   colorIn: Float32Array | null,
   totalVerts: number,
+  bounceIn: Float32Array | null = null,
 ): THREE.BufferGeometry {
   const merged = new THREE.BufferGeometry();
   if (totalVerts === 0) return merged;
@@ -2048,6 +2055,7 @@ function buildIndexedBatchGeometry(
   const normOut = new Float32Array(totalVerts * 3);
   const uvOut = new Float32Array(totalVerts * 2);
   const colorOut = colorIn ? new Float32Array(totalVerts * 3) : null;
+  const bounceOut = bounceIn ? new Float32Array(totalVerts * 3) : null;
 
   let uniqueCount = 0;
 
@@ -2065,6 +2073,9 @@ function buildIndexedBatchGeometry(
     const cr = colorIn ? colorIn[i3]! : 1;
     const cg = colorIn ? colorIn[i3 + 1]! : 1;
     const cb = colorIn ? colorIn[i3 + 2]! : 1;
+    const br = bounceIn ? bounceIn[i3]! : 0;
+    const bg = bounceIn ? bounceIn[i3 + 1]! : 0;
+    const bb = bounceIn ? bounceIn[i3 + 2]! : 0;
 
     const qx = Math.round(px * 1000) | 0;
     const qy = Math.round(py * 1000) | 0;
@@ -2099,7 +2110,13 @@ function buildIndexedBatchGeometry(
         (!colorOut ||
           (Math.abs(colorOut[c3]! - cr) <= 2e-3 &&
             Math.abs(colorOut[c3 + 1]! - cg) <= 2e-3 &&
-            Math.abs(colorOut[c3 + 2]! - cb) <= 2e-3))
+            Math.abs(colorOut[c3 + 2]! - cb) <= 2e-3)) &&
+        // Bounce is decoded light, not a 0..1 colour: welded only where it is
+        // the same byte's worth (`scale · c²` moves least near zero).
+        (!bounceOut ||
+          (Math.abs(bounceOut[c3]! - br) <= 1e-4 &&
+            Math.abs(bounceOut[c3 + 1]! - bg) <= 1e-4 &&
+            Math.abs(bounceOut[c3 + 2]! - bb) <= 1e-4))
       ) {
         found = cand;
         break;
@@ -2126,6 +2143,11 @@ function buildIndexedBatchGeometry(
         colorOut[o3 + 1] = cg;
         colorOut[o3 + 2] = cb;
       }
+      if (bounceOut) {
+        bounceOut[o3] = br;
+        bounceOut[o3 + 1] = bg;
+        bounceOut[o3 + 2] = bb;
+      }
       next[idx] = head[h]!;
       head[h] = idx;
       indices[i] = idx;
@@ -2138,6 +2160,12 @@ function buildIndexedBatchGeometry(
   if (colorOut) {
     merged.setAttribute('color', new THREE.BufferAttribute(colorOut.slice(0, uniqueCount * 3), 3));
   }
+  if (bounceOut) {
+    merged.setAttribute(
+      BOUNCE_ATTRIBUTE,
+      new THREE.BufferAttribute(bounceOut.slice(0, uniqueCount * 3), 3),
+    );
+  }
   merged.setIndex(new THREE.BufferAttribute(indices, 1));
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
@@ -2148,6 +2176,7 @@ export function buildWorld3DFromGLTF(
   THREE: typeof import('three'),
   info: MapInfo,
   gltfScene: THREE.Group,
+  bounce: BounceEncoding | null = null,
 ): World3D {
   const root = new THREE.Group();
   root.name = `World3D_${info.name}`;
@@ -2175,6 +2204,8 @@ export function buildWorld3DFromGLTF(
 
     // Clone geometry and apply world transform + Z flip
     let geom = obj.geometry.clone();
+    // COLOR_1 becomes decoded bounce light, or goes (`bounce-light.ts`).
+    installBounceAttribute(THREE, geom, bounce);
     geom.applyMatrix4(obj.matrixWorld);
     geom.applyMatrix4(zFlip);
 
@@ -2385,8 +2416,11 @@ export function buildWorld3DFromGLTF(
     // GLTFLoader gives a primitive that has it a `vertexColors` material of its
     // own, so a batch is all-or-none. Read through getX: the GLB stores it as
     // normalised bytes, which `.array` would hand over unscaled.
-    const colorMerged = material.vertexColors
-      ? new Float32Array(totalVerts * 3).fill(1)
+    const colorMerged = material.vertexColors ? new Float32Array(totalVerts * 3).fill(1) : null;
+    // Baked bounce (`bounce-light.ts`): a batch has it if any member does, and
+    // a member without it gathers none.
+    const bounceMerged = entries.some((e) => e.geom.attributes[BOUNCE_ATTRIBUTE])
+      ? new Float32Array(totalVerts * 3)
       : null;
     let vOffset = 0;
 
@@ -2395,7 +2429,10 @@ export function buildWorld3DFromGLTF(
       const norm = e.geom.attributes.normal;
       const uv = e.geom.attributes.uv;
       const color = e.geom.attributes.color;
+      const bounceAttr = e.geom.attributes[BOUNCE_ATTRIBUTE];
       const count = pos?.count ?? 0;
+      if (bounceMerged && bounceAttr)
+        bounceMerged.set(bounceAttr.array as Float32Array, vOffset * 3);
       if (pos) posMerged.set(pos.array as Float32Array, vOffset * 3);
       if (norm) normMerged.set(norm.array as Float32Array, vOffset * 3);
       if (uv) uvMerged.set(uv.array as Float32Array, vOffset * 2);
@@ -2417,6 +2454,7 @@ export function buildWorld3DFromGLTF(
       uvMerged,
       colorMerged,
       totalVerts,
+      bounceMerged,
     );
     geometries.push(merged);
 
@@ -2444,12 +2482,12 @@ export function buildWorld3DFromGLTF(
     }
 
     if (batch.entries.length > 8) {
-      const quadrants: [StaticBatchEntry[], StaticBatchEntry[], StaticBatchEntry[], StaticBatchEntry[]] = [
-        [],
-        [],
-        [],
-        [],
-      ];
+      const quadrants: [
+        StaticBatchEntry[],
+        StaticBatchEntry[],
+        StaticBatchEntry[],
+        StaticBatchEntry[],
+      ] = [[], [], [], []];
       for (const e of batch.entries) {
         const qx = e.centerX >= mapMidX ? 1 : 0;
         const qz = e.centerZ >= mapMidZ ? 2 : 0;
@@ -2506,7 +2544,7 @@ export async function loadWorld3D(THREE: typeof import('three'), info: MapInfo):
     const assetUrl = await getCachedAssetUrl(`/${glbFilename}`);
     const loader = new GLTFLoader();
     const gltf = await loader.loadAsync(assetUrl);
-    return buildWorld3DFromGLTF(THREE, info, gltf.scene);
+    return buildWorld3DFromGLTF(THREE, info, gltf.scene, readBounce(gltf.asset));
   } catch (err) {
     console.warn(
       `[world3d] Could not load GLB asset ${glbFilename}, falling back to procedural generation:`,

@@ -54,6 +54,21 @@ pub struct Vertex {
     /// darkening out; the shader multiplies it in after the mix, as three does
     /// with a vertex colour.
     pub ao: f32,
+    /// Baked bounce light: the irradiance a map's second bounce puts on this
+    /// vertex, in `shade()`'s units, as half floats (rgb, w padding). Zero for
+    /// everything that is not a map — the operators, the view model, the
+    /// procedural worlds — so nothing but the map's own surfaces gathers it.
+    /// Decoded from the GLB's COLOR_1 on load (`world3d::read_bounce`).
+    pub bounce: [u16; 4],
+}
+
+/// No bounce light: half-float zero is all zero bits.
+pub const NO_BOUNCE: [u16; 4] = [0; 4];
+
+/// Irradiance as the vertex's half floats.
+pub fn pack_bounce(rgb: [f32; 3]) -> [u16; 4] {
+    let h = |x: f32| half::f16::from_f32(x).to_bits();
+    [h(rgb[0]), h(rgb[1]), h(rgb[2]), 0]
 }
 
 /// A vertex of a translucent volume: smoke, fire.
@@ -147,6 +162,7 @@ impl Vertex {
             uv: [0.0, 0.0],
             material: 0.0,
             ao: 1.0,
+            bounce: NO_BOUNCE,
         }
     }
 
@@ -164,16 +180,18 @@ impl Vertex {
             uv,
             material,
             ao: 1.0,
+            bounce: NO_BOUNCE,
         }
     }
 
-    pub const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    pub const ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x3,
         3 => Float32x2,
         4 => Float32,
         5 => Float32,
+        6 => Float16x4,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -2236,6 +2254,7 @@ pub fn mesh_vertices(mesh: &MeshData) -> Vec<Vertex> {
             uv,
             material,
             ao: mesh.ao.get(i).copied().unwrap_or(1.0),
+            bounce: mesh.bounce.get(i).map_or(NO_BOUNCE, |&b| pack_bounce(b)),
         });
     }
     out
@@ -2293,7 +2312,7 @@ mod tests {
         // The shader indexes by byte offset. If `repr(C)` were ever dropped,
         // Rust would be free to reorder these and the colours would arrive in
         // the normal's slot with no error anywhere.
-        assert_eq!(std::mem::size_of::<Vertex>(), 13 * 4);
+        assert_eq!(std::mem::size_of::<Vertex>(), 13 * 4 + 8);
         let v = Vertex {
             position: [1.0, 2.0, 3.0],
             normal: [4.0, 5.0, 6.0],
@@ -2301,12 +2320,19 @@ mod tests {
             uv: [10.0, 11.0],
             material: 12.0,
             ao: 13.0,
+            bounce: pack_bounce([0.5, 2.0, 0.0]),
         };
-        let bytes: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&v));
+        let bytes: &[u8] = bytemuck::bytes_of(&v);
+        let floats: &[f32] = bytemuck::cast_slice(&bytes[..13 * 4]);
         assert_eq!(
-            bytes,
+            floats,
             &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0]
         );
+        // `6 => Float16x4` at byte 52: the bounce, as half floats.
+        let halves: &[u16] = bytemuck::cast_slice(&bytes[13 * 4..]);
+        let back: Vec<f32> = halves.iter().map(|&h| half::f16::from_bits(h).to_f32()).collect();
+        assert_eq!(back, vec![0.5, 2.0, 0.0, 0.0]);
+        assert_eq!(Vertex::ATTRS[6].offset, 13 * 4);
     }
 
     #[test]
@@ -2331,6 +2357,7 @@ mod tests {
             uvs: vec![0.0, 0.0, 1.0, 1.0],
             materials: vec![0.0, 1.0],
             ao: vec![0.5],
+            bounce: vec![[0.25, 0.5, 1.0]],
             triangles: 0,
         };
         let verts = mesh_vertices(&mesh);
@@ -2342,6 +2369,9 @@ mod tests {
         // A mesh with fewer AO values than vertices is unoccluded past them.
         assert_eq!(verts[0].ao, 0.5);
         assert_eq!(verts[1].ao, 1.0);
+        // And without bounce past them.
+        assert_eq!(verts[0].bounce, pack_bounce([0.25, 0.5, 1.0]));
+        assert_eq!(verts[1].bounce, NO_BOUNCE);
     }
 }
 #[cfg(test)]

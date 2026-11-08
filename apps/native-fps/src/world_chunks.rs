@@ -212,6 +212,7 @@ mod tests {
             uv: [0.0; 2],
             material: 0.0,
             ao: 1.0,
+            bounce: crate::renderer::NO_BOUNCE,
         }
     }
 

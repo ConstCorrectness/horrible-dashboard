@@ -30,6 +30,9 @@ pub struct MeshData {
     pub materials: Vec<f32>,
     /// Baked ambient occlusion per vertex; missing entries read as 1.
     pub ao: Vec<f32>,
+    /// Baked bounce light per vertex (a GLB's COLOR_1, already decoded to
+    /// irradiance); missing entries read as none.
+    pub bounce: Vec<[f32; 3]>,
     pub triangles: usize,
 }
 
@@ -135,6 +138,7 @@ impl MeshBuilder {
             uvs: Vec::new(),
             materials: Vec::new(),
             ao: Vec::new(),
+            bounce: Vec::new(),
             triangles,
         }
     }

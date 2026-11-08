@@ -96,6 +96,9 @@ pub struct World3D {
     /// Baked ambient occlusion per render vertex (a GLB's COLOR_0). Empty for
     /// the procedural worlds, which read as unoccluded.
     pub render_ao: Vec<f32>,
+    /// Baked bounce light per render vertex (a GLB's COLOR_1, decoded by
+    /// `read_bounce`). Empty for a map without it, which then has none.
+    pub render_bounce: Vec<[f32; 3]>,
     pub triangles: usize,
     /// Collision geometry in game space (x, y, z as height).
     pub col_vertices: Vec<Point<Real>>,
@@ -115,6 +118,7 @@ impl World3D {
             uvs: self.render_uvs.clone(),
             materials: self.render_materials.clone(),
             ao: self.render_ao.clone(),
+            bounce: self.render_bounce.clone(),
             triangles: self.triangles,
         }
     }
@@ -589,6 +593,7 @@ pub fn create_procedural_facility_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -702,6 +707,7 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1056,6 +1062,7 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1508,6 +1515,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1653,6 +1661,7 @@ pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1804,6 +1813,7 @@ pub fn create_procedural_dust2_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1962,6 +1972,7 @@ pub fn create_procedural_inferno_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2121,6 +2132,7 @@ pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2262,6 +2274,7 @@ pub fn create_procedural_nuke_3d(info: MapInfo) -> World3D {
         render_uvs: b.render_uvs,
         render_materials: b.render_materials,
         render_ao: Vec::new(),
+        render_bounce: Vec::new(),
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2369,6 +2382,8 @@ fn walk_glb_node(
     render_uvs: &mut Vec<f32>,
     render_materials: &mut Vec<f32>,
     render_ao: &mut Vec<f32>,
+    bounce: Option<BounceEncoding>,
+    render_bounce: &mut Vec<[f32; 3]>,
     col_vertices: &mut Vec<Point<Real>>,
     col_indices: &mut Vec<[u32; 3]>,
     windows: &mut std::collections::HashMap<String, BreakableWindow>,
@@ -2451,6 +2466,11 @@ fn walk_glb_node(
             // Baked ambient occlusion (`maplib.bake_vertex_ao`): grey in COLOR_0,
             // so red is the value. A primitive without it is unoccluded.
             let ao: Option<Vec<f32>> = reader.read_colors(0).map(|c| c.into_rgb_f32().map(|c| c[0]).collect());
+            // Baked bounce light (`tools/blender/bake_bounce.py`), when the map
+            // declares how it is encoded. Without that it is not read at all:
+            // bytes of an unknown curve are not light.
+            let bounce_rgb: Option<Vec<[f32; 3]>> = bounce
+                .and_then(|enc| reader.read_colors(1).map(|c| c.into_rgb_f32().map(|c| enc.decode(c)).collect()));
             let mat_kind = MaterialKind::from_name(mat_name);
             let mat_id = mat_kind as u8 as f32;
             let indices: Vec<u32> = match reader.read_indices() {
@@ -2532,6 +2552,14 @@ fn walk_glb_node(
                         ao.as_ref().and_then(|a| a.get(i).copied()).unwrap_or(1.0)
                     };
                     render_ao.extend_from_slice(&[ao_at(i0), ao_at(i2), ao_at(i1)]);
+                    if let Some(b) = &bounce_rgb {
+                        let at = |i: usize| b.get(i).copied().unwrap_or([0.0; 3]);
+                        // Index-aligned with the other attributes: a map whose
+                        // first primitives had none is padded with zeros first.
+                        let start = render_ao.len() - 3;
+                        render_bounce.resize(start, [0.0; 3]);
+                        render_bounce.extend_from_slice(&[at(i0), at(i2), at(i1)]);
+                    }
                 }
 
                 if is_win {
@@ -2597,11 +2625,51 @@ fn walk_glb_node(
             render_uvs,
             render_materials,
             render_ao,
+            bounce,
+            render_bounce,
             col_vertices,
             col_indices,
             windows,
         );
     }
+}
+
+/// How a map's GLB stores its bounce light: `asset.extras.hassaultBounce`,
+/// written by `tools/blender/bake_bounce.py`.
+///
+/// COLOR_1 holds normalised bytes on a square-root curve, so the decoded
+/// irradiance is `scale * c * c` — in the units of `shade()`'s irradiance sum,
+/// added before `albedo / PI`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BounceEncoding {
+    pub scale: f32,
+}
+
+impl BounceEncoding {
+    pub fn decode(self, c: [f32; 3]) -> [f32; 3] {
+        c.map(|c| self.scale * c * c)
+    }
+}
+
+/// The bounce encoding a GLB declares, or `None` for a map without baked
+/// bounce, or with an encoding this client does not know (then the bytes are
+/// left unread rather than guessed at).
+pub fn read_bounce(glb: &[u8]) -> Option<BounceEncoding> {
+    // GLB: a 12-byte header, then the JSON chunk (length, type, bytes).
+    let len = u32::from_le_bytes(glb.get(12..16)?.try_into().ok()?) as usize;
+    if glb.get(16..20)? != b"JSON" {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(glb.get(20..20 + len)?).ok()?;
+    let spec = json.get("asset")?.get("extras")?.get("hassaultBounce")?;
+    let attribute = spec.get("attribute")?.as_str()?;
+    let curve = spec.get("curve")?.as_str()?;
+    let scale = spec.get("scale")?.as_f64()? as f32;
+    if attribute != "COLOR_1" || curve != "square" || !(scale > 0.0) {
+        eprintln!("map bounce light: unknown encoding {spec}, not drawn");
+        return None;
+    }
+    Some(BounceEncoding { scale })
 }
 
 pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, String> {
@@ -2616,6 +2684,8 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     let mut render_uvs = Vec::new();
     let mut render_materials = Vec::new();
     let mut render_ao = Vec::new();
+    let mut render_bounce = Vec::new();
+    let bounce = read_bounce(bytes);
     let mut col_vertices = Vec::new();
     let mut col_indices = Vec::new();
     let mut windows = std::collections::HashMap::new();
@@ -2632,6 +2702,8 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 &mut render_uvs,
                 &mut render_materials,
                 &mut render_ao,
+                bounce,
+                &mut render_bounce,
                 &mut col_vertices,
                 &mut col_indices,
                 &mut windows,
@@ -2967,6 +3039,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         render_uvs,
         render_materials,
         render_ao,
+        render_bounce,
         triangles,
         col_vertices,
         col_indices,

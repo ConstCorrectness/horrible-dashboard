@@ -55,6 +55,8 @@ struct VertexIn {
     @location(3) uv: vec2<f32>,
     @location(4) material: f32,
     @location(5) ao: f32,
+    // Baked bounce light as half floats, rgb (`Vertex::bounce`).
+    @location(6) bounce: vec4<f32>,
 };
 
 struct VertexOut {
@@ -76,6 +78,8 @@ struct VertexOut {
     // The point lights that can reach this vertex's cell: `point_mask` in
     // `lighting.wgsl.inc`. Flat, because it is the draw's, not the vertex's.
     @location(8) @interpolate(flat) point_mask: vec2<u32>,
+    // Baked bounce irradiance, zero off the map (`bounce_irradiance`).
+    @location(9) bounce: vec3<f32>,
 };
 
 // How wide the moving front is, in units of overall progress. `reveal::BAND`.
@@ -163,6 +167,7 @@ fn world_vertex(in: VertexIn, point_mask: vec2<u32>) -> VertexOut {
     out.uv = in.uv;
     out.material = in.material;
     out.ao = in.ao;
+    out.bounce = in.bounce.rgb;
     return out;
 }
 
@@ -414,9 +419,10 @@ fn shade_physical(
         }
     }
 
-    // The hemisphere: indirect diffuse (`RE_IndirectDiffuse_Physical`).
+    // The hemisphere and the baked bounce: indirect diffuse
+    // (`RE_IndirectDiffuse_Physical`), which is where three adds a light map.
     let hemi = mix(lights.hemi_ground.rgb, lights.hemi_sky.rgb, n.y * 0.5 + 0.5) * lights.hemi_sky.w;
-    color = color + hemi * s.contribution * RECIPROCAL_PI;
+    color = color + (hemi + bounce_irradiance) * s.contribution * RECIPROCAL_PI;
 
     // The environment (`getIBLRadiance`, `getIBLIrradiance`,
     // `RE_IndirectSpecular_Physical`).
@@ -676,6 +682,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
     }
     point_mask = in.point_mask;
+    bounce_irradiance = in.bounce;
     var radiance: vec3<f32>;
     if (mat_id > 0u && detail >= 1.0) {
         radiance = shade_physical(albedo, metalness, roughness, shade_normal, in.world_position, detail, occlusion);

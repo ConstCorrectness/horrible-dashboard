@@ -607,7 +607,39 @@ stored as normalised bytes on a square-root curve, `bounce = 4 · c²`, and the
 GLB says so in `asset.extras.hassaultBounce`. The GLB is patched, not
 re-exported, so `COLOR_0` stays byte-identical (the script refuses to write
 otherwise). Like AO it is content at every quality level, so it changes nobody's
-view. Consuming it in the clients' shaders is a later phase.
+view.
+
+**How the clients draw it.** Both read `asset.extras.hassaultBounce` rather than
+a constant, refuse an encoding they do not know (the bytes are then dropped, not
+guessed at), and decode `scale · c²` **once at load**, so the shader only adds:
+
+- Native (`world3d.rs` `read_bounce`): the decoded value rides in the world
+  `Vertex` as `Float16x4` (52 → 60 bytes). `fs_main` sets the private
+  `bounce_irradiance`, which `shade()` adds to its irradiance sum and
+  `shade_physical` adds beside the hemisphere as indirect diffuse
+  (`× contribution / π`).
+- Browser (`bounce-light.ts`): `color_1` becomes a float `hdBounce` attribute,
+  carried through the static-batch merge (and welded on). The surface-breakup
+  patch adds it to three's `irradiance` right after `lights_fragment_maps`,
+  which is three's own light-map slot, on every GLB material, glass and Low's
+  Lambert twins included.
+
+Only the map's own vertices carry it. Operators, the view model and props have
+zero bounce (natively their `VertexOut` is zero-initialised and the skin and prop
+shaders never set it), so it never lights a character. A map without `COLOR_1`
+simply has none, which is the old hemisphere-only look. Native Low draws
+surfaces unlit, so it has nothing to add bounce to.
+
+The fill light is kept. The bake leaves the fill out because it is a stand-in
+for bounce; keeping it on top of the real bounce counts that light twice where
+the fill reaches. On Dust II's site A framing the bounce adds about 2.5 of 255
+in mean luma, landing on the shaded walls, awnings and crate sides rather than
+the sunlit floor. Dropping the fill on maps that have bounce is a look call left
+for a playtest. `browser_parity.rs`
+(`baked_bounce_light_is_content_on_the_world_in_both_clients_alike`) pins the
+decode, where it is added, that only the world sets it, and that no setting
+names it. `PREVIEW_NO_BOUNCE=1` renders `dust2_preview` without it, for a
+before-and-after from one build.
 
 Checked and closed: Bank's street spawn at (36, 8) m was written up as standing
 inside the bus shelter. Rendered from the GLB at eye height, it stands 0.4 m in
@@ -1337,8 +1369,8 @@ path:
 - Smith-correlated visibility, `D_GGX`, and the Epic Fresnel fit;
 - Turquin multiscatter compensation from the DFG table, for the sun, the fill
   and the map's lamps;
-- the hemisphere as indirect diffuse, plus the environment's irradiance and its
-  split-sum specular;
+- the hemisphere and the map's baked bounce as indirect diffuse, plus the
+  environment's irradiance and its split-sum specular;
 - a roughness floor of 0.0525, widened by the normal's screen derivatives, as
   three does.
 

@@ -25,6 +25,10 @@
  *   height to read per pixel on a multi-level map, and the AO bake is already
  *   darkest exactly at the foot of a wall.)
  *
+ * The same patch carries the map's **baked bounce light** (`bounce-light.ts`)
+ * into three's `irradiance`, where a light map goes, on every GLB material and
+ * every tier — glass included, which is otherwise left alone.
+ *
  * **One `onBeforeCompile` per material.** Nothing else patches a modelled map's
  * materials (`reveal.ts` patches the cube maps' one material), and
  * `surface-quality.ts` copies the patch onto each Lambert twin.
@@ -34,6 +38,7 @@
  */
 import type * as THREE from 'three';
 
+import { BOUNCE_ATTRIBUTE } from './bounce-light';
 import type { SurfaceKind } from './glb-surfaces';
 
 /** How often the anti-tiling's offset changes, per tile (native `ANTI_TILE_FREQ`). */
@@ -76,6 +81,7 @@ float hdNoise(vec2 p) {
 
 const FRAGMENT_COMMON = /* glsl */ `
 varying vec3 vHdWorld;
+varying vec3 vHdBounce;
 ${BREAKUP_NOISE_GLSL}
 vec3 hdSurfaceBreakup(vec3 albedo, vec3 world, float ao) {
   vec2 q = (world.xz + world.yy * vec2(0.37, 0.61)) * ${f(MACRO_FREQ)};
@@ -148,7 +154,7 @@ export function installSurfaceBreakup(
   kind: SurfaceKind,
 ): void {
   const spec = breakupFor(kind);
-  if (!spec.antiTile && !spec.breakup) return;
+  // Every kind is patched, for the bounce light, even one with no breakup.
   material.userData[SPEC] = spec;
   setPatch(three, material, spec.antiTile, spec.breakup, spec.breakup);
 }
@@ -160,7 +166,11 @@ const SPEC = 'hdBreakup';
  * and the grime only (Medium), as native switches on `detail`. A recompile, so
  * it runs on a tier change, never per frame.
  */
-export function setBreakupDetail(three: typeof THREE, material: THREE.Material, full: boolean): void {
+export function setBreakupDetail(
+  three: typeof THREE,
+  material: THREE.Material,
+  full: boolean,
+): void {
   const spec = material.userData[SPEC] as ReturnType<typeof breakupFor> | undefined;
   if (!spec) return;
   if (full) setPatch(three, material, spec.antiTile, spec.breakup, spec.breakup);
@@ -169,7 +179,7 @@ export function setBreakupDetail(three: typeof THREE, material: THREE.Material, 
 
 /**
  * Low's Lambert twin (`surface-quality.ts`): the grime only, if the material
- * it stands in for has any (`TierSpec.breakup` says why).
+ * it stands in for has any (`TierSpec.breakup` says why), and the bounce.
  */
 export function installLowTierBreakup(
   three: typeof THREE,
@@ -177,8 +187,8 @@ export function installLowTierBreakup(
   source: THREE.Material,
 ): void {
   const spec = source.userData[SPEC] as ReturnType<typeof breakupFor> | undefined;
-  if (!spec?.breakup) return;
-  setPatch(three, twin, false, false, true);
+  if (!spec) return;
+  setPatch(three, twin, false, false, spec.breakup);
 }
 
 function setPatch(
@@ -188,7 +198,7 @@ function setPatch(
   macro: boolean,
   grime: boolean,
 ): void {
-  const key = `hd-breakup-2${antiTile ? '-tile' : ''}${macro ? '-tint' : ''}${grime ? '-grime' : ''}`;
+  const key = `hd-breakup-3${antiTile ? '-tile' : ''}${macro ? '-tint' : ''}${grime ? '-grime' : ''}`;
   if (material.customProgramCacheKey() === key) return;
   material.onBeforeCompile = patchFor(three, antiTile, macro, grime);
   material.customProgramCacheKey = () => key;
@@ -216,16 +226,40 @@ function patchFor(three: typeof THREE, antiTile: boolean, macro: boolean, breaku
   return (shader: THREE.WebGLProgramParametersWithUniforms) => {
     const defines = `${antiTile ? '#define HD_ANTI_TILE\n' : ''}${macro ? '#define HD_MACRO\n' : ''}${breakup ? '#define HD_BREAKUP\n' : ''}`;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vHdWorld;')
+      .replace(
+        '#include <common>',
+        `#include <common>\nvarying vec3 vHdWorld;\n${BOUNCE_VERTEX_COMMON}`,
+      )
       .replace(
         '#include <project_vertex>',
-        '#include <project_vertex>\n  vHdWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        '#include <project_vertex>\n  vHdWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vHdBounce = hdBounce;',
       );
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `${defines}#include <common>\n${FRAGMENT_COMMON}`)
       .replace('#include <map_fragment>', MAP_FRAGMENT)
       .replace('#include <color_fragment>', BREAKUP_FRAGMENT)
       .replace('#include <normal_fragment_maps>', normalMaps)
-      .replace('#include <roughnessmap_fragment>', roughnessMap);
+      .replace('#include <roughnessmap_fragment>', roughnessMap)
+      .replace('#include <lights_fragment_maps>', BOUNCE_FRAGMENT);
   };
 }
+
+/**
+ * The bounce, decoded at load (`BOUNCE_ATTRIBUTE`). A geometry without the
+ * attribute reads WebGL's default of zero, so a material shared with one
+ * gathers none there.
+ */
+const BOUNCE_VERTEX_COMMON = /* glsl */ `attribute vec3 ${BOUNCE_ATTRIBUTE};
+varying vec3 vHdBounce;
+`;
+
+/**
+ * Added to the irradiance the rig's lights already put there, before
+ * `BRDF_Lambert` — three's own light-map slot, and native's
+ * `bounce_irradiance`. Physical and Lambert both define `RE_IndirectDiffuse`.
+ */
+const BOUNCE_FRAGMENT = /* glsl */ `#include <lights_fragment_maps>
+#if defined( RE_IndirectDiffuse )
+  irradiance += vHdBounce;
+#endif
+`;

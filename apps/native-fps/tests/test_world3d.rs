@@ -551,6 +551,29 @@ fn test_nuke_glb_generation() {
     assert!(dist <= 36.0, "dist was {}", dist);
 }
 
-
-
-
+/// The baked bounce light (`tools/blender/bake_bounce.py`) reaches the world
+/// vertices decoded, one value per render vertex, beside the AO. What it should
+/// be is pinned on the GLB itself (`map-geometry.test.ts`); this is that the
+/// loader reads it rather than leaving the attribute in the file.
+#[test]
+fn modelled_maps_carry_their_baked_bounce_to_every_render_vertex() {
+    use hassault_native::world3d::{load_bank_glb, load_dust2_glb, read_bounce, BounceEncoding};
+    assert_eq!(read_bounce(b"not a glb"), None);
+    let encoding = read_bounce(&std::fs::read("../../apps/web/public/hd_dust2.glb").unwrap());
+    assert_eq!(encoding, Some(BounceEncoding { scale: 4.0 }));
+    for (name, load) in [
+        ("hd_dust2", load_dust2_glb as fn(MapInfo) -> Result<_, String>),
+        ("hd_bank", load_bank_glb),
+    ] {
+        let info = MapInfo { name: name.into(), ssize: 128, ..Default::default() };
+        let world = load(info).unwrap();
+        let vertices = world.render_positions.len() / 3;
+        assert_eq!(world.render_bounce.len(), vertices, "{name}: bounce is not per vertex");
+        let lit = world.render_bounce.iter().filter(|b| b.iter().any(|&c| c > 0.0)).count();
+        let most = world.render_bounce.iter().flatten().fold(0.0f32, |a, &b| a.max(b));
+        assert!(lit * 10 > vertices, "{name}: {lit} of {vertices} vertices gather bounce");
+        assert!(most <= 4.0 + 1e-4, "{name}: {most} is past the encoding's scale");
+        let mesh = world.to_mesh_data();
+        assert_eq!(mesh.bounce.len(), vertices);
+    }
+}

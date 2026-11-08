@@ -8,6 +8,7 @@
 //! ```
 //!
 //! `x y z` are in cubes (a standing eye is 4.5 high), `yaw` and `pitch` in degrees.
+//! `PREVIEW_NO_BOUNCE=1` leaves out the map's baked bounce light.
 
 use glam::Mat4;
 use hassault_native::api::MapInfo;
@@ -84,7 +85,12 @@ async fn run(path: &str, camera: Camera) {
         ssize: 64,
         ..Default::default()
     };
-    let world = hassault_native::world3d::create_world_3d(info);
+    let mut world = hassault_native::world3d::create_world_3d(info);
+    // `PREVIEW_NO_BOUNCE=1`: the map without its baked bounce light, for a
+    // before-and-after from the same build.
+    if std::env::var("PREVIEW_NO_BOUNCE").is_ok_and(|v| v == "1") {
+        world.render_bounce.clear();
+    }
     let map_name = map_name.as_str();
 
     let m3d = world.to_mesh_data();

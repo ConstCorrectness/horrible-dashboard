@@ -98,6 +98,15 @@ fn point_attenuation(distance: f32, range: f32) -> f32 {
 /// other shader leaves it as is and takes them all.
 var<private> point_mask: vec2<u32> = vec2<u32>(0xffffffffu, 0xffffffffu);
 
+/// The map's baked bounce light on this fragment (`Vertex::bounce`): irradiance
+/// added to the rig's own, before `albedo / PI`, like three's light map.
+///
+/// Zero unless the caller sets it, and only the world's fragment shader does,
+/// from the vertex — so the operators, the view model and the props never
+/// gather it, whatever shader they share. Content, not a setting: the same
+/// bake on every machine, at every quality level that lights at all.
+var<private> bounce_irradiance: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+
 /// One point light's irradiance on a surface.
 fn point_light(i: u32, n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     let light = lights.point[i];
@@ -306,6 +315,7 @@ fn shade(
             + lights.fill_color.rgb * lights.fill_color.w * max(dot(n, lights.fill_dir.xyz), 0.0);
     }
     irradiance = irradiance + point_irradiance(n, world_position);
+    irradiance = irradiance + bounce_irradiance;
     return albedo * irradiance * RECIPROCAL_PI;
 }
 
