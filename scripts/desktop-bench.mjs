@@ -151,8 +151,14 @@ function tree(root) {
   }
   const shell = [];
   const backend = [];
+  // Each process once. Windows keeps a dead parent's id in ParentProcessId and
+  // reuses ids, so a process can name its own descendant as its parent: the
+  // links can loop, and a walk without this recursed until the stack ran out.
+  const seen = new Set([root]);
   const walk = (pid, inBackend) => {
     for (const child of children.get(pid) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
       const b = inBackend || isBackend(child);
       (b ? backend : shell).push(child);
       walk(child.pid, b);
