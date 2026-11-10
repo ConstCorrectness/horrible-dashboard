@@ -1812,7 +1812,11 @@ def _turn_finished(
 
 
 async def _call_frontend_tool(
-    conn: WsConnection, turn_id: str, name: str, args: dict[str, Any]
+    conn: WsConnection,
+    turn_id: str,
+    name: str,
+    args: dict[str, Any],
+    timeout: float | None = None,
 ) -> Any:
     """Send a tool_call to the browser and await its tool_result."""
     call_id = uuid.uuid4().hex[:8]
@@ -1825,7 +1829,7 @@ async def _call_frontend_tool(
         )
     )
     try:
-        data = await asyncio.wait_for(fut, timeout=TOOL_TIMEOUT_S)
+        data = await asyncio.wait_for(fut, timeout=timeout or TOOL_TIMEOUT_S)
     except TimeoutError:
         conn.pending.pop(call_id, None)
         return {"error": "tool timed out"}
@@ -1855,6 +1859,44 @@ def _default_rule(name: str, specifier: str | None) -> str:
     return f"{name}({specifier})" if specifier else name
 
 
+# The name a gate question is relayed under (manifest.ts `GATE_PROBE`). A frontend
+# tool that declares `gate` (manifest `gated`) is asked what *this* call would do
+# before it is relayed: the browser's click, for one, is a link or a form
+# submission depending on the ref, which the arguments alone can't say.
+GATE_PROBE = "__gate__"
+GATE_PROBE_TIMEOUT_S = 15.0
+
+
+async def _probe_gate(
+    conn: WsConnection, turn_id: str, call: Any
+) -> dict[str, Any] | None:
+    """The tool's own per-call gate answer, or None to use its static meta.
+
+    None on any failure, which fails closed: a gated tool keeps a static
+    `sideEffect: true`, so an unanswered probe still asks."""
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    try:
+        answer = await _call_frontend_tool(
+            conn,
+            turn_id,
+            GATE_PROBE,
+            {"tool": call.name, "args": args},
+            timeout=GATE_PROBE_TIMEOUT_S,
+        )
+    except Exception:  # noqa: BLE001 — a dead socket is a failed probe, not a crash
+        logger.debug("gate probe for %s failed", call.name, exc_info=True)
+        return None
+    if not isinstance(answer, dict) or not isinstance(answer.get("sideEffect"), bool):
+        return None
+    specifier = answer.get("specifier")
+    rule = answer.get("rule")
+    return {
+        "sideEffect": answer["sideEffect"],
+        "specifier": specifier if isinstance(specifier, str) else None,
+        "rule": rule if isinstance(rule, str) else None,
+    }
+
+
 async def _request_approval(
     conn: WsConnection,
     turn_id: str,
@@ -1864,11 +1906,14 @@ async def _request_approval(
     *,
     call_id: str | None = None,
     args: dict[str, Any] | None = None,
+    rule: str | None = None,
 ) -> dict[str, Any]:
     """Prompt the browser to approve a gated call; await the user's decision.
 
     `call_id` is the provider's id for the call — the one `tool_start` carried — so
-    the chat can mark that exact row as waiting on the user."""
+    the chat can mark that exact row as waiting on the user. `rule` is the
+    always-allow rule to offer, when the tool suggested a broader one than the
+    exact call."""
     approval_id = uuid.uuid4().hex[:8]
     fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
     conn.pending_approvals[approval_id] = fut
@@ -1883,6 +1928,7 @@ async def _request_approval(
                 "mode": mode.value,
                 "callId": call_id,
                 "args": args or {},
+                "rule": rule or _default_rule(name, specifier),
             },
         )
     )
@@ -1898,23 +1944,39 @@ async def _gate(
     turn_id: str,
     call: Any,
     mode_override: permissions.Mode | None = None,
+    *,
+    probe: bool = True,
 ) -> bool:
     """Decide whether a relayed tool call may run. Read-only/layout tools pass
     straight through; side-effecting tools are evaluated against the permission
     rules + mode, prompting the user on an ASK and persisting a rule on
-    'always allow'. Returns True to relay, False to deny."""
+    'always allow'. Returns True to relay, False to deny.
+
+    A tool whose manifest entry is `gated` is asked first what this call would do
+    (`_probe_gate`), and its answer replaces the static `sideEffect` and specifier.
+    `probe=False` (a simulated run, which has no live page to ask) skips that."""
     meta = _tool_meta(conn, call.name)
     side_effect = bool(meta and meta.get("sideEffect"))
-    if not side_effect:
+    specifier = permissions.render_specifier(
+        meta.get("specifierTemplate") if meta else None, call.arguments
+    )
+    suggested_rule: str | None = None
+    if probe and meta and meta.get("gated") and not getattr(conn, "is_remote", False):
+        answer = await _probe_gate(conn, turn_id, call)
+        if answer is not None:
+            side_effect = answer["sideEffect"]
+            specifier = answer["specifier"]
+            suggested_rule = answer["rule"]
+    # A gated tool's harmless answer still meets explicit deny/ask rules (evaluate
+    # checks those before it lets a read-only call through); an ungated read-only
+    # tool never loads the rules at all.
+    if not side_effect and not (meta and meta.get("gated")):
         # Plan mode's one extra refusal: the appearance verbs carry no meta, so
         # nothing else would stop them (see PLAN_MODE_BLOCKED).
         return not (
             call.name in PLAN_MODE_BLOCKED
             and _effective_mode(conn, mode_override) is permissions.Mode.PLAN
         )
-    specifier = permissions.render_specifier(
-        meta.get("specifierTemplate") if meta else None, call.arguments
-    )
     mode = _effective_mode(conn, mode_override)
     rules = permission_store.load_rules()
     decision = permissions.evaluate(call.name, specifier, side_effect, mode, rules)
@@ -1933,11 +1995,17 @@ async def _gate(
         mode,
         call_id=getattr(call, "id", None),
         args=call.arguments if isinstance(call.arguments, dict) else None,
+        rule=suggested_rule,
     )
     choice = response.get("decision")
     if choice == "allow_always":
         permission_store.add_rule(
-            "allow", str(response.get("rule") or _default_rule(call.name, specifier))
+            "allow",
+            str(
+                response.get("rule")
+                or suggested_rule
+                or _default_rule(call.name, specifier)
+            ),
         )
         return True
     return choice == "allow_once"
@@ -2390,7 +2458,7 @@ async def _dispatch_call(
             return {"error": f"tool {name} is outside this agent's allowed groups"}
         active_groups.add(group)
 
-    if not await _gate(conn, turn_id, call, mode_override):
+    if not await _gate(conn, turn_id, call, mode_override, probe=simulate is None):
         return {"error": "denied by permission policy"}
     if simulate is not None:
         return await simulate(name, call.arguments)
@@ -2604,6 +2672,29 @@ async def _final_answer(
         f"I used all {rounds} steps for this turn without reaching an answer. "
         "Ask me to continue and I'll pick up from here."
     )
+
+
+#: A tool result's image travels under this key (browser/agentTools.ts `IMAGE_KEY`).
+#: It is lifted out before the result is serialized anywhere: the model gets it as
+#: an image part, while the transcript, timeline and trace keep a short note.
+IMAGE_KEY = "__image__"
+
+
+def _take_image(result: Any) -> str | None:
+    """Remove and return the image a tool result carries, if it carries one."""
+    if not isinstance(result, dict):
+        return None
+    image = result.pop(IMAGE_KEY, None)
+    if isinstance(image, str) and image.startswith("data:image/"):
+        return image
+    return None
+
+
+def _model_sees_images(info: Any, model: str) -> bool:
+    from backend.modules.settings.routes import get_value
+
+    setting = str(get_value("agent.modelSeesImages", "auto") or "auto")
+    return P.model_sees_images(info, model, setting)
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str | None:
@@ -2872,6 +2963,9 @@ async def run_agent_loop(
                     answer = result.content
                     return answer
                 submitted_plan: str | None = None
+                # Images tool calls returned this step, sent after all of its tool
+                # results (see `P.tool_image_message`).
+                step_images: list[dict[str, Any]] = []
                 for call in result.tool_calls:
                     started = time.monotonic()
                     # Two clocks on purpose: `monotonic` measures the duration (it
@@ -2934,7 +3028,13 @@ async def run_agent_loop(
                                 mode_override,
                                 simulate,
                             )
-                        elif not await _gate(conn, turn_id, call, mode_override):
+                        elif not await _gate(
+                            conn,
+                            turn_id,
+                            call,
+                            mode_override,
+                            probe=simulate is None,
+                        ):
                             tool_result = {"error": "denied by permission policy"}
                         elif simulate is not None:
                             tool_result = await simulate(call.name, call.arguments)
@@ -2945,6 +3045,19 @@ async def run_agent_loop(
                             tool_result = await _call_frontend_tool(
                                 conn, turn_id, call.name, call.arguments
                             )
+                        image = _take_image(tool_result)
+                        if image is not None:
+                            if _model_sees_images(info, model):
+                                step_images.append(
+                                    P.tool_image_message(info, call, image)
+                                )
+                                tool_result["image"] = "attached in the next message"
+                            else:
+                                tool_result["image"] = (
+                                    "not shown: this model is not known to see "
+                                    "images (Settings: agent.modelSeesImages). Use "
+                                    "browser.snapshot to read the page instead."
+                                )
                         tool_span.finish(tool_result)
                     await conn.send_json(
                         _evt(
@@ -2970,6 +3083,7 @@ async def run_agent_loop(
                             ts=started_wall,
                         )
                     messages.append(P.tool_result_message(info, call, tool_result))
+                messages.extend(step_images)
                 if submitted_plan is not None:
                     # The plan *is* the turn's answer: the chat renders it as an
                     # approval card, and saving it as the assistant's text is what

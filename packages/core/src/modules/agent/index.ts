@@ -22,6 +22,22 @@ export const agentModule: ModuleManifest = {
       // The transcript itself is not shared here; a guest only learns the
       // agent pane is open. Sharing what was said needs the `agent` grant.
       share: { mode: 'mirror' },
+      // The agent's browser, docked beside the conversation: the page the agent
+      // reads and acts on, where the person can watch it and take over. It is the
+      // browser module's own view (a region renders any registered view), so with
+      // that module off the strip shows its "enable" placeholder instead.
+      // `browser.open` from a turn opens this strip (browser/dock.ts).
+      regions: [
+        {
+          id: 'browser.view',
+          label: 'Browser',
+          icon: '🌐',
+          key: 'w',
+          position: 'right',
+          defaultSize: 640,
+          maxSize: 1600,
+        },
+      ],
       agentTools: [
         {
           name: 'agent.setHyperparameters',
@@ -132,6 +148,15 @@ export const agentModule: ModuleManifest = {
         'How many rounds of tool calls one turn may spend before the agent is asked to answer with what it has. Rounds spent only loading tool groups are free. 0 uses the default (24). Raise it for long multi-step tasks; lower it to cut off a model that will not stop calling tools.',
       type: 'number',
       default: 0,
+    },
+    {
+      key: 'agent.modelSeesImages',
+      title: 'Model sees images',
+      description:
+        "Whether tool images (browser.screenshot) are sent to the chat model. auto sends them when the model is known to take images: the provider's capability table for hosted models, else a vision model's name (vl, llava, gemma-3, …). An image sent to a model that cannot take one fails the whole turn, so auto errs towards no; set yes for a vision model it does not recognise.",
+      type: 'enum',
+      enumValues: ['auto', 'yes', 'no'],
+      default: 'auto',
     },
     {
       key: 'agent.activeBufferBudget',

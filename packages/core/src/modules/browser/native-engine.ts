@@ -23,6 +23,7 @@
  */
 import { windowControl, type BrowserCdpControl, type BrowserCdpEvent } from '../../window';
 import { extractArticle, pageScripts } from './api';
+import type { ElementInfo } from './action-gate';
 import type { BrowserEngine, PageCapture, PageContent, PageMedia, PageSnapshot } from './session';
 
 /** A navigation that never fires `load` (a stuck tracker, a streaming page) must not
@@ -149,7 +150,7 @@ async function evaluate<T>(id: string, expression: string): Promise<T> {
 }
 
 let scripts: Promise<Record<string, string>> | null = null;
-function pageScript(name: 'snapshot' | 'media'): Promise<string> {
+function pageScript(name: 'snapshot' | 'media' | 'describe'): Promise<string> {
   if (!scripts) {
     scripts = pageScripts()
       .then((r) => r.scripts)
@@ -166,9 +167,16 @@ function pageScript(name: 'snapshot' | 'media'): Promise<string> {
 }
 
 /** Call one of the shared page scripts (each is a single arrow function). */
-async function runScript<T>(id: string, name: 'snapshot' | 'media'): Promise<T> {
+async function runScript<T>(
+  id: string,
+  name: 'snapshot' | 'media' | 'describe',
+  arg: unknown = null,
+): Promise<T> {
   const src = (await pageScript(name)).trim().replace(/;$/, '');
-  return evaluate<T>(id, `(${src})()`);
+  // A script's one argument travels as JSON, which is also a JS expression: data,
+  // never code, whatever text (a search query) it carries.
+  const literal = arg === null || arg === undefined ? '' : JSON.stringify(arg);
+  return evaluate<T>(id, `(${src})(${literal})`);
 }
 
 /** Viewport centre of the element tagged with `ref`, scrolled into view first. */
@@ -276,6 +284,7 @@ export async function captureFrame(id: string, quality = 70): Promise<string> {
 export function nativeEngine(id: string): BrowserEngine {
   return {
     kind: 'native',
+    key: id,
 
     async navigate(url) {
       const cdp = cdpControl();
@@ -304,7 +313,13 @@ export function nativeEngine(id: string): BrowserEngine {
       return Promise.reject(new Error('page archive is a backend-engine feature'));
     },
 
-    snapshot: () => runScript<PageSnapshot>(id, 'snapshot'),
+    snapshot: (opts) => runScript<PageSnapshot>(id, 'snapshot', opts ?? null),
+    describeRef: (target) =>
+      runScript<ElementInfo | null>(
+        id,
+        'describe',
+        typeof target === 'number' ? Math.trunc(target) : target,
+      ),
 
     media: () => runScript<PageMedia>(id, 'media'),
 
@@ -365,6 +380,45 @@ export function nativeEngine(id: string): BrowserEngine {
         deltaX: 0,
         deltaY: dy,
       });
+      return null;
+    },
+
+    async pointer(p) {
+      const cdp = cdpControl();
+      if (p.action === 'click') await click(id, p.x, p.y);
+      else if (p.action === 'move') {
+        await cdp.call(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+      } else if (p.action === 'drag') {
+        // A held drag in small steps, so sliders and canvases see the motion.
+        await cdp.call(id, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+        await cdp.call(id, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: p.x,
+          y: p.y,
+          button: 'left',
+          buttons: 1,
+          clickCount: 1,
+        });
+        const STEPS = 12;
+        for (let i = 1; i <= STEPS; i++) {
+          await cdp.call(id, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: p.x + ((p.toX - p.x) * i) / STEPS,
+            y: p.y + ((p.toY - p.y) * i) / STEPS,
+            button: 'left',
+            buttons: 1,
+          });
+        }
+        await cdp.call(id, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: p.toX,
+          y: p.toY,
+          button: 'left',
+          buttons: 0,
+          clickCount: 1,
+        });
+      }
+      touchNativeTarget(id);
       return null;
     },
 

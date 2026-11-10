@@ -5,10 +5,12 @@
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
 import { readActiveAgentContext, type ActiveAgentContext } from '../../agent-context';
+import { runInTurn } from '../../agent-turn';
 import { readVisibleAgentContexts } from '../../layout/controller';
 import { getSetting } from '../../settings';
 import { onSocketClose, sendChannel, subscribeChannel } from '../../ws';
 import type { AgentMode } from './modes';
+import { GATE_PROBE, gateDynamicTool } from './manifest';
 import { executeTool, paneTitle } from './tool-exec';
 import type { Answers, Question, TodoItem } from './turn-steps';
 
@@ -171,7 +173,16 @@ export function initAgentRelay(): void {
       let result: unknown;
       let error: string | undefined;
       try {
-        result = await executeTool(String(data.name), (data.args ?? {}) as Record<string, unknown>);
+        const args = (data.args ?? {}) as Record<string, unknown>;
+        // The gate asking what a call would do, before it decides to relay it.
+        // Run under the call's turn, so a tool can tell which turn is acting
+        // (agent-turn.ts): the browser marks the page that turn is driving.
+        const turn = typeof data.turnId === 'string' ? data.turnId : null;
+        result = await runInTurn(turn, () =>
+          data.name === GATE_PROBE
+            ? gateDynamicTool(String(args.tool), (args.args ?? {}) as Record<string, unknown>)
+            : executeTool(String(data.name), args),
+        );
       } catch (e) {
         ok = false;
         error = String(e);

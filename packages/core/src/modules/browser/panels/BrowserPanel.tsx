@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import { PaneInstanceContext } from '../../../agent-context';
+import { IconStop } from '../../../glyphs';
 import { hasCapability } from '../../../capabilities';
 import { openExternal, openPath } from '../../../external';
 import { toggleRegion } from '../../../layout/controller';
@@ -30,6 +31,8 @@ import {
   type HistoryEntry,
   type ReaderArticle,
 } from '../api';
+import { isDock, onDockRequest, takeDockRequest } from '../dock';
+import { SERVER_PAGE, stopDriving, useDrivingTurn } from '../driving';
 import { acquireSession, sendInput } from '../session';
 import './browser-tabs.css';
 import { FullBrowserView } from './FullBrowserView';
@@ -125,6 +128,67 @@ const btn: CSSProperties = {
   cursor: 'pointer',
 };
 
+/**
+ * Shown while an agent turn is acting on this page: who has the wheel, and the way
+ * to take it back. Stop cancels the turn (the chat's own Stop does the same); the
+ * page stays as the agent left it, for the person to carry on in.
+ */
+function DrivingBar({ turnId, onStop }: { turnId: string; onStop: () => void }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.6rem',
+        padding: '0 0.4rem 0 0.6rem',
+        minHeight: 36,
+        borderTop: '2px solid var(--accent)',
+        borderBottom: '1px solid var(--border)',
+        background:
+          'repeating-linear-gradient(90deg, transparent 0 11px, color-mix(in srgb, var(--accent) 7%, transparent) 11px 12px)',
+      }}
+    >
+      <span
+        style={{
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.14em',
+          color: 'var(--accent)',
+        }}
+      >
+        Agent driving
+      </span>
+      <span
+        title={`Turn ${turnId}`}
+        style={{
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: '0.72rem',
+          color: 'var(--text-muted, var(--text-secondary))',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+          flex: 1,
+        }}
+      >
+        turn {turnId.slice(0, 8)}
+      </span>
+      <button
+        type="button"
+        onClick={onStop}
+        title="Stop the agent and take over this page"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+      >
+        <IconStop width={12} height={12} />
+        Take over
+      </button>
+    </div>
+  );
+}
+
 export function BrowserPanel() {
   const params = usePaneParams();
   const homePage = (useSetting<string>('browser.homePage') ?? '').trim();
@@ -178,7 +242,11 @@ export function BrowserPanel() {
       disposeNativeTabs(held.native);
     },
   );
-  const native = useNativeTabs(useNative ? (claim?.native ?? null) : null, paneKey.current, initialUrl);
+  const native = useNativeTabs(
+    useNative ? (claim?.native ?? null) : null,
+    paneKey.current,
+    initialUrl,
+  );
   const activeTab = native.activeTab;
   const [nav, setNav] = useState<Nav>(() =>
     initialUrl ? { stack: [initialUrl], idx: 0 } : { stack: [], idx: -1 },
@@ -261,6 +329,27 @@ export function BrowserPanel() {
     },
     [useFull, useNative, native],
   );
+
+  // A chat's docked browser takes the URLs `browser.open` sends it (browser/dock.ts),
+  // once this pane knows which renderer it is: a URL taken while the engine probe is
+  // still out would land in the iframe.
+  const docked = isDock(paneKey.current);
+  // A pane the agent opened on the headless engine (`follow`): like a dock, it
+  // streams the engine's page and never navigates on its own.
+  const follows = docked || params.follow === true;
+  useEffect(() => {
+    if (!docked || !(useNative || useFull)) return;
+    const take = () => {
+      const url = takeDockRequest(paneKey.current);
+      if (url) go(url);
+    };
+    take();
+    return onDockRequest(take);
+  }, [docked, useNative, useFull, go]);
+
+  // The page an agent turn is acting on right now, if any: shown, and stoppable.
+  const drivenPage = useNative ? (activeTab?.webviewId ?? null) : useFull ? SERVER_PAGE : null;
+  const drivingTurn = useDrivingTurn(drivenPage);
 
   // Claim the shared engine for as long as this *pane* exists — not for as long as
   // this component is mounted. The release only stops Chromium once the LAST
@@ -401,6 +490,10 @@ export function BrowserPanel() {
         if (useNative && canCdp) activeDevtools = openDevtools;
       }}
     >
+      {drivingTurn && drivenPage && (
+        <DrivingBar turnId={drivingTurn} onStop={() => stopDriving(drivenPage)} />
+      )}
+
       {/* Tabs — native only: each one is its own live webview. */}
       {useNative && !nativeError && (
         <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
@@ -501,11 +594,7 @@ export function BrowserPanel() {
           disabled={!current}
           title="Reload"
           onClick={() =>
-            useFull
-              ? sendInput('reload')
-              : useNative
-                ? native.reload()
-                : setReloadKey((k) => k + 1)
+            useFull ? sendInput('reload') : useNative ? native.reload() : setReloadKey((k) => k + 1)
           }
         >
           ⟳
@@ -669,7 +758,10 @@ export function BrowserPanel() {
                 ? 'DOWNLOADED'
                 : 'DOWNLOAD FAILED'}
           </span>
-          <span className="browser-download-path" title={native.download.path ?? native.download.url}>
+          <span
+            className="browser-download-path"
+            title={native.download.path ?? native.download.url}
+          >
             {native.download.path ?? native.download.url}
           </span>
           {native.download.state === 'done' && native.download.path && (
@@ -783,7 +875,10 @@ export function BrowserPanel() {
             <div style={{ padding: '1rem', color: 'var(--danger, #f87171)' }}>
               Reader mode failed: {readerError}
             </div>
-          ) : useFull && current ? (
+          ) : useFull && (current || follows) ? (
+            // A dock (or a pane the agent opened) streams the engine's one shared page
+            // even before it has a URL of its own: `browser.open` navigates the
+            // engine, not this panel.
             <FullBrowserView url={fullTarget} navSeq={navSeq} onMeta={setLiveMeta} />
           ) : useNative && activeTab?.target && !nativeError ? (
             // Every tab stays mounted (each owns a live webview); only the active one

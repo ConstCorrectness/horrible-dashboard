@@ -18,6 +18,8 @@ export interface PendingApproval {
   /** The rendered permission specifier (e.g. the shell command), or null. */
   specifier: string | null;
   mode: string;
+  /** The always-allow rule the gate suggests (may be broader than this call). */
+  rule: string | null;
 }
 
 let pending: PendingApproval[] = [];
@@ -58,6 +60,7 @@ export function initApprovalListener(): void {
       tool: String(d.tool ?? ''),
       specifier: d.specifier == null ? null : String(d.specifier),
       mode: String(d.mode ?? ''),
+      rule: typeof d.rule === 'string' && d.rule ? d.rule : null,
     };
     pending = [...pending, item];
     emit();

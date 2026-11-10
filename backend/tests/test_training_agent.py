@@ -179,5 +179,5 @@ class _Call:
         self.arguments = arguments
 
 
-async def _always_allow(conn, turn_id, call, mode_override=None) -> bool:
+async def _always_allow(conn, turn_id, call, mode_override=None, **_kw) -> bool:
     return True

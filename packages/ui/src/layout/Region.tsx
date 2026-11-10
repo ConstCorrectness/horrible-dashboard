@@ -105,7 +105,7 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
       if (position === 'right') next = startSize - (me.clientX - startX);
       else if (position === 'left') next = startSize + (me.clientX - startX);
       else next = startSize - (me.clientY - startY);
-      next = Math.max(MIN_SIZE, Math.min(MAX_SIZE[position], next));
+      next = Math.max(MIN_SIZE, Math.min(activeDecl?.maxSize ?? MAX_SIZE[position], next));
       const current = latestRegion(pane.instanceId, position);
       if (!current) return;
       layoutStore.dispatch({

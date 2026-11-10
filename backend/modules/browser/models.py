@@ -24,7 +24,7 @@ class ExtractRequest(BaseModel):
 
 
 class PageScriptsResponse(BaseModel):
-    """The page scripts both engines evaluate (`snapshot`, `media`), keyed by name."""
+    """The page scripts both engines evaluate (`snapshot`, `media`, `describe`), keyed by name."""
 
     scripts: dict[str, str]
 

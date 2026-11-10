@@ -10,7 +10,7 @@ import { respondApproval, useApprovals, type PendingApproval } from '@horrible/c
 
 function ApprovalCard({ a }: { a: PendingApproval }) {
   const display = a.specifier ? `${a.tool}(${a.specifier})` : a.tool;
-  const [rule, setRule] = useState(display);
+  const [rule, setRule] = useState(a.rule ?? display);
   return (
     <div className="approval-card">
       <div className="approval-head">Agent wants to run</div>

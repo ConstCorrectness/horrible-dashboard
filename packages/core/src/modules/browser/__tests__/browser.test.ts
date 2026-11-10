@@ -53,6 +53,12 @@ describe('browser module', () => {
     expect(byName('browser.scroll')?.sideEffect).toBe(false);
     expect(byName('browser.back')?.sideEffect).toBe(true);
     expect(byName('browser.type')?.params?.properties).toHaveProperty('submit');
+    // Acting on the page decides its gate per call (action-gate.ts), and keeps a
+    // static sideEffect so an unanswered gate question still asks.
+    for (const n of ['browser.click', 'browser.type', 'browser.press']) {
+      expect(byName(n)?.gate, n).toBeTypeOf('function');
+      expect(byName(n)?.sideEffect, n).toBe(true);
+    }
   });
 
   it('registers with the shared registry', () => {

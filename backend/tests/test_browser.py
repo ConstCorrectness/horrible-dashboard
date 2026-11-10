@@ -232,11 +232,12 @@ def test_page_scripts_are_the_files_the_backend_engine_evaluates() -> None:
     r = client.get("/api/browser/scripts")
     assert r.status_code == 200
     scripts = r.json()["scripts"]
-    assert set(scripts) == {"snapshot", "media"}
+    assert set(scripts) == {"snapshot", "media", "describe"}
     # One source of truth: what the native webview is handed is byte-for-byte what
     # Playwright evaluates, so the two engines number refs identically.
     assert scripts["snapshot"] == session._SNAPSHOT_JS
     assert scripts["media"] == session._MEDIA_JS
+    assert scripts["describe"] == session._DESCRIBE_JS
     assert "data-agent-ref" in scripts["snapshot"]
 
 
@@ -256,3 +257,189 @@ def test_extract_reads_html_without_fetching(monkeypatch: pytest.MonkeyPatch) ->
     assert data["url"] == "https://example.com/a"
     assert "live DOM" in data["text"]
     assert data["title"]
+
+
+# ---- describe.js: what acting on a ref would do ---------------------------------
+
+_FORMS_PAGE = """<!doctype html><html><body>
+<a href="/docs">Docs</a>
+<a href="#" onclick="return false">Delete post</a>
+<button type="button">Like</button>
+<div role="button" tabindex="0" onclick="1"></div>
+<form method="get" action="/search"><input name="q"><button>Search</button></form>
+<form method="post" action="/login">
+  <input name="user" autocomplete="username">
+  <input type="password" name="pw" autocomplete="current-password" value="hunter2">
+  <button type="submit">Sign in</button>
+</form>
+<form method="post" action="/pay">
+  <input name="cardnumber" autocomplete="cc-number">
+  <input type="submit" value="Pay now">
+</form>
+</body></html>"""
+
+
+def _chromium_installed() -> bool:
+    try:
+        from pathlib import Path
+
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            return Path(pw.chromium.executable_path).is_file()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@pytest.mark.skipif(not _chromium_installed(), reason="Chromium is not installed")
+def test_describe_reports_what_a_ref_would_do() -> None:
+    from playwright.sync_api import sync_playwright
+
+    from backend.modules.browser import session
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(_FORMS_PAGE)
+            snap = page.evaluate(session._SNAPSHOT_JS)
+            by_name = {e["name"]: e["ref"] for e in snap["elements"]}
+
+            def describe(ref):
+                return page.evaluate(session._DESCRIBE_JS, ref)
+
+            docs = describe(by_name["Docs"])
+            assert docs["href"].endswith("/docs") and not docs["inForm"]
+            assert describe(by_name["Delete post"])["href"].endswith("#")
+            assert describe(by_name["Like"])["isButton"] is True
+            assert describe(by_name["Like"])["submits"] is False
+
+            search = describe(by_name["Search"])
+            assert search["submits"] and search["formMethod"] == "get"
+            assert not search["formHasPassword"]
+
+            sign_in = describe(by_name["Sign in"])
+            assert sign_in["submits"] and sign_in["formMethod"] == "post"
+            assert sign_in["formHasPassword"] and sign_in["formPasswordFilled"]
+            # Whether the password holds something, never what.
+            assert "hunter2" not in str(sign_in)
+
+            pw_field = [e for e in snap["elements"] if e["role"] == "password"]
+            assert describe(pw_field[0]["ref"])["type"] == "password"
+
+            card = [e for e in snap["elements"] if e["role"] == "text"]
+            card_info = [describe(e["ref"]) for e in card]
+            assert any(i["autocomplete"] == "cc-number" for i in card_info)
+
+            # Enter in the search box presses the form's first submitter.
+            page.focus("input[name=q]")
+            focused = describe(None)
+            assert focused["editable"] and focused["submitter"] == "Search"
+
+            assert describe(9999) is None
+        finally:
+            browser.close()
+
+
+_TALL_PAGE = """<!doctype html><html><head><title>Tall</title></head><body>
+<button id="top">Top button</button>
+<div style="height: 3000px"></div>
+<h2>Pricing</h2>
+<a href="/plans">See plans</a>
+<input id="range" type="range" min="0" max="100" value="0" style="width:300px">
+</body></html>"""
+
+
+@pytest.mark.skipif(not _chromium_installed(), reason="Chromium is not installed")
+def test_snapshot_refs_are_stable_and_bound_to_the_document() -> None:
+    from playwright.sync_api import sync_playwright
+
+    from backend.modules.browser import session
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 800, "height": 600})
+            page.set_content(_TALL_PAGE)
+            first = page.evaluate(session._SNAPSHOT_JS)
+            # On screen only, by default: the link 3000px down is not listed.
+            assert [e["name"] for e in first["elements"]] == ["Top button"]
+            assert first["viewport"] == {"width": 800, "height": 600}
+
+            # The whole page: off-screen elements are listed and marked, and the
+            # element seen before keeps its ref.
+            full = page.evaluate(session._SNAPSHOT_JS, {"fullPage": True})
+            by_name = {e["name"]: e for e in full["elements"]}
+            assert by_name["Top button"]["ref"] == first["elements"][0]["ref"]
+            assert by_name["See plans"]["onScreen"] is False
+            assert full["doc"] == first["doc"]
+
+            # A find searches the whole page, headings included, and never
+            # renumbers a ref already handed out.
+            found = page.evaluate(session._SNAPSHOT_JS, {"query": "plans"})
+            assert [e["name"] for e in found["elements"]] == ["See plans"]
+            assert found["elements"][0]["ref"] == by_name["See plans"]["ref"]
+            heading = page.evaluate(session._SNAPSHOT_JS, {"query": "pricing"})
+            assert heading["elements"][0]["role"] == "heading"
+
+            # The limit caps what is returned, not what is counted.
+            capped = page.evaluate(session._SNAPSHOT_JS, {"fullPage": True, "limit": 1})
+            assert len(capped["elements"]) == 1 and capped["total"] >= 3
+
+            # describe reports the document, so a ref can be checked against it.
+            described = page.evaluate(session._DESCRIBE_JS, first["elements"][0]["ref"])
+            assert described["doc"] == first["doc"]
+
+            # A new document is a new id, and its refs start over: ref 1 there is
+            # not ref 1 here, which is exactly what the tools refuse to confuse.
+            page.set_content(_TALL_PAGE.replace("Top button", "Other button"))
+            again = page.evaluate(session._SNAPSHOT_JS)
+            assert again["doc"] != first["doc"]
+            assert again["elements"][0]["ref"] == first["elements"][0]["ref"]
+        finally:
+            browser.close()
+
+
+@pytest.mark.skipif(not _chromium_installed(), reason="Chromium is not installed")
+def test_pointer_reaches_what_a_ref_cannot() -> None:
+    from playwright.sync_api import sync_playwright
+
+    from backend.modules.browser import session
+
+    dispatch = session.BrowserSession._dispatch
+    this = object.__new__(session.BrowserSession)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 800, "height": 600})
+            page.set_content(_TALL_PAGE)
+            # describe takes a viewport point, up to the control under it.
+            box = page.locator("#top").bounding_box()
+            assert box is not None
+            cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            at = page.evaluate(session._DESCRIBE_JS, {"x": cx, "y": cy})
+            assert at["isButton"] and at["name"] == "Top button"
+
+            # A drag moves a slider no ref could set.
+            page.locator("#range").scroll_into_view_if_needed()
+            r = page.locator("#range").bounding_box()
+            assert r is not None
+            y = r["y"] + r["height"] / 2
+            dispatch(
+                this,
+                page,
+                "pointer",
+                {
+                    "action": "drag",
+                    "x": r["x"] + 2,
+                    "y": y,
+                    "toX": r["x"] + r["width"] - 2,
+                    "toY": y,
+                },
+            )
+            assert int(page.eval_on_selector("#range", "e => e.value")) > 90
+
+            with pytest.raises(ValueError):
+                dispatch(this, page, "pointer", {"action": "wiggle", "x": 1, "y": 1})
+        finally:
+            browser.close()

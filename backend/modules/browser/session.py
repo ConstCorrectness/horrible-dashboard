@@ -89,6 +89,7 @@ _SEND_TIMEOUT_S = 5.0
 _RESULT_OPS = {
     "content",
     "snapshot",
+    "describe_ref",
     "scrape",
     "screenshot",
     "eval",
@@ -130,7 +131,7 @@ def _profile_dir(profile: str) -> Path:
 # bridge (fetched from `GET /api/browser/scripts`), so the two engines can't drift
 # into reporting different refs or media for one page.
 _SCRIPT_DIR = Path(__file__).with_name("scripts")
-PAGE_SCRIPTS = ("snapshot", "media")
+PAGE_SCRIPTS = ("snapshot", "media", "describe")
 
 
 def page_script(name: str) -> str:
@@ -147,6 +148,10 @@ def page_script(name: str) -> str:
 # standard agentic-browser affordance, but with clickable handles the raw a11y tree
 # from `page.accessibility.snapshot()` doesn't give.
 _SNAPSHOT_JS = page_script("snapshot")
+
+# What acting on one ref would do (link, form submission, password field…), for the
+# agent's per-call permission gate. Takes the ref; null describes the focused element.
+_DESCRIBE_JS = page_script("describe")
 
 
 # JS that harvests the page's media along with the **text that describes it**.
@@ -742,6 +747,23 @@ class BrowserSession:
         if op == "click":
             page.mouse.click(float(args["x"]), float(args["y"]))
             return None
+        if op == "pointer":
+            # The agent's pointer at viewport CSS pixels: hover, click, or a held
+            # drag (sliders, canvases, maps) — what a ref cannot reach.
+            action = str(args.get("action", "click"))
+            x, y = float(args["x"]), float(args["y"])
+            if action == "move":
+                page.mouse.move(x, y)
+            elif action == "click":
+                page.mouse.click(x, y)
+            elif action == "drag":
+                page.mouse.move(x, y)
+                page.mouse.down()
+                page.mouse.move(float(args["toX"]), float(args["toY"]), steps=12)
+                page.mouse.up()
+            else:
+                raise ValueError(f"unknown pointer action {action!r}")
+            return None
         if op == "scroll":
             page.mouse.wheel(float(args.get("dx", 0)), float(args.get("dy", 0)))
             return None
@@ -768,9 +790,18 @@ class BrowserSession:
                 shrink_images=bool(args.get("shrink_images")),
             )
         if op == "snapshot":
-            return page.evaluate(_SNAPSHOT_JS)
+            opts = {k: args[k] for k in ("fullPage", "query", "limit") if k in args}
+            return page.evaluate(_SNAPSHOT_JS, opts or None)
         if op == "media":
             return page.evaluate(_MEDIA_JS)
+        if op == "describe_ref":
+            ref = args.get("ref")
+            if isinstance(ref, dict):
+                # A viewport point: what a pointer click there would hit.
+                target: Any = {"x": float(ref["x"]), "y": float(ref["y"])}
+            else:
+                target = None if ref is None else int(ref)
+            return page.evaluate(_DESCRIBE_JS, target)
         if op == "scrape":
             return self._scrape(page, str(args.get("selector", "")))
         if op == "screenshot":

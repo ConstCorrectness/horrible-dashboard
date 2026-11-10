@@ -18,6 +18,7 @@
  *
  * See docs/modules/browser.mdx.
  */
+import type { ElementInfo } from './action-gate';
 import type { WsMessage } from '@horribledashboard/sdk';
 
 import { sendChannel, subscribeChannel } from '../../ws';
@@ -57,13 +58,24 @@ export interface SnapshotElement {
   value: string;
   x: number;
   y: number;
+  /** In the viewport now. Only a full-page snapshot or a find lists others. */
+  onScreen?: boolean;
 }
 
-/** `snapshot`: the page's interactable elements, numbered for click/type by ref. */
+/**
+ * `snapshot`: the page's interactable elements, numbered for click/type by ref.
+ * Refs are stable within one document; `doc` names that document, so a ref can be
+ * checked against the page it came from (agentTools.ts).
+ */
 export interface PageSnapshot {
   url: string;
   title: string;
+  doc?: string;
+  /** The viewport in CSS pixels: the space of `x`/`y` and of the agent's pointer. */
+  viewport?: { width: number; height: number };
   elements: SnapshotElement[];
+  /** How many elements matched before the `limit` cap (`elements` may be fewer). */
+  total?: number;
   /** A CAPTCHA / bot check is on the page — a human has to clear it. */
   challenge?: boolean;
 }
@@ -240,12 +252,38 @@ export function requestOp<T = unknown>(
  * (`native-engine.ts`, over the shell's CDP bridge). Both evaluate the same page
  * scripts, so refs from one `snapshot` mean the same thing on either.
  */
+/** What `snapshot` lists: on screen (default), the whole page, or matches for a query. */
+export interface SnapshotOptions {
+  fullPage?: boolean;
+  query?: string;
+  limit?: number;
+}
+
+/** The agent's pointer, in viewport CSS pixels: hover, click, or a held drag. */
+export type PointerAction =
+  | { action: 'move' | 'click'; x: number; y: number }
+  | { action: 'drag'; x: number; y: number; toX: number; toY: number };
+
+/** What `describeRef` describes: a snapshot ref, a viewport point, or (null) focus. */
+export type DescribeTarget = number | { x: number; y: number } | null;
+
 export interface BrowserEngine {
   readonly kind: 'server' | 'native';
+  /**
+   * Which page this is: the native webview id, or `server` for the headless engine.
+   * The driving marks (driving.ts) and the ref-document check key on it.
+   */
+  readonly key: string;
   navigate(url: string): Promise<unknown>;
   content(): Promise<PageContent>;
   capture(): Promise<PageCapture>;
-  snapshot(): Promise<PageSnapshot>;
+  snapshot(opts?: SnapshotOptions): Promise<PageSnapshot>;
+  /**
+   * What acting on `target` would do (a ref, a viewport point, or null for the
+   * focused element), for the agent's per-call permission gate. Null when there is
+   * no such element.
+   */
+  describeRef(target: DescribeTarget): Promise<ElementInfo | null>;
   scrape(selector: string): Promise<unknown>;
   media(): Promise<PageMedia>;
   screenshot(): Promise<{ frame: string }>;
@@ -255,18 +293,23 @@ export interface BrowserEngine {
   press(key: string): Promise<unknown>;
   /** Scroll the page by `dy` CSS pixels (negative scrolls up). */
   scroll(dy: number): Promise<unknown>;
+  pointer(p: PointerAction): Promise<unknown>;
   back(): Promise<unknown>;
   info(): Promise<{ url: string; title: string }>;
 }
 
 export const engine = {
   kind: 'server' as const,
+  key: 'server',
   navigate: (url: string) => requestOp<null>('navigate', { url }),
   content: (): Promise<PageContent> => requestOp<PageContent>('content'),
   /** Capture the live page as a self-contained HTML artifact (server-stored).
    * Generous timeout: the backend fetches and inlines every subresource. */
   capture: (): Promise<PageCapture> => requestOp<PageCapture>('capture', {}, 120_000),
-  snapshot: (): Promise<PageSnapshot> => requestOp('snapshot'),
+  snapshot: (opts: SnapshotOptions = {}): Promise<PageSnapshot> =>
+    requestOp('snapshot', { ...opts }),
+  describeRef: (ref: DescribeTarget): Promise<ElementInfo | null> =>
+    requestOp('describe_ref', { ref }),
   scrape: (selector: string) => requestOp('scrape', { selector }),
   media: (): Promise<PageMedia> => requestOp<PageMedia>('media'),
   screenshot: (): Promise<{ frame: string }> => requestOp('screenshot'),
@@ -274,6 +317,7 @@ export const engine = {
   typeRef: (ref: number, text: string) => requestOp<null>('type_ref', { ref, text }),
   press: (key: string) => requestOp<null>('key', { key }),
   scroll: (dy: number) => requestOp<null>('scroll', { dx: 0, dy }),
+  pointer: (p: PointerAction) => requestOp<null>('pointer', { ...p }),
   back: () => requestOp<null>('back'),
   info: (): Promise<{ url: string; title: string }> => requestOp('info'),
   /**

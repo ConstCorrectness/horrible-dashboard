@@ -377,6 +377,13 @@
 .frame-region--right {
   border-left: 1px solid var(--border);
 }
+/* A strip never squeezes its host pane out of sight. The agent chat's docked
+   browser is wide by design; in a narrow window the strip gives way, not the
+   conversation. */
+.frame-region--left,
+.frame-region--right {
+  max-width: calc(100% - 240px);
+}
 .frame-region--bottom {
   flex-direction: column;
   border-top: 1px solid var(--border);

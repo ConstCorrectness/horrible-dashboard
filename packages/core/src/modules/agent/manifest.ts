@@ -9,7 +9,7 @@
  * Handlers never cross the wire — only the serialized schema does. See
  * docs/architecture/agent-tools.md and backend/modules/agent/orchestrator.py.
  */
-import type { AgentToolDecl, JSONSchema } from '@horribledashboard/sdk';
+import type { AgentToolDecl, AgentToolGate, JSONSchema } from '@horribledashboard/sdk';
 
 import { registry } from '../../registry';
 import { onSocketOpen, sendChannel } from '../../ws';
@@ -21,8 +21,16 @@ export interface SerializedTool {
   params?: JSONSchema;
   sideEffect?: boolean;
   specifierTemplate?: string;
+  /** The tool decides its gate per call (`AgentToolDecl.gate`); see `gateDynamicTool`. */
+  gated?: boolean;
   kind: 'agentTool' | 'command';
 }
+
+/**
+ * The name the backend gate relays a gate question under (orchestrator.py
+ * `GATE_PROBE`). Not a tool: the relay answers it from `gateDynamicTool`.
+ */
+export const GATE_PROBE = '__gate__';
 
 /** Every `agentTools` entry across registered panels and widgets. */
 function allAgentTools(): AgentToolDecl[] {
@@ -54,6 +62,7 @@ export function serializeManifest(): SerializedTool[] {
     params: t.params,
     sideEffect: t.sideEffect,
     specifierTemplate: t.specifierTemplate,
+    ...(t.gate ? { gated: true } : {}),
     kind: 'agentTool',
   }));
   for (const c of registry.commands) {
@@ -96,6 +105,25 @@ export async function executeDynamicTool(
     return { handled: true, result: { ok: true } };
   }
   return { handled: false };
+}
+
+/**
+ * Answer the backend gate's question about one call: what it would do, as an
+ * `AgentToolGate`. Throws for a tool with no `gate`, so the backend falls back to
+ * the tool's static fields.
+ */
+export async function gateDynamicTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<AgentToolGate> {
+  const tool = allAgentTools().find((t) => t.name === name);
+  if (!tool?.gate) throw new Error(`tool ${name} has no per-call gate`);
+  const answer = await tool.gate(args);
+  return {
+    sideEffect: answer.sideEffect !== false,
+    specifier: answer.specifier ?? null,
+    rule: answer.rule ?? null,
+  };
 }
 
 let started = false;

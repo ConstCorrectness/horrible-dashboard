@@ -10,10 +10,10 @@
  * 3. Nothing — the tools then fall back to a server-side fetch (`browser.read`) or
  *    say what's missing.
  */
-import { layoutStore } from '../../layout/store';
-import { findPaneAnywhere } from '../../layout/model';
-import { focusInstance } from '../../layout/controller';
+import { relayTurn } from '../../agent-turn';
 import { engineStatus } from './api';
+import { revealBrowserPane } from './dock';
+import { markDriving, SERVER_PAGE } from './driving';
 import { activeNativeTarget, nativeEngine, nativeTargetPane } from './native-engine';
 import { engine as serverEngine, type BrowserEngine } from './session';
 
@@ -28,17 +28,29 @@ export function serverEngineEnabled(): Promise<boolean> {
   return serverProbe;
 }
 
-/** The engine the agent's next browser action should use, or null if none. */
+/**
+ * The engine the agent's next browser action should use, or null if none. Called
+ * from a relayed tool call, it also marks that page as driven by the calling turn
+ * (browser/driving.ts), so the page can show it and offer a Stop. The turn is read
+ * before the first `await`, which is the only place it is known (agent-turn.ts).
+ */
 export async function agentEngine(): Promise<BrowserEngine | null> {
+  const turn = relayTurn();
   const native = activeNativeTarget();
-  if (native) return nativeEngine(native);
-  return (await serverEngineEnabled()) ? serverEngine : null;
+  if (native) {
+    markDriving(native, turn);
+    return nativeEngine(native);
+  }
+  if (!(await serverEngineEnabled())) return null;
+  markDriving(SERVER_PAGE, turn);
+  return serverEngine;
 }
 
-/** Bring the pane holding native webview `id` to the front (the agent is using it). */
+/**
+ * Bring the pane holding native webview `id` to the front (the agent is using it).
+ * For a chat's docked browser that is the chat, with its browser strip open.
+ */
 export function revealNativeTarget(id: string): void {
   const paneId = nativeTargetPane(id);
-  if (!paneId) return;
-  const located = findPaneAnywhere(layoutStore.getSnapshot().frame, paneId);
-  if (located) focusInstance(located);
+  if (paneId) revealBrowserPane(paneId);
 }

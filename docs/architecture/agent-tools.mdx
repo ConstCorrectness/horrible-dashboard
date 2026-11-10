@@ -222,12 +222,38 @@ Two surfaces, by design (the "hybrid" decision in
       * builds the specifier itself, keeping the gate fully server-side.
       */
      specifierTemplate?: string;
+     /** Decide the gate per call; see "Per-call gates" below. */
+     gate?: (args: Record<string, unknown>) => AgentToolGate | Promise<AgentToolGate>;
      handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
    }
    ```
 
    `handler` and the live arguments stay frontend-owned; only the serialized
    schema and `specifierTemplate` reach the backend.
+
+### Per-call gates
+
+Some tools can't be gated from their arguments. `browser.click{ref: 12}` is a
+link or a form's submit button depending on the page, and only the page knows.
+Such a tool declares `gate(args)`, which returns
+`{sideEffect, specifier?, rule?}` for this call:
+
+1. The manifest marks the tool `gated: true`.
+2. Before relaying a call, the backend gate (`_gate` in `orchestrator.py`) sends
+   a `tool_call` named `__gate__` with `{tool, args}`. The relay answers it from
+   the tool's `gate` (`gateDynamicTool` in `manifest.ts`), without running the
+   tool.
+3. The answer replaces `sideEffect` and the rendered specifier. `rule` is the
+   always-allow rule the approval card offers, which may be broader than the
+   call (`browser.click(submit:github.com *)`).
+4. A harmless answer (`sideEffect: false`) still meets explicit `deny` and
+   `ask` rules, so a user can tighten what a tool calls harmless.
+
+The probe fails closed. If it errors, times out (15s) or answers something
+malformed, the tool's static fields apply, so a gated tool keeps
+`sideEffect: true`. A simulated run (fixtures) and a remote turn skip the probe.
+The browser's use of it is in
+[the browser module](../modules/browser.mdx#what-the-gate-asks-about).
 
 ## Giving the agent a new tool (recipe)
 
@@ -338,10 +364,10 @@ manifest reflects runtime-loaded plugins and the current registry. New
 | Direction     | event              | data                                                            |
 | ------------- | ------------------ | --------------------------------------------------------------- |
 | client→server | `manifest`         | `{tools: SerializedTool[]}` — on connect **and** on registry change |
-| server→client | `approval_request` | `{turnId, callId, tool, specifier, mode}`                       |
+| server→client | `approval_request` | `{turnId, callId, tool, specifier, mode, rule}`                 |
 | client→server | `approval_response`| `{callId, decision: 'allow_once'\|'allow_always'\|'deny', rule?}` |
 
-`SerializedTool` = `{name, description, params, sideEffect, specifierTemplate, kind}`
+`SerializedTool` = `{name, description, params, sideEffect, specifierTemplate, gated?, kind}`
 where `kind` is `'agentTool' | 'command' | 'layout'`. Each turn the backend merges
 the pushed manifest with the static `LAYOUT_TOOLS` into the model's tool list. The
 `handler` is never serialized; the backend learns *which* tools to gate from
@@ -428,8 +454,9 @@ problem at the backend boundary, not something the permission engine solves.
 fed by the `useApprovals` store in `packages/core/.../agent/approvals.ts`) — and,
 on desktop, an OS notification via `notifications.system` — showing the tool, the
 rendered specifier, and **Allow once / Always allow / Deny**. "Always allow" sends
-an `approval_response` carrying an editable `rule` (prefilled with the exact call,
-broadenable to e.g. `terminal.exec(npm run *)`) that the backend persists.
+an `approval_response` carrying an editable `rule` that the backend persists. It is
+prefilled with the request's `rule`: the exact call, or the broader rule a per-call
+gate suggested, and can be edited to e.g. `terminal.exec(npm run *)`.
 
 The mode and rule lists are editable on the settings page: the agent module
 contributes a `settingsSections` entry (`PermissionsSettings`) — a registry seam

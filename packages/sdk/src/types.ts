@@ -95,7 +95,26 @@ export interface AgentToolDecl {
    * Omit for a tool gated by bare name only.
    */
   specifierTemplate?: string;
+  /**
+   * Decide the gate **per call**, from what the call would actually do. The
+   * backend's permission gate asks this before relaying the call, and uses its
+   * answer in place of `sideEffect` / `specifierTemplate`. The browser's click
+   * uses it to tell a link (no prompt) from a form submission (prompt, scoped to
+   * the site). If it throws or times out, the static fields apply, so keep
+   * `sideEffect: true` on a tool whose gate can say "ask".
+   */
+  gate?: (args: Record<string, unknown>) => AgentToolGate | Promise<AgentToolGate>;
   handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+}
+
+/** A per-call gate decision (see `AgentToolDecl.gate`). */
+export interface AgentToolGate {
+  /** False lets the call run with no prompt (deny and ask rules still apply). */
+  sideEffect: boolean;
+  /** What permission rules match against, as `specifierTemplate` would render. */
+  specifier?: string | null;
+  /** The always-allow rule to offer if the user is asked, e.g. `browser.click(submit:github.com *)`. */
+  rule?: string | null;
 }
 
 export interface CommandDecl {
@@ -640,4 +659,10 @@ export interface RegionViewDecl {
   defaultOpen?: boolean;
   /** Initial strip size in px (width for left/right, height for bottom). */
   defaultSize?: number;
+  /**
+   * The largest the strip may be dragged, in px. Defaults to 700 for a side strip
+   * and 480 for the bottom one; a view that is the main thing to look at (the agent
+   * chat's docked browser) raises it.
+   */
+  maxSize?: number;
 }

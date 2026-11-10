@@ -46,6 +46,27 @@ export default tseslint.config(
     },
   },
   {
+    // The browser agent's page scripts: each file is one function *expression*,
+    // evaluated inside the page by both engines (Playwright's evaluate and the
+    // native engine's CDP Runtime.evaluate), so its globals are the page's.
+    files: ['backend/modules/browser/scripts/*.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
+        getComputedStyle: 'readonly',
+        innerWidth: 'readonly',
+        innerHeight: 'readonly',
+        Node: 'readonly',
+        NodeFilter: 'readonly',
+        HTMLElement: 'readonly',
+        URL: 'readonly',
+      },
+    },
+    rules: { '@typescript-eslint/no-unused-expressions': 'off' },
+  },
+  {
     // Plugin-runtime shims: plain browser ESM served from public/, no build step.
     files: ['apps/*/public/plugin-runtime/**/*.js'],
     languageOptions: {

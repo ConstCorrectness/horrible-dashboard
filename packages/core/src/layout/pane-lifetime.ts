@@ -59,6 +59,25 @@ export function paneUiBag(key: string): Map<string, unknown> {
   return bag;
 }
 
+/**
+ * A region strip's view renders under a synthetic instance id,
+ * `${host}:${position}:${viewId}` (ui/layout/Region.tsx), so its sessions belong to
+ * the host pane: closed, moved and kept with it. The agent chat's docked browser is
+ * one, and its session holds a live native webview.
+ */
+const REGION_CHILD = /:(left|right|bottom):[^:]+$/;
+
+/** The pane a region view's instance id rides on, or the id itself for a pane. */
+export function regionHost(instanceId: string): string {
+  return instanceId.replace(REGION_CHILD, '');
+}
+
+/** Every session key belonging to `key`'s pane: its own, then its region views'. */
+function familyOf(key: string): string[] {
+  const keys = [...new Set([...live.keys(), ...uiState.keys()])];
+  return [key, ...keys.filter((k) => k !== key && k.startsWith(`${key}:`) && REGION_CHILD.test(k))];
+}
+
 /** The stable identity of a pane across the whole app. */
 export function paneSessionKey(workspaceId: string | null, instanceId: string): string {
   return `${workspaceId ?? '-'}::${instanceId}`;
@@ -84,13 +103,18 @@ export function hasPaneSession(key: string): boolean {
   return live.has(key);
 }
 
-/** Dispose one pane's resource. Called from the layout's close paths. */
+/**
+ * Dispose one pane's resources, its region views' included. Called from the
+ * layout's close paths.
+ */
 export function closePaneSession(key: string): void {
-  uiState.delete(key);
-  const entry = live.get(key);
-  if (!entry) return;
-  live.delete(key);
-  entry.dispose();
+  for (const k of familyOf(key)) {
+    uiState.delete(k);
+    const entry = live.get(k);
+    if (!entry) continue;
+    live.delete(k);
+    entry.dispose();
+  }
 }
 
 /**
@@ -109,6 +133,13 @@ export function closePaneSession(key: string): void {
  */
 export function movePaneSession(fromKey: string, toKey: string): void {
   if (fromKey === toKey) return;
+  for (const child of familyOf(fromKey).slice(1)) {
+    moveOne(child, toKey + child.slice(fromKey.length));
+  }
+  moveOne(fromKey, toKey);
+}
+
+function moveOne(fromKey: string, toKey: string): void {
   const bag = uiState.get(fromKey);
   if (bag && !uiState.has(toKey)) {
     uiState.delete(fromKey);
@@ -136,7 +167,9 @@ export function closeWorkspaceSessions(
   const prefix = `${workspaceId ?? '-'}::`;
   for (const key of [...new Set([...live.keys(), ...uiState.keys()])]) {
     if (!key.startsWith(prefix)) continue;
-    if (keep.has(key.slice(prefix.length))) continue;
+    // A region view is kept with its host pane.
+    if (keep.has(regionHost(key.slice(prefix.length)))) continue;
+    if (!live.has(key) && !uiState.has(key)) continue; // gone with its host already
     closePaneSession(key);
   }
 }

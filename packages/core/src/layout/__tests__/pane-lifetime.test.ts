@@ -12,6 +12,7 @@ import {
   closePaneSession,
   closeWorkspaceSessions,
   hasPaneSession,
+  movePaneSession,
   paneSession,
   paneSessionKey,
   resetPaneSessionsForTests,
@@ -107,5 +108,44 @@ describe('workspace scoping', () => {
     paneSession(paneSessionKey('scripting-two', 'p#1'), () => ({}), dispose);
     closeWorkspaceSessions('scripting');
     expect(dispose).not.toHaveBeenCalled();
+  });
+});
+
+describe('region views', () => {
+  // A region strip renders its view under `${host}:${position}:${viewId}`. The agent
+  // chat's docked browser is one, holding a native webview: closing the chat must
+  // close it, or the page keeps painting over the desktop with nothing to hide it.
+  const host = 'agent.chat#1';
+  const dock = `${host}:right:browser.view`;
+
+  it('closes with its host pane', () => {
+    const dispose = vi.fn();
+    paneSession(paneSessionKey('w', dock), () => ({}), dispose);
+    closePaneSession(paneSessionKey('w', host));
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not close a different pane that shares a prefix', () => {
+    const dispose = vi.fn();
+    paneSession(paneSessionKey('w', 'agent.chat#10:right:browser.view'), () => ({}), dispose);
+    closePaneSession(paneSessionKey('w', host));
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('is kept by a reset that keeps its host', () => {
+    const dispose = vi.fn();
+    paneSession(paneSessionKey('w', dock), () => ({}), dispose);
+    closeWorkspaceSessions('w', new Set([host]));
+    expect(dispose).not.toHaveBeenCalled();
+    closeWorkspaceSessions('w');
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves to another workspace with its host', () => {
+    const value = {};
+    paneSession(paneSessionKey('a', dock), () => value, () => {});
+    movePaneSession(paneSessionKey('a', host), paneSessionKey('b', host));
+    expect(hasPaneSession(paneSessionKey('a', dock))).toBe(false);
+    expect(paneSession(paneSessionKey('b', dock), () => ({}), () => {})).toBe(value);
   });
 });

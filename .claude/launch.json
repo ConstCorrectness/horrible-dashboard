@@ -47,6 +47,36 @@
       }
     },
     {
+      "name": "backend-browser",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--no-sync",
+        "uvicorn",
+        "backend.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8220"
+      ],
+      "port": 8220,
+      "env": {
+        "HORRIBLE_DATA_DIR": ".data-node-b",
+        "HORRIBLE_ENABLE_SERVER_BROWSER": "1",
+        "HORRIBLE_BUS": "off"
+      }
+    },
+    {
+      "name": "web-ui-browser",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev:web"],
+      "port": 5175,
+      "env": {
+        "PORT": "5175",
+        "HORRIBLE_DEV_BACKEND_PORT": "8220"
+      }
+    },
+    {
       "name": "backend",
       "runtimeExecutable": "uv",
       "runtimeArgs": [
