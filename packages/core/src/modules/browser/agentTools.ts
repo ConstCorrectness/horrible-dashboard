@@ -56,6 +56,7 @@ import {
 } from './action-gate';
 import { relayTurn } from '../../agent-turn';
 import { agentChatPane, sendToDock } from './dock';
+import { isLocalUrl } from './local-url';
 import { markDriving, SERVER_PAGE } from './driving';
 import { agentEngine, revealNativeTarget, serverEngineEnabled } from './engines';
 import { activeNativeTarget, nativeEngine, waitForNativeTarget } from './native-engine';
@@ -359,11 +360,23 @@ export const browserAgentTools: AgentToolDecl[] = [
     },
     sideEffect: true,
     specifierTemplate: '{url}',
+    // A local address (a dev server, the router, this app's own backend) is asked
+    // about under its own `local:` specifier, so a rule written for the web
+    // (`browser.open(https://*)`) never covers it; always-allow offers that exact
+    // URL. A page the agent read may be what sent it there. The approved call
+    // unlocks that host for one pane.
+    gate: (args) =>
+      isLocalUrl(String(args.url))
+        ? { sideEffect: true, specifier: `local:${String(args.url)}`, rule: null }
+        : { sideEffect: true, specifier: String(args.url) },
     handler: async (args) => {
       // Before any await: the calling turn is only known synchronously.
       const turn = relayTurn();
       const url = String(args.url);
       const chat = agentChatPane();
+      // Reaching the handler means the call was approved (the gate above).
+      const local = isLocalUrl(url);
+      const webviews = windowControl()?.browserWebview;
       if (hasCapability('browser.nativeCdp')) {
         // A native page is already open (a browser pane, or this chat's dock): drive
         // it in place, and bring it forward so the user sees what the agent does.
@@ -371,10 +384,12 @@ export const browserAgentTools: AgentToolDecl[] = [
         if (existing) {
           markDriving(existing, turn);
           revealNativeTarget(existing);
+          if (local) await webviews?.allowLocal?.(url, existing);
           await nativeEngine(existing).navigate(url);
           return { ok: true, url };
         }
         // Otherwise the page opens beside the conversation that asked for it.
+        if (local) await webviews?.allowLocal?.(url);
         if (!(chat && sendToDock(chat, url))) {
           openDocument('browser.view', `browser.view:${url}`, { url }, () => true);
         }

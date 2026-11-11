@@ -20,7 +20,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { BackendSupervisor } from './backend.js';
-import { configureAppSession } from './sessions.js';
+import { configureAppSession, startBrowserNetwork } from './sessions.js';
 import { registerShortcuts, unregisterAllShortcuts } from './shortcuts.js';
 import { checkForUpdate, installUpdate } from './updater.js';
 import { isWebUrl, type Bounds } from './urls.js';
@@ -125,6 +125,7 @@ async function main(): Promise<void> {
   // Ctrl+Shift+I, zoom) into a page whose keymap owns every one of them.
   Menu.setApplicationMenu(null);
   configureAppSession(isAppOrigin);
+  await startBrowserNetwork();
   if (packaged) serveUi();
   registerCommands();
   createWindow();
@@ -301,6 +302,8 @@ const COMMANDS: Record<string, Command> = {
   set_browser_webview_visible: (a) => browserViews().setVisible(str(a, 'id'), bool(a, 'visible')),
   navigate_browser_webview: (a) => browserViews().navigate(str(a, 'id'), str(a, 'url')),
   close_browser_webview: (a) => browserViews().close(str(a, 'id')),
+  allow_browser_local: (a) =>
+    browserViews().allowLocal(str(a, 'url'), typeof a.id === 'string' ? a.id : undefined),
   close_all_browser_webviews: () => browserViews().closeAll(),
   cdp_browser_webview: (a) =>
     browserViews().cdpCall(str(a, 'id'), str(a, 'method'), (a.params as Args | undefined) ?? {}),

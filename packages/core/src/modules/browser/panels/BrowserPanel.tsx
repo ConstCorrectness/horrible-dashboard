@@ -305,8 +305,14 @@ export function BrowserPanel() {
   const canPopOut = hasCapability('browser.nativeWindow');
   const bookmarked = current !== '' && kbItem !== null;
 
+  /**
+   * Point the pane at `raw`. `byHand` is the user's own pick (address bar, home,
+   * bookmark, history): on the desktop that may open a local address, which the
+   * browser is otherwise fenced off from (browserProxy.ts). The agent's dock
+   * requests never pass it.
+   */
   const go = useCallback(
-    (raw: string) => {
+    (raw: string, byHand = false) => {
       const url = normalizeUrl(raw);
       if (!url) return;
       if (useFull) {
@@ -319,7 +325,10 @@ export function BrowserPanel() {
       }
       if (useNative) {
         setInput(url);
-        native.navigate(url);
+        const allow = byHand ? windowControl()?.browserWebview?.allowLocal?.(url) : undefined;
+        void Promise.resolve(allow)
+          .catch(() => undefined)
+          .then(() => native.navigate(url));
         return;
       }
       setNav((n) => {
@@ -476,7 +485,7 @@ export function BrowserPanel() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    go(input);
+    go(input, true);
   };
 
   return (
@@ -604,7 +613,7 @@ export function BrowserPanel() {
           style={btn}
           disabled={!homeUrl}
           title="Home"
-          onClick={() => homeUrl && go(homeUrl)}
+          onClick={() => homeUrl && go(homeUrl, true)}
         >
           ⌂
         </button>
@@ -691,7 +700,14 @@ export function BrowserPanel() {
             style={btn}
             disabled={!current}
             title="Open in native window"
-            onClick={() => current && windowControl()?.openBrowserWindow(current)}
+            onClick={() => {
+              const control = windowControl();
+              if (!current || !control) return;
+              // The user's click: the window may reach a local page, as the pane did.
+              void Promise.resolve(control.browserWebview?.allowLocal?.(current))
+                .catch(() => undefined)
+                .then(() => control.openBrowserWindow(current));
+            }}
           >
             ⧉
           </button>
@@ -725,7 +741,7 @@ export function BrowserPanel() {
               type="button"
               style={{ ...btn, whiteSpace: 'nowrap', fontSize: '0.72rem' }}
               title={b.url}
-              onClick={() => go(b.url)}
+              onClick={() => go(b.url, true)}
             >
               {b.title || b.url}
             </button>
@@ -841,7 +857,7 @@ export function BrowserPanel() {
                 title={h.url}
                 onClick={() => {
                   setShowHistory(false);
-                  go(h.url);
+                  go(h.url, true);
                 }}
               >
                 {h.title || h.url}

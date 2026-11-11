@@ -12,7 +12,7 @@
 import { BrowserWindow, shell } from 'electron';
 import * as fs from 'node:fs';
 
-import { WEB_PREFERENCES_BROWSER, browserSession } from './sessions.js';
+import { WEB_PREFERENCES_BROWSER, browserSession, localAccess } from './sessions.js';
 import { parseWebUrl } from './urls.js';
 
 /** Windows that were maximized when they went fullscreen, so leaving puts them back. */
@@ -143,5 +143,9 @@ export async function openBrowserWindow(url: string): Promise<void> {
     autoHideMenuBar: true,
     webPreferences: { ...WEB_PREFERENCES_BROWSER, session: browserSession() },
   });
+  // A pop-out of a pane the user unlocked a local host in: the pane granted it first.
+  const key = String(win.webContents.id);
+  localAccess.claim(key, parsed.toString());
+  win.webContents.once('destroyed', () => localAccess.forget(key));
   await win.loadURL(parsed.toString());
 }

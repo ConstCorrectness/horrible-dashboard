@@ -26,7 +26,7 @@
 import { type BrowserWindow, type DownloadItem, WebContentsView } from 'electron';
 
 import { checkParams, eventAllowed, methodAllowed } from './cdpPolicy.js';
-import { WEB_PREFERENCES_BROWSER, browserSession } from './sessions.js';
+import { WEB_PREFERENCES_BROWSER, browserSession, localAccess } from './sessions.js';
 import { type Bounds, isWebUrl, parseWebUrl, sanitizeBounds, wantsPopupWindow } from './urls.js';
 
 /**
@@ -115,7 +115,23 @@ export class BrowserViews {
    * business — Chromium's error page and a `load` event — not a command failure.
    */
   private load(view: WebContentsView, url: string): void {
+    // The app pointed this pane here: a local host the user just asked for
+    // (`allowLocal`) becomes reachable for this pane. A page navigating itself never
+    // comes through here, so it can never unlock one.
+    localAccess.claim(String(view.webContents.id), url);
     view.webContents.loadURL(url).catch(() => undefined);
+  }
+
+  /**
+   * The user asked for `url` — typed it, or approved the agent opening it — so its
+   * host may be local (a dev server, the router). With `id`, pane `id` may reach it
+   * now (the agent drives an open pane over CDP, which bypasses {@link load});
+   * without, the next pane created or navigated there claims it.
+   */
+  allowLocal(url: string, id?: string): void {
+    const target = parseWebUrl(url).toString();
+    localAccess.grant(target);
+    if (id !== undefined) localAccess.claim(String(this.get(id).view.webContents.id), target);
   }
 
   /** What makes the view a *browser*: each hook keeps the pane's chrome honest. */
@@ -164,6 +180,8 @@ export class BrowserViews {
       }
     });
     wc.on('render-process-gone', () => load(false));
+    const key = String(wc.id);
+    wc.once('destroyed', () => localAccess.forget(key));
   }
 
   /**

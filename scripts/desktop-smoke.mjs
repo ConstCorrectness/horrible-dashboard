@@ -266,6 +266,31 @@ async function main() {
       return registered;
     });
 
+    await check('browser views are fenced off from local addresses', async () => {
+      // No grant: the proxy refuses the backend, and the view shows its refusal.
+      await mustInvoke('create_browser_webview', {
+        id: 'fenced',
+        url: `${origin}/api/health`,
+        bounds: { x: 0, y: 0, width: 0, height: 0 },
+      });
+      const deadline = Date.now() + 20_000;
+      let text = '';
+      while (Date.now() < deadline) {
+        const r = await invoke('cdp_browser_webview', {
+          id: 'fenced',
+          method: 'Runtime.evaluate',
+          params: { expression: 'document.body ? document.body.innerText : ""', returnByValue: true },
+        });
+        text = r.ok ? String(r.value?.result?.value ?? '') : '';
+        if (text) break;
+        await new Promise((r2) => setTimeout(r2, 300));
+      }
+      assert(/local address/.test(text), `expected the proxy's refusal, got: ${text.slice(0, 80)}`);
+      assert(!text.includes('horrible-dashboard'), 'the backend answered an ungranted view');
+      await mustInvoke('close_browser_webview', { id: 'fenced' });
+      return text.trim();
+    });
+
     await check('native browser view loads, reports, and is drivable over CDP', async () => {
       const events = await page.evaluate(() => {
         window.__smokeEvents = [];
@@ -274,6 +299,9 @@ async function main() {
       });
       assert(events, 'listen');
       const url = `${origin}/api/health`;
+      // The backend is a local address, which browser views are fenced off from
+      // (browserProxy.ts) until the user asks for it: grant it, as the address bar does.
+      await mustInvoke('allow_browser_local', { url });
       await mustInvoke('create_browser_webview', {
         id: 'smoke',
         url,

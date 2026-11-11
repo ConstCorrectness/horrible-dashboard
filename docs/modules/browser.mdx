@@ -575,8 +575,9 @@ A normal backend module (`backend/modules/browser`), same shape as `library`:
 
 `GET /read` fetches an arbitrary user-supplied URL server-side, so `fetch.py` enforces
 an SSRF policy before **every** request and each redirect hop: `http`/`https` only;
-resolve the host and reject if any IP is loopback / private / link-local / multicast /
-reserved (blocks `localhost`, `169.254.169.254`, RFC1918, …); follow redirects manually
+resolve the host and reject if any IP is not global (`is_public_address`: loopback,
+private, link-local, CGNAT, multicast, reserved, and IPv4-mapped / NAT64 / 6to4
+spellings of them — blocks `localhost`, `169.254.169.254`, RFC1918, Tailscale, …); follow redirects manually
 and re-validate each `Location`; cap response size and content type. A TOCTOU
 DNS-rebind is mitigated but not fully eliminated (full protection needs pinning the
 validated IP into the connection). The `library` blog ingest — which used to be the
@@ -675,12 +676,22 @@ misused agent tool could pivot inward, so full mode is:
 - **Opt-in**: `HORRIBLE_ENABLE_SERVER_BROWSER=1` (mirrors `GAMES_ENABLE_CODE_EXEC`). Off →
   the panel stays in iframe mode and the full-engine agent tools return a "not enabled"
   notice. `GET /api/browser/engine` reports `{enabled, installed}`.
-- **Egress-guarded**: every request is routed through Chromium's `context.route` and
-  aborted if its host resolves to a private / loopback / link-local / reserved IP
-  (reusing `fetch._check_host_public`, resolution cached per host). `file://` and other
-  non-`http(s)` schemes are blocked; `data:` / `blob:` / `about:` pass. Navigation
-  re-checks the scheme + host. `browser.eval` (arbitrary in-page JS) is behind the same
-  gate.
+- **Egress-guarded**, twice:
+  - every request is routed through Chromium's `context.route` and aborted if its host
+    resolves to a non-global address (`fetch._check_host_public`, verdict cached per
+    host). `file://` and other non-`http(s)` schemes are blocked; `data:` / `blob:` /
+    `about:` pass. Navigation re-checks the scheme + host. This is the half that
+    stamps a reason on the request for the network view.
+  - Chromium itself is launched behind `egress_proxy.py`, a loopback proxy (one per
+    process, own thread) that resolves each name **once**, refuses any non-global
+    answer, and connects to the address it checked. The route check alone can be
+    rebound — Chromium resolves the name again to connect, and a hostile DNS server
+    answers differently the second time — and never sees WebSockets. Playwright adds
+    `<-loopback>`, so `localhost` goes through the proxy too. There is no local unlock
+    on this engine: it may run on a hosted server, where "local" is the server's
+    network.
+
+  `browser.eval` (arbitrary in-page JS) is behind the same gate.
 - **Bounded**: one context per connection, released on disconnect / pane close.
 
 ### Dependency & cross-platform
@@ -815,6 +826,58 @@ guard, and a call that has not answered in 30 seconds fails rather than hanging 
 
 Every platform runs the same Chromium, so the capability is granted everywhere. (Under
 the Tauri shell it was Windows-only: WKWebView and WebKitGTK have no CDP.)
+
+### The network fence
+
+A page the agent reads can tell it where to go next, so the native browser is fenced
+off from **this machine and its network**: the dev server on `:5173`, this app's own
+backend, the router's admin page, `169.254.169.254`. `browserProxy.ts` (desktop main
+process) is a loopback HTTP/CONNECT proxy, and `sessions.ts` points the
+`persist:browser` session at it with `<-loopback>` (Chromium otherwise exempts
+`localhost` from any proxy). For every connection it:
+
+1. resolves the name **once** (all addresses);
+2. refuses it if **any** address is not global — loopback, RFC1918, link-local, CGNAT
+   (`100.64/10`, where Tailscale lives), unique-local and link-local IPv6, multicast,
+   reserved, and IPv4-mapped / NAT64 / 6to4 spellings of any of those;
+3. connects to the address it checked. A rebinding DNS server never gets a second
+   lookup to answer differently.
+
+The table is the same one the backend uses (`fetch.is_public_address`); the two test
+files (`apps/desktop/test/browserProxy.test.ts`, `backend/tests/test_browser_egress_proxy.py`)
+carry the same cases.
+
+**Local pages the user asks for.** Browsing your own dev server is legitimate, so a
+local host opens for **one pane**, for that pane's lifetime, when the user asks:
+
+- typing it into the address bar, or picking it from home, bookmarks or history
+  (`go(url, byHand)` in `BrowserPanel.tsx`);
+- approving the agent's `browser.open` to it. Its per-call gate gives a local URL
+  (`local-url.ts`: localhost, private IP literals, single-label names, `.local`,
+  `.lan`, `.internal`, `.home.arpa`, …) the specifier `local:<url>`, so a rule written
+  for the web never covers it, and always-allow offers that exact URL only;
+- popping a pane out to its own window.
+
+The app tells the shell with `allowLocal(url, id?)` (`allow_browser_local`): a grant,
+claimed by the next create or navigate of a pane to that host within 30 s, or claimed
+by pane `id` at once (the agent drives an open pane over CDP, which never passes
+through the shell's navigate). A page navigating itself never reaches those commands,
+so it can't unlock anything. A `webRequest.onBeforeRequest` check keeps one pane's
+unlock to that pane: a request to an unlocked local host from another pane is
+cancelled, and so is a subresource request from a public page the pane moved on to
+(a top-level navigation back is allowed).
+
+**What the fence does not cover.**
+
+- A public-looking name that resolves to a local address (split-horizon DNS for an
+  intranet host) is never unlocked by the agent's gate and is refused; type it into
+  the address bar.
+- WebRTC sends UDP straight from the renderer, outside any proxy. It can't fetch a
+  page, but ICE can touch LAN addresses.
+- If the proxy fails to start, the session points at a dead port: panes stay offline
+  rather than load unfenced.
+- Without the shell's fence (the browser build, the Tauri shell) there is no
+  `allowLocal`, and iframes reach whatever the user's browser does.
 
 ## Browser vs desktop
 

@@ -97,6 +97,15 @@ export interface BrowserWebviewControl {
   /** Destroy the overlay. */
   close(id: string): Promise<void>;
   /**
+   * The user asked for `url` (typed it, or approved the agent opening it), so it may
+   * be on a local address — this machine or its network, which browser panes are
+   * otherwise fenced off from (apps/desktop/src/browserProxy.ts). With `id`, that
+   * overlay may reach the host now; without, the next overlay created or navigated
+   * there may. Never call it for a URL a page or the agent chose on its own.
+   * Absent on shells without the fence.
+   */
+  allowLocal?(url: string, id?: string): Promise<void>;
+  /**
    * Destroy every overlay the shell is holding.
    *
    * Each surface is owned by a pane session, and a frontend reload destroys every

@@ -29,7 +29,9 @@ Key decisions (see docs/modules/browser.mdx):
 - **Persistent context** under `$HORRIBLE_DATA_DIR/browser/<profile>` → cookies, cache,
   localStorage, IndexedDB and site data survive restarts.
 - **Egress policy**: every request is gated through `fetch._check_host_public`, so the
-  backend Chromium can't be steered at the user's own LAN / cloud-metadata.
+  backend Chromium can't be steered at the user's own LAN / cloud-metadata — and
+  Chromium connects only through `egress_proxy.py`, which resolves each name once and
+  connects to the address it checked, so a rebinding DNS answer can't slip past.
 - **Gated** behind `HORRIBLE_ENABLE_SERVER_BROWSER=1` — off, the panel stays iframe-only.
 """
 
@@ -48,6 +50,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from backend.modules.browser.cdp import connection_info
+from backend.modules.browser.egress_proxy import egress_proxy_port
 from backend.modules.browser.fetch import UnsafeUrlError, _check_host_public
 from backend.modules.telemetry.instrument import record_browser_request
 from backend.modules.ws import WsConnection
@@ -341,6 +344,10 @@ class BrowserSession:
                 user_data_dir=str(_profile_dir(self.profile)),
                 headless=True,
                 viewport=dict(self._viewport),
+                # Every connection goes through the egress proxy, which connects
+                # only to the address it checked (egress_proxy.py). Playwright adds
+                # `<-loopback>`, so localhost is proxied (and refused) too.
+                proxy={"server": f"http://127.0.0.1:{egress_proxy_port()}"},
                 **identity,
             )
             context.set_default_timeout(_NAV_TIMEOUT_MS)

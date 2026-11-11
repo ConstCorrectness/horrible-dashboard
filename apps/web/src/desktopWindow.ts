@@ -70,6 +70,7 @@ export function createDesktopWindowControl(): WindowControl {
       setVisible: (id, visible) => invoke<void>('set_browser_webview_visible', { id, visible }),
       navigate: (id, url) => invoke<void>('navigate_browser_webview', { id, url }),
       close: (id) => invoke<void>('close_browser_webview', { id }),
+      allowLocal: (url, id) => invoke<void>('allow_browser_local', { url, id }),
       closeAll: () => invoke<void>('close_all_browser_webviews'),
       onEvent: onWebviewEvent,
       // Chromium on every platform, so the CDP bridge is too.

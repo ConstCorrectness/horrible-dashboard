@@ -6,9 +6,9 @@ embedding (`safe_fetch_bytes`, returns raw pixels). Before every request (includ
 each redirect hop) we:
 
 1. require an `http`/`https` scheme;
-2. resolve the host and reject if **any** resolved address is loopback / private /
-   link-local / multicast / reserved (blocks `localhost`, `127.0.0.1`,
-   `169.254.169.254`, RFC1918, etc.);
+2. resolve the host and reject if **any** resolved address is not global
+   (`is_public_address`: blocks `localhost`, `127.0.0.1`, `169.254.169.254`,
+   RFC1918, CGNAT, and IPv4-mapped spellings of all of them);
 3. follow redirects **manually**, re-validating each `Location` (a 302 to an
    internal host can't slip past a one-time check);
 4. require an expected content type and cap the response size *during* transfer.
@@ -53,23 +53,56 @@ class UnsafeUrlError(ValueError):
     """A URL failed the SSRF policy (bad scheme, unresolvable, or non-public IP)."""
 
 
-def _check_host_public(host: str) -> None:
-    """Resolve `host` and raise `UnsafeUrlError` if any address is non-public."""
+def _embedded_v4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The IPv4 host an IPv6 address reaches, when it is one of the forms that does.
+
+    IPv4-mapped (`::ffff:a.b.c.d`), NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`):
+    `::ffff:127.0.0.1` is loopback however global its IPv6 spelling looks.
+    """
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip in _NAT64:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip.sixtofour
+
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def is_public_address(address: str) -> bool:
+    """Whether `address` (a literal) is on the public internet.
+
+    `is_global` rather than a list of `is_private`/`is_loopback`/...: it also
+    refuses CGNAT (100.64.0.0/10, where Tailscale lives) and the documentation and
+    benchmarking ranges. The desktop shell's proxy applies the same table
+    (apps/desktop/src/browserProxy.ts); the two must agree.
+    """
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and (inner := _embedded_v4(ip)) is not None:
+        ip = inner
+    return ip.is_global and not ip.is_multicast
+
+
+def _check_host_public(host: str) -> list[str]:
+    """Resolve `host`; raise `UnsafeUrlError` if any address is non-public.
+
+    Returns the addresses, so a caller can connect to the one it checked instead of
+    resolving the name a second time (the DNS-rebinding gap; see egress_proxy.py).
+    """
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise UnsafeUrlError(f"cannot resolve host: {host}") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise UnsafeUrlError(f"host resolves to a non-public address: {ip}")
+    addresses = [str(info[4][0]) for info in infos]
+    for address in addresses:
+        if not is_public_address(address):
+            raise UnsafeUrlError(f"host resolves to a non-public address: {address}")
+    if not addresses:
+        raise UnsafeUrlError(f"cannot resolve host: {host}")
+    return addresses
 
 
 def _validate(url: str) -> None:

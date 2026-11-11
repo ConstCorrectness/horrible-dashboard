@@ -11,9 +11,22 @@
  *   "Electron"), and every sensitive permission is asked of the user, per site, the
  *   way a browser does — so an open tab can never listen to the room unannounced.
  */
-import { app, desktopCapturer, dialog, session, type Session, type WebPreferences } from 'electron';
+import {
+  app,
+  desktopCapturer,
+  dialog,
+  session,
+  type Session,
+  type WebPreferences,
+  webContents,
+} from 'electron';
+
+import { LocalAccess, requestAllowed, startBrowserProxy } from './browserProxy.js';
 
 export const BROWSER_PARTITION = 'persist:browser';
+
+/** Which browser panes may reach which local hosts (browserProxy.ts). */
+export const localAccess = new LocalAccess();
 
 /** Hardened preferences for every surface that shows a foreign page. */
 export const WEB_PREFERENCES_BROWSER: WebPreferences = {
@@ -36,6 +49,47 @@ export function browserSession(): Session {
   installBrowserPermissions(s);
   browser = s;
   return s;
+}
+
+/**
+ * Put the browser session behind the network fence (browserProxy.ts): every request
+ * goes through a loopback proxy that refuses this machine and its network, and a
+ * local host a pane unlocked serves that pane only. Must finish before the first
+ * browser pane loads, so main.ts awaits it before creating the window.
+ *
+ * Fails closed: without the proxy the session points at a port nothing listens on,
+ * and every page fails to load rather than loading unfenced.
+ */
+export async function startBrowserNetwork(): Promise<void> {
+  const s = browserSession();
+  let rules: string;
+  try {
+    const proxy = await startBrowserProxy(localAccess);
+    app.once('will-quit', () => void proxy.close());
+    rules = `127.0.0.1:${proxy.port}`;
+  } catch (err) {
+    console.error(
+      `[desktop] browser proxy failed to start; browser panes stay offline: ${String(err)}`,
+    );
+    rules = '127.0.0.1:9';
+  }
+  // `<-loopback>` takes away Chromium's built-in exemption, so localhost goes
+  // through the proxy (and its checks) too.
+  await s.setProxy({ proxyRules: rules, proxyBypassRules: '<-loopback>' });
+  s.webRequest.onBeforeRequest(
+    { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+    (details, callback) => {
+      const wc =
+        details.webContentsId === undefined ? null : webContents.fromId(details.webContentsId);
+      const allowed = requestAllowed(localAccess, {
+        url: details.url,
+        pane: wc ? String(wc.id) : undefined,
+        pageUrl: wc && !wc.isDestroyed() ? wc.getURL() : null,
+        mainFrame: details.resourceType === 'mainFrame',
+      });
+      callback({ cancel: !allowed });
+    },
+  );
 }
 
 /**
