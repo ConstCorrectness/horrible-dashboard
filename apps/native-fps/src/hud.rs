@@ -313,7 +313,11 @@ pub struct ConsoleView<'a> {
     pub scroll: usize,
     pub suggestions: &'a [String],
     pub suggestion: usize,
-    /// The selected completion, spelled out. Drawn under the input line.
+    /// The completion list's right-hand column, one per suggestion: a CVar's
+    /// current value, a borrowed spelling's target. May be shorter than
+    /// `suggestions`; a missing entry draws nothing.
+    pub hints: &'a [String],
+    /// The selected completion, spelled out. Drawn at the foot of the list.
     pub detail: Option<&'a str>,
     /// Whether the node's registry actually loaded. Drawn in the title bar,
     /// because a console with no completions looks broken in exactly the same
@@ -2071,7 +2075,7 @@ fn draw_badge_banner(
     }
 }
 
-fn draw_weapon_silhouette(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, name: &str, color: [f32; 4]) {
+pub fn draw_weapon_silhouette(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, name: &str, color: [f32; 4]) {
     let upper = name.to_uppercase();
     let s = (w / 36.0).min(h / 14.0);
     if upper.contains("SNIPER") {
@@ -3582,10 +3586,17 @@ pub struct ConsoleHits {
     /// Short of the full list when the row runs out of width — a chip that was
     /// not drawn must not be clickable.
     pub chips: Vec<(usize, Hit)>,
-    /// The completion row, each with its index into `ConsoleView::suggestions`.
+    /// The completion list, one row each, with its index into
+    /// `ConsoleView::suggestions`.
     pub suggestions: Vec<(usize, Hit)>,
     /// The panel itself, so a click outside it can be told from one inside.
     pub panel: Hit,
+    /// The completion list's box (rows and the detail line), when there is one.
+    pub list: Option<Hit>,
+    /// The input field.
+    pub input: Hit,
+    /// Where the scrollback is drawn: lines fill it from the bottom up.
+    pub well: Hit,
 }
 
 /// The console's size unit: the HUD's `height / 360`, rounded, and **not**
@@ -3628,19 +3639,27 @@ pub fn console_hits_with(
     let u = console_unit(height);
     let scale = u * 0.7;
     let line_h = scale * 9.0;
-    let panel_h = (height * 0.55).max(line_h * 9.0);
     let pad = u * 3.0;
+    // Inset from the sides once there is room to be: a console the full width
+    // of a 4K monitor is a line of text a metre long. On a narrow window the
+    // inset would cost more columns than it is worth.
+    let margin = if width >= 1100.0 { (width * 0.06).min(u * 40.0) } else { 0.0 };
+    let panel_x = margin;
+    let panel_w = width - margin * 2.0;
+    let panel_h = (height * 0.62).max(line_h * 14.0).min(height);
+    let left = panel_x + pad;
+    let right = panel_x + panel_w - pad;
 
-    let chip_y = pad + line_h;
+    let chip_y = pad + line_h * 1.75;
     let mut chips = Vec::new();
-    let mut x = pad;
+    let mut x = left;
     for (i, action) in quick.iter().enumerate() {
         let text = match &action.state {
             Some(state) => format!("{} {} {}", action.key, action.label, state),
             None => format!("{} {}", action.key, action.label),
         };
         let w = measure(kit, Face::Display, &text, scale * 0.85) + scale * 3.0;
-        if x + w > width - pad {
+        if x + w > right {
             break;
         }
         chips.push((
@@ -3655,29 +3674,56 @@ pub fn console_hits_with(
         x += w;
     }
 
-    let input_y = panel_h - pad - line_h;
-    let mut y = input_y - line_h;
-    if has_detail {
-        y -= line_h * 0.9;
-    }
+    // Built up from the floor: the key hints, then the input field, then —
+    // floating over the bottom of the scrollback rather than shrinking it — the
+    // completion list. A list that took its height out of the scrollback would
+    // make every line jump each time a keystroke changed how many names match.
+    let footer_y = panel_h - pad - line_h * 0.8;
+    let input_h = line_h * 1.5;
+    let input = Hit {
+        x: left,
+        y: footer_y - u * 1.5 - input_h,
+        w: right - left,
+        h: input_h,
+    };
+    let well_top = chip_y + line_h * 1.35;
+    let well = Hit {
+        x: left,
+        y: well_top,
+        w: right - left,
+        h: (input.y - u * 1.5 - well_top).max(line_h),
+    };
+
     let mut rows = Vec::new();
+    let mut list = None;
     if !suggestions.is_empty() {
-        let mut x = pad;
-        for (i, item) in suggestions.iter().enumerate() {
-            let w = measure(kit, Face::Mono, item, scale * 0.85) + scale * 2.0;
+        let row_h = line_h * 1.05;
+        let detail_h = if has_detail { line_h * 1.1 } else { 0.0 };
+        let list_w = (right - left).min((u * 190.0).max((right - left) * 0.55));
+        let list_h = suggestions.len() as f32 * row_h + detail_h + u * 2.0;
+        let list_y = (input.y - u - list_h).max(well_top);
+        list = Some(Hit {
+            x: left,
+            y: list_y,
+            w: list_w,
+            h: list_h,
+        });
+        for i in 0..suggestions.len() {
+            let y = list_y + u + i as f32 * row_h;
+            // A row that would start above the list's clamped top is not drawn,
+            // so it is not clickable either.
+            if y + row_h > input.y {
+                break;
+            }
             rows.push((
                 i,
                 Hit {
-                    x: x - scale,
-                    y: y - scale,
-                    w,
-                    h: line_h * 0.85,
+                    x: left,
+                    y,
+                    w: list_w,
+                    h: row_h,
                 },
             ));
-            x += w + scale * 2.0;
-            if x > width - pad {
-                break;
-            }
         }
     }
 
@@ -3685,33 +3731,63 @@ pub fn console_hits_with(
         chips,
         suggestions: rows,
         panel: Hit {
-            x: 0.0,
+            x: panel_x,
             y: 0.0,
-            w: width,
+            w: panel_w,
             h: panel_h,
         },
+        list,
+        input,
+        well,
     }
 }
 
-/// The developer console: a status header, a quick-action row, a scrollback and
-/// an input line.
+/// Break `text` into rows of at most `columns` characters.
 ///
-/// Occupies the **top** of the screen rather than the bottom, which is where a
-/// Quake console has always gone and is not nostalgia: the bottom of this screen
-/// is the health and ammo block, and a console that covered it would hide the
-/// two numbers most worth glancing at while typing `player.god 1`.
+/// By character, not by word: this is a console, where the long lines are
+/// paths, JSON and tables, none of which have anywhere better to break than
+/// the column they run out at. Never returns an empty list, so a blank line
+/// still occupies a row.
+fn wrap_columns(text: &str, columns: usize) -> Vec<&str> {
+    let columns = columns.max(8);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    let mut count = 0;
+    for (at, _) in text.char_indices() {
+        if count == columns {
+            rows.push(&text[start..at]);
+            start = at;
+            count = 0;
+        }
+        count += 1;
+    }
+    rows.push(&text[start..]);
+    rows
+}
+
+/// The developer console: a status header, a quick-action row, a scrollback, a
+/// completion list and an input field.
+///
+/// Hangs from the **top** of the screen rather than sitting at the bottom,
+/// which is where a Quake console has always gone and is not nostalgia: the
+/// bottom of this screen is the health and ammo block, and a console that
+/// covered it would hide the two numbers most worth glancing at while typing
+/// `player.god 1`.
+///
+/// **Opaque, and a panel rather than a tint.** It used to be a translucent
+/// band the full width of the window, and the scoreboard and kill feed read
+/// straight through it as if they were console output. A console is a tool
+/// laid over the game, not part of it.
 ///
 /// The layout is built from both ends inward — header and chips down from the
-/// top, input and completions up from the bottom — and the scrollback takes
-/// whatever is left between them. That is what keeps the caret and the newest
-/// line adjacent at any window size, which is the one property a console cannot
-/// trade away.
+/// top, hints and the input field up from the bottom — and the scrollback
+/// takes whatever is left between them. That keeps the caret and the newest
+/// line adjacent at any window size, the one property a console cannot trade
+/// away. All of it comes from `console_hits_with`, which the mouse reads too.
 fn paint_console(p: &mut Painter, c: &ConsoleView) {
     let u = console_unit(p.height);
     let scale = u * 0.7;
     let line_h = scale * 9.0;
-    let width = p.width;
-    // The one layout, shared with the mouse. See `console_hits`.
     let hits = console_hits_with(
         p.kit,
         c.quick,
@@ -3720,44 +3796,57 @@ fn paint_console(p: &mut Painter, c: &ConsoleView) {
         p.width,
         p.height,
     );
-    let height = hits.panel.h;
+    let panel = hits.panel;
     let pad = u * 3.0;
+    let left = panel.x + pad;
+    let right = panel.x + panel.w - pad;
+    let cut = u * 5.0;
 
-    // Near-opaque, unlike every other panel here. The rest of the HUD sits over
-    // a world you still need to see; a console does not, and a transparent one
-    // makes a map's own geometry read as text.
-    p.rect(0.0, 0.0, width, height, theme::panel(0.93));
-    p.grid(0.0, 0.0, width, height, u * theme::GRID_CELL_UNITS, theme::GRID);
-    // The one accent line, at the bottom edge — a border all the way round is
-    // the "generic panel" look this UI deliberately avoids.
-    p.rect(0.0, height, width, u * 0.5, theme::ACCENT);
+    // The game behind is dimmed, so the panel's edges read against a bright
+    // map as well as a dark one.
+    p.rect(0.0, 0.0, p.width, p.height, [0.0, 0.0, 0.0, 0.28]);
+
+    // The body: square where it meets the top of the window, one corner cut at
+    // the bottom right — the house shape, used once.
+    let body = theme::panel(1.0);
+    p.rect(panel.x, 0.0, panel.w, panel.h - cut, body);
+    p.rect(panel.x, panel.h - cut, panel.w - cut, cut, body);
+    p.tri_aa(
+        (panel.x + panel.w - cut, panel.h - cut),
+        (panel.x + panel.w, panel.h - cut),
+        (panel.x + panel.w - cut, panel.h),
+        body,
+    );
+    p.grid(
+        panel.x,
+        0.0,
+        panel.w,
+        panel.h - cut,
+        u * theme::GRID_CELL_UNITS,
+        theme::GRID,
+    );
+    // The one accent edge, on the side the panel hangs from.
+    p.rect(panel.x, 0.0, panel.w, 2.0, theme::ACCENT);
 
     // ---- the header ---------------------------------------------------------
     //
-    // The browser's title bar: which match this console is attached to, how far
-    // away it is, and whether cheats are open. All of it is context for reading
-    // the output below, which is why it is here rather than behind a command.
-    let title = if c.registry_loaded {
-        "HASSAULT CONSOLE"
-    } else {
-        // Not an error and not silence: completion being absent has two very
-        // different causes and only one of them is worth acting on.
-        "HASSAULT CONSOLE - REGISTRY UNAVAILABLE"
-    };
-    p.text(pad, pad, scale * 0.9, DIM, title);
-
+    // Which match this console is attached to, how far away it is, and whether
+    // cheats are open: context for reading the output below, which is why it is
+    // here rather than behind a command.
+    let title = "CONSOLE";
+    p.text(left, pad, scale * 1.15, WHITE, title);
     let mut status = String::new();
     if !c.room.is_empty() {
-        status.push_str(&format!("ROOM {}  ", short_room(c.room)));
+        status.push_str(&format!("ROOM {}  /  ", short_room(c.room)));
     }
     if !c.map.is_empty() {
-        status.push_str(&format!("{}  ", c.map));
+        status.push_str(&format!("{}  /  ", c.map));
     }
     match c.rtt {
         // Absent rather than zero, the same rule the rest of this HUD follows: a
         // `0 MS` for "not measured yet" is a claim of a perfect link.
-        Some(rtt) => status.push_str(&format!("PING {rtt:.0}MS  ")),
-        None => status.push_str("PING --  "),
+        Some(rtt) => status.push_str(&format!("{rtt:.0} MS  /  ")),
+        None => status.push_str("-- MS  /  "),
     }
     status.push_str(match c.cheats {
         Some(true) => "CHEATS ON",
@@ -3765,15 +3854,39 @@ fn paint_console(p: &mut Painter, c: &ConsoleView) {
         // Never been told. See `ConsoleView::cheats`.
         None => "CHEATS ?",
     });
-    let status_x = pad + p.text_width(title, scale * 0.9) + scale * 4.0;
-    p.text(status_x, pad, scale * 0.9, DIM, &status);
-
-    p.text_right(
-        width - pad,
-        pad,
-        scale * 0.9,
-        DIM,
-        "F1-F8 ACTIONS   ^F FILTER   TAB COMPLETE   ESC CLOSE",
+    if !c.registry_loaded {
+        // Not an error and not silence: completion being absent has two very
+        // different causes and only one of them is worth acting on.
+        status.push_str("  /  NO COMMAND LIST FROM THE SERVER");
+    }
+    let status_x = left + p.text_width(title, scale * 1.15) + scale * 5.0;
+    p.num(
+        status_x,
+        pad + scale * 1.6,
+        scale * 0.8,
+        if c.registry_loaded { DIM } else { AMBER },
+        &status,
+    );
+    // The filter, on the right where the browser puts its tabs.
+    let filter_text = if c.hidden > 0 {
+        format!("FILTER {}  /  {} HIDDEN", c.filter, c.hidden)
+    } else {
+        format!("FILTER {}", c.filter)
+    };
+    let filter_w = p.num_width(&filter_text, scale * 0.8);
+    p.num(
+        right - filter_w,
+        pad + scale * 1.6,
+        scale * 0.8,
+        if c.hidden > 0 { AMBER } else { DIM },
+        &filter_text,
+    );
+    p.rule(
+        left,
+        pad + line_h * 1.4,
+        right - left,
+        theme::FAINT,
+        theme::ACCENT,
     );
 
     // ---- the quick-action chips ---------------------------------------------
@@ -3781,7 +3894,6 @@ fn paint_console(p: &mut Painter, c: &ConsoleView) {
     // The browser's toolbar. Half of what a toggle button gives you is not the
     // click but the *state*, which is why a chip is drawn even for the actions
     // that have none to show.
-    let chip_y = pad + line_h;
     for (i, rect) in &hits.chips {
         let action = &c.quick[*i];
         let text = match &action.state {
@@ -3809,123 +3921,193 @@ fn paint_console(p: &mut Painter, c: &ConsoleView) {
         };
         p.text(
             rect.x + scale,
-            chip_y + scale * 0.6,
+            rect.y + scale * 0.6,
             scale * 0.85,
             ink,
             &text,
         );
     }
 
-    // The filter, on the right of the chip row where the browser puts its tabs.
-    let filter_text = if c.hidden > 0 {
-        format!("[{}]  {} HIDDEN", c.filter, c.hidden)
-    } else {
-        format!("[{}]", c.filter)
-    };
-    p.text_right(
-        width - pad,
-        chip_y + scale * 0.6,
-        scale * 0.85,
-        if c.hidden > 0 { AMBER } else { DIM },
-        &filter_text,
-    );
-
-    // ---- the input line -----------------------------------------------------
+    // ---- the scrollback -----------------------------------------------------
     //
-    // On the floor of the panel, with the log growing upward from just above it,
-    // so the newest line is always adjacent to the caret.
-    let input_y = height - pad - line_h;
-    let prompt = format!("] {}", c.input);
-    p.num(pad, input_y, scale, AMBER, &prompt);
+    // A well, darker than the panel, so output reads as a different surface
+    // from the controls around it. Newest first, painted upward until the well
+    // runs out. Iterating from the back is what makes `scroll` mean "lines back
+    // from the bottom" — the only definition under which new output does not
+    // shift what you are reading.
+    //
+    // `c.lines` is already filtered, so `scroll` counts visible lines and a tab
+    // change cannot leave the view parked in the middle of nothing.
+    let well = hits.well;
+    p.rect(well.x, well.y, well.w, well.h, [0.0, 0.0, 0.0, 0.34]);
+    let inner = scale * 2.0;
+    let stamp_scale = scale * 0.8;
+    let stamp_column = p.num_width("00:00", stamp_scale) + scale * 3.0;
+    // The stamp is smaller than the line; drop it so the two share a baseline
+    // instead of a top edge.
+    let stamp_drop = 7.0 * (scale - stamp_scale);
+    let text_x = well.x + inner + stamp_column;
+    // Room for the scrollbar on the right.
+    let text_w = well.w - inner * 2.0 - stamp_column - u * 2.0;
+    let cell = p.num_width("MMMMMMMMMM", scale) / 10.0;
+    let columns = (text_w / cell.max(1.0)).floor() as usize;
+    let mut y = well.y + well.h - line_h;
+    let top = well.y + scale;
+    'entries: for entry in c.lines.iter().rev().skip(c.scroll) {
+        let color = match entry.tone {
+            Tone::Echo => AMBER,
+            Tone::Output => WHITE,
+            Tone::Error => RED,
+            Tone::Note => GREEN,
+        };
+        let rows = wrap_columns(&entry.text, columns);
+        for (i, row) in rows.iter().enumerate().rev() {
+            if y < top {
+                break 'entries;
+            }
+            if i == 0 {
+                // The stamp is always dim, whatever the line is: it is not part
+                // of the message, and a red timestamp on an error line reads as
+                // the time itself being the problem.
+                p.num(
+                    well.x + inner,
+                    y + stamp_drop,
+                    stamp_scale,
+                    [0.35, 0.40, 0.50, 1.0],
+                    &entry.stamp(),
+                );
+            }
+            // Monospace, the way a terminal is: columns in tabular output line
+            // up, and a glyph is six vertices rather than the bitmap font's
+            // hundred — a full scrollback used to overrun the overlay's cap.
+            p.num(text_x, y, scale, color, row);
+            y -= line_h;
+        }
+    }
+
+    // The scrollbar: how much there is, and where in it this is. Only when
+    // there is more than fits, so an empty console does not carry furniture.
+    let visible = (well.h / line_h).floor().max(1.0);
+    let total = c.lines.len() as f32;
+    if total > visible {
+        let track_x = well.x + well.w - u * 1.2;
+        p.rect(track_x, well.y, u * 1.2, well.h, [1.0, 1.0, 1.0, 0.05]);
+        let thumb_h = (well.h * visible / total).max(u * 4.0);
+        let span = (total - visible).max(1.0);
+        let back = (c.scroll as f32).min(span) / span;
+        let thumb_y = well.y + (well.h - thumb_h) * (1.0 - back);
+        p.rect(
+            track_x,
+            thumb_y,
+            u * 1.2,
+            thumb_h,
+            if c.scroll > 0 {
+                theme::AMBER
+            } else {
+                theme::with_alpha(theme::ACCENT, 0.7)
+            },
+        );
+    }
+    if c.scroll > 0 {
+        // Scrolled up, so what is on screen is not the newest thing. Said out
+        // loud: a console silently showing history is a console that looks like
+        // it stopped responding.
+        let note = format!("SCROLLED BACK {}  /  PGDN TO RETURN", c.scroll);
+        let w = p.text_width(&note, scale * 0.8) + scale * 4.0;
+        let x = well.x + well.w - w - u * 2.5;
+        let note_y = well.y + well.h - line_h * 1.1;
+        p.rect(x, note_y, w, line_h, theme::panel(0.95));
+        p.text(x + scale * 2.0, note_y + scale * 1.4, scale * 0.8, AMBER, &note);
+    }
+
+    // ---- the input field ------------------------------------------------------
+    //
+    // A field, not a line of text at the bottom of the log: it is the one thing
+    // in this panel that takes typing, and it should look like it.
+    let field = hits.input;
+    p.rect(field.x, field.y, field.w, field.h, [0.09, 0.11, 0.15, 1.0]);
+    p.rect(field.x, field.y, 2.0, field.h, theme::AMBER);
+    p.rect(field.x, field.y + field.h - 1.0, field.w, 1.0, theme::FAINT);
+    let text_y = field.y + (field.h - scale * 7.0) * 0.5;
+    let prompt = "> ";
+    let prompt_x = field.x + scale * 3.0;
+    p.num(prompt_x, text_y, scale, AMBER, prompt);
+    let typed_x = prompt_x + p.num_width(prompt, scale) + if p.kit.is_some() { 0.0 } else { scale };
+    if c.input.is_empty() {
+        // What to type, while nothing has been: the two things that make every
+        // other command findable.
+        p.num(typed_x, text_y, scale, theme::FAINT, "help   /   find <text>");
+    } else {
+        p.num(typed_x, text_y, scale, WHITE, c.input);
+    }
     // A block caret one cell wide, positioned by measuring the text to its left
     // in the face it is drawn in. The bitmap font's width leaves off the
     // spacing column after the last glyph, so it gets that column back; a real
     // font's run already includes the trailing space's advance.
-    let gap = if p.kit.is_some() { 0.0 } else { scale };
-    let caret_x = pad + p.num_width(&format!("] {}", &c.input[..c.cursor]), scale) + gap;
+    let before = &c.input[..c.cursor.min(c.input.len())];
+    let gap = if p.kit.is_some() || before.is_empty() { 0.0 } else { scale };
+    let caret_x = typed_x + p.num_width(before, scale) + gap;
     p.rect(
         caret_x,
-        input_y,
+        text_y,
         p.num_width("M", scale).max(scale),
         scale * 7.0,
         theme::with_alpha(theme::AMBER, 0.55),
     );
 
-    let mut y = input_y - line_h;
-
-    // What the selected completion actually *is*. The browser carries a type and
-    // a description on every autocomplete row; a row here is one line of 5x7
-    // glyphs with no room for either, so it is spelled out once for the selected
-    // one — which is the half that was being read anyway.
-    if let Some(detail) = c.detail {
-        p.num(pad, y, scale * 0.8, [0.55, 0.62, 0.75, 1.0], detail);
-        y -= line_h * 0.9;
-    }
-
-    // Completions, immediately under the caret where the eye already is.
-    if !c.suggestions.is_empty() {
+    // ---- the completion list --------------------------------------------------
+    //
+    // One name to a row, directly above the caret, with what each one currently
+    // is on the right. Drawn after the scrollback because it floats over it.
+    if let Some(list) = hits.list {
+        p.rect(list.x, list.y, list.w, list.h, [0.07, 0.09, 0.13, 1.0]);
+        p.rect(list.x, list.y, list.w, 1.0, theme::with_alpha(theme::ACCENT, 0.6));
+        p.rect(list.x, list.y, 1.0, list.h, theme::FAINT);
+        p.rect(list.x + list.w - 1.0, list.y, 1.0, list.h, theme::FAINT);
         for (i, rect) in &hits.suggestions {
             let selected = *i == c.suggestion;
             if selected {
-                p.rect(rect.x, rect.y, rect.w, rect.h, theme::with_alpha(theme::ACCENT, 0.35));
+                p.rect(rect.x, rect.y, rect.w, rect.h, theme::with_alpha(theme::ACCENT, 0.28));
+                p.rect(rect.x, rect.y, 2.0, rect.h, theme::ACCENT);
             }
+            let row_y = rect.y + (rect.h - scale * 0.9 * 7.0) * 0.5;
             p.num(
-                rect.x + scale,
-                y,
-                scale * 0.85,
+                rect.x + scale * 3.0,
+                row_y,
+                scale * 0.9,
                 if selected { WHITE } else { DIM },
                 &c.suggestions[*i],
             );
+            if let Some(hint) = c.hints.get(*i).filter(|h| !h.is_empty()) {
+                let w = p.num_width(hint, scale * 0.8);
+                p.num(
+                    rect.x + rect.w - w - scale * 3.0,
+                    row_y + scale * 0.5,
+                    scale * 0.8,
+                    if selected { AMBER } else { theme::FAINT },
+                    hint,
+                );
+            }
         }
-        y -= line_h;
+        // What the selected completion actually *is*, at the foot of the list
+        // and cut to its width: the type, the owner and the description.
+        if let Some(detail) = c.detail {
+            let y = list.y + list.h - line_h * 1.05;
+            p.rect(list.x, y - scale, list.w, 1.0, theme::FAINT);
+            let cell = p.num_width("MMMMMMMMMM", scale * 0.75) / 10.0;
+            let fits = ((list.w - scale * 6.0) / cell.max(1.0)).floor() as usize;
+            let shown = wrap_columns(detail, fits)[0];
+            p.num(list.x + scale * 3.0, y + scale * 0.6, scale * 0.75, [0.55, 0.62, 0.75, 1.0], shown);
+        }
     }
 
-    // ---- the scrollback -----------------------------------------------------
-    //
-    // Newest first, painted upward until the panel runs out. Iterating from the
-    // back is what makes `scroll` mean "lines back from the bottom" — the only
-    // definition under which new output does not shift what you are reading.
-    //
-    // `c.lines` is already filtered, so `scroll` counts visible lines and a tab
-    // change cannot leave the view parked in the middle of nothing.
-    let top = pad + line_h * 2.0;
-    let stamp_column = p.num_width("00:00", scale * 0.8) + scale * 3.0;
-    // The stamp is smaller than the line; drop it so the two share a baseline
-    // instead of a top edge.
-    let stamp_drop = 7.0 * (scale - scale * 0.8);
-    for entry in c.lines.iter().rev().skip(c.scroll) {
-        if y < top {
-            break;
-        }
-        let color = match entry.tone {
-            Tone::Echo => DIM,
-            Tone::Output => WHITE,
-            Tone::Error => RED,
-            Tone::Note => GREEN,
-        };
-        // The stamp is always dim, whatever the line is: it is not part of the
-        // message, and a red timestamp on an error line reads as the time itself
-        // being the problem.
-        // Monospace, the way a terminal is: columns in tabular output line up,
-        // and a glyph is six vertices rather than the bitmap font's hundred —
-        // a full scrollback used to overrun the overlay's vertex cap.
-        p.num(pad, y + stamp_drop, scale * 0.8, [0.35, 0.40, 0.50, 1.0], &entry.stamp());
-        p.num(pad + stamp_column, y, scale, color, &entry.text);
-        y -= line_h;
-    }
-
-    if c.scroll > 0 {
-        // Scrolled up, so what is on screen is not the newest thing. Said out
-        // loud: a console silently showing history is a console that looks like
-        // it stopped responding.
-        p.text_right(
-            width - pad,
-            input_y,
-            scale * 0.85,
-            AMBER,
-            &format!("SCROLLED BACK {}", c.scroll),
-        );
-    }
+    // ---- the key hints ---------------------------------------------------------
+    let hint = if c.suggestions.is_empty() {
+        "ENTER RUN   /   UP DOWN HISTORY   /   PGUP PGDN SCROLL   /   ^F FILTER   /   F1-F8 ACTIONS   /   ESC CLOSE"
+    } else {
+        "TAB COMPLETE   /   UP DOWN CHOOSE   /   ENTER RUN   /   ESC CLOSE"
+    };
+    p.text(left, panel.h - pad - line_h * 0.8 + scale, scale * 0.75, theme::FAINT, hint);
 }
 
 /// A room id, short enough to sit in a header.
@@ -4313,7 +4495,7 @@ impl<'a> Painter<'a> {
 
     /// A thick line between two points — the only thing here that is not axis
     /// aligned, and it exists for the hitmarker's X.
-    fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]) {
+    pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]) {
         let (dx, dy) = (x1 - x0, y1 - y0);
         let len = (dx * dx + dy * dy).sqrt();
         if len <= 0.0 {
@@ -4439,7 +4621,7 @@ impl<'a> Painter<'a> {
     /// dim skirt half a pixel proud of the shape approximates the ramp. It is
     /// not real anti-aliasing and does not need to be; it needs the edge to stop
     /// being a step.
-    fn soft_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+    pub fn soft_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
         if w <= 0.0 || h <= 0.0 || color[3] <= 0.0 {
             return;
         }
@@ -4457,7 +4639,7 @@ impl<'a> Painter<'a> {
     /// than as a fraction of each, so the sight stays circular in a window of any
     /// shape instead of stretching into an ellipse — which would misreport where
     /// the edge of the scope's view actually is.
-    fn ring(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, color: [f32; 4]) {
+    pub fn ring(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, color: [f32; 4]) {
         const SEGMENTS: usize = 72;
         for i in 0..SEGMENTS {
             let a0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
@@ -4489,7 +4671,7 @@ impl<'a> Painter<'a> {
     /// Segments scale with the sweep so a 5% arc is not drawn with 72 of them,
     /// and there is always at least one — a reload that has just started should
     /// show a sliver, not nothing.
-    fn arc(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, frac: f32, color: [f32; 4]) {
+    pub fn arc(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, frac: f32, color: [f32; 4]) {
         let frac = frac.clamp(0.0, 1.0);
         if frac <= 0.0 || color[3] <= 0.0 {
             return;
@@ -4526,7 +4708,7 @@ impl<'a> Painter<'a> {
     /// and twelve segments is already more than the screen can show. Reusing
     /// `ring(.., 0.0, r, ..)` for both would spend 432 vertices per blip to draw
     /// a dot.
-    fn disc(&mut self, cx: f32, cy: f32, r: f32, segments: usize, color: [f32; 4]) {
+    pub fn disc(&mut self, cx: f32, cy: f32, r: f32, segments: usize, color: [f32; 4]) {
         let segments = segments.max(3);
         for i in 0..segments {
             let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
@@ -4547,7 +4729,7 @@ impl<'a> Painter<'a> {
     /// One triangle, in pixels. The only free-form primitive here, and it exists
     /// for the radar's own arrow — the one shape on this HUD that is neither
     /// axis-aligned nor a segment.
-    fn tri(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: [f32; 4]) {
+    pub fn tri(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: [f32; 4]) {
         for (x, y) in [a, b, c] {
             self.out.push(OverlayVertex::solid(self.ndc(x, y), color));
         }
@@ -6860,8 +7042,36 @@ mod tests {
             with.suggestions[0].1.y < without.suggestions[0].1.y,
             "the detail line did not push the completions up"
         );
-        // Distinct rectangles, or the second suggestion is unreachable.
-        assert!(without.suggestions[0].1.x < without.suggestions[1].1.x);
+        // One row each, stacked, or the second suggestion is unreachable.
+        let (a, b) = (without.suggestions[0].1, without.suggestions[1].1);
+        assert!(a.y + a.h <= b.y, "two completion rows overlap");
+        // And the whole list stays between the scrollback's top and the input.
+        let list = with.list.expect("a list with suggestions in it");
+        assert!(list.y >= with.well.y && list.y + list.h <= with.input.y);
+    }
+
+    #[test]
+    fn a_long_console_line_wraps_by_column_and_a_blank_one_still_takes_a_row() {
+        assert_eq!(wrap_columns("abcdefghijkl", 8), vec!["abcdefgh", "ijkl"]);
+        assert_eq!(wrap_columns("", 8), vec![""]);
+        // By character: an accent is one column, and the cut never splits it.
+        let rows = wrap_columns("ééééééééé", 8);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].chars().count(), 8);
+    }
+
+    #[test]
+    fn the_console_s_parts_do_not_overlap_at_any_size() {
+        for (w, h) in [(1280.0, 720.0), (1920.0, 1080.0), (3840.0, 2160.0), (900.0, 600.0)] {
+            let hits = console_hits(&[], &[], false, w, h);
+            let (panel, well, input) = (hits.panel, hits.well, hits.input);
+            assert!(panel.x >= 0.0 && panel.x + panel.w <= w, "{w}x{h}");
+            assert!(panel.h <= h, "{w}x{h}");
+            assert!(well.y + well.h <= input.y, "{w}x{h}: the log runs into the input");
+            assert!(input.y + input.h <= panel.h, "{w}x{h}: the input left the panel");
+            assert!(well.x >= panel.x && well.x + well.w <= panel.x + panel.w, "{w}x{h}");
+            assert!(well.h > 0.0, "{w}x{h}: no room for any output");
+        }
     }
 
     #[test]
@@ -6903,6 +7113,7 @@ mod tests {
             scroll: 0,
             suggestions: &[],
             suggestion: 0,
+            hints: &[],
             detail: None,
             registry_loaded: true,
             filter: "ALL",

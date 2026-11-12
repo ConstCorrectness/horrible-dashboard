@@ -1,0 +1,17 @@
+# Cargo configuration for the one Rust crate in this repo, `apps/native-fps`.
+#
+# At the repo root rather than beside the crate on purpose: cargo finds config from
+# the directory it is *run* in, not from `--manifest-path`, and every caller here
+# (`scripts/build-hassault.mjs`, `.github/workflows/release.yml`) runs it from the
+# root. A copy under `apps/native-fps/` would apply to `cd apps/native-fps && cargo
+# build` and to nothing that ships.
+
+# Link the C runtime into the executable on Windows.
+#
+# The client is downloaded and double-clicked (`/download/hAssault.exe` on the game
+# server). By default an MSVC build imports VCRUNTIME140.dll, which is not part of
+# Windows: it arrives with the Visual C++ redistributable, usually as a side effect
+# of installing something else. On a machine without it the game does not start, and
+# the dialog names a DLL rather than anything a player can act on.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -24,7 +24,15 @@
 //! (`packages/core/src/modules/hassault/index.ts`) so they appear in the pane's
 //! Settings page too — a native-only key would be invisible to every other
 //! surface, which is exactly the split this file exists to avoid.
+//!
+//! **The one exception is a client with no node at all** — the downloaded
+//! executable playing straight on a game server. There is no bag to read, and a
+//! game that forgot its sensitivity on every launch would not be worth keeping.
+//! That client keeps the same keys in one JSON file under the user's config
+//! directory (`local_settings_path`, `SettingsWriter::to_file`). It is the same
+//! document a node would serve, so nothing above the store knows which it has.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
@@ -843,6 +851,71 @@ pub fn format_mode(mode: (u32, u32, u32)) -> String {
         format!("{}x{}@{}", mode.0, mode.1, mode.2)
     }
 }
+/// The callsign a client with no node plays under. Local only: a node takes the
+/// name from its account, so no pane has this key and none should.
+pub const KEY_CALLSIGN: &str = "hassault.standalone.callsign";
+/// The game server's sign-in token, for a client with no node. Local only,
+/// and never a password: it is what the server handed back after the player
+/// signed in with their provider in a browser. Empty when signed out.
+pub const KEY_TOKEN: &str = "hassault.standalone.token";
+
+/// Where a client with no node keeps its settings, or `None` when the platform
+/// names no per-user config directory (then nothing is saved, and it says so).
+///
+/// From the environment rather than a crate: it is one variable per platform,
+/// and the answer is only ever a directory to put one file in.
+pub fn local_settings_path() -> Option<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    let dir = if cfg!(windows) {
+        PathBuf::from(var("APPDATA")?)
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from(var("HOME")?).join("Library/Application Support")
+    } else {
+        match var("XDG_CONFIG_HOME") {
+            Some(dir) => PathBuf::from(dir),
+            None => PathBuf::from(var("HOME")?).join(".config"),
+        }
+    };
+    Some(dir.join("hAssault").join("settings.json"))
+}
+
+/// The local settings document: one flat object of `key -> value`, the same
+/// shape as the `values` a node serves.
+///
+/// A missing file is a first launch and an unreadable one is a file somebody
+/// edited by hand. Both are an empty bag — every default — rather than a client
+/// that will not start over a preference.
+pub fn read_local(path: &Path) -> serde_json::Value {
+    let empty = || serde_json::Value::Object(serde_json::Map::new());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return empty();
+    };
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(doc) if doc.is_object() => doc,
+        _ => {
+            eprintln!(
+                "hassault: warning — {} is not a settings document; using defaults",
+                path.display()
+            );
+            empty()
+        }
+    }
+}
+
+/// Write the bag beside itself and rename it into place, so a crash mid-write
+/// leaves the previous file rather than half of the new one.
+fn write_local(
+    path: &Path,
+    bag: &serde_json::Map<String, serde_json::Value>,
+) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let staged = path.with_extension("json.tmp");
+    std::fs::write(&staged, serde_json::to_vec_pretty(bag)?)?;
+    std::fs::rename(&staged, path)
+}
+
 /// A background writer, so no setting change ever costs a frame.
 ///
 /// One thread and a channel rather than a thread per write: a slider dragged
@@ -879,10 +952,61 @@ impl SettingsWriter {
         }
     }
 
+    /// A writer for a client with no node: the whole bag, in one local file.
+    ///
+    /// The thread holds the document and rewrites it whole on each change. A
+    /// slider dragged across its range queues a change per frame, so everything
+    /// already waiting is folded in before the write: one file write per burst,
+    /// not sixty.
+    pub fn to_file(path: PathBuf) -> SettingsWriter {
+        let (tx, rx) = mpsc::channel::<(String, serde_json::Value)>();
+        let handle = thread::Builder::new()
+            .name("settings-writer".into())
+            .spawn(move || {
+                let mut bag = match read_local(&path) {
+                    serde_json::Value::Object(bag) => bag,
+                    _ => serde_json::Map::new(),
+                };
+                while let Ok((key, value)) = rx.recv() {
+                    bag.insert(key, value);
+                    while let Ok((key, value)) = rx.try_recv() {
+                        bag.insert(key, value);
+                    }
+                    if let Err(e) = write_local(&path, &bag) {
+                        // As with the node: the value is live in this session,
+                        // and what is lost is it being live in the next one.
+                        eprintln!(
+                            "hassault: could not save settings to {}: {e}",
+                            path.display()
+                        );
+                    }
+                }
+            })
+            .ok();
+        SettingsWriter {
+            tx: Some(tx),
+            handle,
+        }
+    }
+
     /// A writer that goes nowhere, for tests and for `--check`.
     pub fn disabled() -> SettingsWriter {
         SettingsWriter {
             tx: None,
+            handle: None,
+        }
+    }
+
+    /// Another handle on the **same** writer thread.
+    ///
+    /// For a match started from the front end: the menu and the match both save
+    /// settings, and the file writer holds the whole document in its thread — a
+    /// second thread with a second copy would write back whatever the first had
+    /// changed. The share does not own the thread: its `finish` only lets go,
+    /// and the thread ends when the last handle has.
+    pub fn share(&self) -> SettingsWriter {
+        SettingsWriter {
+            tx: self.tx.clone(),
             handle: None,
         }
     }
@@ -913,6 +1037,53 @@ impl SettingsWriter {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A path of this test's own, under the system temp directory.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("hassault-settings-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("nested").join("settings.json")
+    }
+
+    #[test]
+    fn a_local_bag_survives_the_process_that_wrote_it() {
+        // The whole of what a client with no node needs from the store: what one
+        // run saves, the next one reads, including the directory not existing yet.
+        let path = scratch("roundtrip");
+        let mut writer = SettingsWriter::to_file(path.clone());
+        writer.save(KEY_SENSITIVITY, json!(2.5));
+        writer.save(KEY_CALLSIGN, json!("Operative-417"));
+        writer.save(KEY_SENSITIVITY, json!(0.75));
+        writer.finish();
+
+        let bag = read_local(&path);
+        assert_eq!(bag[KEY_SENSITIVITY], json!(0.75), "the last write wins");
+        assert_eq!(bag[KEY_CALLSIGN], json!("Operative-417"));
+        assert_eq!(Settings::from_values(&bag).sensitivity, 0.75);
+
+        // A second writer starts from the file rather than from nothing, so one
+        // key saved does not cost every other.
+        let mut again = SettingsWriter::to_file(path.clone());
+        again.save(KEY_FULLSCREEN, json!(false));
+        again.finish();
+        let bag = read_local(&path);
+        assert_eq!(bag[KEY_FULLSCREEN], json!(false));
+        assert_eq!(bag[KEY_CALLSIGN], json!("Operative-417"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn a_missing_or_mangled_local_bag_is_every_default() {
+        let path = scratch("mangled");
+        assert_eq!(read_local(&path), json!({}), "a first launch has no file");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for garbage in ["", "{ not json", "[1, 2, 3]", "\"a string\""] {
+            std::fs::write(&path, garbage).unwrap();
+            assert_eq!(read_local(&path), json!({}), "{garbage:?}");
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
 
     #[test]
     fn an_empty_bag_is_every_default() {

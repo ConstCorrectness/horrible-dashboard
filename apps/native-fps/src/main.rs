@@ -25,8 +25,16 @@
 //!
 //! Identity needs nothing here: the node takes the player's name from its own
 //! signed-in account and ignores anything a client sends.
+//!
+//! **Standalone — no node at all.** Started with no `--server` (which is what a
+//! double-click is), the client plays straight on the public game server: the
+//! same HTTP reads, answered by `backend/games_server/hassault_content.py`, and
+//! the same wire on that server's `/hassault-ws` as a guest. That is what makes
+//! the executable something a person can download and run. The launcher always
+//! passes `--server`, so nothing it starts is affected.
 
 mod app;
+mod shell;
 
 use std::time::{Duration, Instant};
 
@@ -107,8 +115,25 @@ impl Mode {
     }
 }
 
+/// The game server a client with no node plays on. Also where the executable
+/// is downloaded from, so the address a player got it at is the one it dials.
+const PUBLIC_GAME_SERVER: &str = "https://horrible-games.fly.dev";
+
 struct Args {
+    /// A node's origin, or a game server's when `standalone`.
     server: String,
+    /// **No node.** `server` is a game server and everything comes from it: the
+    /// map and the numbers over HTTP, the match on its `/hassault-ws` as a
+    /// guest. True unless `--server` names a node — so it is what no arguments
+    /// at all means, which is the only thing a double-click can say.
+    standalone: bool,
+    /// Whether `--name` was passed. Standalone, the name is the guest callsign
+    /// people actually see, so a default nobody chose is replaced by a stored one.
+    name_given: bool,
+    /// Started with no arguments whatsoever: almost certainly from Explorer,
+    /// where a failure's one line of explanation dies with the console window
+    /// unless something holds it open.
+    bare: bool,
     map: String,
     mode: Mode,
     room: String,
@@ -154,15 +179,29 @@ struct Args {
     /// `--bench=<map>`: fly that map's benchmark path in Train, print one
     /// `BENCH {json}` line on stdout and exit. See `bench.rs`.
     bench: Option<String>,
+    /// Something on the command line said **where to go**: a map, a room, a
+    /// mode, a check. A launch with a destination goes straight there, as it
+    /// always has — the dashboard is the menu for a client it launches.
+    destination: bool,
+    /// `--menu` / `--no-menu`, when one was passed.
+    menu_flag: Option<bool>,
+    /// Open into the front end (`shell.rs`) instead of a match: standalone
+    /// with nowhere to go, which is what a double-click is.
+    menu: bool,
 }
 
 impl Default for Args {
     fn default() -> Args {
         Args {
-            // The node on this machine. `HORRIBLE_DEV_BACKEND_PORT` moves it —
-            // Hyper-V reserves ranges on Windows that can swallow 8000 — so the
-            // launcher passes `--server` rather than anyone guessing.
-            server: "http://127.0.0.1:8000".into(),
+            // With nothing said, the public game server and no node. It used to
+            // be `http://127.0.0.1:8000`, which was never right by default
+            // either: `HORRIBLE_DEV_BACKEND_PORT` moves the node (Hyper-V
+            // reserves ranges on Windows that can swallow 8000), so the launcher
+            // has always passed `--server` rather than anyone guessing.
+            server: PUBLIC_GAME_SERVER.into(),
+            standalone: true,
+            name_given: false,
+            bare: false,
             map: "hd_dust2".into(),
             // Joining is the least surprising default and the one the old
             // argument-free launch effectively did.
@@ -187,18 +226,39 @@ impl Default for Args {
             windowed: false,
             overrides: Vec::new(),
             bench: None,
+            destination: false,
+            menu_flag: None,
+            menu: false,
         }
     }
 }
 
 fn parse_args() -> Args {
-    let mut args = Args::default();
-    for arg in std::env::args().skip(1) {
+    parse_from(std::env::args().skip(1))
+}
+
+fn parse_from(argv: impl Iterator<Item = String>) -> Args {
+    let mut args = Args {
+        bare: true,
+        ..Args::default()
+    };
+    for arg in argv {
+        args.bare = false;
         if let Some(v) = arg.strip_prefix("--server=") {
+            // A node. The last of `--server` / `--game-server` wins, like every
+            // other repeated flag here.
             args.server = v.to_string();
+            args.standalone = false;
+        } else if let Some(v) = arg.strip_prefix("--game-server=") {
+            // A game server other than the public one — a local one on :9200,
+            // which is how standalone is tested without touching production.
+            args.server = v.to_string();
+            args.standalone = true;
         } else if let Some(v) = arg.strip_prefix("--map=") {
+            args.destination = true;
             args.map = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--mode=") {
+            args.destination = true;
             match Mode::parse(v) {
                 Some(m) => args.mode = m,
                 // Refused rather than defaulted: a typo'd mode silently becoming
@@ -209,21 +269,27 @@ fn parse_args() -> Args {
                 }
             }
         } else if let Some(v) = arg.strip_prefix("--bots=") {
+            args.destination = true;
             if let Ok(n) = v.parse::<u32>() {
                 args.bots = n;
             }
         } else if let Some(v) = arg.strip_prefix("--bot-skill=") {
             args.bot_skill = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--drill=") {
+            args.destination = true;
             args.drill = Some(v.to_string());
         } else if let Some(v) = arg.strip_prefix("--game=") {
+            args.destination = true;
             args.game = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--room=") {
+            args.destination = true;
             args.room = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--host=") {
+            args.destination = true;
             args.host = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--name=") {
             args.name = v.to_string();
+            args.name_given = true;
         } else if let Some(v) = arg.strip_prefix("--sensitivity=") {
             if let Ok(n) = v.parse::<f32>() {
                 // A zero or negative multiplier is a view that cannot turn, which
@@ -237,10 +303,12 @@ fn parse_args() -> Args {
             // There is no frame cap to set — the present mode decides — and raw
             // input is not an option, it is how the mouse is read.
         } else if let Some(v) = arg.strip_prefix("--bench=") {
+            args.destination = true;
             args.bench = Some(v.to_string());
         } else if arg == "--new" {
             args.blank = true;
         } else if let Some(v) = arg.strip_prefix("--spawn=") {
+            args.destination = true;
             if let Ok(n) = v.parse::<usize>() {
                 args.spawn = Some(n);
             }
@@ -267,13 +335,28 @@ fn parse_args() -> Args {
             std::process::exit(0);
         } else if arg == "--headless" {
             args.headless = true;
+            args.destination = true;
         } else if arg == "--check" {
             args.check_only = true;
+            args.destination = true;
+        } else if arg == "--menu" {
+            args.menu_flag = Some(true);
+        } else if arg == "--no-menu" {
+            args.menu_flag = Some(false);
         } else if arg == "--help" || arg == "-h" {
             eprintln!(
                 "hassault (native)\n\
                  \n\
-                   --server=<origin>   the node's HTTP origin (default http://127.0.0.1:8000)\n\
+                 With no --server this plays online, on the public game server,\n\
+                 as a guest. Settings are then kept in a local file. With nothing\n\
+                 saying where to go (no --map, --room or --mode) it opens the\n\
+                 main menu.\n\
+                 \n\
+                   --menu              open the main menu even with a destination\n\
+                   --no-menu           go straight into a match, as --map=hd_dust2\n\
+                   --server=<origin>   a dashboard node's HTTP origin; the launcher passes it\n\
+                   --game-server=<origin>  a game server to play on with no node\n\
+                   \x20                   (default https://horrible-games.fly.dev)\n\
                    --map=<name>        map to load and join\n\
                    --mode=<mode>       train (no server), host, join (default), or\n\
                    \x20                   ranked (the game server adjudicates)\n\
@@ -283,7 +366,8 @@ fn parse_args() -> Args {
                    --game=<mode>       dm, tdm, ctf or defuse (ignored with --room)\n\
                    --room=<id>         join a specific room rather than any on the map\n\
                    --host=<node id>    that room is on a friend's node\n\
-                   --name=<label>      wire label only; the node uses your account's username\n\
+                   --name=<label>      your callsign with no node; a node uses your\n\
+                   \x20                   account's username and ignores it\n\
                    --sensitivity=<n>   turn per unit of raw mouse movement (default 1)\n\
                    --new               --mode=edit: start from solid rock\n\
                    --headless          no window: connect, join, and log\n\
@@ -301,6 +385,10 @@ fn parse_args() -> Args {
             std::process::exit(0);
         }
     }
+    // A node is somebody's dashboard, and the dashboard is its menu: only a
+    // client with no node opens its own. `--menu` and `--no-menu` say so
+    // outright; otherwise a destination on the command line means go there.
+    args.menu = args.standalone && args.menu_flag.unwrap_or(!args.destination);
     args
 }
 
@@ -326,12 +414,115 @@ fn main() {
         // failure is "the node is not running", and it deserves to say so rather
         // than surfacing as a window that never appears.
         eprintln!("hassault: {e}");
+        if args.bare {
+            hold_console_open();
+        }
         std::process::exit(1);
     }
 }
 
+/// Keep the console up until somebody has read it.
+///
+/// Double-clicked, the executable gets a console of its own that closes the
+/// instant the process exits — so "could not reach the server" would flash for a
+/// frame and be gone, and the game would simply seem not to start. Only when
+/// started with no arguments: anything launched with flags has a terminal or a
+/// launcher reading its stderr, and must exit rather than wait on a key.
+fn hold_console_open() {
+    eprintln!("\nPress Enter to close.");
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+}
+
+/// A callsign for a guest who has not chosen one: `Operative-417`, the browser
+/// client's own default (`useGuestSession.ts`), so the two read alike in a room.
+/// The clock is the only entropy here and all this needs — it is a label, and
+/// two players drawing the same three digits is not a collision anything minds.
+fn fresh_callsign() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("Operative-{}", 100 + nanos % 900)
+}
+
+/// The name a guest plays under: `--name` if given, else the one stored from a
+/// previous launch, else a fresh one. `true` when it is new and wants saving.
+///
+/// Cut to 16 characters because the game server cuts it there too
+/// (`hassault_ws`), and a name that is one thing here and another in the
+/// scoreboard is a small lie on every line of the kill feed.
+fn guest_callsign(given: Option<&str>, stored: &serde_json::Value) -> (String, bool) {
+    let clean = |s: &str| s.trim().chars().take(16).collect::<String>();
+    if let Some(name) = given.map(clean).filter(|n| !n.is_empty()) {
+        return (name, false);
+    }
+    let kept = stored
+        .get(hassault_native::settings::KEY_CALLSIGN)
+        .and_then(|v| v.as_str())
+        .map(clean)
+        .filter(|n| !n.is_empty());
+    match kept {
+        Some(name) => (name, false),
+        None => (fresh_callsign(), true),
+    }
+}
+
+/// Lay this run's command-line choices over the stored settings.
+///
+/// Nothing here is written back, so a terminal experiment does not become the
+/// menu's value. Shared by a direct launch and the front end (`shell.rs`).
+fn apply_run_flags(settings: &mut Settings, args: &Args) {
+    // An explicit `--sensitivity` outranks the stored one: it is the launcher
+    // passing what the pane's own slider says, and the two are the same setting.
+    if let Some(sensitivity) = args.sensitivity {
+        settings.sensitivity = sensitivity;
+    }
+    // The GPU flags outrank the saved choice for this run only.
+    if let Some(name) = args.adapter.as_deref() {
+        settings.gpu.adapter = hassault_native::gpu::adapters()
+            .iter()
+            .position(|a| a.name.eq_ignore_ascii_case(name))
+            .map(|i| i + 1)
+            .unwrap_or_else(|| {
+                eprintln!("hassault: no GPU named {name:?}; see --list-adapters");
+                0
+            });
+    }
+    if let Some(api) = args.backend.as_deref() {
+        settings.gpu.backend = hassault_native::gpu::BackendPref::parse(api);
+    }
+    if args.low_power {
+        settings.gpu.low_power = true;
+    }
+    if args.windowed {
+        settings.video.fullscreen = false;
+    }
+}
+
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    if args.menu {
+        // Nowhere to go: open the window first and let the player say.
+        return shell::run(args);
+    }
     let node = NodeApi::new(&args.server);
+    if args.standalone {
+        eprintln!(
+            "hassault: playing on {} with no node (pass --server=<origin> to use one)",
+            args.server
+        );
+    }
+    // With no node there is no settings bag to read, so the same document is
+    // kept in a file. See `settings.rs`.
+    let local_settings = if args.standalone {
+        let path = hassault_native::settings::local_settings_path();
+        if path.is_none() {
+            eprintln!("hassault: warning — no config directory; settings will not be saved");
+        }
+        path
+    } else {
+        None
+    };
 
     // Edit mode opens a draft first, and then loads it **as a map**. That is the
     // whole of the special-casing: a draft is served at `draft:<id>` through the
@@ -340,7 +531,19 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // knows nothing about the designer.
     let mut draft: Option<hassault_native::api::DraftInfo> = None;
     let map_name = if args.mode == Mode::Edit {
-        let opened = node.create_draft(if args.blank { "" } else { &args.map })?;
+        let opened = node
+            .create_draft(if args.blank { "" } else { &args.map })
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                if e.is_missing() {
+                    // A draft is a document on a server that keeps them: a
+                    // dashboard node always does, a game server only when
+                    // asked to. The bare 404 reads as the server being broken.
+                    "this server keeps no map drafts: run a game server with                      HASSAULT_ENABLE_DRAFTS=1 (--game-server=<origin>), or name                      a dashboard node (--server=<origin>)"
+                        .into()
+                } else {
+                    e.into()
+                }
+            })?;
         eprintln!(
             "hassault: editing {} as {}",
             if args.blank { "a new map" } else { &args.map },
@@ -401,7 +604,24 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // error state — so this warns and carries on.
     let mut stored_loadout: Option<serde_json::Value> = None;
     let mut stored_agents = serde_json::Value::Null;
-    let (mut settings, controls) = match node.settings().map(|mut values| {
+    let stored = if args.standalone {
+        Ok(local_settings
+            .as_deref()
+            .map(hassault_native::settings::read_local)
+            .unwrap_or_else(|| serde_json::json!({})))
+    } else {
+        node.settings()
+    };
+    // The guest callsign rides the same document, read before the overrides
+    // are laid over it below.
+    let stored_callsign = match &stored {
+        Ok(values) if args.standalone => Some(guest_callsign(
+            args.name_given.then_some(args.name.as_str()),
+            values,
+        )),
+        _ => None,
+    };
+    let (mut settings, controls) = match stored.map(|mut values| {
         if let Some(bag) = values.as_object_mut() {
             for (key, value) in &args.overrides {
                 bag.insert(key.clone(), value.clone());
@@ -433,32 +653,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             (Settings::default(), Controls::default())
         }
     };
-    // An explicit `--sensitivity` outranks the stored one: it is the launcher
-    // passing what the pane's own slider says, and the two are the same setting.
-    if let Some(sensitivity) = args.sensitivity {
-        settings.sensitivity = sensitivity;
-    }
-    // The GPU flags outrank the saved choice for this run only; nothing here is
-    // written back, so a terminal experiment does not become the menu's value.
-    if let Some(name) = args.adapter.as_deref() {
-        settings.gpu.adapter = hassault_native::gpu::adapters()
-            .iter()
-            .position(|a| a.name.eq_ignore_ascii_case(name))
-            .map(|i| i + 1)
-            .unwrap_or_else(|| {
-                eprintln!("hassault: no GPU named {name:?}; see --list-adapters");
-                0
-            });
-    }
-    if let Some(api) = args.backend.as_deref() {
-        settings.gpu.backend = hassault_native::gpu::BackendPref::parse(api);
-    }
-    if args.low_power {
-        settings.gpu.low_power = true;
-    }
-    if args.windowed {
-        settings.video.fullscreen = false;
-    }
+    apply_run_flags(&mut settings, args);
     if args.bench.is_some() {
         // The tier's whole preset, not just its label: `quality` is a name,
         // and the rows it stands for (MSAA, shadows, lights) are stored one by
@@ -498,7 +693,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
         settings.video.fullscreen = false;
     }
-    let writer = SettingsWriter::new(&args.server);
+    let writer = match (&local_settings, args.standalone) {
+        (Some(path), _) => SettingsWriter::to_file(path.clone()),
+        (None, true) => SettingsWriter::disabled(),
+        (None, false) => SettingsWriter::new(&args.server),
+    };
 
     let weapons = match node.weapons() {
         Ok(weapons) if !weapons.is_empty() => {
@@ -738,7 +937,22 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         return Err("a match on a friend's node needs --room".into());
     }
 
-    let mut socket = MatchSocket::connect(&node.ws_url())?;
+    let ws_url = match &stored_callsign {
+        Some((callsign, fresh)) => {
+            if *fresh {
+                // Kept, so the next launch is the same player rather than a
+                // stranger with a new number.
+                writer.save(
+                    hassault_native::settings::KEY_CALLSIGN,
+                    serde_json::Value::String(callsign.clone()),
+                );
+            }
+            eprintln!("hassault: guest callsign {callsign} (change it with --name=<label>)");
+            node.guest_ws_url(callsign)
+        }
+        None => node.ws_url(),
+    };
+    let mut socket = MatchSocket::connect(&ws_url)?;
     eprintln!("hassault: joining…");
     // Hosting asks for no particular room, exactly as the browser's Host does:
     // the server opens one on this map (or seats us in one already running there).
@@ -932,5 +1146,97 @@ mod tests {
         assert_eq!(Mode::parse("Train"), None);
         assert_eq!(Mode::parse("practice"), None);
         assert_eq!(Mode::parse(""), None);
+    }
+
+    fn parse(argv: &[&str]) -> Args {
+        parse_from(argv.iter().map(|a| a.to_string()))
+    }
+
+    #[test]
+    fn no_arguments_is_the_public_game_server_and_no_node() {
+        // What a double-click says, which is nothing. It has to mean "play".
+        let args = parse(&[]);
+        assert!(args.standalone);
+        assert!(args.bare);
+        assert_eq!(args.server, PUBLIC_GAME_SERVER);
+        assert_eq!(args.mode, Mode::Join);
+    }
+
+    #[test]
+    fn a_double_click_opens_the_menu_and_a_destination_skips_it() {
+        let parse = |argv: &[&str]| parse_from(argv.iter().map(|s| s.to_string()));
+        // No arguments: the public server, no node, and nowhere to go.
+        assert!(parse(&[]).menu);
+        // Flags that are about the session, not the destination, keep it.
+        assert!(
+            parse(&[
+                "--windowed",
+                "--name=Sable",
+                "--game-server=http://127.0.0.1:9200"
+            ])
+            .menu
+        );
+        // Anything that names a destination goes there, as it always did.
+        for flag in [
+            "--map=hd_aim",
+            "--mode=train",
+            "--room=abc",
+            "--headless",
+            "--check",
+            "--bench=hd_aim",
+        ] {
+            assert!(!parse(&[flag]).menu, "{flag} should skip the menu");
+        }
+        // A node is never given a menu: the dashboard is one.
+        assert!(!parse(&["--server=http://127.0.0.1:8000"]).menu);
+        assert!(!parse(&["--server=http://127.0.0.1:8000", "--menu"]).menu);
+        // And both can be said outright.
+        assert!(parse(&["--map=hd_aim", "--menu"]).menu);
+        assert!(!parse(&["--no-menu"]).menu);
+    }
+
+    #[test]
+    fn the_launcher_s_server_flag_still_means_a_node() {
+        // The launcher always passes `--server`. If that ever stopped meaning a
+        // node, every pane launch would dial `/hassault-ws` on a dashboard.
+        let args = parse(&["--server=http://127.0.0.1:8100", "--map=hd_pit"]);
+        assert!(!args.standalone);
+        assert!(!args.bare);
+        assert_eq!(args.server, "http://127.0.0.1:8100");
+    }
+
+    #[test]
+    fn a_game_server_can_be_named_and_other_flags_keep_it_standalone() {
+        let args = parse(&["--game-server=http://127.0.0.1:9200", "--windowed"]);
+        assert!(args.standalone);
+        assert_eq!(args.server, "http://127.0.0.1:9200");
+        // A flag that is not about the server does not move it off the default.
+        let args = parse(&["--map=hd_mirage"]);
+        assert!(args.standalone && !args.bare);
+        assert_eq!(args.server, PUBLIC_GAME_SERVER);
+    }
+
+    #[test]
+    fn a_guest_keeps_one_callsign_until_told_otherwise() {
+        use serde_json::json;
+        let key = hassault_native::settings::KEY_CALLSIGN;
+
+        // Nothing stored: a fresh one, flagged so it gets saved.
+        let (name, fresh) = guest_callsign(None, &json!({}));
+        assert!(fresh);
+        assert!(name.starts_with("Operative-") && name.len() == "Operative-000".len());
+
+        // Stored: the same player as last time, and nothing to write.
+        let stored = json!({ key: "  Ghost  " });
+        assert_eq!(guest_callsign(None, &stored), ("Ghost".to_string(), false));
+
+        // `--name` outranks it for this run, cut where the server cuts it.
+        assert_eq!(
+            guest_callsign(Some("a-very-long-callsign-indeed"), &stored),
+            ("a-very-long-call".to_string(), false)
+        );
+        // A blank `--name` is not a name; neither is a stored non-string.
+        assert_eq!(guest_callsign(Some("   "), &stored).0, "Ghost");
+        assert!(guest_callsign(None, &json!({ key: 7 })).1);
     }
 }

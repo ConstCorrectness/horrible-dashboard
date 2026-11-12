@@ -8,7 +8,13 @@ edition = "2021"
 half = "2"
 # Blocking WebSocket. Blocking on purpose: one reader thread owns the socket and
 # the game loop drains a channel, which needs no async runtime at all.
-tungstenite = { version = "0.21", features = ["handshake"] }
+#
+# TLS (`rustls-tls-webpki-roots`) is for the one case with no node in between: the
+# downloaded client playing straight on the public game server, which is only
+# reachable as `wss://`. rustls rather than `native-tls` because rustls is already
+# in the tree through ureq, and native-tls would make the Linux build need OpenSSL
+# headers for a socket that is plain TCP every other time.
+tungstenite = { version = "0.21", features = ["handshake", "rustls-tls-webpki-roots"] }
 # Blocking HTTP for the three reads that stand a world up (map info, cubes,
 # weapons). ureq rather than reqwest because reqwest would pull tokio in for
 # three requests made once at startup.

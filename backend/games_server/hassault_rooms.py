@@ -176,6 +176,22 @@ def _declared_modes(path: str, _mtime_ns: int) -> tuple[str, ...]:
     return tuple(out)
 
 
+#: How long `find_match` holds a seat for a client that is still loading the
+#: map. Well under `EMPTY_GRACE`, so a room opened for a search outlives the
+#: search.
+MATCH_HOLD_S = 30.0
+
+#: Rooms `find_match` may have open that nobody has reached yet. The route is
+#: public and unauthenticated; without this, asking for a match on every map in
+#: turn would fill `max_rooms` with empty rooms for a minute at a time.
+MAX_UNCLAIMED_ROOMS = 4
+
+
+def quick_map() -> str:
+    """The map a search with no map opens on (`HASSAULT_QUICK_MAP`)."""
+    return os.environ.get("HASSAULT_QUICK_MAP", "").strip() or "hd_dust2"
+
+
 class HassaultReferee:
     """The rooms this server is running, and the results it stands behind."""
 
@@ -192,6 +208,11 @@ class HassaultReferee:
         #: Room id → the account that opened it: whose console may cheat there
         #: (`hassault_console.py`). Unlike the host, this never passes on.
         self.creators: dict[str, str] = {}
+        #: Room id → when each seat `find_match` promised there lapses.
+        self._held: dict[str, list[float]] = {}
+        #: Rooms `find_match` opened that nobody has joined yet. The first seat
+        #: to arrive is the creator, as if its own join had opened the room.
+        self._unclaimed: set[str] = set()
         #: Seats waiting for a duel, oldest first: `(conn, since, rating)`.
         self._duel_queue: list[tuple[SeatConn, float, float]] = []
         self._duel_sweeper: asyncio.Task[None] | None = None
@@ -246,6 +267,156 @@ class HassaultReferee:
                 }
             )
         return result
+
+    def room_detail(self, room_id: str) -> dict[str, Any] | None:
+        """One room as the list shows it, plus who is in it.
+
+        The roster is `MatchRoom.roster_rows` — what every seated client is
+        already sent — so this tells an onlooker nothing a player in the room
+        could not see on the scoreboard. No positions, no health, no accounts.
+        """
+        room = self.server.get(room_id)
+        if room is None:
+            return None
+        humans = room.humans
+        return {
+            "id": room.id,
+            "map": room.map_name,
+            "mode": room.mode.id if room.mode else "dm",
+            "playerCount": len(room.players),
+            "humans": len(humans),
+            "maxPlayers": MAX_PLAYERS,
+            "host": self.host_of(room),
+            "roster": room.roster_rows(),
+        }
+
+    # -- matchmaking --------------------------------------------------------
+
+    def _holds(self, room_id: str, now: float | None = None) -> int:
+        """Seats promised in a room and not yet taken or lapsed."""
+        now = time.monotonic() if now is None else now
+        live = [t for t in self._held.get(room_id, ()) if t > now]
+        if live:
+            self._held[room_id] = live
+        else:
+            self._held.pop(room_id, None)
+        return len(live)
+
+    def _forget_closed(self) -> None:
+        rooms = self.server.rooms
+        self._unclaimed &= set(rooms)
+        for stale in [r for r in self._held if r not in rooms]:
+            del self._held[stale]
+
+    def find_match(
+        self,
+        map_name: str | None = None,
+        mode: str | None = None,
+        maps: list[str] | None = None,
+        seats: int = 1,
+    ) -> dict[str, Any]:
+        """Where a player looking for a match should go: one rule, here.
+
+        Every client — the browser's Quick Play, the native menu's Find Match —
+        asks this instead of reading the room list and choosing for itself. Two
+        clients choosing separately agree only while they run the same rule on
+        the same list, and they ran neither: the browser opened a room on its
+        own default map, the native client on a random one, so two people
+        searching an empty server at the same moment each got a room to
+        themselves.
+
+        The answer is the fullest room with space that fits the request, where
+        *full* counts the humans seated and the seats already promised to
+        people still loading — so the second search lands in the room the first
+        one opened a second ago, which nobody has reached yet. With no such
+        room, one is opened **now**, before anyone joins it, for the same
+        reason. The caller then joins by room id like any other join.
+
+        `map_name` and `mode` narrow it; either may be omitted. `maps` is the
+        same narrowing with several maps the player would take — the tiles
+        toggled on before pressing play — and any of them satisfies it. A room
+        with nobody in it or coming is skipped: it is counting down to
+        closing, and being seated alone in a room someone else left is not a
+        match.
+
+        `seats` is how many are coming: a lobby searches once for all of its
+        members, and the room it is given has that many seats promised.
+        """
+        now = time.monotonic()
+        self._forget_closed()
+        mode = mode or None
+        seats = max(1, min(int(seats), MAX_PLAYERS))
+        wanted = [m for m in ([map_name] if map_name else []) + list(maps or []) if m]
+        wanted = list(dict.fromkeys(wanted))  # in the order asked, once each
+        for name in wanted:
+            if not self.playable(name):
+                raise ValueError(f"{name!r} is not a bundled map")
+        if mode and mode not in MENU_MODES:
+            raise ValueError(f"{mode!r} is not a game a search can ask for")
+        if mode and wanted:
+            offering = [m for m in wanted if mode in self.map_modes(m)]
+            if not offering:
+                raise ValueError(
+                    f"{', '.join(wanted)} "
+                    f"{'does' if len(wanted) == 1 else 'do'} not offer {mode}"
+                )
+            wanted = offering
+
+        best: Any = None
+        best_rank = (0, 0)
+        for room in self.server.rooms.values():
+            if room.mode.id not in MENU_MODES:
+                continue  # a duel is paired, not found
+            if wanted and room.map_name not in wanted:
+                continue
+            if mode and room.mode.id != mode:
+                continue
+            held = self._holds(room.id, now)
+            if len(room.players) + held + seats > MAX_PLAYERS:
+                continue
+            rank = (len(room.humans) + held, len(room.players))
+            # Strictly greater: ties go to the room listed first, so the answer
+            # does not flicker between two equally full rooms.
+            if rank[0] > 0 and rank > best_rank:
+                best, best_rank = room, rank
+        opened = best is None
+        if best is None:
+            if len(self.server.rooms) >= max_rooms():
+                raise ValueError(
+                    "this server is full; try a room that is already running"
+                )
+            if len(self._unclaimed) >= MAX_UNCLAIMED_ROOMS:
+                raise ValueError(
+                    "too many rooms are opening at once; try again in a moment"
+                )
+            # The first of the maps asked for: the order they were picked in
+            # is the nearest thing to a preference the request carries.
+            target = wanted[0] if wanted else self._map_for(mode)
+            best = self.server.create(target, mode=mode)
+            self._unclaimed.add(best.id)
+        self._held.setdefault(best.id, []).extend([now + MATCH_HOLD_S] * seats)
+        return {
+            "id": best.id,
+            "map": best.map_name,
+            "mode": best.mode.id,
+            "playerCount": len(best.players),
+            "humans": len(best.humans),
+            "maxPlayers": MAX_PLAYERS,
+            "opened": opened,
+        }
+
+    def _map_for(self, mode: str | None) -> str:
+        """The map a search that named none opens on: the quick map if it can
+        host `mode`, else the first bundled map that can."""
+        first = quick_map()
+        if not self.playable(first):
+            first = next(iter(self.maps()), "hd_assault")
+        if mode is None or mode in self.map_modes(first):
+            return first
+        for name in self.maps():
+            if mode in self.map_modes(name):
+                return name
+        raise ValueError(f"no bundled map offers {mode}")
 
     # -- play ---------------------------------------------------------------
 
@@ -308,6 +479,17 @@ class HassaultReferee:
             # host the mode is a refusal with a reason, before anyone is seated.
             room_id = self.server.create(target_map, mode=mode).id
             self.creators[room_id] = conn.account_id
+        elif existing is not None:
+            # A seat `find_match` promised is taken by the join that follows
+            # it; which promise is not tracked, only how many are outstanding.
+            held = self._held.get(existing.id)
+            if held:
+                held.pop(0)
+            if existing.id in self._unclaimed:
+                # Opened for a search and reached first by this seat: theirs,
+                # exactly as if this join had opened it.
+                self._unclaimed.discard(existing.id)
+                self.creators[existing.id] = conn.account_id
         loadouts, look = self.account_look(conn)
         if isinstance(loadout, (dict, str)) and loadout:
             loadouts = weapons.loadouts_for(loadout)

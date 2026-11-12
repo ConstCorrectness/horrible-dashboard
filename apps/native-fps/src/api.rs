@@ -38,11 +38,126 @@ where
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
+/// A sign-in that has been started, and how to finish and ask about it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthStart {
+    /// Open `url`; the provider sends the browser back to the server.
+    Web { url: String, retrieval_code: String },
+    /// Go to `url` and type `user_code`.
+    Device {
+        url: String,
+        user_code: String,
+        device_code: String,
+        /// Seconds between asks, as the provider requires.
+        interval: u64,
+    },
+}
+
+impl AuthStart {
+    pub fn url(&self) -> &str {
+        match self {
+            AuthStart::Web { url, .. } | AuthStart::Device { url, .. } => url,
+        }
+    }
+
+    pub fn user_code(&self) -> Option<&str> {
+        match self {
+            AuthStart::Device { user_code, .. } => Some(user_code),
+            AuthStart::Web { .. } => None,
+        }
+    }
+
+    pub fn interval(&self) -> u64 {
+        match self {
+            AuthStart::Device { interval, .. } => *interval,
+            AuthStart::Web { .. } => 2,
+        }
+    }
+}
+
+/// An account on the game server.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct Account {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub display_name: String,
+    /// The unique username; absent until one is chosen.
+    #[serde(default)]
+    pub handle: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthPoll {
+    Pending,
+    Done { token: String, account: Account },
+    Failed(String),
+}
+
+/// One answer from a sign-in poll route: `{pending}`, `{token, account}` or
+/// `{error}`. A provider's "slow down" arrives as pending **with** an error,
+/// and is pending.
+pub fn parse_poll(v: &serde_json::Value) -> AuthPoll {
+    if let Some(token) = v["token"].as_str().filter(|t| !t.is_empty()) {
+        return AuthPoll::Done {
+            token: token.to_string(),
+            account: serde_json::from_value(v["account"].clone()).unwrap_or_default(),
+        };
+    }
+    if v["pending"].as_bool().unwrap_or(false) {
+        return AuthPoll::Pending;
+    }
+    match v["error"].as_str() {
+        Some(why) => AuthPoll::Failed(why.to_string()),
+        None => AuthPoll::Pending,
+    }
+}
+
+/// A 409's `detail`: why the server said no.
+fn refusal(res: ureq::Response) -> String {
+    res.into_json::<serde_json::Value>()
+        .ok()
+        .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "the server refused".to_string())
+}
+
+/// Entering a lobby: this member's token, and the lobby as they see it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct LobbyEntry {
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub lobby: crate::front::LobbyView,
+}
+
+/// The server's answer to a search: a room, and whether it was opened for it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct Matched {
+    #[serde(flatten)]
+    pub room: crate::front::RoomEntry,
+    /// Nobody was playing anything that fit, so this room is new — and the
+    /// first to reach it may tune it and field bots.
+    #[serde(default)]
+    pub opened: bool,
+    /// People in it, bots not counted.
+    #[serde(default)]
+    pub humans: u32,
+}
+
 #[derive(Debug)]
 pub enum ApiError {
     Http(String),
     Status(u16, String),
     Decode(String),
+    /// The server understood and said no, in its own words.
+    Refused(String),
+}
+
+impl ApiError {
+    /// The route does not exist on this server: an older build, not a failure.
+    pub fn is_missing(&self) -> bool {
+        matches!(self, ApiError::Status(404 | 405, _))
+    }
 }
 
 impl std::fmt::Display for ApiError {
@@ -51,6 +166,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Http(e) => write!(f, "could not reach the node: {e}"),
             ApiError::Status(code, path) => write!(f, "{path} answered {code}"),
             ApiError::Decode(e) => write!(f, "could not read the node's answer: {e}"),
+            ApiError::Refused(why) => write!(f, "{why}"),
         }
     }
 }
@@ -429,7 +545,9 @@ pub fn loadout_slots(
     stored: &serde_json::Value,
     side: &str,
 ) -> crate::protocol::LoadoutSlots {
-    let per_side = ["t", "ct"].iter().any(|s| stored.get(*s).is_some_and(|v| v.is_object()));
+    let per_side = ["t", "ct"]
+        .iter()
+        .any(|s| stored.get(*s).is_some_and(|v| v.is_object()));
     let choice = if per_side {
         stored.get(side).cloned().unwrap_or(serde_json::Value::Null)
     } else {
@@ -731,6 +849,9 @@ pub struct SkinDefinition {
 /// One item in the player's inventory.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SkinInstance {
+    /// This one item, as opposed to its design: what equip names.
+    #[serde(rename = "instanceId", default)]
+    pub instance_id: String,
     #[serde(rename = "skinId", default)]
     pub skin_id: String,
     #[serde(rename = "isEquipped", default)]
@@ -819,6 +940,9 @@ pub struct TextureRow {
 pub struct NodeApi {
     base: String,
     agent: ureq::Agent,
+    /// The game server's sign-in token, when there is one: sent as a bearer
+    /// on every request, which is what makes the account routes answer.
+    token: Option<String>,
 }
 
 impl NodeApi {
@@ -829,7 +953,210 @@ impl NodeApi {
                 .timeout_read(TIMEOUT)
                 .timeout_connect(TIMEOUT)
                 .build(),
+            token: None,
         }
+    }
+
+    /// The same client, signed in. `None` or empty leaves it a guest's.
+    pub fn with_token(mut self, token: Option<&str>) -> NodeApi {
+        self.token = token.filter(|t| !t.is_empty()).map(str::to_string);
+        self
+    }
+
+    fn authed(&self, request: ureq::Request) -> ureq::Request {
+        match &self.token {
+            Some(token) => request.set("Authorization", &format!("Bearer {token}")),
+            None => request,
+        }
+    }
+
+    /// The match socket for a signed-in player: the account is the token's.
+    pub fn account_ws_url(&self, token: &str) -> String {
+        format!(
+            "{}/hassault-ws?token={}",
+            self.ws_origin(),
+            urlencode(token)
+        )
+    }
+
+    // ---- signing in ---------------------------------------------------------
+    //
+    // The provider's own page, in the player's browser. This client starts a
+    // sign-in, says where to finish it, and asks until it is done; it never
+    // sees a password. The server's routes answer 200 with an `error` key
+    // rather than a status, so these read the body.
+
+    fn auth_post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        let url = format!("{}{}", self.base, path);
+        self.agent
+            .post(&url)
+            .send_json(body)
+            .map_err(|e| format!("could not reach the server - {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("could not read the server's answer - {e}"))
+    }
+
+    /// Which providers this server can sign in with, in `front::PROVIDERS`
+    /// order. Either flow counts.
+    pub fn auth_providers(&self) -> Result<[bool; 2], ApiError> {
+        let v: serde_json::Value = self
+            .get("/auth/providers")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+        let has = |provider: &str| {
+            ["web", "device"]
+                .iter()
+                .any(|flow| v[provider][flow].as_bool().unwrap_or(false))
+        };
+        Ok([has("github"), has("google")])
+    }
+
+    /// Begin a sign-in: the redirect flow where the server has one, else the
+    /// device flow.
+    pub fn auth_start(&self, provider: &str) -> Result<AuthStart, String> {
+        let web = self.auth_post(&format!("/auth/{provider}/web/start"), ureq::json!({}))?;
+        if let (Some(url), Some(code)) = (web["login_url"].as_str(), web["retrieval_code"].as_str())
+        {
+            return Ok(AuthStart::Web {
+                url: url.to_string(),
+                retrieval_code: code.to_string(),
+            });
+        }
+        let device = self.auth_post(&format!("/auth/{provider}/start"), ureq::json!({}))?;
+        match (
+            device["verification_uri"].as_str(),
+            device["user_code"].as_str(),
+            device["device_code"].as_str(),
+        ) {
+            (Some(url), Some(user_code), Some(device_code)) => Ok(AuthStart::Device {
+                url: url.to_string(),
+                user_code: user_code.to_string(),
+                device_code: device_code.to_string(),
+                interval: device["interval"].as_u64().unwrap_or(5).clamp(2, 30),
+            }),
+            _ => Err(device["error"]
+                .as_str()
+                .or(web["error"].as_str())
+                .unwrap_or("the server could not start that sign-in")
+                .to_string()),
+        }
+    }
+
+    /// Ask once whether a sign-in has finished.
+    pub fn auth_poll(&self, provider: &str, start: &AuthStart) -> AuthPoll {
+        let answer = match start {
+            AuthStart::Web { retrieval_code, .. } => self.auth_post(
+                &format!("/auth/{provider}/web/poll"),
+                ureq::json!({ "retrieval_code": retrieval_code }),
+            ),
+            AuthStart::Device { device_code, .. } => self.auth_post(
+                &format!("/auth/{provider}/poll"),
+                ureq::json!({ "device_code": device_code }),
+            ),
+        };
+        match answer {
+            Ok(v) => parse_poll(&v),
+            // One request that did not get through is not a failed sign-in.
+            Err(_) => AuthPoll::Pending,
+        }
+    }
+
+    /// The signed-in account, read fresh. `Refused` when the token is no
+    /// longer one this server accepts.
+    pub fn me(&self) -> Result<Account, ApiError> {
+        let url = format!("{}/me", self.base);
+        let v: serde_json::Value = match self.authed(self.agent.get(&url)).call() {
+            Ok(res) => res
+                .into_json()
+                .map_err(|e| ApiError::Decode(e.to_string()))?,
+            Err(ureq::Error::Status(code, _)) => return Err(ApiError::Status(code, "/me".into())),
+            Err(e) => return Err(ApiError::Http(e.to_string())),
+        };
+        match serde_json::from_value::<Account>(v["account"].clone()) {
+            Ok(account) if !account.id.is_empty() => Ok(account),
+            _ => Err(ApiError::Refused(
+                v["error"]
+                    .as_str()
+                    .unwrap_or("sign in required")
+                    .to_string(),
+            )),
+        }
+    }
+
+    // ---- the account, on a game server --------------------------------------
+    //
+    // A node proxies these at its own paths (`wallet`, `skins`, above). With
+    // no node the game server is asked directly, as the account the token
+    // names.
+
+    fn account_get(&self, path: &str) -> Result<ureq::Response, ApiError> {
+        let url = format!("{}{}", self.base, path);
+        match self.authed(self.agent.get(&url)).call() {
+            Ok(res) => Ok(res),
+            Err(ureq::Error::Status(401 | 403, res)) => Err(ApiError::Refused(refusal(res))),
+            Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, path.to_string())),
+            Err(e) => Err(ApiError::Http(e.to_string())),
+        }
+    }
+
+    pub fn account_inventory(&self) -> Result<Vec<SkinInstance>, ApiError> {
+        self.account_get("/api/hassault/account/inventory")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    pub fn account_wallet(&self) -> Result<Wallet, ApiError> {
+        self.account_get("/api/hassault/account/wallet")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    pub fn account_equip(&self, instance_id: &str) -> Result<(), ApiError> {
+        self.post_json(
+            &format!(
+                "/api/hassault/account/equip?instance_id={}",
+                urlencode(instance_id)
+            ),
+            ureq::json!({}),
+        )
+        .map(|_| ())
+    }
+
+    pub fn account_unequip(&self, weapon_id: &str) -> Result<(), ApiError> {
+        self.post_json(
+            &format!(
+                "/api/hassault/account/unequip?weapon_id={}",
+                urlencode(weapon_id)
+            ),
+            ureq::json!({}),
+        )
+        .map(|_| ())
+    }
+
+    pub fn account_buy_key(&self) -> Result<(), ApiError> {
+        self.post_json("/api/hassault/account/keys/buy", ureq::json!({}))
+            .map(|_| ())
+    }
+
+    /// Open an owned case with a key: the skin it made.
+    pub fn account_open_case(&self, instance_id: &str) -> Result<SkinInstance, ApiError> {
+        self.post_json(
+            &format!(
+                "/api/hassault/account/cases/open?instance_id={}",
+                urlencode(instance_id)
+            ),
+            ureq::json!({}),
+        )?
+        .into_json()
+        .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    pub fn account_buy_listing(&self, listing_id: &str) -> Result<(), ApiError> {
+        self.post_json(
+            &format!("/api/hassault/account/market/{}/buy", urlencode(listing_id)),
+            ureq::json!({}),
+        )
+        .map(|_| ())
     }
 
     /// The `ws://…/ws` address matching this origin.
@@ -838,6 +1165,26 @@ impl NodeApi {
     /// is two addresses that can disagree, and the failure — an HTTP call that
     /// works and a socket that never connects — reads as a backend fault.
     pub fn ws_url(&self) -> String {
+        format!("{}/ws", self.ws_origin())
+    }
+
+    /// The match socket of a **game server**, for a client with no node.
+    ///
+    /// A node's `/ws` takes its player from the node's own signed-in account. The
+    /// game server has no such thing to ask, so identity rides the address: a
+    /// guest session under a callsign, exactly what the browser client opens
+    /// (`apps/assault-web/src/auth.ts`). Everything after the upgrade is the same
+    /// `hassault` envelope, which is why this is a second address and not a
+    /// second protocol.
+    pub fn guest_ws_url(&self, name: &str) -> String {
+        format!(
+            "{}/hassault-ws?guest=1&name={}",
+            self.ws_origin(),
+            urlencode(name)
+        )
+    }
+
+    fn ws_origin(&self) -> String {
         let scheme = if self.base.starts_with("https://") {
             "wss://"
         } else {
@@ -847,7 +1194,7 @@ impl NodeApi {
             .base
             .trim_start_matches("https://")
             .trim_start_matches("http://");
-        format!("{scheme}{host}/ws")
+        format!("{scheme}{host}")
     }
 
     fn get(&self, path: &str) -> Result<ureq::Response, ApiError> {
@@ -859,7 +1206,153 @@ impl NodeApi {
         }
     }
 
-    #[allow(dead_code)] // The in-client map picker arrives with B2.
+    /// The rooms open on a game server, for the menu's list and its search.
+    pub fn rooms(&self) -> Result<Vec<crate::front::RoomEntry>, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Listing {
+            #[serde(default)]
+            rooms: Vec<crate::front::RoomEntry>,
+        }
+        self.get("/api/hassault/rooms")?
+            .into_json::<Listing>()
+            .map(|l| l.rooms)
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// Ask the server where to play: the room a search should join.
+    ///
+    /// The server holds the one matchmaking rule, so this client and the
+    /// browser's land in the same room however close together they ask. The
+    /// room may have been opened for this search (`opened`); either way it is
+    /// joined by id. A server too old to have the route answers 404 — see
+    /// [`ApiError::is_missing`].
+    pub fn matchmake(&self, maps: &[String], mode: Option<&str>) -> Result<Matched, ApiError> {
+        self.post_json(
+            "/api/hassault/matchmake",
+            ureq::json!({ "maps": maps, "mode": mode.unwrap_or("") }),
+        )?
+        .into_json::<Matched>()
+        .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    // ---- lobbies ------------------------------------------------------------
+    //
+    // A group gathered before the search (`hassault_lobby.py`). Polled over
+    // HTTP: it exists before anyone has a match socket.
+
+    /// Open a lobby. The token is this member's, for every later call.
+    pub fn lobby_create(&self, name: &str) -> Result<LobbyEntry, ApiError> {
+        self.post_json("/api/hassault/lobbies", ureq::json!({ "name": name }))?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    pub fn lobby_join(&self, code: &str, name: &str) -> Result<LobbyEntry, ApiError> {
+        self.post_json(
+            &format!("/api/hassault/lobbies/{}/join", urlencode(code)),
+            ureq::json!({ "name": name }),
+        )?
+        .into_json()
+        .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The lobby as this member sees it. Asking is also the heartbeat.
+    pub fn lobby_state(
+        &self,
+        code: &str,
+        token: &str,
+    ) -> Result<crate::front::LobbyView, ApiError> {
+        let path = format!(
+            "/api/hassault/lobbies/{}?token={}",
+            urlencode(code),
+            urlencode(token)
+        );
+        let url = format!("{}{}", self.base, path);
+        match self.agent.get(&url).call() {
+            Ok(res) => res.into_json().map_err(|e| ApiError::Decode(e.to_string())),
+            Err(ureq::Error::Status(409, res)) => Err(ApiError::Refused(refusal(res))),
+            Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, "lobbies".into())),
+            Err(e) => Err(ApiError::Http(e.to_string())),
+        }
+    }
+
+    pub fn lobby_leave(&self, code: &str, token: &str) -> Result<(), ApiError> {
+        self.post_json(
+            &format!("/api/hassault/lobbies/{}/leave", urlencode(code)),
+            ureq::json!({ "token": token }),
+        )
+        .map(|_| ())
+    }
+
+    /// The leader's search: one room with a seat for every member.
+    pub fn lobby_play(
+        &self,
+        code: &str,
+        token: &str,
+        maps: &[String],
+        mode: Option<&str>,
+    ) -> Result<crate::front::LobbyView, ApiError> {
+        self.post_json(
+            &format!("/api/hassault/lobbies/{}/play", urlencode(code)),
+            ureq::json!({ "token": token, "maps": maps, "mode": mode.unwrap_or("") }),
+        )?
+        .into_json()
+        .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// POST a JSON body. A 409 is the server saying no in its own words.
+    fn post_json(&self, path: &str, body: serde_json::Value) -> Result<ureq::Response, ApiError> {
+        let url = format!("{}{}", self.base, path);
+        match self.authed(self.agent.post(&url)).send_json(body) {
+            Ok(res) => Ok(res),
+            // Not there at all: an older server, which callers fall back from.
+            Err(ureq::Error::Status(code @ (404 | 405), _)) => {
+                Err(ApiError::Status(code, path.to_string()))
+            }
+            // Any other 4xx is the server saying no, with a reason to show.
+            Err(ureq::Error::Status(400..=499, res)) => Err(ApiError::Refused(refusal(res))),
+            Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, path.to_string())),
+            Err(e) => Err(ApiError::Http(e.to_string())),
+        }
+    }
+
+    /// One room and who is in it, for the DEV TOOLS server view.
+    pub fn room_detail(&self, id: &str) -> Result<crate::front::RoomDetail, ApiError> {
+        self.get(&format!("/api/hassault/rooms/{id}"))?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// Every skin design there is, for the model viewer. The catalog, not the
+    /// inventory: the viewer shows what a finish looks like, owned or not.
+    pub fn skin_catalog(&self) -> Result<Vec<SkinDefinition>, ApiError> {
+        self.get("/api/hassault/skins/catalog")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The aim drills on offer, for the DEV TOOLS tab.
+    pub fn drills(&self) -> Result<Vec<crate::front::DrillEntry>, ApiError> {
+        self.get("/api/hassault/drills")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The games a room can run, `(id, name)`, in the server's order.
+    pub fn modes(&self) -> Result<Vec<(String, String)>, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Mode {
+            #[serde(default)]
+            id: String,
+            #[serde(default)]
+            name: String,
+        }
+        self.get("/api/hassault/modes")?
+            .into_json::<Vec<Mode>>()
+            .map(|modes| modes.into_iter().map(|m| (m.id, m.name)).collect())
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
     pub fn maps(&self) -> Result<Vec<MapSummary>, ApiError> {
         self.get("/api/hassault/maps")?
             .into_json()
@@ -955,13 +1448,19 @@ impl NodeApi {
             self.base,
             urlencode(listing_id)
         );
-        self.send(self.agent.post(&url).send_json(ureq::json!({})), "market/buy")
+        self.send(
+            self.agent.post(&url).send_json(ureq::json!({})),
+            "market/buy",
+        )
     }
 
     /// Spend credits on a key.
     pub fn buy_key(&self) -> Result<serde_json::Value, ApiError> {
         let url = format!("{}/api/hassault/wallet/keys/buy", self.base);
-        self.send(self.agent.post(&url).send_json(ureq::json!({})), "wallet/keys/buy")
+        self.send(
+            self.agent.post(&url).send_json(ureq::json!({})),
+            "wallet/keys/buy",
+        )
     }
 
     /// Open an owned case with a key: the skin it made, inventory-shaped.
@@ -971,7 +1470,10 @@ impl NodeApi {
             self.base,
             urlencode(instance_id)
         );
-        self.send(self.agent.post(&url).send_json(ureq::json!({})), "wallet/cases/open")
+        self.send(
+            self.agent.post(&url).send_json(ureq::json!({})),
+            "wallet/cases/open",
+        )
     }
 
     /// The agents a player may wear, and on which sides (`cosmetics.py`).
@@ -1157,6 +1659,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_sign_in_poll_is_pending_done_or_failed() {
+        use serde_json::json;
+        assert_eq!(parse_poll(&json!({"pending": true})), AuthPoll::Pending);
+        // A provider's "slow down" is pending with an error attached.
+        assert_eq!(
+            parse_poll(&json!({"pending": true, "error": "slow_down"})),
+            AuthPoll::Pending
+        );
+        assert_eq!(
+            parse_poll(&json!({"error": "access_denied"})),
+            AuthPoll::Failed("access_denied".into())
+        );
+        assert_eq!(parse_poll(&json!({})), AuthPoll::Pending);
+        let done = parse_poll(&json!({
+            "token": "jwt",
+            "account": {"id": "a1", "display_name": "Sable", "handle": null}
+        }));
+        assert_eq!(
+            done,
+            AuthPoll::Done {
+                token: "jwt".into(),
+                account: Account {
+                    id: "a1".into(),
+                    display_name: "Sable".into(),
+                    handle: None
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn a_token_makes_the_socket_the_accounts_and_none_leaves_a_guest() {
+        let node = NodeApi::new("https://games.example/");
+        assert_eq!(
+            node.account_ws_url("a b"),
+            "wss://games.example/hassault-ws?token=a%20b"
+        );
+        assert!(node.guest_ws_url("Sable").contains("guest=1"));
+        assert!(NodeApi::new("http://x")
+            .with_token(Some(""))
+            .token
+            .is_none());
+        assert_eq!(
+            NodeApi::new("http://x")
+                .with_token(Some("t"))
+                .token
+                .as_deref(),
+            Some("t")
+        );
+    }
+
+    #[test]
     fn the_socket_address_follows_the_http_one() {
         assert_eq!(
             NodeApi::new("http://127.0.0.1:8000").ws_url(),
@@ -1165,6 +1719,22 @@ mod tests {
         assert_eq!(
             NodeApi::new("https://node.example/").ws_url(),
             "wss://node.example/ws"
+        );
+    }
+
+    #[test]
+    fn a_game_server_is_joined_as_a_guest_on_its_own_socket() {
+        // Not `/ws`: that path does not exist on the game server, and the failure
+        // is a 404 on the upgrade that reads as the server being down.
+        assert_eq!(
+            NodeApi::new("https://horrible-games.fly.dev").guest_ws_url("Operative-417"),
+            "wss://horrible-games.fly.dev/hassault-ws?guest=1&name=Operative-417"
+        );
+        // A callsign is typed by a person. Unencoded, the `&` would end the name
+        // and start a parameter of the player's choosing.
+        assert_eq!(
+            NodeApi::new("http://127.0.0.1:9200/").guest_ws_url("a b&token=x"),
+            "ws://127.0.0.1:9200/hassault-ws?guest=1&name=a%20b%26token%3Dx"
         );
     }
 

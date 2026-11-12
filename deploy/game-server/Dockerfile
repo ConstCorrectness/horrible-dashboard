@@ -5,7 +5,7 @@
 #   fly deploy
 #   docker build -f deploy/game-server/Dockerfile -t horrible-game-server .
 #
-# Only backend/ and the built browser game are copied in; the rest of the frontend and local .data/logs are excluded by the
+# Only backend/, the built browser game and the staged native client are copied in; the rest of the frontend and local .data/logs are excluded by the
 # repo-root .dockerignore, so the image stays small (no torch/ML deps in this project).
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
@@ -39,6 +39,16 @@ COPY backend ./backend
 # whole pnpm workspace. `pnpm deploy:games` builds it and then deploys; a plain
 # `fly deploy` with no build fails on this COPY rather than shipping without a site.
 COPY apps/assault-web/dist ./apps/assault-web/dist
+
+# Layer 4 — the native client, served at `/download/hAssault.exe`
+# (`backend/games_server/downloads.py`). Built on the host for the same reason as
+# the layer above, and more so: this builder is Linux and the file is a Windows
+# executable. `scripts/stage-hassault-download.mjs` writes this directory, always
+# with a `manifest.json` in it — on a host that cannot build for Windows the
+# manifest says so and the server offers no download, so the COPY only fails when
+# the staging step was skipped altogether. Last, because it is the largest layer
+# and changes with every client build.
+COPY apps/native-fps/dist ./apps/native-fps/dist
 
 # Production defaults. Real secrets (GAMES_JWT_SECRET, GAMES_GITHUB_CLIENT_ID) are
 # injected by the host (`fly secrets set ...`), never baked into the image.

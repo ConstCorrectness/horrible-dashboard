@@ -44,6 +44,7 @@ use hassault_native::api::{
 };
 use hassault_native::arc::{self, ThrowArc};
 use hassault_native::audio::GameAudio;
+use hassault_native::bench::{BenchRun, FrameRing, Sample, FRAME_RING};
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::chat::{ChatChannel, ChatState};
@@ -53,22 +54,20 @@ use hassault_native::damage::{DamageNumbers, Placed};
 use hassault_native::decals::{DecalPool, MarkKind, MARK_COLOR};
 use hassault_native::editor::{self, EditRequest, Editor, Selection};
 use hassault_native::effects::EffectsPool;
+use hassault_native::eye::EyeLerp;
 use hassault_native::geometry::{build_world_mesh, MeshData};
 use hassault_native::held;
+use hassault_native::hud::NetGraphStats;
 use hassault_native::hud::{
     self, ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow, UtilitySlot, UtilityView,
 };
-use hassault_native::bench::{BenchRun, FrameRing, Sample, FRAME_RING};
-use hassault_native::hud::NetGraphStats;
-use hassault_native::eye::EyeLerp;
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
-use hassault_native::own_shots::{OwnShots, ShotGate};
-use hassault_native::net_stats::NetStats;
-use hassault_native::renderer::FrameCost;
 use hassault_native::items::ItemField;
 use hassault_native::menu::{self, Action, Menu};
 use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
+use hassault_native::net_stats::NetStats;
+use hassault_native::own_shots::{OwnShots, ShotGate};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
@@ -76,6 +75,7 @@ use hassault_native::protocol::{
     Command, Event, Fx, HitMarker, ModeInfo, ModeShared, PlayerRow, RosterCache, SelfState,
 };
 use hassault_native::radar::{self, Blip, Edge, Mark, Run};
+use hassault_native::renderer::FrameCost;
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
@@ -139,6 +139,17 @@ const STRIDE_DISTANCE: f32 = 4.2;
 /// stated at (144 fps at 1080p on a mid-range GPU).
 const BENCH_SIZE: (u32, u32) = (1920, 1080);
 
+/// How a match ended, for whatever started it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ended {
+    /// The player left: LEAVE MATCH, the summary card, `disconnect`.
+    Left,
+    /// The server refused the join, in its own words.
+    Refused(String),
+    /// The connection dropped.
+    Closed(String),
+}
+
 pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
@@ -170,6 +181,18 @@ pub struct App {
     /// server's join with no room id is join-*or*-create, so it would drop a
     /// learner into whatever match was already running on that map.
     socket: Option<MatchSocket>,
+    /// Whether a front end (`shell.rs`) is hosting this match. Hosted, the end
+    /// of a match is reported in `ended` and the window stays open for the
+    /// menu; alone, it is the end of the process, as it always was.
+    hosted: bool,
+    /// Set when a hosted match is over. The shell takes it.
+    ended: Option<Ended>,
+    /// A finished benchmark's result line, when hosted: the shell shows it.
+    /// Alone, the line goes to stdout and the process ends.
+    bench_line: Option<String>,
+    /// A console `quit` or `disconnect`, carried to the next pass of the loop:
+    /// the first place that holds the event loop both of them need.
+    pending_end: Option<Dispatch>,
     /// Bots to field once the welcome names a room, `--mode=host` only.
     pending_bots: Option<(u32, String)>,
     /// The stored loadout (`hassault.loadout`), `{primary, secondary}` ids,
@@ -178,6 +201,8 @@ pub struct App {
     /// The aim drill this Train was launched into (`--drill`), kept so the
     /// results card can run it again.
     drill: Option<hassault_native::drills::DrillSpec>,
+    /// The model viewer (`viewer.rs`), when this session is one.
+    viewer: Option<hassault_native::viewer::Viewer>,
     /// Where we believe we are, ahead of the server. The camera reads this.
     prediction: Prediction,
     camera: Camera,
@@ -600,10 +625,15 @@ impl App {
             world3d,
             spawn_index: None,
             socket,
+            hosted: false,
+            bench_line: None,
+            ended: None,
+            pending_end: None,
             pending_bots: None,
             loadout: None,
             looks: HashMap::new(),
             drill: None,
+            viewer: None,
             prediction: Prediction::default(),
             camera: Camera::default(),
             shake: Shake::default(),
@@ -1114,12 +1144,20 @@ impl App {
             let team = self.players.iter().find(|p| p.id == self.self_id)?.team;
             look.skin_for(team, self.held().map(|w| w.id.as_str()).unwrap_or(""))
         });
-        let equipped_skin = if self.looks.contains_key(&self.self_id) {
-            own_skin.as_ref()
-        } else {
-            self.skins.get(&display_weapon)
+        // The viewer's finish outranks both: it is showing a skin, not
+        // wearing one.
+        let viewed = self.viewer.as_ref().map(|v| v.skin(&display_weapon));
+        let equipped_skin = match &viewed {
+            Some(skin) => skin.as_ref(),
+            None if self.looks.contains_key(&self.self_id) => own_skin.as_ref(),
+            None => self.skins.get(&display_weapon),
         };
         self.viewmodel.set_weapon(&display_weapon, equipped_skin);
+        // And it keeps the weapon turning: the inspect clip, restarted each
+        // time it ends, unless the trigger is down.
+        if self.viewer.is_some() && !self.keys.fire && !self.viewmodel.inspecting() {
+            self.viewmodel.inspect();
+        }
         // One rule for which knife a skin is, shared with the inspect that
         // knife runs — see `inspects::knife_archetype`.
         let prop_name = if display_weapon == "knife" {
@@ -1233,7 +1271,10 @@ impl App {
                 }
                 // Bones, not vertices: the skinning is `vs_hand`'s. Doing it
                 // here was 1.8 ms a frame — see `hands.rs`.
-                let arms = self.viewmodel.hands_bones(&mut self.hand_bones).unwrap_or(0);
+                let arms = self
+                    .viewmodel
+                    .hands_bones(&mut self.hand_bones)
+                    .unwrap_or(0);
                 renderer.write_hand_bones(&self.hand_bones, arms);
             }
         }
@@ -1315,7 +1356,97 @@ impl App {
         if let Some(socket) = &self.socket {
             let _ = socket.leave();
         }
-        event_loop.exit();
+        self.finish(event_loop, Ended::Left);
+    }
+
+    /// The match is over. Hosted, say so and keep the window; alone, exit.
+    fn finish(&mut self, event_loop: &ActiveEventLoop, why: Ended) {
+        if self.hosted {
+            self.ended = Some(why);
+        } else {
+            event_loop.exit();
+        }
+    }
+
+    /// Run under a front end. See `hosted`.
+    pub fn set_hosted(&mut self) {
+        self.hosted = true;
+        // The front end only exists for a client with no node, whose settings
+        // are a local file.
+        self.menu.local = true;
+    }
+
+    /// Make this range session the model viewer: every served weapon in
+    /// hand in turn, in any finish from `catalog`. See `viewer.rs`.
+    pub fn start_viewer(&mut self, catalog: Vec<hassault_native::api::SkinDefinition>) {
+        let mut viewer = hassault_native::viewer::Viewer::new(catalog);
+        viewer.weapon = self.range.slot();
+        self.viewer = Some(viewer);
+    }
+
+    /// The viewer's keys. `true` when the key was one of them.
+    fn viewer_key(&mut self, code: KeyCode) -> bool {
+        let Some(viewer) = self.viewer.as_mut() else {
+            return false;
+        };
+        // The number row still changes weapon; follow it.
+        viewer.weapon = self.range.slot();
+        let id = self
+            .weapons
+            .get(viewer.weapon)
+            .map(|w| w.id.clone())
+            .unwrap_or_default();
+        match code {
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                let step = if code == KeyCode::BracketLeft { -1 } else { 1 };
+                let slot = viewer.step_weapon(step, self.weapons.len());
+                self.select_weapon(slot);
+            }
+            KeyCode::Comma => viewer.step_finish(-1, &id),
+            KeyCode::Period => viewer.step_finish(1, &id),
+            KeyCode::Minus => viewer.step_wear(-1),
+            KeyCode::Equal => viewer.step_wear(1),
+            _ => return false,
+        }
+        true
+    }
+
+    /// A benchmark that ran to its end under a front end. Taken once.
+    pub fn take_bench(&mut self) -> Option<String> {
+        self.bench_line.take()
+    }
+
+    /// Switch on the developer overlays the DEV TOOLS tab offers. Each is the
+    /// console CVar of the same name, set as the console would set it; one
+    /// left off is left alone, so a default is never overwritten with `false`.
+    pub fn set_dev_overlays(&mut self, net_graph: bool, hitboxes: bool, own_tracers: bool) {
+        if net_graph {
+            self.net_graph_default = self.net_graph_default.max(1);
+            self.cvars
+                .set("net.graph", serde_json::json!(self.net_graph_default));
+        }
+        if hitboxes {
+            self.cvars.set("draw.hitboxes", serde_json::json!(true));
+        }
+        if own_tracers {
+            self.cvars
+                .set("draw.tracers_firstperson", serde_json::json!(true));
+        }
+    }
+
+    /// Whether a hosted match is over, and why. Taken once.
+    pub fn take_ended(&mut self) -> Option<Ended> {
+        self.ended.take()
+    }
+
+    /// What the pause menu may have changed, for the front end to carry into
+    /// the next match: the settings, and the two loadout documents.
+    pub fn hand_back(&self) -> (Settings, serde_json::Value, serde_json::Value) {
+        (
+            self.settings,
+            self.menu.loadout.choice.clone(),
+            self.menu.loadout.agent_choice.clone(),
+        )
     }
 
     /// The card's contents, from what this client already knows.
@@ -1413,7 +1544,8 @@ impl App {
         let held = self.held();
         let knife = held.is_some_and(|w| w.id == "knife");
         if let Some(radius) = radar::own_noise_radius(kind, held.map(|w| w.damage), knife) {
-            self.own_noise.set(Some((radius, std::time::Instant::now())));
+            self.own_noise
+                .set(Some((radius, std::time::Instant::now())));
         }
         let Some(audio) = &self.audio else { return };
         audio.own(kind, volume, if weapon { held } else { None });
@@ -1776,25 +1908,23 @@ impl App {
     /// scatters up to twenty-two cubes above the floor.
     fn place_offline(&mut self) {
         let mut override_pitch = 0.0;
-        let spawn_3d = std::env::var("SPAWN_OVERRIDE")
-            .ok()
-            .and_then(|v| {
-                let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if parts.len() >= 4 {
-                    if parts.len() >= 5 {
-                        override_pitch = parts[4];
-                    }
-                    Some(hassault_native::world3d::SpawnPoint {
-                        x: parts[0],
-                        y: parts[1],
-                        z: parts[2],
-                        yaw: parts[3],
-                        team: 0,
-                    })
-                } else {
-                    None
+        let spawn_3d = std::env::var("SPAWN_OVERRIDE").ok().and_then(|v| {
+            let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            if parts.len() >= 4 {
+                if parts.len() >= 5 {
+                    override_pitch = parts[4];
                 }
-            });
+                Some(hassault_native::world3d::SpawnPoint {
+                    x: parts[0],
+                    y: parts[1],
+                    z: parts[2],
+                    yaw: parts[3],
+                    team: 0,
+                })
+            } else {
+                None
+            }
+        });
         // An override (screenshots, the bench) is already exactly where it
         // means. Anything else is a map spawn entity, grounded on the grid below
         // as a match grounds it, modelled map or not.
@@ -2198,11 +2328,10 @@ impl App {
                     // Our shots in this tick, against the ones we predicted and
                     // already felt: only the ones we did not foresee still need
                     // their kick and gunshot. See `own_shots.rs`.
-                    let mine = s
-                        .fx
-                        .iter()
-                        .filter(|fx| matches!(fx, Fx::Shot { id, .. } if id == &self.self_id))
-                        .count();
+                    let mine =
+                        s.fx.iter()
+                            .filter(|fx| matches!(fx, Fx::Shot { id, .. } if id == &self.self_id))
+                            .count();
                     let mut unforeseen = self.own_shots.snapshot(s.ack, mine);
                     for fx in &s.fx {
                         self.hud.on_fx(fx, &self.self_id);
@@ -2285,10 +2414,15 @@ impl App {
                                     }
                                 }
                             } else {
-                                // Knife attack wall scratch or puncture
-                                self.effects
-                                    .shot_ex(*origin, ends, faces, is_mine, *hit, false);
+                                // A blade leaves a mark only where it met
+                                // a wall. A swing through air ends a metre
+                                // ahead of the eye, and sparks there are a
+                                // burst stamped on the crosshair.
+                                self.effects.knife(*origin, ends, faces, is_mine);
                                 let is_stab = *alt;
+                                if is_mine && is_stab {
+                                    self.viewmodel.stab();
+                                }
                                 for (i, end) in ends.iter().enumerate() {
                                     let face = faces.get(i).copied().unwrap_or(FACE_NONE);
                                     if face != FACE_NONE
@@ -2449,7 +2583,7 @@ impl App {
                     } else {
                         eprintln!("hassault: server refused: {}", e.message);
                     }
-                    event_loop.exit();
+                    self.finish(event_loop, Ended::Refused(e.message.clone()));
                 }
                 Incoming::Event(Event::Pong(p)) => {
                     // A round trip on one clock. `p.t` is the stamp we sent, so
@@ -2585,7 +2719,7 @@ impl App {
                 Incoming::Event(Event::Other(_)) => {}
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");
-                    event_loop.exit();
+                    self.finish(event_loop, Ended::Closed(why.to_string()));
                 }
             }
         }
@@ -3119,6 +3253,9 @@ impl App {
             if done && code == KeyCode::KeyF {
                 return self.end_drill();
             }
+        }
+        if down && self.viewer_key(code) {
+            return;
         }
         match code {
             // F3 steps the *fallback*, and clears any override so the key the
@@ -3656,6 +3793,7 @@ impl App {
             Dispatch::Handled => {}
             Dispatch::SaveTranscript { text } => self.save_transcript(&text),
             Dispatch::Send { command, req_id } => self.send_console(&command, req_id),
+            end @ (Dispatch::Quit | Dispatch::Disconnect) => self.pending_end = Some(end),
         }
     }
 
@@ -3725,12 +3863,23 @@ impl App {
                 self.console.complete();
                 return;
             }
+            // Up and Down choose from the completion list while one is
+            // showing, and walk the history when it is not — a recalled line
+            // offers no list (`Console::recall`), so history keeps walking.
             KeyCode::ArrowUp => {
-                self.console.history_prev();
+                if self.console.suggestions.is_empty() {
+                    self.console.history_prev();
+                } else {
+                    self.console.cycle_suggestion(-1);
+                }
                 return;
             }
             KeyCode::ArrowDown => {
-                self.console.history_next();
+                if self.console.suggestions.is_empty() {
+                    self.console.history_next();
+                } else {
+                    self.console.cycle_suggestion(1);
+                }
                 return;
             }
             KeyCode::ArrowLeft => {
@@ -4201,42 +4350,14 @@ fn axis(positive: bool, negative: bool) -> f32 {
     (positive as i32 as f32) - (negative as i32 as f32)
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        // **Fullscreen from the first frame, not applied after one.** Creating
-        // a window and then toggling it means a visible flash of a 1280×800
-        // window on a 4K monitor, and on some compositors a resize the renderer
-        // has to service before anything has been drawn.
-        //
-        // Borderless unless the player asked for exclusive: see `set_fullscreen`.
-        let monitors: Vec<_> = event_loop.available_monitors().collect();
-        let current = event_loop.primary_monitor();
-        hassault_native::display::capture(&self.settings.video, monitors.clone(), current.clone());
-        let fullscreen =
-            hassault_native::display::fullscreen(&self.settings.video, monitors, current);
-        let attrs = Window::default_attributes()
-            .with_title("HorribleAssault")
-            .with_fullscreen(fullscreen)
-            // The size a windowed session opens at, and what fullscreen returns
-            // to when it is turned off in the menu.
-            .with_inner_size(if self.bench.is_some() {
-                // Physical, not logical: a bench at 1080p means 1080 rows of
-                // pixels whatever the display scaling is.
-                winit::dpi::Size::from(winit::dpi::PhysicalSize::new(BENCH_SIZE.0, BENCH_SIZE.1))
-            } else {
-                winit::dpi::Size::from(winit::dpi::LogicalSize::new(1280.0, 800.0))
-            });
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("hassault: could not open a window: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
+impl App {
+    /// Start drawing into `window`.
+    ///
+    /// The second half of `resumed`, apart from it because a match started
+    /// from the front end is handed a window that is already open: closing
+    /// it to open another would be a flash of desktop between the loading
+    /// screen and the first frame.
+    pub fn attach(&mut self, window: Arc<Window>, event_loop: &ActiveEventLoop) {
         self.fullscreen = self.settings.video.fullscreen;
         match pollster::block_on(Renderer::new(
             window.clone(),
@@ -4276,6 +4397,46 @@ impl ApplicationHandler for App {
         // Poll rather than Wait: frames are driven by this loop, not by the
         // compositor asking for one.
         event_loop.set_control_flow(ControlFlow::Poll);
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        // **Fullscreen from the first frame, not applied after one.** Creating
+        // a window and then toggling it means a visible flash of a 1280×800
+        // window on a 4K monitor, and on some compositors a resize the renderer
+        // has to service before anything has been drawn.
+        //
+        // Borderless unless the player asked for exclusive: see `set_fullscreen`.
+        let monitors: Vec<_> = event_loop.available_monitors().collect();
+        let current = event_loop.primary_monitor();
+        hassault_native::display::capture(&self.settings.video, monitors.clone(), current.clone());
+        let fullscreen =
+            hassault_native::display::fullscreen(&self.settings.video, monitors, current);
+        let attrs = Window::default_attributes()
+            .with_title("HorribleAssault")
+            .with_fullscreen(fullscreen)
+            // The size a windowed session opens at, and what fullscreen returns
+            // to when it is turned off in the menu.
+            .with_inner_size(if self.bench.is_some() {
+                // Physical, not logical: a bench at 1080p means 1080 rows of
+                // pixels whatever the display scaling is.
+                winit::dpi::Size::from(winit::dpi::PhysicalSize::new(BENCH_SIZE.0, BENCH_SIZE.1))
+            } else {
+                winit::dpi::Size::from(winit::dpi::LogicalSize::new(1280.0, 800.0))
+            });
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("hassault: could not open a window: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        self.attach(window, event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -4788,7 +4949,8 @@ impl ApplicationHandler for App {
                 self.radar_marks.clear();
                 if let Some(you) = &self.you {
                     let team = self.my_team();
-                    self.blips.extend(radar::blips(&self.drawn, &self.self_id, team, &you.spotted));
+                    self.blips
+                        .extend(radar::blips(&self.drawn, &self.self_id, team, &you.spotted));
                     let now = self.radar_epoch.elapsed().as_secs_f32();
                     self.radar_memory
                         .track(&self.drawn, &self.self_id, team, &you.spotted, now);
@@ -4811,7 +4973,8 @@ impl ApplicationHandler for App {
                     );
                 }
                 let own_noise = self.own_noise.get().and_then(|(radius, at)| {
-                    let life = radar::fade_out(at.elapsed().as_secs_f32(), radar::OWN_NOISE_SECONDS);
+                    let life =
+                        radar::fade_out(at.elapsed().as_secs_f32(), radar::OWN_NOISE_SECONDS);
                     (life > 0.0).then_some((radius, life))
                 });
                 // Centred on the camera, which is the prediction — where we
@@ -4825,7 +4988,11 @@ impl ApplicationHandler for App {
                     yaw: self.camera.yaw.to_radians(),
                     blips: &self.blips,
                     marks: &self.radar_marks,
-                    sites: self.mode.as_ref().map(|m| m.sites.as_slice()).unwrap_or(&[]),
+                    sites: self
+                        .mode
+                        .as_ref()
+                        .map(|m| m.sites.as_slice())
+                        .unwrap_or(&[]),
                     settings: self.settings.radar,
                     ssize: self.world.ssize as f32,
                     scores: self.keys.scores,
@@ -4846,6 +5013,11 @@ impl ApplicationHandler for App {
                     )
                 } else {
                     (Vec::new(), Vec::new(), None)
+                };
+                let console_hints = if self.console.open {
+                    self.console.suggestion_hints(&self.cvars)
+                } else {
+                    Vec::new()
                 };
                 // The pouch, built here rather than borrowed out of the
                 // controller: the HUD wants a name and a count per slot, and
@@ -4899,6 +5071,7 @@ impl ApplicationHandler for App {
                         scroll: self.console.scroll,
                         suggestions: &self.console.suggestions,
                         suggestion: self.console.suggestion,
+                        hints: &console_hints,
                         detail: console_detail.as_deref(),
                         registry_loaded: !self.console.definitions().cvars.is_empty(),
                         filter: self.console.filter.label(),
@@ -4981,6 +5154,19 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
+                if let (Some(viewer), false) = (&self.viewer, self.menu.open) {
+                    if let Some(weapon) = self.weapons.get(self.range.slot()) {
+                        let (title, finish) = viewer.caption(&weapon.name, &weapon.id);
+                        hassault_native::viewer::build(
+                            &title,
+                            &finish,
+                            view.width as f32,
+                            view.height as f32,
+                            Some(&self.text_kit),
+                            &mut overlay,
+                        );
+                    }
+                }
                 if self.summary.open {
                     let summary = self.build_summary();
                     self.summary.build(
@@ -5040,7 +5226,14 @@ impl ApplicationHandler for App {
                         // Stdout, one line, prefixed: the bench's whole output,
                         // for a script to pick out of everything on stderr.
                         println!("BENCH {line}");
-                        event_loop.exit();
+                        if self.hosted {
+                            // Started from the menu: back to it, with the
+                            // numbers, rather than a window that vanishes.
+                            self.bench_line = Some(line);
+                            self.finish(event_loop, Ended::Left);
+                        } else {
+                            event_loop.exit();
+                        }
                     }
                 }
                 // No `request_redraw` here: `about_to_wait` asks for the next
@@ -5079,6 +5272,24 @@ impl ApplicationHandler for App {
         }
         self.poll_clipboard();
         self.poll_store();
+        // A line the server never answered is reported, not left hanging.
+        self.console.expire(console::ANSWER_PATIENCE);
+        if let Some(end) = self.pending_end.take() {
+            if let Some(socket) = &self.socket {
+                let _ = socket.leave();
+            }
+            if end == Dispatch::Quit {
+                // Alone, this handle owns the writer thread and waits for it.
+                // Hosted, the shell does, once the loop has returned.
+                if !self.hosted {
+                    self.writer.finish();
+                }
+                event_loop.exit();
+            } else {
+                self.finish(event_loop, Ended::Left);
+            }
+            return;
+        }
         self.laps.lap(hassault_native::profile::Phase::Net);
 
         let now = Instant::now();

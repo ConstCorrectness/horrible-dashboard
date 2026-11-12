@@ -291,6 +291,21 @@ impl EffectsPool {
         }
     }
 
+    /// A knife attack: sparks and dust where the blade met a wall, and
+    /// nothing anywhere else.
+    ///
+    /// Not `shot`, whose fallback for a shot with no faces is "it hit a
+    /// surface": true of a bullet, which always stops somewhere, and false of
+    /// a blade, whose reach ends in the air in front of whoever swung it.
+    pub fn knife(&mut self, origin: [f32; 3], ends: &[[f32; 3]], faces: &[i32], mine: bool) {
+        for (i, end) in ends.iter().enumerate() {
+            let face = faces.get(i).copied().unwrap_or(crate::trace::FACE_NONE);
+            if face >= 0 && (face as usize) < crate::trace::FACE_NORMALS.len() {
+                self.impact(*end, origin, face, true, i, mine);
+            }
+        }
+    }
+
     /// The flash, sparks and dust one pellet leaves where it stopped.
     ///
     /// Split out of [`EffectsPool::shot`] so the two ways a pellet can be drawn
@@ -357,10 +372,7 @@ impl EffectsPool {
     /// Muzzle flash smoke wisp lingering after a shot, matching Three.js FLASH_SMOKE_LIFE
     pub fn muzzle_smoke(&mut self, at: [f32; 3]) {
         self.push(Live {
-            shape: Shape::Puff {
-                at,
-                radius: 0.14,
-            },
+            shape: Shape::Puff { at, radius: 0.14 },
             color: [0.55, 0.51, 0.47], // FLASH_SMOKE 0x8d8377
             base: 0.28,
             age: 0.0,
@@ -446,7 +458,12 @@ impl EffectsPool {
     /// Bullet or explosion shockwave carving a sightline void through active smokes.
     pub fn carve_smoke_void(&mut self, ray_start: [f32; 3], ray_dir: [f32; 3]) {
         for live in self.live.iter_mut() {
-            if let Shape::VolumetricSmoke { tunnel_start, tunnel_dir, .. } = &mut live.shape {
+            if let Shape::VolumetricSmoke {
+                tunnel_start,
+                tunnel_dir,
+                ..
+            } = &mut live.shape
+            {
                 *tunnel_start = Some(ray_start);
                 *tunnel_dir = Some(ray_dir);
             }
@@ -588,7 +605,9 @@ impl EffectsPool {
                     for i in 0..8 {
                         let offset_seed = (*seed).wrapping_add(i as u32 * 0x1928_3741);
                         let angle = (i as f32) * (std::f32::consts::PI * 2.0 / 8.0);
-                        let lobe_dist = current_radius * 0.48 * (0.8 + 0.4 * ((offset_seed & 0xFF) as f32 / 255.0));
+                        let lobe_dist = current_radius
+                            * 0.48
+                            * (0.8 + 0.4 * ((offset_seed & 0xFF) as f32 / 255.0));
                         let lobe_center = [
                             at[0] + angle.cos() * lobe_dist,
                             at[1] + angle.sin() * lobe_dist,
@@ -597,11 +616,22 @@ impl EffectsPool {
 
                         let mut carved = false;
                         if let (Some(t_start), Some(t_dir)) = (tunnel_start, tunnel_dir) {
-                            let to_lobe = [lobe_center[0] - t_start[0], lobe_center[1] - t_start[1], lobe_center[2] - t_start[2]];
-                            let proj = to_lobe[0] * t_dir[0] + to_lobe[1] * t_dir[1] + to_lobe[2] * t_dir[2];
+                            let to_lobe = [
+                                lobe_center[0] - t_start[0],
+                                lobe_center[1] - t_start[1],
+                                lobe_center[2] - t_start[2],
+                            ];
+                            let proj = to_lobe[0] * t_dir[0]
+                                + to_lobe[1] * t_dir[1]
+                                + to_lobe[2] * t_dir[2];
                             if proj > 0.0 {
-                                let perp = [to_lobe[0] - t_dir[0] * proj, to_lobe[1] - t_dir[1] * proj, to_lobe[2] - t_dir[2] * proj];
-                                let d_sq = perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2];
+                                let perp = [
+                                    to_lobe[0] - t_dir[0] * proj,
+                                    to_lobe[1] - t_dir[1] * proj,
+                                    to_lobe[2] - t_dir[2] * proj,
+                                ];
+                                let d_sq =
+                                    perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2];
                                 if d_sq < 1.44 {
                                     carved = true;
                                 }
@@ -609,7 +639,15 @@ impl EffectsPool {
                         }
 
                         if !carved && dist(lobe_center, eye) >= (current_radius * 0.6) + EYE_CLEAR {
-                            push_ball(out, lobe_center, current_radius * 0.58, e.color, smoke_alpha, 6, 4);
+                            push_ball(
+                                out,
+                                lobe_center,
+                                current_radius * 0.58,
+                                e.color,
+                                smoke_alpha,
+                                6,
+                                4,
+                            );
                         }
                     }
                 }
@@ -1113,6 +1151,37 @@ mod tests {
             "geometry {near} from the eye, inside the {EYE_CLEAR} clip"
         );
         assert!(near > crate::camera::NEAR, "inside the near plane");
+    }
+
+    #[test]
+    fn a_knife_swung_through_air_draws_nothing() {
+        // The reach ends a metre in front of the eye. A burst there is a
+        // star on the crosshair every swing.
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.knife(eye, &[[11.0, 10.0, 5.0]], &[], true);
+        fx.knife(eye, &[[11.0, 10.0, 5.0]], &[crate::trace::FACE_NONE], false);
+        let mut out = Vec::new();
+        fx.vertices(&mut out, eye);
+        assert!(
+            out.is_empty(),
+            "{} vertices from a swing at nothing",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn a_knife_into_a_wall_marks_it() {
+        let eye = [10.0, 10.0, 5.0];
+        let far = [40.0, 40.0, 5.0];
+        let mut theirs = EffectsPool::default();
+        theirs.knife(eye, &[[11.0, 10.0, 5.0]], &[0], false);
+        let mut out = Vec::new();
+        theirs.vertices(&mut out, far);
+        assert!(
+            !out.is_empty(),
+            "somebody else's blade on a wall drew nothing"
+        );
     }
 
     #[test]

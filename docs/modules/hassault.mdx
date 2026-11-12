@@ -8112,6 +8112,336 @@ exit code and the tail of the log, instead of a pid for a process that is not
 there.
 :::
 
+### With no node: the downloaded executable
+
+Everything above is the native client launched **by a node**. It also runs with no
+node at all, which is what makes it a file somebody can download and double-click:
+`https://horrible-games.fly.dev/download/hAssault.exe`
+([how the server hosts it](../architecture/game-server-hosting.mdx#the-native-client-download)).
+
+The rule is one line in `parse_from` (`apps/native-fps/src/main.rs`): **`--server`
+names a node; without it the client is standalone.** A double-click passes no
+arguments, so no arguments has to mean "play". The launcher has always passed
+`--server` (the node's port moves), so nothing a pane starts is affected, and the
+old default of `http://127.0.0.1:8000` was never something anyone relied on.
+
+| | Launched by a node | Standalone |
+| --- | --- | --- |
+| Started with | `--server=<node origin>` | nothing, or `--game-server=<origin>` |
+| Map, weapons, hitbox, grenades | the node's `/api/hassault/*` | the game server's (`hassault_content.py`, the node's own handlers) |
+| Match socket | `ws://<node>/ws` | `wss://<game server>/hassault-ws?guest=1&name=…` |
+| Who you are | the node's signed-in account | a guest, under a callsign |
+| Settings | the node's settings bag | `settings.json` in the user's config directory |
+| Maps | bundled, installed and drafts | bundled only |
+
+Three things had to exist for that table's right-hand column:
+
+- **TLS on the match socket.** `tungstenite` was built with `handshake` only, so
+  `wss://` failed at connect; the socket has only ever been plain TCP to a node on
+  the same machine. It now has `rustls-tls-webpki-roots` (rustls was already in the
+  tree through `ureq`). The 4 ms read timeout that lets one thread both read and
+  write is set on the TCP stream **underneath** the TLS session (`net.rs` `tune`):
+  that is where a read blocks, and a timeout part-way through a TLS record is safe
+  because rustls keeps the partial record.
+- **A guest identity.** A node takes the name from its account and ignores what a
+  client sends. The game server has no account to ask, so the callsign rides the
+  socket address, exactly as the browser client's does. `--name=` sets it;
+  otherwise it is generated once (`Operative-417`, the browser's own default) and
+  kept, cut to the 16 characters the server cuts it to.
+- **Somewhere to keep settings.** `settings.rs` opens by saying the node is the
+  store and not a file beside the binary. Standalone is the one exception, because
+  there is no bag to read: the same `key -> value` document lives at
+  `%APPDATA%\hAssault\settings.json` (`$XDG_CONFIG_HOME/hAssault/` on Linux,
+  `~/Library/Application Support/hAssault/` on macOS), written whole and renamed
+  into place by `SettingsWriter::to_file`. Nothing above the store knows which one
+  it has.
+
+What standalone does **not** have, each because it means "this node": `--mode=edit`
+(refused before anything is fetched: drafts are documents on a node), the armoury's
+skins (the inventory route 404s and weapons draw in default colours), and sign-in —
+a standalone player is always a guest, so their matches are unrated.
+
+`--game-server=http://127.0.0.1:9200` points it at a local game server, which is
+how this is tested without touching production:
+
+```bash
+./apps/native-fps/target/release/hassault-native --game-server=http://127.0.0.1:9200 --headless
+```
+
+:::warning A double-click has nowhere to print
+Started from Explorer the executable gets a console of its own, which closes the
+instant the process exits. "Could not reach the server" would flash for a frame
+and the game would simply seem not to start. So a run with **no arguments at
+all** holds the console open on a fatal error until Enter is pressed. Only then:
+anything started with flags has a terminal or a launcher reading its stderr, and
+must exit rather than wait on a key.
+:::
+
+:::note The executable carries its own C runtime
+An MSVC build imports `VCRUNTIME140.dll` by default, which is not part of
+Windows — it arrives with the Visual C++ redistributable, usually as a side effect
+of installing something else. `.cargo/config.toml` at the **repo root** sets
+`+crt-static` so the download starts on a machine without it. At the root, not
+beside the crate: cargo finds config from the directory it is run in, not from
+`--manifest-path`, and both the build script and the release workflow run it from
+the root.
+:::
+
+### The front end: a menu to start in
+
+Launched by a node, the client is handed a match the player already chose in the
+dashboard, and opens straight into it. Standalone it used to do the same with
+defaults nobody chose: fetch `hd_dust2`, join whatever room was on it, and open a
+window with the match already running — after several seconds of a console
+window, with no say in the map and no way to look at the loadout.
+
+So a standalone client with **no destination** opens into a front end instead.
+`parse_from` decides: any of `--map`, `--room`, `--mode`, `--game`, `--bots`,
+`--host`, `--drill`, `--spawn`, `--bench`, `--headless` or `--check` is a
+destination and goes there as before; `--menu` and `--no-menu` say it outright. A
+node is never given one — the dashboard is its menu.
+
+```text
+  BOOT ──► HOME ──► SEARCHING ──► LOADING ──► the match ──► HOME
+           play / loadout / settings
+```
+
+| Screen | What it is |
+| --- | --- |
+| Boot | The window opens at once and lists each table as it is fetched. Weapons and maps are required; the rest are skipped with a note. A failure offers a retry instead of closing |
+| Play | Three ways in: **Quick play** (map or any, game or any, bots for a new room), **Browse rooms** (the server's list), **Practice** (one map, no server) |
+| Loadout | Per side: primary, secondary, operator. Each weapon's numbers are bars measured against the best on offer, and the whole kit (blade included) is one row along the bottom |
+| Settings | The pause menu's own pages (`Menu::front`), without the rows that mean "this match" |
+| Searching | Asks `/api/hassault/rooms`, picks with `front::choose_room`, and says which it was |
+| Loading | The map's name, each phase with what it produced, and the map's floor plan as a backdrop once the world is built |
+
+Three files, split the way `console.rs` and `menu.rs` already are:
+
+- **`front.rs`** (library) is a state machine and a painter. It owns no window, no
+  socket and no thread: a click or a key becomes an `Intent`, and it draws itself
+  into the overlay vertices the HUD uses. `Front::hits` produces a rectangle for
+  everything clickable and both the painter and the mouse read it. That is why
+  every screen renders in `hud_preview` (`front`, `front-browse`,
+  `front-practice`, `front-loadout`, `front-operator`, `front-search`,
+  `front-found`, `front-loading`, `front-boot`, `front-bootfail`, `front-notice`,
+  `front-name`) and is unit-tested without a GPU.
+- **`front_gpu.rs`** (library) is one surface and the overlay pipeline. The match's
+  `Renderer` needs a world to build and a moment to start; a screen of rectangles
+  and text needs neither, so the menu is up before anything is fetched. It
+  presents with vsync, since a menu has no latency worth a torn frame.
+- **`shell.rs`** (binary) owns the window and whichever of the two is in it.
+
+**A match is a fresh `App`, every time.** `App` holds a few hundred fields of match
+state. Returning to the menu by resetting them would be a list that is wrong the
+day a field is added, and the symptom would be a second match that opens with the
+first one's score. So the shell constructs an `App`, hands it the window
+(`App::attach`, the second half of what `resumed` used to do) and drops it when
+`App::take_ended` says the match is over. Hosted, `leave_and_exit` and the two
+socket-failure paths report an `Ended` instead of calling `event_loop.exit()`. The
+cost is a renderer start per match, which is the loading screen's last line.
+
+**Nothing that waits runs on the window's thread.** Boot, the room search and the
+whole load (map fetch, world build, connect, join) are worker threads reporting
+over one channel. Each job carries a ticket; a message whose ticket is not the
+current one belongs to a job the player cancelled, and is dropped — a socket that
+arrives that way closes as it is dropped, which is the leave.
+
+**The join is answered before the renderer starts.** `MatchSocket::await_welcome`
+blocks the loader until the server seats the player or refuses, so a refusal
+("that map cannot host Bomb Defuse") is a line on the menu rather than a match
+that opens and closes. Everything it reads while waiting is kept and handed out by
+the next `drain`, so the game sees the welcome as if nobody had looked.
+
+**There is no queue, and the screen does not pretend there is one.** A casual join
+is seated at once, in a room on that map or a new one. Searching is a real
+question: the busiest room with a free seat and somebody in it, among those
+matching the map and game asked for. If there is none, a room is opened and the
+title says *opening a room*, not *match found*. A room nobody is in is never
+chosen: it closes a minute after its last player, and joining one is being seated
+alone with no right to add bots. Rated duels are paired by the server and need an
+account, so they are not offered to a guest.
+
+:::note One settings writer, two holders
+The menu and the match both save settings, and `SettingsWriter::to_file` keeps the
+whole document in its thread. Two writers would each rewrite the file from their
+own copy and undo each other. The match gets `SettingsWriter::share` — another
+handle on the same thread — and the shell is the one that joins it at exit, after
+the match's handle is gone.
+:::
+
+Driving the real window from a script, for a check that is not a person: winit
+takes posted window messages, so `PostMessage` with `WM_MOUSEMOVE`,
+`WM_LBUTTONDOWN` and `WM_KEYDOWN` (scan code in the `lParam`) clicks and types
+without taking the desktop, and `PrintWindow` with flag 3 photographs the client
+area. Point it at a local game server and a scratch `APPDATA`. Against a server on
+the same machine a load is over in a few hundred milliseconds, so
+`HASSAULT_LOAD_HOLD_MS=5000` pauses it once the world is built — long enough to
+look at the loading screen, and nothing at all when unset. `hud_preview
+front-loading-real` draws the same screen over a real map's floor plan.
+
+### Finding a match is the server's rule
+
+The browser's Quick Play and the native menu's Find Match used to read
+`/api/hassault/rooms` and each choose a room for itself. They ran different
+rules and opened on different default maps, so two people searching an empty
+server at the same moment got a room each. Both now ask the server:
+
+| Route | Answer |
+| --- | --- |
+| `POST /api/hassault/matchmake` with `{"map"?, "mode"?}` | A room in the shape the room list uses, plus `opened` and `humans` |
+| `GET /api/hassault/rooms/{id}` | That room, its host and its roster (the scoreboard's columns, nothing else) |
+
+`HassaultReferee.find_match` picks the fullest room with space that fits the
+request, where full counts the humans seated **and** the seats already promised
+to clients still loading the map. With no such room it opens one at once, before
+anyone has joined it, so the next search lands there too. A promise lapses after
+`MATCH_HOLD_S` (30 s). A room with nobody in it or coming is skipped: it is
+counting down to closing. The first seat to reach a room opened this way is its
+creator, exactly as if its own join had opened it.
+
+The route is public, so opening is bounded twice: by `HASSAULT_MAX_ROOMS`, and
+by `MAX_UNCLAIMED_ROOMS` rooms that nobody has reached yet. The map a search
+with no map opens on is `HASSAULT_QUICK_MAP` (default `hd_dust2`).
+
+Both clients fall back to choosing from the room list when the route answers
+404, so a client newer than the server it dials still plays.
+
+### Several maps, and a lobby
+
+A search may name several maps: `POST /api/hassault/matchmake` takes
+`{"maps": [...], "mode"?}`, and a room on any of them satisfies it. With no
+such room, one is opened on the first map named that can host the mode. The
+native menu's quick-play tiles toggle, so the request is every tile that is on;
+none is any map.
+
+A **lobby** is a group gathered before the search (`hassault_lobby.py`). One
+player opens it and gets a five-character code; up to four more join with the
+code; when the leader presses play, `find_match` is asked once with
+`seats` set to the size of the group, so the room it returns has a seat promised
+for every member.
+
+| Route | Does |
+| --- | --- |
+| `POST /api/hassault/lobbies` | Opens a lobby; answers this member's token and the lobby |
+| `POST /api/hassault/lobbies/{code}/join` | Joins it |
+| `GET /api/hassault/lobbies/{code}?token=` | The lobby as this member sees it. Polled, and the heartbeat |
+| `POST /api/hassault/lobbies/{code}/play` | The leader's search, with `maps` and `mode` |
+| `POST /api/hassault/lobbies/{code}/leave` | Leaves |
+
+It is polled HTTP because a lobby exists before anyone has a match socket. A
+member who has not asked for 12 s is dropped, so a client keeps asking during a
+match (every 4 s) as well as in the menu (every 1.5 s). The leader is the
+longest-standing member; nobody is elected. Each search increments `serial`,
+and a client acts on a serial once. Nothing here is an account: a member is a
+callsign and the token the server handed back.
+
+### Map art in the menu
+
+The front end draws the web client's key art (`apps/assault-web/src/assets/maps/`)
+behind the menu, on each map tile, and behind the loading screen. `map_art.rs`
+compiles the pictures in, decodes them on a worker thread, and packs them into
+one texture; `front_gpu.rs` draws them in a pass under the overlay. `Front::images`
+lists what goes where by map name, and a map with no picture (`hd_aim` today)
+keeps its flat card.
+
+### Signing in, with no node
+
+A client with no node played as a guest and owned nothing. It can now sign in
+to the game server directly, and the menu's **INVENTORY** and **STORE** tabs are
+the account (`front/account.rs`). For a guest, both tabs are where to sign in.
+
+No password is typed in the client. It uses the game server's existing provider
+flows, and the rest happens in the player's browser:
+
+1. `POST /auth/{provider}/web/start` answers a `login_url` and a private
+   `retrieval_code`. The client opens the address and polls
+   `POST /auth/{provider}/web/poll`.
+2. Where a server has no redirect client, `POST /auth/{provider}/start` answers a
+   `user_code` and a `verification_uri` (the device flow). The client shows both
+   and polls `POST /auth/{provider}/poll`.
+
+The address is always drawn on screen as well as opened, because an open that
+fails does so silently. Only an `http` or `https` address is ever handed to the
+system, as an argument and never through a shell. `GET /auth/providers` decides
+which buttons are live.
+
+What comes back is the server's token. It is kept in the local settings file
+under `hassault.standalone.token`, checked against `GET /me` when the menu
+opens, and cleared when the server refuses it. Signed in:
+
+- the match socket is `/hassault-ws?token=`, so the seat is the account's;
+- account routes are asked with `Authorization: Bearer` (`NodeApi::with_token`).
+
+| Tab | Shows | Routes |
+| --- | --- | --- |
+| Inventory | Owned skins; click one to equip it or take it off | `/api/hassault/account/inventory`, `equip`, `unequip` |
+| Store | Credits, keys and cases; the market | `/api/hassault/account/wallet`, `keys/buy`, `cases/open`, `/api/hassault/market`, `account/market/{id}/buy` |
+
+A refusal from the server (not enough credits, no key for a case) is shown in
+its own words.
+
+### Developer tools, in the executable
+
+The menu's **DEV TOOLS** tab (`front.rs`, `Tab::Dev`) starts what used to need a
+command line or the dashboard:
+
+| Tool | What it starts | Needs |
+| --- | --- | --- |
+| Aim drill | A drill from `/api/hassault/drills` on the range | Any game server |
+| Benchmark | The map's benchmark path; the result returns to the menu as one line | A map with a path in `bench-paths.json` |
+| Map editor | The map designer on a draft of the selected map | A server that keeps drafts |
+| Model viewer | Every served weapon in hand, in any finish from `/api/hassault/skins/catalog`, at any wear, with its inspect clip looping (`viewer.rs`) | Any game server |
+| Server | The rooms running, the selected room's roster, and a button to join it | Any game server |
+
+Three switches under the tools turn on the net graph, hitboxes and first-person
+tracers for the next match. Each sets the console CVar of the same name.
+
+A game server keeps map drafts only when started with
+`HASSAULT_ENABLE_DRAFTS=1`. Its content routes have no accounts, and a draft can
+be saved as a map file, so the public server leaves it off. With it on, the
+draft routes and `draft:<id>` maps are served there and the editor needs no
+dashboard node; `--mode=edit` works with `--game-server=` as well. The switch is
+read per request.
+
+### The console, for a client with no node
+
+Two faults made the console useless standalone, and neither was in the console:
+
+- **The game server dropped `console_exec`.** The native client sends server
+  commands down its match socket, where a node's channel resolves the room from
+  the connection. The game server's socket had no arm for the event, so every
+  command went nowhere and nothing said so. It answers now
+  (`hassault_console.socket_console`), under the same roles as its HTTP route but
+  read off the socket's own account — so a **guest who is hosting** can run the
+  room's commands, which the sign-in-only HTTP route never allowed.
+- **It served no client CVars.** `draw.fov` is the client's to apply, but the
+  client learns the name and the range from the registry — and without it could
+  not tell `draw.fov` from a server command, so it sent that too.
+  `console_definitions` now adds every `client`-flagged CVar from the node's own
+  `console_registry`, so both servers describe one set of settings.
+
+And three things in the console itself:
+
+- **A sent line that is never answered is reported** (`Console::expire`, four
+  seconds). A console that sends a command and prints nothing is indistinguishable
+  from one that ran it.
+- **A CVar this client reads is settable even when nothing described it**
+  (`honored_def`): an older game server, or Train. It carries only the type, which
+  is this client's own knowledge — the type of the read that consumes it.
+- **Built-ins and borrowed spellings.** `help [name]`, `find <text>`, `echo`,
+  `quit`/`exit` and `disconnect` run with or without a server (`BUILTINS`, one
+  table for help, search and completion). `SPELLINGS` maps what people type first
+  — `sensitivity`, `fov`, `net_graph`, `cl_crosshairsize`, `bot_add` — onto the
+  names that exist here. They are spellings, not a registry: each resolves to a
+  name that is then typed, range-checked and routed like any other.
+
+It is also drawn differently. It was a translucent band the width of the window,
+and the scoreboard read straight through it as if it were output. It is now an
+opaque panel hung from the top, inset on a wide window, with a field for the
+input, a **list** of completions above the caret (one name to a row, its current
+value on the right, Up and Down to choose) and a scrollbar. Long lines wrap by
+column rather than running off the panel.
+
 ### The pane stops rendering while the native client plays
 
 The pane's three.js loop used to run the whole time the native window was up: a
@@ -10256,7 +10586,16 @@ The standalone web client plays on the central game server, so its console's
 route existed the game server's static web mount answered that POST with
 `405 Method Not Allowed`. It is now answered by
 `backend/games_server/hassault_console.py`, which is deliberately much smaller
-than the node's console:
+than the node's console.
+
+The native client reaches the same table a second way: `console_exec` on its
+match socket, answered as `console_res` by `socket_console`. The role is read off
+the socket's own account rather than a bearer token, so it works for a guest —
+see [the console, for a client with no node](#the-console-for-a-client-with-no-node).
+The route's definitions also carry the node registry's `client`-flagged CVars, for
+a client that has no node to ask.
+
+The rules are the same on both paths:
 
 - **Who.** Three roles, each able to do everything the one before can:
 

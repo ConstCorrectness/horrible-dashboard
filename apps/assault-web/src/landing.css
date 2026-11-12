@@ -296,6 +296,85 @@
   font-weight: 500;
 }
 
+/* ---- native client download --------------------------------------------------
+ * One slim row in the hero's lower-left corner, opposite `now-showing`. Absolute
+ * so that arriving after its fetch moves nothing; it sits inside the hero grid's
+ * bottom padding. An accent rule on top and a cut corner rather than a glowing
+ * outline, and a faint grid behind it so it reads as a panel, not a banner.   */
+
+.native-dl {
+  position: absolute;
+  /* The wrap's own side padding, so the row starts on the content's left edge
+   * rather than in the gutter. */
+  left: 24px;
+  bottom: 14px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px 0 14px;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 100% 10px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 10px 100%,
+    rgba(10, 11, 12, 0.72);
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--notch)),
+    calc(100% - var(--notch)) 100%,
+    0 100%
+  );
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.native-dl:hover,
+.native-dl:focus-visible {
+  color: var(--text);
+  border-color: var(--line-strong);
+  border-top-color: var(--accent-hover);
+}
+.native-dl svg {
+  flex: none;
+  color: var(--accent);
+}
+.native-dl .tag {
+  height: 18px;
+}
+.native-dl-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.native-dl-meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.native-dl-cta {
+  margin-left: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line-strong);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.native-dl:hover .native-dl-cta {
+  color: var(--accent-hover);
+}
+
 /* ---- operator panel -------------------------------------------------------- */
 
 .operator {
@@ -1096,6 +1175,14 @@
   .now-showing {
     display: none;
   }
+  /* The hero is one column here and its bottom padding is spoken for, so the
+   * row rejoins the flow under the operator panel. */
+  .native-dl {
+    position: static;
+    width: fit-content;
+    max-width: 100%;
+    margin: -24px 0 40px;
+  }
   .srow {
     grid-template-columns: 72px minmax(0, 1fr) 96px;
   }
@@ -1128,6 +1215,11 @@
     display: none;
   }
   .online span:last-child {
+    display: none;
+  }
+  /* A phone cannot run it and has no room for the detail; the title and the
+   * action are the whole message at this width. */
+  .native-dl-meta {
     display: none;
   }
   .stats {

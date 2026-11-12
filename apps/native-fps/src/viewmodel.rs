@@ -187,7 +187,11 @@ struct Palette {
 
 /// Grime. What a Battle-Scarred rifle is mixed toward: `#5a554e`, the
 /// browser's and the reference's (`cosmetics.py` `WEAR_COLOR`).
-const WEAR_COLOR: [f32; 3] = [0x5a as f32 / 255.0, 0x55 as f32 / 255.0, 0x4e as f32 / 255.0];
+const WEAR_COLOR: [f32; 3] = [
+    0x5a as f32 / 255.0,
+    0x55 as f32 / 255.0,
+    0x4e as f32 / 255.0,
+];
 const BLACK: [f32; 3] = [0.0, 0.0, 0.0];
 const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 
@@ -465,6 +469,43 @@ struct Shape {
     rest: Vec3,
 }
 
+/// How long a knife attack's swing lasts: the browser client's numbers
+/// (`viewmodel.ts`), so one attack reads the same in both.
+const KNIFE_SLASH: f32 = 0.22;
+const KNIFE_STAB: f32 = 0.35;
+
+fn knife_duration(stab: bool) -> f32 {
+    if stab {
+        KNIFE_STAB
+    } else {
+        KNIFE_SLASH
+    }
+}
+
+/// Where a knife attack has the hand, as an offset and a turn (pitch, yaw,
+/// roll) over the resting pose. Out and back on one half sine, so it leaves
+/// and returns to rest with no step at either end.
+fn knife_swing(action: Option<(bool, f32)>) -> (Vec3, Vec3) {
+    let Some((stab, t)) = action else {
+        return (Vec3::ZERO, Vec3::ZERO);
+    };
+    let progress = (t / knife_duration(stab)).clamp(0.0, 1.0);
+    let arc = (progress * std::f32::consts::PI).sin();
+    if stab {
+        // A thrust straight down the view.
+        (
+            Vec3::new(-0.12, 0.06, -0.4) * arc,
+            Vec3::new(-0.12, 0.15, 0.55) * arc,
+        )
+    } else {
+        // A fast diagonal swipe across the screen.
+        (
+            Vec3::new(-0.32, 0.08, -0.12) * arc,
+            Vec3::new(0.25, -0.55, -0.45) * arc,
+        )
+    }
+}
+
 pub struct WeaponViewModel {
     weapon: String,
     /// The skin the current model was built with. The palette is baked into the
@@ -473,6 +514,10 @@ pub struct WeaponViewModel {
     skin: Option<Skin>,
     shape: Option<Shape>,
     kick: f32,
+    /// A knife attack in progress: whether it is the stab, and its age in
+    /// seconds. A blade has no recoil to kick with, so an attack is a swing
+    /// of the whole hand instead — `KNIFE_SLASH` / `KNIFE_STAB`.
+    knife_action: Option<(bool, f32)>,
     bob_phase: f32,
     reload_t: f32,
     last_yaw: Option<f32>,
@@ -562,6 +607,7 @@ impl Default for WeaponViewModel {
             skin: None,
             shape: None,
             kick: 0.0,
+            knife_action: None,
             bob_phase: 0.0,
             reload_t: 0.0,
             last_yaw: None,
@@ -610,6 +656,10 @@ impl WeaponViewModel {
         // and re-holstering because somebody changed a colour would make the
         // weapon dive out of frame in the middle of a firefight.
         let swapped = id != self.weapon;
+        if swapped {
+            // A swing belongs to the blade that was in the hand.
+            self.knife_action = None;
+        }
         self.weapon = id.to_string();
         self.grips = arms::grips_for(id);
         self.skin = skin.cloned();
@@ -680,6 +730,12 @@ impl WeaponViewModel {
     /// being dead; this client does not, so the key would flash on shots the
     /// server refused.
     pub fn fire(&mut self) {
+        if self.weapon == "knife" {
+            // A blade does not recoil and has no muzzle: the attack is the
+            // swing. Restarted by every attack, so a held trigger chains them.
+            self.swing(false);
+            return;
+        }
         // Additive but capped: holding an assault rifle should climb to a steady
         // shake, not to a weapon behind the player's ear.
         self.kick = (self.kick + 0.8).min(1.0);
@@ -695,6 +751,20 @@ impl WeaponViewModel {
         // away from the crosshair, and a shot that came out of a weapon pointing
         // at the floor would be a picture of a shot that did not happen. The
         // server has already resolved it against the real view angles.
+        self.inspect = None;
+    }
+
+    /// The knife's heavy attack: a thrust rather than a swipe. Called when the
+    /// server reports our own attack as the alternate one.
+    pub fn stab(&mut self) {
+        if self.weapon == "knife" {
+            self.swing(true);
+        }
+    }
+
+    fn swing(&mut self, stab: bool) {
+        self.knife_action = Some((stab, 0.0));
+        self.action = None;
         self.inspect = None;
     }
 
@@ -792,6 +862,10 @@ impl WeaponViewModel {
         self.sway_y += ((-pitch_delta * 1.6).clamp(-0.18, 0.18) - self.sway_y) * settle;
 
         self.kick -= self.kick * (dt * KICK_DECAY).min(1.0);
+        self.knife_action = self.knife_action.and_then(|(stab, t)| {
+            let t = t + dt;
+            (t < knife_duration(stab)).then_some((stab, t))
+        });
         // The dip, on the server's clock where there is one. `reload_progress`
         // is `None` only when there is no length to stretch across, and the old
         // fixed-rate approach is kept for exactly that case — see `RELOAD_RATE`.
@@ -960,45 +1034,54 @@ impl WeaponViewModel {
         let cock_yaw = pin_pull * if self.throw_lob { 0.12 } else { 0.16 };
         let cock_roll = pin_pull * if self.throw_lob { 0.35 } else { -0.22 };
 
-        let position = Vec3::new(
-            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x + breath_x + cock_x,
-            cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55
-                + reload_impulse_y
-                + inspect_lift_y
-                - stow * 1.15
-                + breath_y
-                + sprint_dip
-                + cock_y,
-            cur_home_z + self.kick * 0.28 + reload_impulse_z + inspect_lift_z + stow * 0.22 + cock_z,
-        );
+        let (knife_pos, knife_rot) = knife_swing(self.knife_action);
+
+        let position = knife_pos
+            + Vec3::new(
+                cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x + breath_x + cock_x,
+                cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55
+                    + reload_impulse_y
+                    + inspect_lift_y
+                    - stow * 1.15
+                    + breath_y
+                    + sprint_dip
+                    + cock_y,
+                cur_home_z
+                    + self.kick * 0.28
+                    + reload_impulse_z
+                    + inspect_lift_z
+                    + stow * 0.22
+                    + cock_z,
+            );
         let draw_pitch = stow * -0.38;
         let draw_yaw = stow * 0.18;
         let draw_roll = stow * 0.28;
 
-        let rotation = Vec3::new(
-            self.kick * -0.16
-                + self.reload_t * 0.7
-                + reload_impulse_pitch
-                + bob_y * 0.4
-                + inspect_pitch
-                + draw_pitch
-                + breath_pitch
-                + sprint_pitch
-                + cock_pitch,
-            self.sway_x * 0.7 * ads_damp
-                + self.reload_t * 0.25
-                + inspect_yaw
-                + draw_yaw
-                + sprint_yaw
-                + cock_yaw,
-            self.sway_x * 0.5 * ads_damp
-                + bob_x * 0.6
-                + reload_impulse_roll
-                + inspect_roll
-                + draw_roll
-                + sprint_roll
-                + cock_roll,
-        );
+        let rotation = knife_rot
+            + Vec3::new(
+                self.kick * -0.16
+                    + self.reload_t * 0.7
+                    + reload_impulse_pitch
+                    + bob_y * 0.4
+                    + inspect_pitch
+                    + draw_pitch
+                    + breath_pitch
+                    + sprint_pitch
+                    + cock_pitch,
+                self.sway_x * 0.7 * ads_damp
+                    + self.reload_t * 0.25
+                    + inspect_yaw
+                    + draw_yaw
+                    + sprint_yaw
+                    + cock_yaw,
+                self.sway_x * 0.5 * ads_damp
+                    + bob_x * 0.6
+                    + reload_impulse_roll
+                    + inspect_roll
+                    + draw_roll
+                    + sprint_roll
+                    + cock_roll,
+            );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
         self.flash_age += dt;
@@ -1093,7 +1176,13 @@ impl WeaponViewModel {
                     -0.12 + reach * 0.03,
                 ));
                 let curl = 0.4 + reach * 0.8;
-                resolved_support_curl = [curl, curl, 0.4 + reach * 0.9, 0.4 + reach * 0.9, 0.4 + reach * 0.9];
+                resolved_support_curl = [
+                    curl,
+                    curl,
+                    0.4 + reach * 0.9,
+                    0.4 + reach * 0.9,
+                    0.4 + reach * 0.9,
+                ];
             } else if self.pin_pull_t < 0.72 {
                 let pull = ease((self.pin_pull_t - 0.40) / 0.32);
                 resolved_support = Some(Vec3::new(
@@ -2289,7 +2378,11 @@ fn build(id: &str, skin: Option<&Skin>) -> Shape {
                 upright_tube(0.135, 0.026, [0.0, 0.26, -0.10], [0.32, 0.35, 0.38]),
                 upright_tube(0.135, 0.026, [0.0, -0.10, -0.10], [0.32, 0.35, 0.38]),
                 upright_tube(0.055, 0.08, [0.0, 0.30, -0.10], [0.32, 0.35, 0.38]),
-                part([0.105, 0.055, 0.115], [0.0, 0.34, -0.10], [0.32, 0.35, 0.38]),
+                part(
+                    [0.105, 0.055, 0.115],
+                    [0.0, 0.34, -0.10],
+                    [0.32, 0.35, 0.38],
+                ),
                 rotated(
                     [0.042, 0.27, 0.025],
                     [0.0, 0.18, -0.225],
@@ -2936,6 +3029,46 @@ mod tests {
         // browser does too.
         vm.update(0.1, &frame(true));
         assert_eq!(drawn(&mut vm).len(), quiet);
+    }
+
+    #[test]
+    fn a_knife_attack_swings_the_hand_out_and_back() {
+        assert_eq!(knife_swing(None), (Vec3::ZERO, Vec3::ZERO));
+        for stab in [false, true] {
+            let len = knife_duration(stab);
+            let (start, _) = knife_swing(Some((stab, 0.0)));
+            let (mid, turn) = knife_swing(Some((stab, len * 0.5)));
+            let (end, _) = knife_swing(Some((stab, len)));
+            assert!(
+                start.length() < 1e-4 && end.length() < 1e-4,
+                "a step at the ends"
+            );
+            assert!(mid.length() > 0.2 && turn.length() > 0.3, "barely moved");
+            // Forward is -Z, and both attacks reach forward.
+            assert!(mid.z < 0.0);
+        }
+        // The stab is the one that goes deep; the slash the one that crosses.
+        let slash = knife_swing(Some((false, KNIFE_SLASH * 0.5))).0;
+        let stab = knife_swing(Some((true, KNIFE_STAB * 0.5))).0;
+        assert!(stab.z < slash.z && slash.x < stab.x);
+    }
+
+    #[test]
+    fn firing_a_knife_starts_a_swing_and_a_gun_does_not() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("knife", None);
+        vm.fire();
+        assert_eq!(vm.knife_action, Some((false, 0.0)));
+        assert_eq!(vm.kick, 0.0, "a blade recoiled");
+        vm.stab();
+        assert_eq!(vm.knife_action, Some((true, 0.0)));
+        // Changing weapon drops it: the swing belonged to the blade.
+        vm.set_weapon("assault", None);
+        assert_eq!(vm.knife_action, None);
+        vm.fire();
+        assert_eq!(vm.knife_action, None);
+        vm.stab();
+        assert_eq!(vm.knife_action, None);
     }
 
     #[test]

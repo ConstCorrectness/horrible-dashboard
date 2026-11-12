@@ -308,4 +308,59 @@ def test_definitions_list_what_the_server_accepts(referee):
     data = asyncio.run(go()).json()
     names = {c["name"] for c in data["commands"]}
     assert {"server.bots.add", "server.bots.remove", "server.kick"} <= names
-    assert {c["name"] for c in data["cvars"]} == set(hassault_console.GAMEPLAY_CVARS)
+    server = {c["name"] for c in data["cvars"] if "client" not in c["flags"]}
+    assert server == set(hassault_console.GAMEPLAY_CVARS)
+
+
+def test_definitions_carry_the_client_cvars_a_client_with_no_node_needs(referee):
+    """`draw.fov` is the client's to apply, but it learns the name and the range
+    here. Without it the standalone client sent the line to a server that has
+    no such command."""
+    data = hassault_console.console_definitions()
+    client = {c["name"]: c for c in data["cvars"] if "client" in c["flags"]}
+    assert {"draw.fov", "player.sensitivity", "net.graph"} <= set(client)
+    fov = client["draw.fov"]
+    assert fov["type"] == "number" and fov["min_value"] < fov["max_value"]
+    # Described, not reported: this process's live value is nobody's setting.
+    assert fov["current_value"] == fov["default_value"]
+    assert "python_attr" not in fov
+
+
+def test_a_seated_socket_runs_the_console_and_is_always_answered(referee):
+    """The native client's `console_exec`. A guest host runs the room; anyone
+    else gets the refusal as an answer on their own request id."""
+
+    async def body(post) -> None:
+        guest = SeatConn(FakeSocket(), "guest_1234", "Guest", is_guest=True)
+        other = seat("bob")
+        stray = seat("nobody")
+        await referee.join(guest, "hd_assault", new=True)
+        room_id = next(iter(referee.server.rooms))
+        await referee.join(other, "hd_assault", room_id=room_id)
+        room = referee.server.get(room_id)
+
+        ok = await hassault_console.socket_console(
+            guest, {"command": "server.bots.add(count=2)", "reqId": 7}
+        )
+        assert ok["ok"] is True and ok["reqId"] == 7 and ok["error"] is None
+        assert len(bot_names(room)) == 2
+        assert ok["output"]
+
+        refused = await hassault_console.socket_console(
+            other, {"command": "server.bots.kick_all()", "reqId": 8}
+        )
+        assert refused["ok"] is False and refused["reqId"] == 8
+        assert "host" in refused["error"]
+        assert len(bot_names(room)) == 2
+
+        unknown = await hassault_console.socket_console(
+            guest, {"command": "sv_gravity 100", "reqId": 9}
+        )
+        assert unknown["ok"] is False and "not available" in unknown["error"]
+
+        unseated = await hassault_console.socket_console(
+            stray, {"command": "help", "reqId": 10}
+        )
+        assert unseated["ok"] is False and "join a room" in unseated["error"]
+
+    run(referee, body)

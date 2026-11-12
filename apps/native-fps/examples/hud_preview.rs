@@ -21,7 +21,10 @@
 //! or `ctf` to draw the objective layer. `menu`, `menu-video` or
 //! `menu-crosshair` draws that page of the pause menu over the HUD, `drill`
 //! the aim drill's score card, `chat` a chat with the prompt open (emoji, CJK,
-//! Arabic) and `console` the console with a scrollback. The size is a parameter
+//! Arabic) and `console` the console with a scrollback (`console-list` with a
+//! completion list open). `front` and its variants (`front-loadout`,
+//! `front-search`, `front-loading`, ... see `front_fixture`) draw a screen of
+//! the front end instead of the HUD. The size is a parameter
 //! because the whole layout is derived from one unit, `u = height / 360`, so a
 //! HUD that reads at 1080p can still be a smear at 720p and overlapping at 4K —
 //! and the only way to know is to render all three.
@@ -479,18 +482,27 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         console.push("] bot_add ct", Tone::Echo);
         console.push("bot Zoë joined CT", Tone::Note);
         console.push("unknown command: bot_kick_al", Tone::Error);
-        console.insert("say naïve café");
+        if preview_flags.iter().any(|a| a == "console-list") {
+            // A completion list: the built-ins and borrowed spellings need no
+            // registry, so this is what a console with no server offers.
+            console.insert("c");
+        } else {
+            console.insert("say naïve café");
+        }
     }
     let console_lines = console.visible();
     let console_quick = console.quick_actions(&cvars);
+    let console_hints = console.suggestion_hints(&cvars);
+    let console_detail = console.suggestion_detail(&cvars);
     let console_view = show_console.then(|| hassault_native::hud::ConsoleView {
         lines: &console_lines,
         input: &console.input,
         cursor: console.cursor,
         scroll: 0,
-        suggestions: &[],
-        suggestion: 0,
-        detail: None,
+        suggestions: &console.suggestions,
+        suggestion: console.suggestion,
+        hints: &console_hints,
+        detail: console_detail.as_deref(),
         registry_loaded: true,
         filter: console.filter.label(),
         hidden: console.hidden_count(),
@@ -635,6 +647,11 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
             Some(&kit),
             &mut verts,
         );
+    }
+    // The front end is a whole screen, not a layer: it replaces the HUD.
+    if let Some(which) = flags.iter().find(|a| a.starts_with("front")) {
+        verts.clear();
+        front_fixture(which).paint(Some(&kit), width as f32, height as f32, &mut verts);
     }
     println!(
         "{} overlay vertices ({:.1}% of the client's 65536 cap)",
@@ -888,4 +905,231 @@ fn radar_fixture(north_up: bool) -> RadarFixture {
         ..RadarSettings::default()
     };
     RadarFixture { plan, edges, blips, marks, sites, settings }
+}
+
+/// The front end with one of everything on it, on the screen `which` names:
+/// `front` (play), `front-browse`, `front-practice`, `front-loadout`,
+/// `front-operator`, `front-search`, `front-found`, `front-loading`,
+/// `front-boot`, `front-bootfail`, `front-notice`, `front-name`.
+fn front_fixture(which: &str) -> hassault_native::front::Front {
+    use hassault_native::api::WeaponSpec;
+    use hassault_native::front::*;
+    use hassault_native::menu::{LoadoutAgent, LoadoutWeapon};
+
+    let mut f = Front::new("horrible-games.fly.dev", "Operative-417");
+    f.maps = [
+        ("hd_aim", 8_763),
+        ("hd_assault", 69_567),
+        ("hd_bank", 105_213),
+        ("hd_dust2", 136_472),
+        ("hd_facility", 49_293),
+        ("hd_inferno", 85_431),
+        ("hd_junkflea", 42_359),
+        ("hd_mirage", 80_914),
+        ("hd_nuke", 98_532),
+        ("hd_office", 97_286),
+    ]
+    .iter()
+    .map(|(name, size)| MapEntry {
+        name: name.to_string(),
+        size: *size,
+    })
+    .collect();
+    f.modes = [
+        ("dm", "Deathmatch"),
+        ("tdm", "Team Deathmatch"),
+        ("defuse", "Bomb Defuse"),
+    ]
+    .iter()
+    .map(|(id, name)| ModeEntry {
+        id: id.to_string(),
+        name: name.to_string(),
+    })
+    .collect();
+    f.rooms = [
+        ("3d8081a0-77c1", "hd_dust2", "defuse", 7),
+        ("a41f09be-1c20", "hd_mirage", "tdm", 4),
+        ("0b77e5d2-9a01", "hd_aim", "dm", 10),
+        ("f2c96a13-55d0", "hd_office", "dm", 1),
+    ]
+    .iter()
+    .map(|(id, map, mode, players)| RoomEntry {
+        id: id.to_string(),
+        map: map.to_string(),
+        players: *players,
+        seats: 10,
+        mode: mode.to_string(),
+    })
+    .collect();
+    // (id, name, slot, side, damage, rpm, mag, range, head, reload, kick, auto, scoped)
+    #[allow(clippy::type_complexity)]
+    let guns: [(&str, &str, &str, &str, f32, f32, i32, f32, f32, f32, f32, bool, bool); 6] = [
+        ("assault", "Assault Rifle", "primary", "any", 26.0, 600.0, 30, 220.0, 3.5, 2.4, 1.4, true, false),
+        ("raider", "Raider", "primary", "t", 34.0, 560.0, 30, 240.0, 4.0, 2.5, 2.2, true, false),
+        ("lancer", "Lancer", "primary", "ct", 30.0, 640.0, 30, 260.0, 4.0, 3.1, 1.6, true, false),
+        ("sniper", "Sniper Rifle", "primary", "any", 96.0, 44.0, 5, 800.0, 2.5, 3.6, 4.0, false, true),
+        ("pistol", "Pistol", "secondary", "any", 14.0, 420.0, 10, 140.0, 2.2, 1.4, 0.0, false, false),
+        ("hand_cannon", "Hand Cannon", "secondary", "any", 53.0, 220.0, 7, 200.0, 2.0, 2.2, 3.0, false, false),
+    ];
+    for (id, name, slot, side, damage, rpm, mag, range, head, reload, kick, auto, scoped) in guns {
+        f.loadout.weapons.push(LoadoutWeapon {
+            id: id.into(),
+            name: name.into(),
+            slot: slot.into(),
+            side: side.into(),
+        });
+        f.weapons.push(WeaponSpec {
+            id: id.into(),
+            name: name.into(),
+            slot: slot.into(),
+            side: side.into(),
+            model: id.into(),
+            damage,
+            rpm,
+            mag,
+            range,
+            head_multiplier: head,
+            reload_time: reload,
+            kickback: kick,
+            auto,
+            pellets: 1,
+            zoom_levels: if scoped { vec![2.0, 4.0] } else { Vec::new() },
+            ..Default::default()
+        });
+    }
+    f.loadout.agents = vec![
+        LoadoutAgent {
+            id: "sable".into(),
+            name: "Sable".into(),
+            sides: vec!["t".into()],
+        },
+        LoadoutAgent {
+            id: "meridian".into(),
+            name: "Meridian".into(),
+            sides: vec!["ct".into()],
+        },
+    ];
+    f.show(Screen::Home);
+    f.map = Some(3);
+    f.mode = 1;
+    // Long past every entrance: a preview is of the settled screen.
+    f.clock = 30.0;
+    // Over the selected kind, so a hover state is in the picture too.
+    f.pointer = (width_hint() * 0.5, 300.0);
+
+    let boot = ["WEAPONS", "GRENADES", "MAPS AND GAMES", "OPERATORS", "CONSOLE COMMANDS", "OPEN ROOMS"];
+    match which {
+        "front-browse" => f.kind = PlayKind::Browse,
+        "front-practice" => f.kind = PlayKind::Practice,
+        "front-loadout" => {
+            f.set_tab(Tab::Loadout);
+            f.clock = 60.0;
+        }
+        "front-operator" => {
+            f.set_tab(Tab::Loadout);
+            f.slot = 2;
+            f.side = 1;
+            f.clock = 60.0;
+        }
+        "front-search" => {
+            f.begin_search();
+            f.clock += 3.4;
+        }
+        "front-found" => {
+            f.begin_search();
+            f.clock += 1.2;
+            f.search.found = Some(Found::Room(f.rooms[0].clone()));
+            f.search.status = "DUST2  /  BOMB DEFUSE  /  7 OF 10 PLAYING".into();
+        }
+        "front-loading" => {
+            f.begin_loading(
+                "hd_dust2",
+                "BOMB DEFUSE",
+                "ROOM 3D8081A0",
+                &["FETCH THE MAP", "BUILD THE GEOMETRY", "CONNECT", "JOIN THE ROOM", "START THE RENDERER"],
+            );
+            f.step(0, StepState::Done, "136 KB");
+            f.step(1, StepState::Done, "48,212 TRIANGLES");
+            f.step(2, StepState::Running, "HORRIBLE-GAMES.FLY.DEV");
+            // A plausible floor plan: rooms and corridors as merged runs.
+            let size = 96.0;
+            let mut plan = Vec::new();
+            for y in 8..88 {
+                let yf = y as f32;
+                for (x0, x1, y0, y1, band) in [
+                    (10.0, 38.0, 10.0, 34.0, 0u8),
+                    (38.0, 52.0, 18.0, 24.0, 1),
+                    (52.0, 86.0, 8.0, 40.0, 1),
+                    (20.0, 28.0, 34.0, 60.0, 0),
+                    (10.0, 44.0, 60.0, 86.0, 2),
+                    (44.0, 64.0, 70.0, 76.0, 1),
+                    (64.0, 88.0, 52.0, 88.0, 0),
+                    (70.0, 78.0, 40.0, 52.0, 1),
+                ] {
+                    if yf >= y0 && yf < y1 {
+                        plan.push(hassault_native::radar::Run {
+                            y: yf,
+                            x0,
+                            x1,
+                            band,
+                        });
+                    }
+                }
+            }
+            f.loading.plan = plan;
+            f.loading.plan_size = size;
+            f.clock += 4.0;
+        }
+        // The loading screen over a **real** map's floor plan, fetched from the
+        // server named in `HASSAULT_PREVIEW_SERVER` (a local game server). The
+        // synthetic plan above is rooms and corridors; a real one is thousands
+        // of thin runs, and only a real one says whether that reads.
+        "front-loading-real" => {
+            let server = std::env::var("HASSAULT_PREVIEW_SERVER")
+                .unwrap_or_else(|_| "http://127.0.0.1:9200".into());
+            let map = std::env::var("HASSAULT_PREVIEW_MAP").unwrap_or_else(|_| "hd_dust2".into());
+            let node = hassault_native::api::NodeApi::new(&server);
+            let info = node.map_info(&map).expect("the map's info");
+            let cubes = node
+                .map_cubes(&map, info.cubic_size * info.plane_order.len())
+                .expect("the map's cubes");
+            let size = info.ssize as f32;
+            let world = hassault_native::world::World::new(info, &cubes).expect("a world");
+            f.begin_loading(&map, "DEATHMATCH", "A NEW ROOM", &["FETCH THE MAP", "BUILD THE WORLD", "CONNECT"]);
+            f.step(0, StepState::Done, "576 KB");
+            f.step(1, StepState::Done, "256 X 256 GRID");
+            f.step(2, StepState::Running, "");
+            f.loading.plan = hassault_native::radar::floor_plan(&world);
+            f.loading.plan_size = size;
+            println!("{} runs on a {size} grid", f.loading.plan.len());
+            f.clock += 4.0;
+        }
+        "front-boot" => {
+            f.show(Screen::Boot);
+            f.steps = boot.iter().map(|s| Step::waiting(s)).collect();
+            f.step(0, StepState::Done, "12");
+            f.step(1, StepState::Done, "4");
+            f.step(2, StepState::Running, "");
+        }
+        "front-bootfail" => {
+            f.show(Screen::Boot);
+            f.steps = boot.iter().map(|s| Step::waiting(s)).collect();
+            f.step(0, StepState::Failed, "TIMED OUT");
+            f.boot_failed = Some("the request timed out after 8 seconds - check the connection and try again".into());
+        }
+        "front-notice" => {
+            f.notice = Some((
+                "THE SERVER REFUSED THE JOIN: 'hd_aim' cannot host Bomb Defuse".into(),
+                true,
+            ));
+        }
+        "front-name" => f.editing = Some("Sab".into()),
+        _ => {}
+    }
+    f
+}
+
+/// The pointer's x for the fixture: over the left column whatever the size.
+fn width_hint() -> f32 {
+    360.0
 }

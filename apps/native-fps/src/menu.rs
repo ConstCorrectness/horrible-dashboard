@@ -249,12 +249,12 @@ pub struct LoadoutTable {
     pub agent_choice: serde_json::Value,
 }
 
-const SIDE_KEYS: [&str; 2] = ["t", "ct"];
-const SLOT_KEYS: [&str; 2] = ["primary", "secondary"];
+pub const SIDE_KEYS: [&str; 2] = ["t", "ct"];
+pub const SLOT_KEYS: [&str; 2] = ["primary", "secondary"];
 const SLOT_DEFAULTS: [&str; 2] = ["assault", "pistol"];
 
 impl LoadoutTable {
-    fn offered(&self, side: usize, slot: usize) -> Vec<&LoadoutWeapon> {
+    pub fn offered(&self, side: usize, slot: usize) -> Vec<&LoadoutWeapon> {
         self.weapons
             .iter()
             .filter(|w| {
@@ -265,7 +265,7 @@ impl LoadoutTable {
     }
 
     /// The per-side half of `choice`, reading a flat choice as both sides.
-    fn side_choice(&self, side: usize) -> serde_json::Value {
+    pub fn side_choice(&self, side: usize) -> serde_json::Value {
         let per_side = SIDE_KEYS
             .iter()
             .any(|s| self.choice.get(*s).is_some_and(|v| v.is_object()));
@@ -277,7 +277,7 @@ impl LoadoutTable {
     }
 
     /// The weapon a side carries in a slot, as the server would resolve it.
-    fn picked(&self, side: usize, slot: usize) -> Option<&LoadoutWeapon> {
+    pub fn picked(&self, side: usize, slot: usize) -> Option<&LoadoutWeapon> {
         let offered = self.offered(side, slot);
         let wanted = self.side_choice(side);
         let wanted = wanted.get(SLOT_KEYS[slot]).and_then(|v| v.as_str()).unwrap_or("");
@@ -289,14 +289,57 @@ impl LoadoutTable {
             .copied()
     }
 
-    fn agents_for(&self, side: usize) -> Vec<&LoadoutAgent> {
+    pub fn agents_for(&self, side: usize) -> Vec<&LoadoutAgent> {
         self.agents
             .iter()
             .filter(|a| a.sides.iter().any(|s| s == SIDE_KEYS[side]))
             .collect()
     }
 
-    fn agent(&self, side: usize) -> Option<&LoadoutAgent> {
+    /// Carry the next (or previous) weapon a side is offered in a slot.
+    /// Returns the setting to save and its new value, the document as the pane
+    /// stores it; `None` when the slot has nothing to step to.
+    ///
+    /// On the table rather than the menu because two things step it: the pause
+    /// menu's LOADOUT page and the front end's loadout screen.
+    pub fn step_weapon(&mut self, side: usize, slot: usize, step: i32) -> Option<(&'static str, String)> {
+        let offered: Vec<String> = self.offered(side, slot).iter().map(|w| w.id.clone()).collect();
+        if offered.is_empty() {
+            return None;
+        }
+        let current = self.picked(side, slot).map(|w| w.id.clone()).unwrap_or_default();
+        let at = offered.iter().position(|id| *id == current).unwrap_or(0);
+        let next = &offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize];
+        // Always written per side, so a flat choice becomes two.
+        let mut doc = serde_json::Map::new();
+        for (i, key) in SIDE_KEYS.iter().enumerate() {
+            let half = self.side_choice(i);
+            let mut half = half.as_object().cloned().unwrap_or_default();
+            if i == side {
+                half.insert(SLOT_KEYS[slot].to_string(), serde_json::Value::String(next.clone()));
+            }
+            doc.insert(key.to_string(), serde_json::Value::Object(half));
+        }
+        self.choice = serde_json::Value::Object(doc);
+        Some(("hassault.loadout", self.choice.to_string()))
+    }
+
+    /// Wear the next (or previous) agent a side is offered. As `step_weapon`.
+    pub fn step_agent(&mut self, side: usize, step: i32) -> Option<(&'static str, String)> {
+        let offered: Vec<String> = self.agents_for(side).iter().map(|a| a.id.clone()).collect();
+        if offered.is_empty() {
+            return None;
+        }
+        let current = self.agent(side).map(|a| a.id.clone()).unwrap_or_default();
+        let at = offered.iter().position(|id| *id == current).unwrap_or(0);
+        let next = offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize].clone();
+        let mut doc = self.agent_choice.as_object().cloned().unwrap_or_default();
+        doc.insert(SIDE_KEYS[side].to_string(), serde_json::Value::String(next));
+        self.agent_choice = serde_json::Value::Object(doc);
+        Some(("hassault.agents", self.agent_choice.to_string()))
+    }
+
+    pub fn agent(&self, side: usize) -> Option<&LoadoutAgent> {
         let offered = self.agents_for(side);
         let wanted = self
             .agent_choice
@@ -387,6 +430,14 @@ pub struct Menu {
     pub store: StoreTable,
     /// Whether this client has a node to ask for a wallet (not a guest build).
     pub store_available: bool,
+    /// Opened from the main menu rather than from a match: the same pages under
+    /// a SETTINGS title, with no match to resume, leave or re-arm. The front
+    /// end has its own loadout screen and its own way out.
+    pub front: bool,
+    /// Settings are kept in a file on this machine, not on a node: a client
+    /// with no node. Only changes what the footer says — which used to be
+    /// "SAVED ON THE NODE" to a player who has none.
+    pub local: bool,
 }
 
 impl Menu {
@@ -448,6 +499,17 @@ impl Menu {
             action: Action::Bind(action),
         };
         match self.page {
+            Page::Root if self.front => vec![
+                row("BACK", String::new(), Action::Resume),
+                row(
+                    "CROSSHAIR",
+                    String::from(">"),
+                    Action::Open(Page::Crosshair),
+                ),
+                row("RADAR", String::from(">"), Action::Open(Page::Radar)),
+                row("VIDEO", String::from(">"), Action::Open(Page::Video)),
+                row("CONTROLS", String::from(">"), Action::Open(Page::Controls)),
+            ],
             Page::Root => vec![
                 row("RESUME", String::new(), Action::Resume),
                 row(
@@ -812,6 +874,7 @@ impl Menu {
             return "PRESS A KEY - ESC CANCELS, BACKSPACE CLEARS";
         }
         match self.page {
+            Page::Root if self.front => "ESC GOES BACK - ARROWS AND ENTER, OR THE MOUSE",
             Page::Root => "ESC RESUMES - ARROWS AND ENTER, OR THE MOUSE",
             Page::Crosshair => "SHARE CODES WORK IN THE BROWSER TOO",
             Page::Radar => "LOWER ZOOM SHOWS MORE MAP - HOLD M TO ZOOM OUT",
@@ -828,6 +891,7 @@ impl Menu {
 
     fn title(&self) -> &'static str {
         match self.page {
+            Page::Root if self.front => "SETTINGS",
             Page::Root => "PAUSED",
             Page::Crosshair => "CROSSHAIR",
             Page::Radar => "RADAR",
@@ -848,43 +912,9 @@ impl Menu {
     pub fn step_loadout(&mut self, action: Action, step: i32) -> Option<(&'static str, String)> {
         match action {
             Action::LoadoutPick(side, slot) => {
-                let (side, slot) = (side as usize, slot as usize);
-                let offered: Vec<String> =
-                    self.loadout.offered(side, slot).iter().map(|w| w.id.clone()).collect();
-                if offered.is_empty() {
-                    return None;
-                }
-                let current = self.loadout.picked(side, slot).map(|w| w.id.clone()).unwrap_or_default();
-                let at = offered.iter().position(|id| *id == current).unwrap_or(0);
-                let next = &offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize];
-                // Always written per side, so a flat choice becomes two.
-                let mut doc = serde_json::Map::new();
-                for (i, key) in SIDE_KEYS.iter().enumerate() {
-                    let half = self.loadout.side_choice(i);
-                    let mut half = half.as_object().cloned().unwrap_or_default();
-                    if i == side {
-                        half.insert(SLOT_KEYS[slot].to_string(), serde_json::Value::String(next.clone()));
-                    }
-                    doc.insert(key.to_string(), serde_json::Value::Object(half));
-                }
-                self.loadout.choice = serde_json::Value::Object(doc);
-                Some(("hassault.loadout", self.loadout.choice.to_string()))
+                self.loadout.step_weapon(side as usize, slot as usize, step)
             }
-            Action::AgentPick(side) => {
-                let side = side as usize;
-                let offered: Vec<String> =
-                    self.loadout.agents_for(side).iter().map(|a| a.id.clone()).collect();
-                if offered.is_empty() {
-                    return None;
-                }
-                let current = self.loadout.agent(side).map(|a| a.id.clone()).unwrap_or_default();
-                let at = offered.iter().position(|id| *id == current).unwrap_or(0);
-                let next = offered[(at as i32 + step).rem_euclid(offered.len() as i32) as usize].clone();
-                let mut doc = self.loadout.agent_choice.as_object().cloned().unwrap_or_default();
-                doc.insert(SIDE_KEYS[side].to_string(), serde_json::Value::String(next));
-                self.loadout.agent_choice = serde_json::Value::Object(doc);
-                Some(("hassault.agents", self.loadout.agent_choice.to_string()))
-            }
+            Action::AgentPick(side) => self.loadout.step_agent(side as usize, step),
             _ => None,
         }
     }
@@ -1070,7 +1100,11 @@ impl Menu {
             footer_y,
             1.3 * k,
             TEXT_DIM,
-            "SAVED ON THE NODE",
+            if self.local {
+                "SAVED ON THIS COMPUTER"
+            } else {
+                "SAVED ON THE NODE"
+            },
         );
     }
 }
@@ -1670,6 +1704,48 @@ mod tests {
             assert!(apply(action, 1, &mut s).is_empty());
         }
         assert_eq!(s.crosshair.size, Settings::default().crosshair.size);
+    }
+
+    #[test]
+    fn from_the_front_end_the_root_is_settings_with_nothing_to_leave() {
+        let (mut m, s) = menu();
+        m.front = true;
+        m.loadout.weapons.push(LoadoutWeapon::default());
+        m.store_available = true;
+        let rows = m.rows(&s, &Controls::default(), false);
+        assert_eq!(rows[0].label, "BACK");
+        assert_eq!(rows[0].action, Action::Resume);
+        assert!(rows.iter().all(|r| r.action != Action::Quit));
+        assert!(rows.iter().all(|r| !matches!(
+            r.action,
+            Action::Open(Page::Loadout | Page::Store | Page::Market)
+        )));
+        assert_eq!(m.title(), "SETTINGS");
+    }
+
+    #[test]
+    fn stepping_a_weapon_writes_both_sides_and_wraps() {
+        let mut table = LoadoutTable::default();
+        for (id, side) in [("assault", "any"), ("raider", "t"), ("lancer", "ct")] {
+            table.weapons.push(LoadoutWeapon {
+                id: id.into(),
+                name: id.to_uppercase(),
+                slot: "primary".into(),
+                side: side.into(),
+            });
+        }
+        // T is offered assault and raider; CT never sees raider.
+        let (key, raw) = table.step_weapon(0, 0, 1).expect("something to step to");
+        assert_eq!(key, "hassault.loadout");
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["t"]["primary"], "raider");
+        assert!(doc["ct"].is_object());
+        assert_eq!(table.picked(0, 0).unwrap().id, "raider");
+        assert_eq!(table.picked(1, 0).unwrap().id, "assault");
+        table.step_weapon(0, 0, 1);
+        assert_eq!(table.picked(0, 0).unwrap().id, "assault");
+        // A slot with nothing in it has nothing to step to.
+        assert!(table.step_weapon(0, 1, 1).is_none());
     }
 
     #[test]

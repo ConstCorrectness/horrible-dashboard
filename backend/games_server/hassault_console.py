@@ -459,6 +459,52 @@ async def socket_bots(conn: Any, event: str, data: dict[str, Any]) -> str | None
     return None
 
 
+async def socket_console(conn: Any, data: dict[str, Any]) -> dict[str, Any]:
+    """`console_exec` from a seated socket, answered as the node's `console_res`.
+
+    The native client sends every server command down its match socket (the
+    node's channel resolves the room from the connection, so there is no room
+    id to get wrong). This server used to drop the event, so a console line
+    typed in the standalone client went nowhere and nothing said so.
+
+    Same rule as `socket_bots`: the role is read off the socket's own account
+    rather than a bearer token, so a guest who is hosting may run the room's
+    commands — which the HTTP route (sign-in only) could never let them do.
+
+    A refusal is an **answer**, not a dropped message: `ok: false` with the
+    reason, on the same request id, so the console can print it.
+    """
+    command = str(data.get("command") or "").strip()
+    reply: dict[str, Any] = {
+        "reqId": data.get("reqId"),
+        "ok": False,
+        "command": command,
+        "output": [],
+        "error": None,
+        "affectedCvars": {},
+        "resultData": None,
+    }
+    entry = referee.server.player_for(conn)
+    if entry is None:
+        reply["error"] = "join a room first"
+        return reply
+    room = entry[0]
+    try:
+        authorise(conn.account_id, room)
+        res = await execute(conn.account_id, room, command)
+    except HTTPException as exc:
+        reply["error"] = str(exc.detail)
+        return reply
+    reply.update(
+        ok=bool(res["ok"]),
+        output=list(res["output"]),
+        error=res["error"],
+        affectedCvars=res["affected_cvars"],
+        resultData=res["result_data"],
+    )
+    return reply
+
+
 def authorise(account_id: str, room: Any) -> str:
     """The role `account_id` holds in `room`, or the 403 that says why it has none."""
     if room.mode.id in RANKED_MODES:
@@ -536,4 +582,30 @@ def console_definitions() -> dict[str, Any]:
         }
         for name, (lo, hi) in GAMEPLAY_CVARS.items()
     ]
-    return {"cvars": cvars, "commands": commands, "macros": []}
+    return {"cvars": cvars + _client_cvars(), "commands": commands, "macros": []}
+
+
+def _client_cvars() -> list[dict[str, Any]]:
+    """The `client`-flagged CVars, from the node's own registry.
+
+    A client applies these itself and never sends them — but it still has to
+    learn their names, types and ranges from somewhere, and a client with no
+    node (the standalone executable, the web client) asks here. Without them a
+    console could not tell `draw.fov` from a server command, sent it, and got
+    nothing back.
+
+    Read from `console_registry` rather than listed again: that table is what
+    a node serves, so both servers describe one set of settings. Only the
+    description of the value is served — `current_value` is the default,
+    because the registry's live value is this process's, not the asker's.
+    """
+    from backend.modules.hassault.console import console_registry
+
+    out = []
+    for cvar in console_registry.cvars.values():
+        if "client" not in cvar.flags:
+            continue
+        doc = cvar.model_dump(exclude={"python_attr"})
+        doc["current_value"] = doc["default_value"]
+        out.append(doc)
+    return out

@@ -28,9 +28,10 @@ this server's simulation of the same shot.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.modules.hassault import mapsource
 from backend.modules.hassault import routes as node
@@ -51,7 +52,35 @@ from backend.modules.hassault.models import (
 router = APIRouter(prefix="/api/hassault", tags=["hassault"])
 
 
+def drafts_enabled() -> bool:
+    """Whether this server keeps map-designer drafts (`HASSAULT_ENABLE_DRAFTS`).
+
+    Off unless asked for. A draft is a document anyone who can reach the route
+    can create, edit and save as a map file on this machine, and the public
+    server has no accounts on its content routes to say who may. A server
+    somebody runs for themselves — beside the native client, with no dashboard
+    — turns it on, and that client's map editor then needs nothing else.
+    """
+    return os.environ.get("HASSAULT_ENABLE_DRAFTS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _drafts_gate() -> None:
+    if not drafts_enabled():
+        raise HTTPException(
+            status_code=404, detail="this server keeps no map drafts"
+        )
+
+
 def _bundled(name: str) -> None:
+    # A draft is served as a map named `draft:<id>` (`assets.load_map`), so the
+    # editor's boot is the ordinary map fetch.
+    if name.startswith("draft:") and drafts_enabled():
+        return
     if name not in mapsource.bundled_names():
         raise HTTPException(status_code=404, detail=f"no map named {name!r}")
 
@@ -125,3 +154,18 @@ for _path, _handler, _model in (
     ("/settings/schema", node.get_settings_schema, None),
 ):
     router.add_api_route(_path, _handler, methods=["GET"], response_model=_model)
+
+# The map designer's drafts: the node's own handlers, every one behind the
+# gate. Registered always and refused per request, so the switch is read when
+# it is asked rather than frozen at import.
+for _route in list(node.router.routes):
+    _full = getattr(_route, "path", "")
+    if not _full.startswith("/hassault/maps/drafts"):
+        continue
+    router.add_api_route(
+        _full[len("/hassault") :],
+        _route.endpoint,
+        methods=sorted(_route.methods or {"GET"}),
+        response_model=_route.response_model,
+        dependencies=[Depends(_drafts_gate)],
+    )

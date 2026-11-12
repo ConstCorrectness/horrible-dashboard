@@ -108,7 +108,8 @@ fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
 #                 hold a redirect URI), Authorized redirect URI:
 #                 https://<server>/auth/google/callback
 
-# Deploy / redeploy (builds the web client first — the image COPYs its dist):
+# Deploy / redeploy (builds the web client and the native client download first —
+# the image COPYs both):
 pnpm deploy:games
 ```
 
@@ -209,6 +210,66 @@ The client side of the same contract is the panel's `standalone` prop: it skips
 everything that means "this node" (account, armoury, friends, native launcher,
 the debrief poll) and joins a match on load. See
 [hassault](../modules/hassault.mdx#the-standalone-web-client).
+
+## The native client download
+
+The server also hands out the **native client** as a file:
+`https://horrible-games.fly.dev/download/hAssault.exe`. Downloaded and
+double-clicked, it plays on this server as a guest with no dashboard node involved
+([what standalone means for the client](../modules/hassault.mdx#with-no-node-the-downloaded-executable)).
+The landing page links it from the hero.
+
+| Route | Answers |
+| --- | --- |
+| `GET /download/hAssault.exe` | The Windows build, as an attachment. `Range` and `If-Range` resume an interrupted download; `If-None-Match` is a 304; `X-Checksum-Sha256` carries the checksum |
+| `GET /download/info` | `{"windows": {url, version, commit, sizeBytes, sha256, builtAt}}`, or `{"windows": null}` when this deploy carries no build |
+
+It is hosted here, and not only on the GitHub release a node installs from, because
+the client and the server are two halves of one wire. A release asset is keyed by a
+**tag**; this server is deployed from a checkout, usually ahead of the last tag. The
+executable offered here is built by the same command, from the same checkout, as the
+server that will simulate it.
+
+**Built on the host, like the web client.** `pnpm deploy:games` runs
+`pnpm build:hassault:download` (`scripts/stage-hassault-download.mjs`), which builds
+the release client and writes it into `apps/native-fps/dist/` with a `manifest.json`;
+the image copies that directory in. The builder is Linux and cannot produce a Windows
+executable, and the machine deploying already can. To stage without rebuilding:
+
+```bash
+pnpm build:hassault:download -- --no-build
+```
+
+Three behaviours worth knowing before they surprise you:
+
+- **A deploy from Linux or macOS ships no download, and does not fail.** The staging
+  script writes a manifest with `windows: null` and says so loudly. `/download/info`
+  then answers `null` and the landing page shows no button. Deploy from Windows to
+  ship one.
+- **The checksum is the staging script's claim, not the server's.** Nothing re-hashes
+  130 MB per request. The server only repeats the checksum while the file on disk is
+  still the size the manifest recorded; a file swapped underneath it is served with
+  no checksum rather than with one describing something else.
+- **`FileResponse` does not answer `If-None-Match`** (only `StaticFiles` does), so
+  the route does it itself against the ETag `FileResponse` computed. Without that, a
+  revalidation is the whole file again.
+
+What it costs: the executable is about 130 MB (every model, texture and map mesh is
+compiled in, which is why it needs nothing else), so the image and each deploy's
+upload grow by that much, and every download is that much egress.
+
+:::warning It is not code-signed
+Windows SmartScreen stops an unsigned executable from the internet the first time:
+**More info**, then **Run anyway**. The landing page's link says so in its tooltip.
+The fix is a code-signing certificate, not anything in this repo.
+:::
+
+:::note A downloaded client does not update itself
+A deploy replaces the file on the server, not the copy on somebody's disk. An older
+client keeps working for as long as the wire it speaks does, and reports what it does
+not understand (`divergence.rs`) rather than refusing to play. There is no version
+check at startup yet.
+:::
 
 ## Scaling path
 

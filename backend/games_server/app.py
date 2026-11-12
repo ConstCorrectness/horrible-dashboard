@@ -18,7 +18,15 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Header, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -766,6 +774,117 @@ def hassault_rooms_list() -> dict[str, Any]:
     return {"rooms": hassault_rooms.referee.active_rooms()}
 
 
+@app.get("/api/hassault/rooms/{room_id}")
+def hassault_room_detail(room_id: str) -> dict[str, Any]:
+    """One room and its roster, for a server browser that shows who is in."""
+    from backend.games_server import hassault_rooms
+
+    detail = hassault_rooms.referee.room_detail(room_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="that room has closed")
+    return detail
+
+
+@app.post("/api/hassault/matchmake")
+async def hassault_matchmake(request: Request) -> dict[str, Any]:
+    """Where to play: the room a search should join, opened if need be.
+
+    The one matchmaking rule (`HassaultReferee.find_match`), for every client.
+    The body is `{"map"?, "mode"?}`; the answer is a room in the shape
+    `/api/hassault/rooms` lists, plus `opened`. `async` so it runs on the event
+    loop the rooms tick on rather than on a worker thread beside it.
+    """
+    from backend.games_server import hassault_rooms
+
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        return hassault_rooms.referee.find_match(
+            str(body.get("map") or "") or None,
+            str(body.get("mode") or "") or None,
+            maps=_map_list(body.get("maps")),
+        )
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _map_list(raw: Any) -> list[str]:
+    """The `maps` of a search body: strings only, and not an unbounded list."""
+    if not isinstance(raw, list):
+        return []
+    return [str(m) for m in raw[:32] if isinstance(m, str) and m]
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _lobby_call(call: Any) -> dict[str, Any]:
+    """Run one lobby verb; a refusal is a 409 carrying the lobby's own words."""
+    try:
+        return call()
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/hassault/lobbies")
+async def hassault_lobby_create(request: Request) -> dict[str, Any]:
+    """Open a lobby: a code to share, and this member's token."""
+    from backend.games_server import hassault_lobby
+
+    body = await _json_body(request)
+    return _lobby_call(lambda: hassault_lobby.book.create(body.get("name")))
+
+
+@app.post("/api/hassault/lobbies/{code}/join")
+async def hassault_lobby_join(code: str, request: Request) -> dict[str, Any]:
+    from backend.games_server import hassault_lobby
+
+    body = await _json_body(request)
+    return _lobby_call(lambda: hassault_lobby.book.join(code, body.get("name")))
+
+
+@app.get("/api/hassault/lobbies/{code}")
+async def hassault_lobby_state(code: str, token: str = "") -> dict[str, Any]:
+    """The lobby as this member sees it. Polled; asking is the heartbeat."""
+    from backend.games_server import hassault_lobby
+
+    return _lobby_call(lambda: hassault_lobby.book.state(code, token))
+
+
+@app.post("/api/hassault/lobbies/{code}/leave")
+async def hassault_lobby_leave(code: str, request: Request) -> dict[str, bool]:
+    from backend.games_server import hassault_lobby
+
+    body = await _json_body(request)
+    return {"left": hassault_lobby.book.leave(code, str(body.get("token") or ""))}
+
+
+@app.post("/api/hassault/lobbies/{code}/play")
+async def hassault_lobby_play(code: str, request: Request) -> dict[str, Any]:
+    """The leader looks for one room with a seat for every member."""
+    from backend.games_server import hassault_lobby, hassault_rooms
+
+    body = await _json_body(request)
+    return _lobby_call(
+        lambda: hassault_lobby.book.play(
+            code,
+            str(body.get("token") or ""),
+            hassault_rooms.referee.find_match,
+            maps=_map_list(body.get("maps")),
+            mode=str(body.get("mode") or "") or None,
+        )
+    )
+
+
 @app.websocket("/hassault-ws")
 async def hassault_ws(websocket: WebSocket) -> None:
     """A rated or casual HorribleAssault match, simulated **here**.
@@ -893,6 +1012,18 @@ async def hassault_ws(websocket: WebSocket) -> None:
                             "data": {"message": refused},
                         }
                     )
+            elif event == "console_exec":
+                # The native client's console. Answered on the socket it came
+                # in on, for the room that socket is seated in.
+                from backend.games_server.hassault_console import socket_console
+
+                await conn.send_json(
+                    {
+                        "channel": "hassault",
+                        "event": "console_res",
+                        "data": await socket_console(conn, data),
+                    }
+                )
             elif event == "room_set":
                 refused = await referee.set_room_setting(conn, data)
                 if refused:
@@ -1046,6 +1177,13 @@ app.add_api_websocket_route("/relay-ws", _relay_broker.relay_ws)
 @app.get("/relay/health")
 def relay_health() -> dict[str, object]:
     return {"status": "ok", "clients": len(_relay_broker._clients)}
+
+
+# The native client as a file (`/download/hAssault.exe`). Registered before the web
+# client below for the reason that mount gives: a mount at `/` matches every path.
+from backend.games_server.downloads import router as _downloads_router  # noqa: E402
+
+app.include_router(_downloads_router)
 
 
 from fastapi.staticfiles import StaticFiles  # noqa: E402

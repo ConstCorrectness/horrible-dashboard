@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { apiUrl, formatBytes } from '@horrible/core';
 import { useGameRooms, type GameRoom } from '../hooks/useGameRooms';
+import { useNativeDownload } from '../hooks/useNativeDownload';
 import { useRollingNumber } from '../hooks/useRollingNumber';
 import { accountName, signOut, useAuth } from '../auth';
 import { MAPS, TRAIN_MODE, defaultMode, mapArt, mapEntry, modeLabel } from '../maps';
+import { findMatch } from '../matchmake';
 import { MapBackdrop } from './MapBackdrop';
 import { Wordmark } from './Logo';
 import { CallsignField } from './CallsignField';
@@ -51,7 +54,20 @@ export function Landing(props: LandingProps) {
   const best = [...open].sort((a, b) => b.playerCount - a.playerCount)[0] ?? null;
   const featured = best?.map ?? QUICK_MAP;
 
-  const quickPlay = () => (best ? props.onJoin(best.id, best.map) : props.onHost(QUICK_MAP));
+  // The server chooses (`matchmake.ts`), so this page and the native client
+  // land in one room. The list is only the fallback, for a server that
+  // cannot say.
+  const searching = useRef(false);
+  const quickPlay = () => {
+    if (searching.current) return;
+    searching.current = true;
+    void findMatch(apiUrl('/api/hassault/matchmake')).then((found) => {
+      searching.current = false;
+      if (found) props.onJoin(found.id, found.map);
+      else if (best) props.onJoin(best.id, best.map);
+      else props.onHost(QUICK_MAP);
+    });
+  };
 
   // Nav highlights the section in view, so the bar is a position, not just links.
   useEffect(() => {
@@ -153,6 +169,7 @@ export function Landing(props: LandingProps) {
               />
             </div>
           </div>
+          <NativeDownload />
           <div className="now-showing">
             {best ? 'Quick play joins' : 'Quick play opens'} · <b>{mapEntry(featured).title}</b>
           </div>
@@ -242,6 +259,47 @@ function Stat({ value, label }: { value: number; label: string }) {
       <div className="stat-value">{String(shown).padStart(2, '0')}</div>
       <div className="stat-label">{label}</div>
     </div>
+  );
+}
+
+/**
+ * The native client, when this server has one to hand over.
+ *
+ * One slim row pinned to the hero's lower-left corner, opposite `now-showing`:
+ * out of the flow on purpose, because it arrives after a fetch and anything in
+ * the flow would push the hero's actions up as it appeared. The whole row is the
+ * link. Absent entirely when the deploy carries no build.
+ */
+function NativeDownload() {
+  const build = useNativeDownload();
+  if (!build) return null;
+  return (
+    <a
+      className="native-dl rise"
+      style={{ ['--i' as string]: 4 }}
+      href={apiUrl(build.url)}
+      title="Not code-signed yet. If Windows SmartScreen stops it, choose More info, then Run anyway."
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="square"
+        aria-hidden="true"
+      >
+        <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
+      </svg>
+      <span className="native-dl-title">Native client</span>
+      <span className="tag">Windows</span>
+      <span className="native-dl-meta">
+        {build.version && `v${build.version} · `}
+        {formatBytes(build.sizeBytes, null)} · one .exe, no installer
+      </span>
+      <span className="native-dl-cta">Download</span>
+    </a>
   );
 }
 

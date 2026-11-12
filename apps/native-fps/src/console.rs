@@ -57,7 +57,7 @@
 //! `?` rather than as `OFF`.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -68,6 +68,10 @@ use crate::divergence;
 const MAX_LOG: usize = 400;
 /// The most lines kept in the input history.
 const MAX_HISTORY: usize = 100;
+/// The most completions offered at once. See `refresh_suggestions`.
+pub const MAX_SUGGESTIONS: usize = 8;
+/// How long a sent line may go unanswered before the console says so.
+pub const ANSWER_PATIENCE: Duration = Duration::from_secs(4);
 
 /// Client CVars this build actually reads.
 ///
@@ -275,6 +279,37 @@ impl ClientCvars {
     }
 }
 
+/// A definition for a CVar this client reads but the registry did not serve.
+///
+/// Not a second registry: there is no range, default or description here,
+/// because those are the server's to say. It carries only the **type**, which
+/// is this client's own knowledge — it is the type of the read (`cvars.number`,
+/// `cvars.boolean`) that consumes the value, and a value stored under the wrong
+/// one is a setting that silently does nothing.
+///
+/// It exists so a server that serves no client CVars (an older game server) or
+/// no registry at all (Train) still has a console that can set what this build
+/// demonstrably acts on.
+fn honored_def(name: &str) -> CVarDef {
+    let kind = match name {
+        "draw.crosshair.dot"
+        | "draw.crosshair.outline"
+        | "draw.hitboxes"
+        | "draw.noise_rings"
+        | "draw.tracers_firstperson"
+        | "player.god" => "boolean",
+        "draw.crosshair.style" => "string",
+        _ => "number",
+    };
+    CVarDef {
+        name: name.to_string(),
+        kind: kind.into(),
+        description: "read by this client; the server did not describe it".into(),
+        flags: vec!["client".into()],
+        ..Default::default()
+    }
+}
+
 // -----------------------------------------------------------------------------
 // The console itself
 // -----------------------------------------------------------------------------
@@ -436,6 +471,11 @@ pub enum Dispatch {
     /// artifact natively — it can be attached to a bug report, and it survives
     /// the crash you were trying to capture.
     SaveTranscript { text: String },
+    /// Close the game (`quit`, `exit`). The app owns the window and the socket.
+    Quit,
+    /// Leave the match (`disconnect`) and go back to wherever it was started
+    /// from: the main menu when there is one, the desktop when there is not.
+    Disconnect,
 }
 
 #[derive(Default)]
@@ -481,6 +521,9 @@ pub struct Console {
     /// exactly the same thing, and it is why the status chips are labelled as
     /// the last known state rather than as a live read.
     server_view: BTreeMap<String, serde_json::Value>,
+    /// Lines sent to the server and not answered yet: request id, the line, and
+    /// when it left. See `expire`.
+    pending: Vec<(u64, String, Instant)>,
 }
 
 impl Console {
@@ -627,6 +670,9 @@ impl Console {
     /// would create a local copy of a value the server owns — one that goes
     /// stale the moment anything else changes it.
     pub fn on_response(&mut self, res: &crate::protocol::ConsoleResponse, cvars: &mut ClientCvars) {
+        if let Some(id) = res.req_id {
+            self.pending.retain(|(req, _, _)| *req != id);
+        }
         for line in &res.output {
             self.push(line.clone(), Tone::Output);
         }
@@ -664,6 +710,35 @@ impl Console {
                 None => divergence::note_unknown_cvar(name),
             }
         }
+    }
+
+    /// Say so when a line that was sent has gone unanswered for `patience`.
+    ///
+    /// A console that sends a command and prints nothing is indistinguishable
+    /// from one that ran it. That was the standalone client against the game
+    /// server, whose socket dropped `console_exec` without a word: every server
+    /// command looked accepted and none of them was. The server answers now —
+    /// and if one ever does not, the console says that instead of saying
+    /// nothing.
+    pub fn expire(&mut self, patience: Duration) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let (late, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|(_, _, sent)| now.duration_since(*sent) >= patience);
+        self.pending = waiting;
+        for (_, command, _) in late {
+            self.error(format!(
+                "no answer to '{command}' - the server did not reply; it may not take this command"
+            ));
+        }
+    }
+
+    /// How many sent lines are still waiting for an answer.
+    pub fn awaiting(&self) -> usize {
+        self.pending.len()
     }
 
     /// The last value seen for a server-owned CVar. See `server_view`.
@@ -839,7 +914,39 @@ impl Console {
         if let Some(m) = self.defs.macros.iter().find(|m| &m.name == name) {
             return Some(format!("macro {} - {}", m.name, m.description));
         }
+        if let Some((_, usage, about)) = BUILTINS.iter().find(|(n, _, _)| n == name) {
+            return Some(format!("{usage} - {about}"));
+        }
+        if let Some((_, target)) = SPELLINGS.iter().find(|(n, _)| n == name) {
+            return Some(format!("{name} - another game's spelling of {target}"));
+        }
         None
+    }
+
+    /// The right-hand column of the completion list: what each offered name
+    /// currently *is*. A value for a CVar, the target for a borrowed spelling,
+    /// and nothing for a command — which has no state to show.
+    pub fn suggestion_hints(&self, cvars: &ClientCvars) -> Vec<String> {
+        self.suggestions
+            .iter()
+            .map(|name| {
+                if let Some(def) = self.cvar_index.get(name) {
+                    let current = if def.is_client() {
+                        cvars.get(&def.name).cloned().unwrap_or_else(|| def.default_value.clone())
+                    } else {
+                        self.server_view
+                            .get(&def.name)
+                            .cloned()
+                            .unwrap_or_else(|| def.current_value.clone())
+                    };
+                    return render(&current);
+                }
+                if let Some((_, target)) = SPELLINGS.iter().find(|(n, _)| n == name) {
+                    return format!("-> {target}");
+                }
+                String::new()
+            })
+            .collect()
     }
 
     /// Look one CVar up in the served registry.
@@ -854,7 +961,7 @@ impl Console {
             return;
         }
         self.history_index = self.history_index.saturating_sub(1);
-        self.set_input(self.history[self.history_index].clone());
+        self.recall(self.history[self.history_index].clone());
     }
 
     pub fn history_next(&mut self) {
@@ -866,8 +973,18 @@ impl Console {
             self.set_input(String::new());
         } else {
             self.history_index += 1;
-            self.set_input(self.history[self.history_index].clone());
+            self.recall(self.history[self.history_index].clone());
         }
+    }
+
+    /// Put a history line on the input **without** offering completions for it.
+    ///
+    /// Up and Down choose from the completion list while one is showing. A
+    /// recalled line that immediately grew a list would capture the very next
+    /// Up, and history would be one line deep.
+    fn recall(&mut self, text: String) {
+        self.set_input(text);
+        self.suggestions.clear();
     }
 
     fn set_input(&mut self, text: String) {
@@ -956,12 +1073,21 @@ impl Console {
             .keys()
             .chain(self.defs.commands.iter().map(|c| &c.name))
             .chain(self.aliases.keys())
+            .map(|n| n.as_str())
+            // The commands that never leave the client, and the spellings
+            // borrowed from other games. Neither is a claim about the server:
+            // a built-in runs here, and a spelling resolves to a name that is
+            // then checked like any other.
+            .chain(BUILTINS.iter().map(|(n, _, _)| *n))
+            .chain(SPELLINGS.iter().map(|(n, _)| *n))
             .filter(|n| n.to_ascii_lowercase().starts_with(&needle))
-            .cloned()
+            .map(|n| n.to_string())
             .collect();
         out.sort();
         out.dedup();
-        out.truncate(12);
+        // A list, drawn one name to a row. Eight is what fits above the input
+        // without pushing the scrollback off the panel at 720p.
+        out.truncate(MAX_SUGGESTIONS);
         self.suggestions = out;
     }
 
@@ -1102,12 +1228,62 @@ impl Console {
             // CVars and commands, and this owns the handful that never leave the
             // client. A `help` that answered only from one side would leave
             // whichever half it skipped undiscoverable.
-            "help" | "?" => {
-                for line in CLIENT_HELP {
-                    self.push(*line, Tone::Output);
-                }
-                // Falls through to the dispatch below.
+            // `help <name>`: one thing, described from what is already here.
+            "help" | "?" if tokens.len() >= 2 => {
+                let name = tokens[1].clone();
+                self.describe(&name, cvars);
+                return Dispatch::Handled;
             }
+            "help" | "?" => {
+                self.push("-- runs on this client, with or without a server --", Tone::Output);
+                for (_, usage, about) in BUILTINS {
+                    self.push(format!("  {usage:<28} {about}"), Tone::Output);
+                }
+                let spellings: Vec<&str> = SPELLINGS.iter().map(|(n, _)| *n).collect();
+                self.push(
+                    format!("  also understood: {}", spellings.join(" ")),
+                    Tone::Output,
+                );
+                let (cvars_n, commands_n) = (self.cvar_index.len(), self.defs.commands.len());
+                self.push(
+                    format!(
+                        "-- served: {cvars_n} cvars, {commands_n} commands - `find <text>` searches them, TAB completes --"
+                    ),
+                    Tone::Output,
+                );
+                // Offline there is nobody to ask what else is allowed.
+                if !online {
+                    return Dispatch::Handled;
+                }
+                // Falls through to the dispatch below: the server lists what
+                // *this player* may run in *this room*.
+            }
+            "find" | "search" => {
+                let needle = tokens[1..].join(" ").to_ascii_lowercase();
+                if needle.is_empty() {
+                    self.error("find <text> - searches every command and cvar by name and description");
+                    return Dispatch::Handled;
+                }
+                let found = self.find(&needle);
+                if found.is_empty() {
+                    self.error(format!("nothing matches '{needle}'"));
+                }
+                let total = found.len();
+                for line in found.into_iter().take(FIND_LIMIT) {
+                    self.push(line, Tone::Output);
+                }
+                if total > FIND_LIMIT {
+                    self.note(format!("{} more - narrow the search", total - FIND_LIMIT));
+                }
+                return Dispatch::Handled;
+            }
+            "echo" => {
+                let start = expanded.find(char::is_whitespace).unwrap_or(expanded.len());
+                self.push(unquote(&expanded[start..]), Tone::Output);
+                return Dispatch::Handled;
+            }
+            "quit" | "exit" => return Dispatch::Quit,
+            "disconnect" => return Dispatch::Disconnect,
             // The browser copies to the clipboard; this writes a file. See
             // `Dispatch::SaveTranscript`.
             "copy" | "save" => {
@@ -1148,15 +1324,12 @@ impl Console {
             {
                 return self.client_cvar(&def, &tokens, cvars);
             }
-        } else if !online && ClientCvars::is_honored(&head) {
-            let def = CVarDef {
-                name: head.clone(),
-                kind: "boolean".into(),
-                default_value: serde_json::Value::Bool(false),
-                description: "Honored offline cvar".into(),
-                flags: vec!["client".into()],
-                ..Default::default()
-            };
+        } else if ClientCvars::is_honored(&head) {
+            // Read here, described nowhere: the server sent no definition for
+            // it (an older game server, or Train with no server at all). Online
+            // or not it is still this client's to apply — sending it would ask
+            // a server about a setting it does not have.
+            let def = honored_def(&head);
             return self.client_cvar(&def, &tokens, cvars);
         }
 
@@ -1168,9 +1341,84 @@ impl Console {
         }
 
         self.next_req += 1;
+        self.pending
+            .push((self.next_req, expanded.clone(), Instant::now()));
         Dispatch::Send {
             command: expanded,
             req_id: self.next_req,
+        }
+    }
+
+    /// Every served or built-in name matching `needle`, one line each.
+    fn find(&self, needle: &str) -> Vec<String> {
+        let hit = |name: &str, about: &str| {
+            name.to_ascii_lowercase().contains(needle) || about.to_ascii_lowercase().contains(needle)
+        };
+        let mut out = Vec::new();
+        for def in self.cvar_index.values() {
+            if hit(&def.name, &def.description) {
+                out.push(format!("{} <{}> - {}", def.name, def.kind, def.description));
+            }
+        }
+        for cmd in &self.defs.commands {
+            if hit(&cmd.name, &cmd.description) {
+                out.push(format!("{} - {}", cmd.name, cmd.description));
+            }
+        }
+        for (name, usage, about) in BUILTINS {
+            if hit(name, about) {
+                out.push(format!("{usage} - {about}"));
+            }
+        }
+        for (name, target) in SPELLINGS {
+            if hit(name, target) {
+                out.push(format!("{name} -> {target}"));
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// `help <name>`: what one name is, from what this console already holds.
+    fn describe(&mut self, name: &str, cvars: &ClientCvars) {
+        let lower = name.to_ascii_lowercase();
+        if let Some(def) = self.cvar_index.get(name).cloned() {
+            let current = if def.is_client() {
+                cvars.get(&def.name).cloned().unwrap_or_else(|| def.default_value.clone())
+            } else {
+                self.server_view.get(&def.name).cloned().unwrap_or_else(|| def.current_value.clone())
+            };
+            let range = match (def.min_value, def.max_value) {
+                (Some(lo), Some(hi)) => format!(" [{lo} - {hi}]"),
+                _ => String::new(),
+            };
+            let owner = if def.is_client() { "client" } else { "server" };
+            self.push(
+                format!(
+                    "{} <{}>{range} {owner} = {} (default {})",
+                    def.name,
+                    def.kind,
+                    render(&current),
+                    render(&def.default_value)
+                ),
+                Tone::Output,
+            );
+            if !def.description.is_empty() {
+                self.push(format!("  {}", def.description), Tone::Output);
+            }
+            if def.is_client() && !ClientCvars::is_honored(&def.name) {
+                self.error("  no reader in this client yet; the browser has one");
+            }
+        } else if let Some(cmd) = self.defs.commands.iter().find(|c| c.name == name).cloned() {
+            let signature = if cmd.signature.is_empty() { cmd.name.clone() } else { cmd.signature };
+            self.push(format!("{signature} - {}", cmd.description), Tone::Output);
+        } else if let Some((_, usage, about)) = BUILTINS.iter().find(|(n, _, _)| *n == lower) {
+            self.push(format!("{usage} - {about}"), Tone::Output);
+        } else if let Some((_, target)) = SPELLINGS.iter().find(|(n, _)| *n == lower) {
+            self.push(format!("{lower} is another game's spelling of {target}"), Tone::Output);
+        } else {
+            self.error(format!("nothing called '{name}' - try `find {name}`"));
         }
     }
 
@@ -1277,6 +1525,10 @@ impl Console {
         }
         let head = clean.split_whitespace().next().unwrap_or("");
         let lower = head.to_ascii_lowercase();
+        if let Some((_, target)) = SPELLINGS.iter().find(|(name, _)| *name == lower) {
+            let tail = clean.trim_start()[head.len()..].to_string();
+            return format!("{target}{tail}");
+        }
         if lower == "god" {
             let tail = &clean[head.len()..];
             return if tail.trim().is_empty() {
@@ -1309,24 +1561,58 @@ fn unquote(s: &str) -> String {
 
 /// A JSON value as a console would say it — `1` not `1.0`, `1` not `true`, and a
 /// bare string with no quotes around it.
-/// The commands that never reach the node, as `help` lists them.
+/// The commands that never reach a server: name, how to call it, what it does.
 ///
-/// Spelled out rather than derived from the match below, because the match arms
-/// carry guards and aliases that would make a generated list either wrong or
-/// unreadable. The cost is that this can drift; the alternative was a help text
-/// that listed `bind` three times.
-const CLIENT_HELP: &[&str] = &[
-    "-- client-side (never sent to the node) --",
-    "  bind <key> <command>     run a command when a key is pressed",
-    "  unbind <key>             forget a binding",
-    "  alias <name> <command>   name a command",
-    "  clear                    empty the scrollback",
-    "  filter [all|net|draw|server|macro]   which lines to show (also ^F)",
-    "  macros                   list the macros the node serves",
-    "  copy                     write the scrollback to a file",
-    "  divergence               what this client ignores that the browser does not",
-    "  F1-F8                    the quick actions on the chip row",
+/// One table for `help`, `find`, completion and the completion's description,
+/// so a built-in cannot be runnable and undiscoverable. Spelled out rather than
+/// derived from the match in `execute`, whose arms carry guards and synonyms
+/// that would make a generated list either wrong or unreadable. Sorted by name.
+pub const BUILTINS: &[(&str, &str, &str)] = &[
+    ("alias", "alias <name> <command>", "name a command"),
+    ("bind", "bind <key> <command>", "run a command when a key is pressed"),
+    ("clear", "clear", "empty the scrollback"),
+    ("copy", "copy", "write the scrollback to a file"),
+    ("disconnect", "disconnect", "leave the match"),
+    ("divergence", "divergence", "what this client ignores that the browser does not"),
+    ("echo", "echo <text>", "print a line"),
+    ("exit", "exit", "close the game"),
+    ("filter", "filter [all|net|draw|server|macro]", "which lines to show (also ^F)"),
+    ("find", "find <text>", "search every command and cvar"),
+    ("help", "help [name]", "this list, or what one name is"),
+    ("macros", "macros", "list the macros the server offers"),
+    ("quit", "quit", "close the game"),
+    ("unbind", "unbind <key>", "forget a binding"),
 ];
+
+/// Names from other games, and what they mean here.
+///
+/// **Spellings, not a registry.** Each resolves to a name that is then looked
+/// up, typed, range-checked and routed exactly as if it had been typed — so a
+/// spelling whose target this server does not have fails the way the target
+/// would, with the target's name in the message. They exist because the first
+/// thing anybody types into a console they have not met is `sensitivity 2`,
+/// and "unknown command" is the wrong answer to a question this client can
+/// perfectly well answer. Sorted by name.
+pub const SPELLINGS: &[(&str, &str)] = &[
+    ("bot_add", "server.bots.add"),
+    ("bot_add_ct", "server.bots.add team=rvsf"),
+    ("bot_add_t", "server.bots.add team=cla"),
+    ("bot_kick", "server.bots.kick_all"),
+    ("bot_stop", "server.bots.freeze"),
+    ("cl_crosshair_drawoutline", "draw.crosshair.outline"),
+    ("cl_crosshairalpha", "draw.crosshair.alpha"),
+    ("cl_crosshairdot", "draw.crosshair.dot"),
+    ("cl_crosshairgap", "draw.crosshair.gap"),
+    ("cl_crosshairsize", "draw.crosshair.size"),
+    ("cl_crosshairstyle", "draw.crosshair.style"),
+    ("cl_crosshairthickness", "draw.crosshair.thickness"),
+    ("fov", "draw.fov"),
+    ("net_graph", "net.graph"),
+    ("sensitivity", "player.sensitivity"),
+];
+
+/// The most lines one `find` prints.
+const FIND_LIMIT: usize = 30;
 
 /// Whether a JSON value reads as "on".
 ///
@@ -1880,6 +2166,154 @@ mod tests {
     }
 
     // -- stamps ----------------------------------------------------------------
+
+    #[test]
+    fn another_game_s_spelling_reaches_the_cvar_it_means() {
+        let (mut c, mut cvars) = console();
+        assert_eq!(c.execute("sensitivity 2.5", &mut cvars, true), Dispatch::Handled);
+        assert_eq!(cvars.number("player.sensitivity"), Some(2.5));
+        // And a server one is sent as the name the server knows.
+        match c.execute("bot_add 3", &mut cvars, true) {
+            Dispatch::Send { command, .. } => assert_eq!(command, "server.bots.add 3"),
+            other => panic!("expected a send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_cvar_this_client_reads_is_settable_when_no_registry_described_it() {
+        // An older game server serves no client cvars. Online, the line used to
+        // go to it and vanish; offline, a number was coerced as a boolean.
+        let mut c = Console::default();
+        let mut cvars = ClientCvars::default();
+        assert_eq!(c.execute("draw.fov 100", &mut cvars, true), Dispatch::Handled);
+        assert_eq!(cvars.number("draw.fov"), Some(100.0));
+        assert_eq!(c.execute("draw.hitboxes 1", &mut cvars, false), Dispatch::Handled);
+        assert_eq!(cvars.boolean("draw.hitboxes"), Some(true));
+        assert_eq!(c.awaiting(), 0);
+    }
+
+    #[test]
+    fn quit_and_disconnect_are_the_app_s_to_carry_out() {
+        let (mut c, mut cvars) = console();
+        assert_eq!(c.execute("quit", &mut cvars, true), Dispatch::Quit);
+        assert_eq!(c.execute("exit", &mut cvars, false), Dispatch::Quit);
+        assert_eq!(c.execute("disconnect", &mut cvars, true), Dispatch::Disconnect);
+    }
+
+    #[test]
+    fn a_line_the_server_never_answers_is_reported_and_an_answered_one_is_not() {
+        let (mut c, mut cvars) = console();
+        let Dispatch::Send { req_id, .. } = c.execute("server.bots.add(1)", &mut cvars, true) else {
+            panic!("expected a send");
+        };
+        let Dispatch::Send { .. } = c.execute("server.kick(name='x')", &mut cvars, true) else {
+            panic!("expected a send");
+        };
+        assert_eq!(c.awaiting(), 2);
+        c.on_response(
+            &crate::protocol::ConsoleResponse {
+                req_id: Some(req_id),
+                ok: true,
+                ..Default::default()
+            },
+            &mut cvars,
+        );
+        assert_eq!(c.awaiting(), 1);
+        // Patient: nothing is said yet.
+        c.expire(Duration::from_secs(60));
+        assert!(!c.lines().iter().any(|l| l.text.contains("no answer")));
+        c.expire(Duration::ZERO);
+        assert_eq!(c.awaiting(), 0);
+        let said: Vec<&LogLine> = c.lines().iter().filter(|l| l.text.contains("no answer")).collect();
+        assert_eq!(said.len(), 1);
+        assert!(said[0].text.contains("server.kick"));
+    }
+
+    #[test]
+    fn find_searches_names_and_descriptions_across_every_table() {
+        let (mut c, mut cvars) = console();
+        c.execute("clear", &mut cvars, true);
+        assert_eq!(c.execute("find scrollback", &mut cvars, true), Dispatch::Handled);
+        let text = c.transcript();
+        assert!(text.contains("clear"), "{text}");
+        assert!(text.contains("copy"), "{text}");
+        c.execute("clear", &mut cvars, true);
+        c.execute("find zzzz-no-such", &mut cvars, true);
+        assert!(c.transcript().contains("nothing matches"));
+    }
+
+    #[test]
+    fn help_is_answered_here_and_only_asks_a_server_that_exists() {
+        let (mut c, mut cvars) = console();
+        // Offline: the built-ins, and no error about needing a node.
+        assert_eq!(c.execute("help", &mut cvars, false), Dispatch::Handled);
+        let text = c.transcript();
+        assert!(text.contains("disconnect") && text.contains("sensitivity"), "{text}");
+        assert!(!text.contains("needs the node"), "{text}");
+        // Online: the same list, and the server is asked what this player may run.
+        assert!(matches!(c.execute("help", &mut cvars, true), Dispatch::Send { .. }));
+        // One name is described locally either way.
+        assert_eq!(c.execute("help quit", &mut cvars, true), Dispatch::Handled);
+    }
+
+    #[test]
+    fn completion_offers_built_ins_and_spellings_and_says_what_each_is() {
+        let (mut c, cvars) = console();
+        c.insert("dis");
+        assert_eq!(c.suggestions, vec!["disconnect".to_string()]);
+        assert!(c.suggestion_detail(&cvars).unwrap().contains("leave the match"));
+        c.set_input("sens".into());
+        assert_eq!(c.suggestions, vec!["sensitivity".to_string()]);
+        assert_eq!(c.suggestion_hints(&cvars), vec!["-> player.sensitivity".to_string()]);
+        // Never more than the list can draw.
+        c.set_input("d".into());
+        assert!(c.suggestions.len() <= MAX_SUGGESTIONS);
+    }
+
+    #[test]
+    fn a_recalled_line_offers_no_list_so_history_keeps_walking() {
+        let (mut c, mut cvars) = console();
+        c.insert("clear");
+        c.submit(&mut cvars, true);
+        c.insert("copy");
+        c.submit(&mut cvars, true);
+        c.history_prev();
+        assert_eq!(c.input, "copy");
+        assert!(c.suggestions.is_empty(), "a list here would swallow the next Up");
+        c.history_prev();
+        assert_eq!(c.input, "clear");
+        // Typing brings the list back.
+        c.insert("x");
+        c.backspace();
+        assert_eq!(c.suggestions, vec!["clear".to_string()]);
+    }
+
+    #[test]
+    fn the_built_in_and_spelling_tables_are_sorted_and_resolve() {
+        let mut names: Vec<&str> = BUILTINS.iter().map(|(n, _, _)| *n).collect();
+        let sorted = {
+            let mut s = names.clone();
+            s.sort();
+            s
+        };
+        assert_eq!(names, sorted);
+        names = SPELLINGS.iter().map(|(n, _)| *n).collect();
+        let sorted = {
+            let mut s = names.clone();
+            s.sort();
+            s
+        };
+        assert_eq!(names, sorted);
+        // A spelling of a client cvar must point at one this build reads, or it
+        // is a second way to type something that does nothing.
+        for (name, target) in SPELLINGS {
+            let head = target.split_whitespace().next().unwrap();
+            assert!(
+                head.starts_with("server.") || ClientCvars::is_honored(head),
+                "{name} -> {target} is not read here"
+            );
+        }
+    }
 
     #[test]
     fn a_stamp_is_minutes_and_seconds() {

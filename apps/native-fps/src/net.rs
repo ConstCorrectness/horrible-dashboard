@@ -132,6 +132,17 @@ pub struct MatchSocket {
     /// Whether the backlog warning has already been printed. See `flush`.
     warned_overflow: bool,
     traffic: Arc<Traffic>,
+    /// Messages `await_welcome` read while waiting, kept for `drain`.
+    held: std::cell::RefCell<Vec<Incoming>>,
+}
+
+/// What the server said when it seated us.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Seated {
+    pub room: String,
+    pub map: String,
+    /// Players already in the room, counting us.
+    pub players: usize,
 }
 
 impl MatchSocket {
@@ -152,21 +163,19 @@ impl MatchSocket {
         // 40 ms on Windows) before it leaves. Failing to set it costs latency,
         // not correctness, so it is not a reason to refuse the connection.
         match socket.get_mut() {
-            MaybeTlsStream::Plain(stream) => {
-                stream
-                    .set_read_timeout(Some(READ_TIMEOUT))
-                    .map_err(|e| NetError::Connect(e.to_string()))?;
-                if let Err(e) = stream.set_nodelay(true) {
-                    eprintln!("hassault: warning — could not set TCP_NODELAY: {e}");
-                }
-            }
-            // The node is on this machine, so the socket is plain TCP and this
-            // arm is unreachable today. If a TLS transport is ever added, the
-            // timeout has to be set on the stream underneath it — and the cost of
-            // forgetting is latency, not breakage, which is exactly the kind of
-            // thing that goes unnoticed. Hence the warning rather than silence.
+            MaybeTlsStream::Plain(stream) => tune(stream)?,
+            // `wss://`: a game server reached directly, with no node on this
+            // machine in between. The timeout goes on the TCP stream *underneath*
+            // the TLS session, because that is where a read actually blocks. A
+            // timeout part-way through a TLS record is safe: rustls keeps the
+            // bytes it has in its own buffer and the next read carries on.
+            MaybeTlsStream::Rustls(stream) => tune(&stream.sock)?,
+            // Any other transport: the cost of no timeout is latency, not
+            // breakage, which is exactly the kind of thing that goes unnoticed.
+            // Hence the warning rather than silence.
             _ => eprintln!(
-                "hassault: warning — no read timeout on this transport;                  input will be sent in bursts rather than promptly"
+                "hassault: warning — no read timeout on this transport; \
+                 input will be sent in bursts rather than promptly"
             ),
         }
 
@@ -189,7 +198,48 @@ impl MatchSocket {
             last_ping: None,
             warned_overflow: false,
             traffic,
+            held: std::cell::RefCell::new(Vec::new()),
         })
+    }
+
+    /// Block until the server answers a join, for at most `patience`.
+    ///
+    /// For a loading screen, which has to know whether there is a match to
+    /// start a renderer for: a refused join used to be discovered by the game
+    /// itself, a window and a world later. `Err` is the server's own reason.
+    ///
+    /// **Nothing read here is lost.** The welcome carries the room's whole
+    /// state and the snapshots behind it are already arriving; everything is
+    /// kept, in order, and handed out by the next `drain` as if this had never
+    /// looked.
+    pub fn await_welcome(&self, patience: Duration) -> Result<Seated, String> {
+        let deadline = Instant::now() + patience;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let item = match self.rx.recv_timeout(left) {
+                Ok(item) => item,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("the server did not answer the join".into())
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("the connection closed before the server answered".into())
+                }
+            };
+            let answer = match &item {
+                Incoming::Event(Event::Welcome(w)) => Some(Ok(Seated {
+                    room: w.room.clone(),
+                    map: w.map.clone(),
+                    players: w.players.len(),
+                })),
+                Incoming::Event(Event::Error(e)) => Some(Err(e.message.clone())),
+                Incoming::Closed(why) => Some(Err(why.clone())),
+                _ => None,
+            };
+            self.held.borrow_mut().push(item);
+            if let Some(answer) = answer {
+                return answer;
+            }
+        }
     }
 
     /// Cumulative payload bytes `(in, out)` since the socket opened.
@@ -393,7 +443,8 @@ impl MatchSocket {
 
     /// Everything that has arrived since the last call. Never blocks.
     pub fn drain(&self) -> Vec<Incoming> {
-        let mut out = Vec::new();
+        // Whatever `await_welcome` read first, then what has arrived since.
+        let mut out = std::mem::take(&mut *self.held.borrow_mut());
         loop {
             match self.rx.try_recv() {
                 Ok(item) => out.push(item),
@@ -406,6 +457,17 @@ impl MatchSocket {
         }
         out
     }
+}
+
+/// The two socket options every transport wants, set on the TCP stream itself.
+fn tune(stream: &TcpStream) -> Result<(), NetError> {
+    stream
+        .set_read_timeout(Some(READ_TIMEOUT))
+        .map_err(|e| NetError::Connect(e.to_string()))?;
+    if let Err(e) = stream.set_nodelay(true) {
+        eprintln!("hassault: warning — could not set TCP_NODELAY: {e}");
+    }
+    Ok(())
 }
 
 /// The socket's whole life, on one thread.
