@@ -1,0 +1,25 @@
+{
+  "name": "@horrible/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The stable surface a horrible-dashboard module package may import from the host. Everything else in @horrible/core is internal.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@horrible/core": "workspace:*",
+    "@horribledashboard/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}

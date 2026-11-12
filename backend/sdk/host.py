@@ -40,18 +40,27 @@ class PluginHost:
     def manifest(self) -> PluginManifest:
         return self._manifest
 
+    @property
+    def owner_id(self) -> str:
+        """The id every contribution is recorded under, for unloading."""
+        return self._manifest.id
+
+    def _own(self, kind: str, key: object) -> None:
+        self._registry.own(self.owner_id, kind, key)
+
     def add_router(self, router: APIRouter, *, prefix: str | None = None) -> None:
         """Mount a FastAPI router. Default prefix is `/api/plugins/<id>`; pass an
         explicit `prefix` (joined under `/api`) to override."""
         resolved = prefix if prefix is not None else f"/plugins/{self._manifest.id}"
-        self._registry.routers.append(
-            _MountedRouter(router=router, prefix=resolved, plugin_id=self._manifest.id)
-        )
+        mounted = _MountedRouter(router=router, prefix=resolved, plugin_id=self._manifest.id)
+        self._registry.routers.append(mounted)
+        self._own("routers", mounted)
 
     def add_agent_tool(self, tool: AgentTool) -> None:
         """Expose a server-side agent tool. Backend plugins win name conflicts in load
         order; a name clash with a core tool is the plugin author's responsibility."""
         self._registry.agent_tools[tool.name] = tool
+        self._own("agent_tools", tool.name)
 
     def add_agent(self, spec: AgentSpec) -> None:
         """Register a specialized agent (own system prompt, tool-group scope, and
@@ -59,6 +68,7 @@ class PluginHost:
         built-ins and is addressable from the chat widget and `agent.delegate`.
         Built-in agent ids (main, coder, dba, researcher) cannot be overridden."""
         self._registry.agents[spec.id] = spec
+        self._own("agents", spec.id)
 
     def add_connector(self, connector: Connector) -> None:
         """Expose an external account the user can connect from the home page, and
@@ -68,11 +78,13 @@ class PluginHost:
         tools by their name prefix, so a mismatch silently splits the connector's
         tools off from its blurb and guide."""
         self._registry.connectors[connector.id] = connector
+        self._own("connectors", connector.id)
 
     def add_ws_channel(self, channel: str, handler: WsChannelHandler) -> None:
         """Handle a new channel on the shared `/ws` socket. Built-in channels
         (`agent`, `collab`, …) take precedence; pick a unique channel name."""
         self._registry.ws_channels[channel] = handler
+        self._own("ws_channels", channel)
 
     def add_training_provider(self, provider: Any) -> None:
         """Expose a training environment provider (an object satisfying
@@ -80,6 +92,7 @@ class PluginHost:
         resolve, fetch, and scaffold one kind of trainable environment. Built-in
         providers (kaggle, huggingface, gymnasium) win id conflicts."""
         self._registry.training_providers[provider.provider] = provider
+        self._own("training_providers", provider.provider)
 
     def add_dataset_source(self, source: Any) -> None:
         """Expose a place training material lives (an object satisfying
@@ -89,6 +102,7 @@ class PluginHost:
 
         Built-in sources (hub, local, exports, kaggle) win id conflicts."""
         self._registry.dataset_sources[source.id] = source
+        self._own("dataset_sources", source.id)
 
     def add_recipe_backend(self, backend: Any) -> None:
         """Expose a training framework (an object satisfying
@@ -101,6 +115,7 @@ class PluginHost:
         as dropped rather than emitted hopefully. Built-ins (trl, unsloth,
         torchtitan, nanotron) win id conflicts."""
         self._registry.recipe_backends[backend.id] = backend
+        self._own("recipe_backends", backend.id)
 
     def add_eval_runner(self, runner: Any) -> None:
         """Expose a way of executing an eval suite (an object satisfying
@@ -108,6 +123,7 @@ class PluginHost:
         how it runs them. Results land in the same tables as every other runner's,
         so a mixed suite still adds up. Built-ins win id conflicts."""
         self._registry.eval_runners[runner.id] = runner
+        self._own("eval_runners", runner.id)
 
     def add_search_provider(self, provider: Any) -> None:
         """Expose a web-search provider (an object satisfying
@@ -119,6 +135,7 @@ class PluginHost:
 
         self._registry.search_providers[provider.id] = provider
         register_provider(provider)
+        self._own("search_providers", provider.id)
 
     def add_music_source(self, source: Any) -> None:
         """Expose a music source (satisfying
@@ -130,6 +147,7 @@ class PluginHost:
 
         self._registry.music_sources[source.id] = source
         sources.register(source)
+        self._own("music_sources", source.id)
 
     def add_playlist_importer(self, importer: Any) -> None:
         """Expose a playlist importer (`backend.modules.music.providers.
@@ -139,6 +157,7 @@ class PluginHost:
 
         self._registry.playlist_importers[importer.id] = importer
         importers.register(importer)
+        self._own("playlist_importers", importer.id)
 
     def add_music_listener(self, listener: Any) -> None:
         """Expose a listener (`backend.modules.music.providers.MusicListener`): told
@@ -147,18 +166,22 @@ class PluginHost:
 
         self._registry.music_listeners[listener.id] = listener
         listeners.register(listener)
+        self._own("music_listeners", listener.id)
 
     def add_dash_facade(self, name: str, factory: DashFacadeFactory) -> None:
         """Attach `dash.<name>` in every REPL session (factory builds the object)."""
         self._registry.dash_facades[name] = factory
+        self._own("dash_facades", name)
 
     def on_startup(self, hook: LifecycleHook) -> None:
         """Run `hook` when the app starts (inside the lifespan). Sync or async."""
         self._registry.startup_hooks.append(hook)
+        self._own("startup_hooks", hook)
 
     def on_shutdown(self, hook: LifecycleHook) -> None:
         """Run `hook` when the app shuts down. Sync or async."""
         self._registry.shutdown_hooks.append(hook)
+        self._own("shutdown_hooks", hook)
 
 
 class BackendPlugin(ABC):

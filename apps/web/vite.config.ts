@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react';
+import { horribleModules } from '@horribledashboard/sdk/vite-modules';
 import { existsSync } from 'node:fs';
 import { Agent } from 'node:http';
 import { resolve } from 'node:path';
@@ -15,7 +16,9 @@ if (existsSync(rootEnv)) {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  // `virtual:horrible-modules`: every built-in module package under modules/, found
+  // by its horrible-module.json (a git submodule there is found the same way).
+  plugins: [react(), horribleModules({ root: resolve(__dirname, '../../modules') })],
   optimizeDeps: {
     // Scan only the app. Vite's default is every .html file here, and the dev-only
     // `operator-check.html` imports `three`, which this package does not depend on:

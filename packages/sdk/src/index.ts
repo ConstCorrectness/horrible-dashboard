@@ -1,5 +1,17 @@
+export type { MixerStripDecl, ServiceContracts, ServiceKey } from './contracts.js';
+export {
+  MODULE_ID_PATTERN,
+  normalizeManifest,
+  ownsTool,
+  type AnyPackageManifest,
+  type ModulePackageManifest,
+  type ModuleStandalone,
+  type ModuleToolGroup,
+} from './module.js';
 export {
   definePlugin,
+  isSupportedSdkVersion,
+  MIN_SDK_API_VERSION,
   SDK_API_VERSION,
   type HorriblePlugin,
   type PluginContributions,

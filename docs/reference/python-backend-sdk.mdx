@@ -232,6 +232,43 @@ how it runs them. Results land in the same tables as every other runner's,
 so a mixed suite still adds up. Built-ins win id conflicts.
 ````
 
+### `PluginHost.add_music_listener`
+
+````text
+PluginHost.add_music_listener(self, listener: Any) -> None
+````
+
+````text
+Expose a listener (`backend.modules.music.providers.MusicListener`): told
+what played (scrobbling) and asked what's similar (the DJ and radio).
+````
+
+### `PluginHost.add_music_source`
+
+````text
+PluginHost.add_music_source(self, source: Any) -> None
+````
+
+````text
+Expose a music source (satisfying
+`backend.modules.music.providers.MusicSource`): `search()` returns
+candidates, `fetch()` downloads one into the library. The agent's
+`music.play` and the import resolver use it with no new tools. Reusing a
+built-in's id (`youtube`) replaces it.
+````
+
+### `PluginHost.add_playlist_importer`
+
+````text
+PluginHost.add_playlist_importer(self, importer: Any) -> None
+````
+
+````text
+Expose a playlist importer (`backend.modules.music.providers.
+PlaylistImporter`): an account that lists playlists, or a file format it
+parses. Imported tracks are resolved and downloaded by the music library.
+````
+
 ### `PluginHost.add_recipe_backend`
 
 ````text
@@ -327,6 +364,16 @@ PluginHost.on_startup(self, hook: LifecycleHook) -> None
 Run `hook` when the app starts (inside the lifespan). Sync or async.
 ````
 
+### `PluginHost.owner_id`
+
+````text
+PluginHost.owner_id(self) -> str
+````
+
+````text
+The id every contribution is recorded under, for unloading.
+````
+
 ### `BackendPlugin.setup`
 
 ````text
@@ -349,6 +396,191 @@ load_plugins(*, extra_dirs: list[Path] | None=None, reg: PluginRegistry | None=N
 Discover and set up every backend plugin into `reg` (the global registry by
 default). Idempotent per registry: call `reg.reset()` first to reload. Returns the
 registry for convenience.
+````
+
+## `backend.sdk.module_manifest`
+
+### `ManifestError`
+
+````text
+class ManifestError
+````
+
+````text
+A manifest that cannot describe a loadable module. The message names the field.
+````
+
+### `ModuleManifest`
+
+````text
+class ModuleManifest
+````
+
+*Undocumented.*
+
+### `PySpec`
+
+````text
+class PySpec
+````
+
+*Undocumented.*
+
+### `Standalone`
+
+````text
+class Standalone
+````
+
+*Undocumented.*
+
+### `ToolGroup`
+
+````text
+class ToolGroup
+````
+
+*Undocumented.*
+
+### `WebSpec`
+
+````text
+class WebSpec
+````
+
+*Undocumented.*
+
+### `ModuleManifest.owns_tool`
+
+````text
+ModuleManifest.owns_tool(self, tool_name: str) -> bool
+````
+
+````text
+Whether `tool_name`'s group (the text before the first dot) is declared.
+````
+
+### `parse_manifest`
+
+````text
+parse_manifest(data: dict[str, Any]) -> ModuleManifest
+````
+
+````text
+Validate and parse a manifest dict (either shape). Raises `ManifestError`.
+````
+
+### `read_manifest`
+
+````text
+read_manifest(package_dir: Path) -> ModuleManifest | None
+````
+
+````text
+The manifest in `package_dir` (module manifest preferred), or None if it has none.
+Raises `ManifestError` for a manifest that exists but is invalid, and also when the
+id does not equal the directory name (the id *is* the install location).
+````
+
+### `ModuleManifest.to_json`
+
+````text
+ModuleManifest.to_json(self) -> dict[str, Any]
+````
+
+````text
+The camelCase wire shape the frontend reads (`ModulePackageManifest`).
+````
+
+## `backend.sdk.module_scan`
+
+### `ModuleDescriptor`
+
+````text
+class ModuleDescriptor
+````
+
+````text
+A discovered module package: its manifest and where it came from.
+````
+
+### `ScanResult`
+
+````text
+class ScanResult
+````
+
+*Undocumented.*
+
+### `ModuleDescriptor.builtin`
+
+````text
+ModuleDescriptor.builtin(self) -> bool
+````
+
+*Undocumented.*
+
+### `builtin_modules_dir`
+
+````text
+builtin_modules_dir() -> Path
+````
+
+````text
+`modules/` beside `backend/` — in a checkout and in the packaged runtime alike.
+````
+
+### `ModuleDescriptor.id`
+
+````text
+ModuleDescriptor.id(self) -> str
+````
+
+*Undocumented.*
+
+### `installed_modules_dir`
+
+````text
+installed_modules_dir() -> Path
+````
+
+*Undocumented.*
+
+### `load_order`
+
+````text
+load_order(manifests: Iterable[ModuleManifest]) -> tuple[list[str], list[str]]
+````
+
+````text
+Topologically order modules so dependencies load first.
+
+Edges come from `dependsOn` and from `requires` → whichever module `provides` that
+contract. Ties keep input order, so the result is deterministic. Returns
+``(order, problems)``: a cycle does not fail the load — its members are appended
+in input order and named in `problems`, because a running app with a logged cycle
+beats a blank one. Dependencies on modules that aren't present are reported too.
+````
+
+### `ModuleDescriptor.load_python`
+
+````text
+ModuleDescriptor.load_python(self) -> Any | None
+````
+
+````text
+Import and return the module's Python entry object (``MODULE``), or None
+for a web-only module.
+````
+
+### `scan_modules`
+
+````text
+scan_modules(*, builtin_dir: Path | None=None, extra_dirs: Iterable[Path]=(), installed_dir: Path | None=None, entry_points: bool=True) -> ScanResult
+````
+
+````text
+Discover every module package. Never raises: bad packages land in `errors`.
 ````
 
 ## `backend.sdk.registry`
@@ -384,6 +616,32 @@ Run a plugin agent tool by name, awaiting an async handler. Failures come
 back as an `{'error': ...}` value so one bad tool can't break a turn.
 ````
 
+### `PluginRegistry.own`
+
+````text
+PluginRegistry.own(self, owner: str, kind: str, key: Any) -> None
+````
+
+````text
+Record that `owner` contributed `key` to `kind`.
+````
+
+### `PluginRegistry.owner_of_tool`
+
+````text
+PluginRegistry.owner_of_tool(self, name: str) -> str | None
+````
+
+*Undocumented.*
+
+### `PluginRegistry.provide`
+
+````text
+PluginRegistry.provide(self, owner: str, contract: str, impl: Any) -> None
+````
+
+*Undocumented.*
+
 ### `PluginRegistry.provider_tools`
 
 ````text
@@ -411,7 +669,7 @@ Drop all registrations (used between test loads).
 ### `PluginRegistry.run_shutdown`
 
 ````text
-PluginRegistry.run_shutdown(self) -> None
+PluginRegistry.run_shutdown(self, owner: str | None=None) -> None
 ````
 
 *Undocumented.*
@@ -419,10 +677,44 @@ PluginRegistry.run_shutdown(self) -> None
 ### `PluginRegistry.run_startup`
 
 ````text
-PluginRegistry.run_startup(self) -> None
+PluginRegistry.run_startup(self, owner: str | None=None) -> None
+````
+
+````text
+Run startup hooks — all of them at app start, or one owner's when it is
+loaded into an app that is already running.
+````
+
+### `PluginRegistry.run_ws_disconnect`
+
+````text
+PluginRegistry.run_ws_disconnect(self, conn: Any) -> None
+````
+
+````text
+Tell every module a `/ws` connection closed. Never raises.
+````
+
+### `PluginRegistry.service`
+
+````text
+PluginRegistry.service(self, contract: str) -> Any | None
 ````
 
 *Undocumented.*
+
+### `PluginRegistry.unregister_owner`
+
+````text
+PluginRegistry.unregister_owner(self, owner: str) -> list[tuple[str, Any]]
+````
+
+````text
+Remove everything `owner` contributed. Idempotent; returns what was removed.
+
+A key another owner has since replaced is left alone — the later registration
+won, and unloading the earlier one must not take it out.
+````
 
 ## `backend.sdk.types`
 

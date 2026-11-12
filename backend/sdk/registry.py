@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +22,7 @@ from backend.sdk.types import (
     LifecycleHook,
     PluginManifest,
     WsChannelHandler,
+    WsDisconnectHook,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,69 @@ class PluginRegistry:
     eval_runners: dict[str, Any] = field(default_factory=dict)
     startup_hooks: list[LifecycleHook] = field(default_factory=list)
     shutdown_hooks: list[LifecycleHook] = field(default_factory=list)
+    # Called with the connection when a `/ws` socket closes (module cleanup that is
+    # per-connection, e.g. leaving a match).
+    ws_disconnect_hooks: list[WsDisconnectHook] = field(default_factory=list)
+    # Typed cross-module services: contract id ("audio.mixer@1") → (owner, impl).
+    # The Python twin of the frontend `ServiceContracts` seam.
+    services: dict[str, tuple[str, Any]] = field(default_factory=dict)
     # Per-plugin load failures, surfaced rather than crashing the app.
     errors: list[tuple[str, str]] = field(default_factory=list)
+    # Everything each owner (a plugin or module id) contributed, as (kind, key)
+    # pairs, so `unregister_owner` can take exactly that back out. Kinds name the
+    # registry dict (`agent_tools`, …) or a hook list (`startup_hooks`, …).
+    owned: dict[str, list[tuple[str, Any]]] = field(default_factory=dict)
+
+    # --- ownership ------------------------------------------------------------
+
+    def own(self, owner: str, kind: str, key: Any) -> None:
+        """Record that `owner` contributed `key` to `kind`."""
+        self.owned.setdefault(owner, []).append((kind, key))
+
+    def owner_of_tool(self, name: str) -> str | None:
+        for owner, items in self.owned.items():
+            if ("agent_tools", name) in items:
+                return owner
+        return None
+
+    def unregister_owner(self, owner: str) -> list[tuple[str, Any]]:
+        """Remove everything `owner` contributed. Idempotent; returns what was removed.
+
+        A key another owner has since replaced is left alone — the later registration
+        won, and unloading the earlier one must not take it out."""
+        removed: list[tuple[str, Any]] = []
+        for kind, key in reversed(self.owned.pop(owner, [])):
+            target = getattr(self, kind, None)
+            if isinstance(target, dict):
+                if key in target and self._still_owned_by(owner, kind, key):
+                    target.pop(key, None)
+                    removed.append((kind, key))
+            elif isinstance(target, list):
+                if key in target:
+                    target.remove(key)
+                    removed.append((kind, key))
+            unhook = _SIDE_UNREGISTER.get(kind)
+            if unhook is not None:
+                try:
+                    unhook(key)
+                except Exception:  # noqa: BLE001 — unloading must finish
+                    logger.exception("unregistering %s %s for %s failed", kind, key, owner)
+        self.loaded = [m for m in self.loaded if m.id != owner]
+        return removed
+
+    def _still_owned_by(self, owner: str, kind: str, key: Any) -> bool:
+        """No *other* owner registered the same key after `owner` did."""
+        return not any(
+            (kind, key) in items for other, items in self.owned.items() if other != owner
+        )
+
+    def provide(self, owner: str, contract: str, impl: Any) -> None:
+        self.services[contract] = (owner, impl)
+        self.own(owner, "services", contract)
+
+    def service(self, contract: str) -> Any | None:
+        entry = self.services.get(contract)
+        return entry[1] if entry else None
 
     def reset(self) -> None:
         """Drop all registrations (used between test loads)."""
@@ -100,7 +162,10 @@ class PluginRegistry:
         self.eval_runners.clear()
         self.startup_hooks.clear()
         self.shutdown_hooks.clear()
+        self.ws_disconnect_hooks.clear()
+        self.services.clear()
         self.errors.clear()
+        self.owned.clear()
 
     # --- reads used by the app / orchestrator / repl -----------------------
 
@@ -146,11 +211,30 @@ class PluginRegistry:
             logger.exception("plugin ws channel %s handler failed", channel)
         return True
 
-    async def run_startup(self) -> None:
-        await _run_hooks(self.startup_hooks, "startup")
+    def _hooks_of(self, kind: str, owner: str | None) -> list[Any]:
+        hooks: list[Any] = getattr(self, kind)
+        if owner is None:
+            return list(hooks)
+        mine = [key for k, key in self.owned.get(owner, []) if k == kind]
+        return [h for h in hooks if any(h is m for m in mine)]
 
-    async def run_shutdown(self) -> None:
-        await _run_hooks(self.shutdown_hooks, "shutdown")
+    async def run_startup(self, owner: str | None = None) -> None:
+        """Run startup hooks — all of them at app start, or one owner's when it is
+        loaded into an app that is already running."""
+        await _run_hooks(self._hooks_of("startup_hooks", owner), "startup")
+
+    async def run_shutdown(self, owner: str | None = None) -> None:
+        await _run_hooks(self._hooks_of("shutdown_hooks", owner), "shutdown")
+
+    async def run_ws_disconnect(self, conn: Any) -> None:
+        """Tell every module a `/ws` connection closed. Never raises."""
+        for hook in list(self.ws_disconnect_hooks):
+            try:
+                result = hook(conn)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # noqa: BLE001 — never break the socket teardown
+                logger.exception("ws disconnect hook failed")
 
 
 async def _run_hooks(hooks: list[LifecycleHook], phase: str) -> None:
@@ -161,6 +245,31 @@ async def _run_hooks(hooks: list[LifecycleHook], phase: str) -> None:
                 await result
         except Exception:  # noqa: BLE001 — a bad hook shouldn't take the app down
             logger.exception("plugin %s hook failed", phase)
+
+
+def _unregister_search(provider_id: str) -> None:
+    from backend.modules.search.base import unregister_provider
+
+    unregister_provider(provider_id)
+
+
+def _music_unregister(attr: str) -> Callable[[str], None]:
+    def unhook(provider_id: str) -> None:
+        from backend.modules.music import providers
+
+        getattr(providers, attr).unregister(provider_id)
+
+    return unhook
+
+
+# Registries that live in another module as well as here (the host writes both), so
+# taking a contribution back out has to reach that module's copy too.
+_SIDE_UNREGISTER: dict[str, Callable[[Any], None]] = {
+    "search_providers": _unregister_search,
+    "music_sources": _music_unregister("sources"),
+    "playlist_importers": _music_unregister("importers"),
+    "music_listeners": _music_unregister("listeners"),
+}
 
 
 # The one registry the whole process shares.

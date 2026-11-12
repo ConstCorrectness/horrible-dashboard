@@ -115,6 +115,30 @@ def test_results_are_cached(monkeypatch):
     assert len(calls) == 2
 
 
+def test_an_absence_is_re_probed_once_it_is_stale(monkeypatch):
+    """A backend that probed before `uv sync --extra voice` finished must notice the
+    install without a restart. Only "installed" is cached for the process."""
+    now = [1000.0]
+    monkeypatch.setattr(extras.time, "monotonic", lambda: now[0])
+
+    _fake_import(monkeypatch, {"torch": ImportError("no module")})
+    assert extras.probe("voice").state == "absent"
+
+    # The package lands. Inside the window the old answer still stands...
+    _fake_import(monkeypatch, {})
+    now[0] += extras._NEGATIVE_TTL_S - 1
+    assert extras.probe("voice").state == "absent"
+
+    # ...and past it the probe looks again.
+    now[0] += 2
+    assert extras.probe("voice").state == "installed"
+
+    # An installed answer is never re-asked, however old.
+    _fake_import(monkeypatch, {"torch": ImportError("gone")})
+    now[0] += 10 * extras._NEGATIVE_TTL_S
+    assert extras.probe("voice").state == "installed"
+
+
 # ---- the migrated guards keep their old shape -----------------------------------
 
 

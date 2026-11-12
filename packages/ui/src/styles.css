@@ -3959,6 +3959,23 @@ kbd {
   color: var(--text-dim);
 }
 
+/* Module packages sit under the plugin list: the same row construction, divided
+   from it by a technical rule rather than a second card. */
+.mk-modules {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 2px solid var(--accent);
+}
+
+.mk-section-title {
+  margin: 0;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
 /* Agent chat widget */
 /* The chat and, when it is out, its trace drawer. The drawer sits beside the
    chat and takes its width from the handle; in a pane too narrow for both it

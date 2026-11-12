@@ -190,6 +190,24 @@
   color: var(--text-dim);
   font-size: 12.5px;
 }
+/* A disabled module's saved pane: says whose it is and offers to bring it back. */
+.frame-pane-disabled {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  border-top: 2px solid var(--accent);
+}
+.frame-pane-disabled-title {
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+.frame-pane-disabled-meta {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
 /* In-pane section tabs. `flex: none` and `position: sticky` so the strip stays
    put while the pane body (which owns the scroll) moves under it. */
 .frame-section-tabs {

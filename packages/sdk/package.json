@@ -16,7 +16,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./vite": "./src/vite.ts"
+    "./vite": "./src/vite.ts",
+    "./vite-modules": "./src/vite-modules.ts"
   },
   "files": [
     "dist",
@@ -33,6 +34,10 @@
       "./vite": {
         "types": "./dist/vite.d.ts",
         "default": "./dist/vite.js"
+      },
+      "./vite-modules": {
+        "types": "./dist/vite-modules.d.ts",
+        "default": "./dist/vite-modules.js"
       }
     }
   },
@@ -47,6 +52,7 @@
   "devDependencies": {
     "@types/react": "^19.0.0",
     "react": "^19.0.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "@types/node": "^22.10.0"
   }
 }

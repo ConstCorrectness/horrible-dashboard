@@ -6,10 +6,13 @@
  * and focusing the pane makes it the frame's focused pane — which is what the
  * keybinding service resolves `paneFocus` / `paneInstance` against.
  */
-import { Suspense, useMemo, useRef, type ComponentType } from 'react';
+import { Suspense, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   activeSectionOf,
   layoutStore,
+  moduleOwningView,
+  setModuleEnabled,
+  useModulePackages,
   PaneInstanceContext,
   PaneParamsContext,
   requestCapture,
@@ -62,6 +65,54 @@ function bodyOfSection(s: SectionDecl | undefined): ComponentType | undefined {
   return s?.component ?? bodyOfView(s?.view);
 }
 
+/**
+ * A saved pane whose view is not registered. Usually because its module is
+ * disabled (or still loading, or failed to): then it says which module and offers
+ * to enable it — the pane comes back in place, keeping its window and params,
+ * because the registry change re-renders the desktop. Removing the node instead
+ * would lose the user's arrangement over a toggle they may flip straight back.
+ */
+function MissingPane({ viewId }: { viewId: string }) {
+  useModulePackages(); // re-render as module state changes
+  const owner = moduleOwningView(viewId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!owner) return <div className="frame-pane-missing">Unknown pane: {viewId}</div>;
+  const enable = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setModuleEnabled(owner.id, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // A module another process on the module bus holds is not a failure: say where it is.
+  const reason = owner.error
+    ? / is running in /.test(owner.error)
+      ? owner.error.replace(/^\S+ is running in /, 'is running in ')
+      : `failed to load: ${owner.error}`
+    : owner.enabled
+      ? 'is loading'
+      : 'is disabled';
+  return (
+    <div className="frame-pane-missing frame-pane-disabled">
+      <span className="frame-pane-disabled-title">{owner.name}</span>
+      <span className="frame-pane-disabled-meta">
+        module {owner.id} {reason}
+      </span>
+      {!owner.enabled && (
+        <button disabled={busy} onClick={() => void enable()}>
+          Enable {owner.name}
+        </button>
+      )}
+      {error && <span className="frame-pane-disabled-meta">{error}</span>}
+    </div>
+  );
+}
+
 export function PaneHost({ pane }: { pane: PaneState }) {
   const { viewId, instanceId, params } = pane;
 
@@ -73,7 +124,7 @@ export function PaneHost({ pane }: { pane: PaneState }) {
 
   const decl = resolveView(viewId);
   if (!decl) {
-    return <div className="frame-pane-missing">Unknown pane: {viewId}</div>;
+    return <MissingPane viewId={viewId} />;
   }
 
   // Sections: the strip is host chrome, but the *body* is the module's choice.

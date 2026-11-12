@@ -5,7 +5,19 @@ import type { PluginPackageManifest } from '@horribledashboard/sdk';
 import { CopyableValue } from '../../CopyableLink';
 import { openExternal } from '../../external';
 import { IconAlert, IconRetry } from '../../glyphs';
-import { pluginLoadErrors, type InstalledPlugin } from '../../plugins/loader';
+import {
+  moduleLoadErrors,
+  setModuleEnabled,
+  uninstallModule,
+  useModulePackages,
+  type ModuleState,
+} from '../../module-packages';
+import {
+  loadPlugin,
+  pluginLoadErrors,
+  unloadPlugin,
+  type InstalledPlugin,
+} from '../../plugins/loader';
 import { Button, EmptyState } from '../../Primitives';
 import {
   getInstalledPlugins,
@@ -43,10 +55,15 @@ function mergeRows(catalog: PluginPackageManifest[], installed: InstalledPlugin[
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** How a lifecycle action lands in the running app once the backend has done it. */
+type Apply = 'load' | 'unload' | 'reload';
+
 /**
- * Browse the plugin catalog and manage installed plugins. Lifecycle changes
- * (install/update/enable/disable/uninstall) take effect on the next reload —
- * the registry has no unregister, so the panel offers a reload banner instead.
+ * Browse the plugin catalog and manage installed plugins and module packages.
+ * Every change applies live: an install or enable registers the plugin's
+ * contributions now, a disable or uninstall unregisters them (closing their
+ * panes through the guarded path). The reload banner is only the fallback, for
+ * when a pane with unsaved work refuses to close or a bundle fails to load.
  */
 export function MarketplacePanel() {
   const [catalog, setCatalog] = useState<PluginPackageManifest[]>([]);
@@ -71,11 +88,19 @@ export function MarketplacePanel() {
   }, [refresh]);
 
   const act = useCallback(
-    async (id: string, action: () => Promise<unknown>) => {
+    async (id: string, action: () => Promise<unknown>, apply: Apply) => {
       setBusyId(id);
       try {
-        await action();
-        setDirty(true);
+        const result = await action();
+        let applied = false;
+        if (apply === 'unload' || apply === 'reload') applied = await unloadPlugin(id);
+        if (apply === 'load' || (apply === 'reload' && applied)) {
+          const manifest = (result as InstalledPlugin | undefined)?.manifest;
+          applied = manifest ? await loadPlugin(manifest) : false;
+        }
+        // Live application failed (a pane vetoed its close, or the bundle threw):
+        // the backend state is right, the running app is behind it.
+        if (!applied) setDirty(true);
         await refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -107,7 +132,7 @@ export function MarketplacePanel() {
               kernel, an open match. The banner says so rather than presenting a
               full page reload as a routine confirmation. */}
           <div className="mk-banner-text">
-            <span className="mk-banner-title">Reload to apply plugin changes</span>
+            <span className="mk-banner-title">A plugin change could not apply live</span>
             <p className="mk-banner-body">
               Reloading restarts the interface. Panes holding live sessions — terminals, notebook
               kernels, running matches — will be closed.
@@ -205,7 +230,7 @@ export function MarketplacePanel() {
                   <button
                     className="primary"
                     disabled={busy}
-                    onClick={() => void act(row.id, () => installPlugin(row.id))}
+                    onClick={() => void act(row.id, () => installPlugin(row.id), 'load')}
                   >
                     Install
                   </button>
@@ -214,7 +239,7 @@ export function MarketplacePanel() {
                   <button
                     className="primary"
                     disabled={busy}
-                    onClick={() => void act(row.id, () => installPlugin(row.id))}
+                    onClick={() => void act(row.id, () => installPlugin(row.id), 'reload')}
                   >
                     Update
                   </button>
@@ -224,14 +249,18 @@ export function MarketplacePanel() {
                     <button
                       disabled={busy}
                       onClick={() =>
-                        void act(row.id, () => setPluginEnabled(row.id, !row.installed?.enabled))
+                        void act(
+                          row.id,
+                          () => setPluginEnabled(row.id, !row.installed?.enabled),
+                          row.installed?.enabled ? 'unload' : 'load',
+                        )
                       }
                     >
                       {row.installed.enabled ? 'Disable' : 'Enable'}
                     </button>
                     <button
                       disabled={busy}
-                      onClick={() => void act(row.id, () => uninstallPlugin(row.id))}
+                      onClick={() => void act(row.id, () => uninstallPlugin(row.id), 'unload')}
                     >
                       Uninstall
                     </button>
@@ -242,6 +271,101 @@ export function MarketplacePanel() {
           );
         })}
       </ul>
+
+      <ModulesSection />
     </div>
+  );
+}
+
+/**
+ * Module packages: the app's own feature modules as installable, toggleable units.
+ * Toggling one loads or unloads it in the backend, which announces it on `/ws`,
+ * and every open window registers or unregisters its panes and tools in response.
+ */
+function ModulesSection() {
+  const { ready, modules } = useModulePackages();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (id: string, action: () => Promise<unknown>) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      await action();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (!ready || modules.length === 0) return null;
+  const sorted = [...modules].sort((a, b) => a.name.localeCompare(b.name));
+  const webErrors = new Map(moduleLoadErrors.map((e) => [e.moduleId, e.message]));
+
+  return (
+    <section className="mk-modules" aria-label="Modules">
+      <h3 className="mk-section-title">Modules</h3>
+      {error && (
+        <div className="mk-alert" data-kind="fail" role="alert">
+          <span className="mk-alert-title">That change was refused</span>
+          <p className="mk-alert-body">{error}</p>
+        </div>
+      )}
+      <ul className="mk-list">
+        {sorted.map((m) => (
+          <ModuleRow
+            key={m.id}
+            module={m}
+            busy={busyId === m.id}
+            webError={webErrors.get(m.id)}
+            onToggle={() => void run(m.id, () => setModuleEnabled(m.id, !m.enabled))}
+            onUninstall={() => void run(m.id, () => uninstallModule(m.id))}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ModuleRow(props: {
+  module: ModuleState;
+  busy: boolean;
+  webError?: string;
+  onToggle: () => void;
+  onUninstall: () => void;
+}) {
+  const { module: m, busy, webError } = props;
+  const failure = m.error ?? webError;
+  const groups = (m.toolGroups ?? []).map((g) => g.id);
+  return (
+    <li className="mk-item">
+      <div className="mk-item-info">
+        <div className="mk-item-head">
+          <strong>{m.name}</strong>
+          <span className="dashboard-hint">
+            v{m.version} · {m.builtin ? 'built in' : m.source}
+          </span>
+          <span className={`mk-badge ${m.enabled && !failure ? 'mk-on' : 'mk-off'}`}>
+            {failure ? 'failed' : m.enabled ? 'enabled' : 'disabled'}
+          </span>
+        </div>
+        {m.description && <span className="dashboard-hint">{m.description}</span>}
+        {groups.length > 0 && (
+          <span className="dashboard-hint">agent tools: {groups.join(', ')}</span>
+        )}
+        {failure && <span className="mk-alert-reason">{failure}</span>}
+      </div>
+      <div className="mk-item-actions">
+        <button disabled={busy} onClick={props.onToggle}>
+          {m.enabled ? 'Disable' : 'Enable'}
+        </button>
+        {m.source === 'installed' && (
+          <button disabled={busy} onClick={props.onUninstall}>
+            Uninstall
+          </button>
+        )}
+      </div>
+    </li>
   );
 }

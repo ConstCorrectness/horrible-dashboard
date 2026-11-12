@@ -5,6 +5,12 @@ sidebar_label: Plugin SDK
 
 # Plugin SDK: the public extension contract
 
+:::note
+A feature with both a browser and a Python half is now a [module package](modules.mdx):
+one `horrible-module.json`, hot enable/disable from the Marketplace. A v3 plugin
+keeps loading unchanged.
+:::
+
 `@horribledashboard/sdk` (`packages/sdk/`) is the unified framework third-party programs
 build against to integrate into the platform. A plugin contributes the same
 things a built-in module does — commands, panels, dashboard widgets,

@@ -16,12 +16,17 @@ would say it.
 and the agent tool group all work. Not built: scoring, a dedicated guest-facing
 mobile page, and playlists — see [Deferred](#deferred).
 
+Karaoke is a [module package](../architecture/modules.mdx): it lives in
+`modules/karaoke` and can be disabled and re-enabled from the Marketplace while the
+app runs. Its stage routes audio through the mixer via the `audio.mediaStrip@1`
+service when the audio module is loaded.
+
 ## The one idea: the session lives on the server
 
 Everything else follows from this. A karaoke night is **one room, one screen,
 several people holding phones**, so the queue cannot live in the stage component's
 React state. It lives in a process-global `KaraokeSession`
-(`backend/modules/karaoke/session.py`); every mutation broadcasts the whole
+(`modules/karaoke/py/src/horrible_mod_karaoke/session.py`); every mutation broadcasts the whole
 `PlayerState` on the `karaoke` `/ws` channel, and every client is a pure renderer
 of it.
 

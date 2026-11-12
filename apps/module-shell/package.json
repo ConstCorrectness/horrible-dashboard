@@ -1,0 +1,27 @@
+{
+  "name": "@horrible/module-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Renders one module package full-window, for `horrible run <id>`.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@horrible/core": "workspace:*",
+    "@horrible/ui": "workspace:*",
+    "@horribledashboard/sdk": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0"
+  }
+}

@@ -129,7 +129,7 @@ llamacpp = ["llama-cpp-python==0.3.34"]
 horrible-trajectories = { path = "sdk/horrible-trajectories", editable = true }
 
 [tool.pytest.ini_options]
-testpaths = ["backend/tests"]
+testpaths = ["backend/tests", "modules"]
 # A hung test (stuck subprocess/kernel/socket) must fail with a stack dump rather
 # than block the whole session forever. `thread` method is the Windows-compatible
 # one (signal/SIGALRM is POSIX-only). Generous default fits the real-kernel tests

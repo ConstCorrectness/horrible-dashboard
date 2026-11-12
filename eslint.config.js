@@ -46,6 +46,29 @@ export default tseslint.config(
     },
   },
   {
+    // Module packages are repo-agnostic: one may be moved to its own repository and
+    // come back as a git submodule with no code change. So a module reaches the host
+    // only through @horrible/kernel and @horribledashboard/sdk, and another module
+    // only through a service contract — never @horrible/core internals, never a
+    // relative path out of its own directory. scripts/module-boundaries.mjs resolves
+    // relative paths (which a glob can't) and checks the Python half the same way.
+    files: ['modules/*/web/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@horrible/core', '@horrible/core/*', '@horrible/ui', '@horrible/ui/*'],
+              message:
+                'Import host APIs from @horrible/kernel; reach other modules through a service contract.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The browser agent's page scripts: each file is one function *expression*,
     // evaluated inside the page by both engines (Playwright's evaluate and the
     // native engine's CDP Runtime.evaluate), so its globals are the page's.

@@ -32,6 +32,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Layer 2 — the backend source.
 COPY backend ./backend
+# Module packages (modules/<id>): the manifest and Python half of each feature the
+# backend loads through ModuleManager. Their web halves are excluded in .dockerignore.
+COPY modules ./modules
 
 RUN useradd --create-home --uid 10001 --shell /bin/bash horrible \
     && mkdir -p /data \

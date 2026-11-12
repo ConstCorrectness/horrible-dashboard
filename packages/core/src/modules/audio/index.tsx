@@ -18,15 +18,17 @@
 import { lazyPane } from '../../lazy-pane';
 import './audio.css';
 
-import { registry, type ModuleManifest } from '../../registry';
+import { defineModule, type ModuleDefinition } from '../../module-def';
+import { registry } from '../../registry';
 import { getSetting } from '../../settings';
 import { AudioDevicesSection } from './settings/DevicesSection';
 import { connectAudio, ensureLoaded } from './store';
+import { useMediaStrip } from './useMediaStrip';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
 const AudioMixerPanel = lazyPane(() => import('./panels/MixerPanel'), 'AudioMixerPanel');
 
-export const audioModule: ModuleManifest = {
+export const audioModule: ModuleDefinition = defineModule({
   id: 'audio',
   title: 'Audio',
   category: 'play',
@@ -75,7 +77,12 @@ export const audioModule: ModuleManifest = {
   settingsSections: [
     { id: 'audio.devices', title: 'Audio devices', component: AudioDevicesSection },
   ],
-};
+  activate(ctx) {
+    // How a module outside core routes its own <audio>/<video> through the mixer
+    // (karaoke's stage). A service, so that module still loads without audio.
+    ctx.provide('audio.mediaStrip@1', { useMediaStrip });
+  },
+});
 
 /**
  * Load the saved routing at launch when `audio.startOnBoot` is on.

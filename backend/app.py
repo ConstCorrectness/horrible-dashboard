@@ -123,8 +123,6 @@ from backend.modules.agentpedia import (
 )
 from backend.modules.agentpedia import router as agentpedia_router
 from backend.modules.interp import router as interp_router
-from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
-from backend.modules.karaoke import router as karaoke_router
 from backend.modules.music import register_agent_tools as register_music_tools
 from backend.modules.music import register_music
 from backend.modules.music import router as music_router
@@ -187,6 +185,7 @@ from backend.modules.scrive import live as scrive_live
 from backend.modules.keymap import router as keymap_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
+from backend.modules.plugins.modules_routes import router as modules_router
 from backend.modules.repl import ReplManager
 from backend.modules.settings import router as settings_router
 from backend.modules.secrets import router as secrets_router
@@ -224,6 +223,7 @@ from backend.modules.database import router as database_router
 from backend.modules.visualizer import visualizer_manager
 from backend.modules.browser.session import browser_manager
 from backend.modules.ws import WsConnection, set_ws_send_observer
+from backend.kernel.module_manager import module_manager
 from backend.sdk import load_plugins
 from backend.sdk import registry as plugin_registry
 from backend.modules.tasks import queue
@@ -242,7 +242,8 @@ APP_VERSION = app_version()
 async def lifespan(app: FastAPI):
     # Bring the peer fabric up so this node can reach (and be reached by) others.
     await start_network()
-    await plugin_registry.run_startup()  # backend plugins' startup hooks
+    await plugin_registry.run_startup()  # backend plugins' + modules' startup hooks
+    await module_manager.start()  # modules' background tasks
     queue.start()
     # Search caches + crawl tables, and the built-in seed list on first run.
     init_search_db()
@@ -314,7 +315,13 @@ async def lifespan(app: FastAPI):
         # give lifespan events to mounted sub-apps, so without this its session
         # manager never starts and every request 500s. No-op when export is disabled.
         async with mcp_export.session_lifespan():
-            yield
+            from backend.kernel import bus_node as _bus
+
+            if _bus.node is None:
+                yield
+            else:
+                async with _bus.node.run():
+                    yield
     finally:
         # Close any training run still mirroring into localtrack, so a run that was
         # in flight at shutdown is recorded as finished rather than left `running`
@@ -338,6 +345,7 @@ async def lifespan(app: FastAPI):
         # MCP servers are child processes (stdio transport); leaving them behind on
         # reload would strand orphaned node/python servers.
         await mcp_manager.stop_all()
+        await module_manager.stop()  # cancels module background tasks, runs teardown
         await plugin_registry.run_shutdown()
         # Kernels are child processes; leaving them behind on reload/shutdown
         # would strand orphaned ipykernels.
@@ -471,7 +479,6 @@ app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(docviewer_router, prefix="/api")
 app.include_router(kb_router, prefix="/api")
-app.include_router(karaoke_router, prefix="/api")
 app.include_router(music_router, prefix="/api")
 app.include_router(evals_router, prefix="/api")
 app.include_router(trajectories_router, prefix="/api")
@@ -503,6 +510,7 @@ app.include_router(notes_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
+app.include_router(modules_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(keymap_router, prefix="/api")
 app.include_router(secrets_router, prefix="/api")
@@ -565,10 +573,6 @@ register_connectors()
 # Register the symdex module's backend agent tools (grouped under `symbols`): the
 # semantic symbol/docs/schema retrieval the coder and dba agents preload.
 register_symdex_tools()
-
-# Register the karaoke agent tools (grouped under `karaoke`): the session lives on
-# the server, so these run the room with no karaoke pane open anywhere.
-register_karaoke_tools()
 
 # The music library: built-in sources/importers/listeners and their connectors
 # (Spotify, Last.fm, ListenBrainz), then the `music` agent group. Before
@@ -637,6 +641,28 @@ register_scrive_tools()
 load_plugins()
 for _mounted in plugin_registry.routers:
     app.include_router(_mounted.router, prefix=f"/api{_mounted.prefix}")
+
+# Module packages (`modules/<id>`, installed modules, `horrible.modules` entry points):
+# discovered, then every enabled one loaded, dependencies first. Unlike the plugins
+# above, these can be loaded and unloaded while the app runs (`/api/modules`), so
+# their routes are mounted by the manager rather than included here once.
+module_manager.attach(app)
+module_manager.discover()
+# The local module bus (backend/kernel/bus_node.py): this node publishes the modules it
+# hosts, serves their tools at /bus/mcp, and mirrors the tools of every `horrible run`
+# process. Attached before loading so a module already running standalone is left there.
+from backend import server_port as _server_port  # noqa: E402
+from backend.kernel import bus_node as _bus_node  # noqa: E402
+
+_bus_node.install(
+    app,
+    module_manager,
+    plugin_registry,
+    kind="dashboard",
+    name="dashboard",
+    port=_server_port.port,
+)
+module_manager.load_all()
 
 
 @app.websocket("/peer-ws")
@@ -807,4 +833,5 @@ async def ws(websocket: WebSocket) -> None:
         collab_manager.drop(conn)
         chat_manager.drop(conn)
         await hassault_on_disconnect(conn)
+        await plugin_registry.run_ws_disconnect(conn)
         drop_games_conn(conn)

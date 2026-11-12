@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://horrible.dashboard/schema/horrible-module.schema.json",
+  "title": "horrible-module.json",
+  "description": "A horrible-dashboard module package: a web half, a Python half, or both, under one manifest. See docs/architecture/modules.mdx.",
+  "type": "object",
+  "required": ["id", "name", "version", "sdkVersion"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "sdkVersion": { "type": "integer", "minimum": 3 },
+    "web": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "string",
+          "description": "Source entry relative to the package root (e.g. web/src/index.ts), bundled for built-ins."
+        },
+        "dist": {
+          "type": "string",
+          "description": "Single-file ES bundle, relative to the package root, for third-party modules."
+        }
+      }
+    },
+    "py": {
+      "type": "object",
+      "required": ["root", "package", "entry"],
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Directory added to sys.path when the package is not importable."
+        },
+        "package": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "entry": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$" }
+      }
+    },
+    "dependsOn": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "provides": { "type": "array", "items": { "$ref": "#/$defs/contract" } },
+    "requires": { "type": "array", "items": { "$ref": "#/$defs/contract" } },
+    "toolGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "description": { "type": "string" },
+          "alwaysOn": { "type": "boolean" }
+        }
+      }
+    },
+    "wsChannels": { "type": "array", "items": { "type": "string" } },
+    "panes": { "type": "array", "items": { "type": "string" } },
+    "renamedPanes": { "type": "object", "additionalProperties": { "type": "string" } },
+    "standalone": {
+      "type": "object",
+      "required": ["pane"],
+      "additionalProperties": false,
+      "properties": {
+        "pane": { "type": "string" },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "title": { "type": "string" }
+      }
+    },
+    "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+    "permissions": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "contract": { "type": "string", "pattern": "^[a-zA-Z0-9.-]+@[0-9]+$" }
+  }
+}

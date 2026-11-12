@@ -120,6 +120,15 @@
       "port": 9200
     },
     {
+      "name": "gameserver-dev",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
+      "port": 9200,
+      "env": {
+        "HASSAULT_ENABLE_DRAFTS": "1"
+      }
+    },
+    {
       "name": "gameserver-web",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
@@ -199,8 +208,36 @@
     {
       "name": "backend-bench",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "--no-sync", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", "8123"],
+      "runtimeArgs": [
+        "run",
+        "--no-sync",
+        "uvicorn",
+        "backend.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8123"
+      ],
       "port": 8123
+    },
+    {
+      "name": "karaoke-standalone-b",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--no-sync",
+        "python",
+        "-m",
+        "backend.cli",
+        "run",
+        "karaoke",
+        "--port",
+        "8210",
+        "--ui",
+        "dev"
+      ],
+      "port": 5191,
+      "env": { "HORRIBLE_DATA_DIR": ".data-node-b", "MODULE_SHELL_PORT": "5191" }
     }
   ]
 }

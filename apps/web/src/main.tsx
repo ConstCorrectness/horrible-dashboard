@@ -30,7 +30,6 @@ import {
   initKeymapHost,
   initKeymapPreset,
   installExternalLinkBridge,
-  karaokeModule,
   musicModule,
   initMusic,
   keymapModule,
@@ -38,6 +37,7 @@ import {
   docviewerModule,
   kbModule,
   loadKeymapOverrides,
+  loadModulePackages,
   loadPlugins,
   loadSettings,
   initLobby,
@@ -106,6 +106,7 @@ import {
   visualizerModule,
 } from '@horrible/core';
 import { AppRoot } from '@horrible/ui';
+import { modules as modulePackages } from 'virtual:horrible-modules';
 
 import { resolveBackendOrigin } from './desktopBackend';
 import { createDesktopGlobalShortcuts } from './desktopShortcuts';
@@ -261,7 +262,6 @@ async function boot(): Promise<void> {
     registry.register(libraryModule);
     registry.register(docviewerModule);
     registry.register(kbModule);
-    registry.register(karaokeModule);
     registry.register(musicModule);
     registry.register(recordsModule);
     registry.register(researchModule);
@@ -295,6 +295,12 @@ async function boot(): Promise<void> {
     if (isHosted()) registry.register(hostedModule);
   });
 
+  // Module packages (modules/<id>): registered after the built-ins above, enabled
+  // ones only, dependencies first — and from here on they follow the backend, so a
+  // module disabled from the marketplace leaves without a reload.
+  await bootStep('module-packages', 'Loading module packages', () =>
+    loadModulePackages(modulePackages),
+  );
   await bootStep('plugins', 'Loading plugins', loadPlugins);
   // After plugins register their declarations, seed the persisted overrides so
   // widgets read correct values on first render. Backend down ⇒ defaults only.

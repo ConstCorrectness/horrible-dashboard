@@ -11,13 +11,14 @@
     "dev:desktop": "node scripts/dev-desktop.mjs",
     "build": "pnpm --filter @horrible/web build",
     "build:assault-web": "pnpm --filter @horrible/assault-web build",
-    "deploy:games": "pnpm build:assault-web && fly deploy",
+    "deploy:games": "pnpm build:assault-web && pnpm build:hassault:download && fly deploy",
     "build:desktop": "pnpm build && pnpm --filter @horrible/desktop dist",
     "smoke:desktop": "node scripts/desktop-smoke.mjs",
     "build:backend-runtime": "node scripts/build-backend-runtime.mjs",
     "build:icons": "node scripts/build_icons.mjs",
     "build:hassault": "node scripts/build-hassault.mjs --release",
     "build:hassault:debug": "node scripts/build-hassault.mjs --debug",
+    "build:hassault:download": "node scripts/stage-hassault-download.mjs",
     "build:hassault-character": "node scripts/build_hassault_character.mjs",
     "build:hassault-weapon": "node scripts/build_hassault_weapon.mjs",
     "build:hassault-arms": "node scripts/build_hassault_arms.mjs",
@@ -28,7 +29,9 @@
     "debug:browser-console": "python3 scripts/attach_browser_console.py",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "check:boundaries": "node scripts/module-boundaries.mjs",
+    "format": "prettier --write .",
+    "horrible": "uv run --no-sync python -m backend.cli"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",

@@ -1,0 +1,41 @@
+{
+  "$schema": "../../packages/sdk/schema/horrible-module.schema.json",
+  "id": "karaoke",
+  "name": "Karaoke",
+  "version": "0.1.0",
+  "description": "A karaoke machine: search and download songs, a queue for the room, a stage with key shift, and a phone remote on the LAN.",
+  "author": "horrible",
+  "sdkVersion": 4,
+  "web": {
+    "entry": "web/src/index.ts"
+  },
+  "py": {
+    "root": "py/src",
+    "package": "horrible_mod_karaoke",
+    "entry": "horrible_mod_karaoke:MODULE"
+  },
+  "requires": [
+    "audio.mediaStrip@1"
+  ],
+  "toolGroups": [
+    {
+      "id": "karaoke",
+      "description": "Run a karaoke night: see what's playing, queue songs by search phrase, play/pause/skip, change key and volume."
+    }
+  ],
+  "wsChannels": [
+    "karaoke"
+  ],
+  "panes": [
+    "karaoke.stage",
+    "karaoke.queue",
+    "karaoke.search"
+  ],
+  "standalone": {
+    "pane": "karaoke.stage",
+    "title": "Karaoke"
+  },
+  "permissions": [
+    "network"
+  ]
+}

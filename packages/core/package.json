@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./kernel-surface": "./src/kernel-surface.ts",
     "./hassault-panel": "./src/modules/hassault/HorribleAssaultPanel.tsx"
   },
   "scripts": {

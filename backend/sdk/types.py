@@ -21,6 +21,9 @@ AgentToolHandler = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 # `conn.send_json(...)`. Always async.
 WsChannelHandler = Callable[[Any, dict[str, Any]], Awaitable[None]]
 
+# Called with the connection when a `/ws` socket closes. May be sync or async.
+WsDisconnectHook = Callable[[Any], Any | Awaitable[Any]]
+
 # A lifespan hook (startup or shutdown). May be sync or async.
 LifecycleHook = Callable[[], Any | Awaitable[Any]]
 

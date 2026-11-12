@@ -2,6 +2,9 @@ node_modules
 apps
 # ...except the built browser game the game server serves at `/`.
 !apps/assault-web/dist
+# ...and the native client it serves at `/download/hAssault.exe`. Only `dist`:
+# `apps/native-fps/target` beside it is tens of gigabytes of build cache.
+!apps/native-fps/dist
 # ...and the dashboard frontend the hosted hub serves at `/` (deploy/hub).
 !apps/web/dist
 packages
@@ -23,3 +26,8 @@ logs
 *.hprof
 hs_err_pid*.log
 replay_pid*.log
+
+# Module packages ship only their manifest and Python half (deploy/dashboard-node):
+# the web half is bundled into the frontend, and tests never ship.
+modules/*/web
+modules/*/py/tests

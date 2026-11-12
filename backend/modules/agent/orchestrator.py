@@ -1381,6 +1381,16 @@ def _group_description(group: str) -> str:
 
     if connector := _plugins.connectors.get(group):
         return connector.blurb
+    # Module packages declare theirs in `horrible-module.json` `toolGroups`.
+    from backend.kernel.module_manager import module_manager
+
+    if declared := module_manager.tool_group_description(group):
+        return declared
+    # A group mirrored from another process on the module bus.
+    from backend.kernel import bus_node as _bus
+
+    if _bus.node is not None and (remote := _bus.node.group_description(group)):
+        return remote
     # MCP servers describe themselves; their groups are named `mcp-<id>`.
     from backend.modules.mcp import bridge as _mcp
 
@@ -2691,9 +2701,11 @@ def _take_image(result: Any) -> str | None:
 
 
 def _model_sees_images(info: Any, model: str) -> bool:
-    from backend.modules.settings.routes import get_value
+    from backend.kernel import (
+        get_setting,
+    )  # lazy: the kernel package loads module hosts
 
-    setting = str(get_value("agent.modelSeesImages", "auto") or "auto")
+    setting = str(get_setting("agent.modelSeesImages", "auto") or "auto")
     return P.model_sees_images(info, model, setting)
 
 

@@ -263,6 +263,36 @@ function installDependencies(python) {
   rmSync(staging, { recursive: true, force: true });
 }
 
+/**
+ * Copy the built-in module packages' backend halves to `<out>/modules/<id>/`.
+ *
+ * `backend/sdk/module_scan.py` finds built-ins at `modules/` *beside* `backend/`, and
+ * imports each one's Python from `<id>/<py.root>` — so the runtime needs the manifest,
+ * the `py/` tree and any `assets/`, in the checkout's shape. The `web/` half is
+ * already bundled into the frontend build and does not ship here.
+ */
+function copyModulePackages(outDir) {
+  const root = join(REPO, 'modules');
+  if (!existsSync(root)) return;
+  for (const id of readdirSync(root)) {
+    const pkg = join(root, id);
+    if (!existsSync(join(pkg, 'horrible-module.json'))) continue;
+    log(`copying modules/${id}`);
+    const dest = join(outDir, 'modules', id);
+    cpSync(join(pkg, 'horrible-module.json'), join(dest, 'horrible-module.json'));
+    for (const part of ['py', 'assets']) {
+      if (!existsSync(join(pkg, part))) continue;
+      cpSync(join(pkg, part), join(dest, part), {
+        recursive: true,
+        filter: (src) => {
+          const name = src.split(/[\\/]/).pop();
+          return !SKIP_SOURCE.has(name) && !name.endsWith('.pyc') && name !== 'tests';
+        },
+      });
+    }
+  }
+}
+
 /** Copy the backend source tree and the manifest that sits beside it. */
 function copySource(outDir) {
   // Scrive's {r3f} scene runtime is built into backend/ and must ship with it.
@@ -280,6 +310,7 @@ function copySource(outDir) {
       return !SKIP_SOURCE.has(name) && !name.endsWith('.pyc');
     },
   });
+  copyModulePackages(outDir);
   // Read by `backend/version.py` — which is what keys the hassault client download, so
   // a runtime without it would resolve every install against the fallback literal.
   cpSync(join(REPO, 'pyproject.toml'), join(outDir, 'pyproject.toml'));

@@ -5,6 +5,8 @@
  * `pluginLoadErrors`, which the marketplace panel renders.
  */
 import {
+  isSupportedSdkVersion,
+  MIN_SDK_API_VERSION,
   SDK_API_VERSION,
   type HorriblePlugin,
   type PluginContributions,
@@ -78,9 +80,9 @@ async function importEntry(entryUrl: string): Promise<{ default?: HorriblePlugin
 async function loadOne(manifest: PluginPackageManifest): Promise<void> {
   const { id } = manifest;
   try {
-    if (manifest.sdkVersion !== SDK_API_VERSION) {
+    if (!isSupportedSdkVersion(manifest.sdkVersion)) {
       throw new Error(
-        `built for SDK v${manifest.sdkVersion}; this app provides v${SDK_API_VERSION}`,
+        `built for SDK v${manifest.sdkVersion}; this app accepts v${MIN_SDK_API_VERSION}–v${SDK_API_VERSION}`,
       );
     }
     const mod = await importEntry(apiUrl(`/api/plugins/${id}/assets/${manifest.entry}`));
@@ -115,4 +117,28 @@ export async function loadPlugins(): Promise<void> {
   await Promise.allSettled(
     installed.plugins.filter((p) => p.enabled).map((p) => loadOne(p.manifest)),
   );
+}
+
+/**
+ * Load one plugin into the running app — after an install or enable — with no
+ * page reload. Same path as boot; a failure lands in `pluginLoadErrors`.
+ */
+export async function loadPlugin(manifest: PluginPackageManifest): Promise<boolean> {
+  installPluginRuntime();
+  const before = pluginLoadErrors.length;
+  // A previous failure for this plugin is stale once we try again.
+  for (let i = pluginLoadErrors.length - 1; i >= 0; i--) {
+    if (pluginLoadErrors[i].pluginId === manifest.id) pluginLoadErrors.splice(i, 1);
+  }
+  await loadOne(manifest);
+  return pluginLoadErrors.length <= before && registry.has(`plugin:${manifest.id}`);
+}
+
+/**
+ * Take one plugin out of the running app — after a disable or uninstall. Its open
+ * panes close through the guarded path; resolves false if one refused (unsaved
+ * work), in which case the plugin stays registered.
+ */
+export function unloadPlugin(pluginId: string): Promise<boolean> {
+  return registry.unregister(`plugin:${pluginId}`);
 }

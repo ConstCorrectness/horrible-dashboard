@@ -356,6 +356,9 @@ export {
   useGraphicsQuality,
   type GraphicsQuality,
 } from './graphics';
+export { lazyPane } from './lazy-pane';
+export * from './module-packages';
+export { defineModule, type ModuleContext, type ModuleDefinition } from './module-def';
 export {
   registry,
   type AgentCommandDecl,
@@ -425,7 +428,6 @@ export {
   subscribeNativeOverlaySuppression,
 } from './modules/browser/overlay';
 export { databaseModule } from './modules/database';
-export { karaokeModule } from './modules/karaoke';
 export { musicModule, initMusic } from './modules/music';
 export { audioModule, initAudio } from './modules/audio';
 export { libraryModule } from './modules/library';

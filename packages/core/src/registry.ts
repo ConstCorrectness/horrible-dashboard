@@ -6,6 +6,10 @@ import { frameCommandHandler } from './layout/frame-bus';
 import { noteViewOpened } from './layout/recents';
 import type { ContextMenuProvider } from './overlay/context-menu';
 
+import type { ServiceContracts, ServiceKey } from '@horribledashboard/sdk';
+
+import type { ModuleContext, ModuleDefinition } from './module-def';
+
 import type {
   AgentCommandDecl,
   AgentContextSnapshot,
@@ -184,6 +188,13 @@ export interface LayoutController {
    * Returns false if either the pane instance or the target `viewId` is unknown.
    */
   changePaneType(instanceId: string, viewId: string): boolean;
+  /**
+   * Close every open pane showing one of `viewIds`, through the guarded close path
+   * (a dirty pane may prompt and veto). Resolves false if any pane refused — the
+   * caller (a module unload) then stops. Panes saved in *other* workspaces are not
+   * touched: they show a "module disabled" placeholder until it comes back.
+   */
+  closeViews?(viewIds: string[]): Promise<boolean>;
 }
 
 class ModuleRegistry {
@@ -191,6 +202,13 @@ class ModuleRegistry {
   private panelOpener: ((panelId: string, opts?: OpenPaneOptions) => void) | null = null;
   private layoutControllerImpl: LayoutController | null = null;
   private services = new Map<string, unknown>();
+  /** Which module provided each service, so an unload withdraws exactly its own. */
+  private serviceOwners = new Map<string, string>();
+  private serviceListeners = new Map<string, Set<() => void>>();
+  /** What each module's `activate` started, run in reverse on unload. */
+  private disposers = new Map<string, Array<() => void>>();
+  /** `activate` failures, by module id — surfaced by the marketplace. */
+  readonly activationErrors = new Map<string, string>();
   private changeListeners = new Set<() => void>();
   /** Bumped whenever the module set changes; the only cache-invalidation signal. */
   private generation = 0;
@@ -199,13 +217,102 @@ class ModuleRegistry {
     decls: Map<string, PanelDecl | WidgetDecl>;
   } | null = null;
 
-  /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
-  register(manifest: ModuleManifest): void {
+  /**
+   * Idempotent: re-registering the same module id is a no-op (StrictMode-safe).
+   *
+   * A `ModuleDefinition` with `activate` has it run once registered; whatever it
+   * provides or hands to `onDispose` is undone by `unregister`. An `activate` that
+   * throws (or rejects) leaves the module registered — its panes and commands are
+   * still declarations — and records the error in `activationErrors`.
+   */
+  register(manifest: ModuleManifest | ModuleDefinition): void {
     if (this.modules.has(manifest.id)) return;
     this.warnOnTitleCollision(manifest);
     this.modules.set(manifest.id, manifest);
     this.generation += 1;
     this.changeListeners.forEach((l) => l());
+    const activate = (manifest as ModuleDefinition).activate;
+    if (activate) this.activate(manifest.id, activate);
+  }
+
+  private activate(id: string, activate: NonNullable<ModuleDefinition['activate']>): void {
+    const ctx: ModuleContext = {
+      moduleId: id,
+      provide: (key, impl) => this.onDispose(id, this.provideService(key, impl, id)),
+      getService: (key) => this.getService(key),
+      onDispose: (dispose) => this.onDispose(id, dispose),
+    };
+    const fail = (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      this.activationErrors.set(id, message);
+      console.error(`[registry] module "${id}" failed to activate: ${message}`);
+    };
+    try {
+      const result = activate(ctx);
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        (result as Promise<void>).catch(fail);
+      }
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  private onDispose(id: string, dispose: () => void): void {
+    const list = this.disposers.get(id) ?? [];
+    list.push(dispose);
+    this.disposers.set(id, list);
+  }
+
+  /** Whether a module id is registered right now. */
+  has(id: string): boolean {
+    return this.modules.has(id);
+  }
+
+  /** Every registered module id, in registration order. */
+  get moduleIds(): string[] {
+    return [...this.modules.keys()];
+  }
+
+  /**
+   * Take a module out of the running app — the inverse of `register`, with no
+   * page reload.
+   *
+   * 1. Its open panes close through the guarded close path (so their long-lived
+   *    pane sessions are disposed — unmount alone would not). A pane that vetoes
+   *    (unsaved work, the user said Cancel) aborts the unload: resolves false and
+   *    nothing else changes.
+   * 2. Everything its `activate` started is disposed, newest first, and the
+   *    services it provided are withdrawn.
+   * 3. Its declarations go, `generation` bumps, and listeners fire — which is what
+   *    re-pushes the agent's tool manifest and re-renders the desktop.
+   *
+   * Resolves true when the module is gone (or was never registered).
+   */
+  async unregister(id: string): Promise<boolean> {
+    const manifest = this.modules.get(id);
+    if (!manifest) return true;
+    const viewIds = ModuleRegistry.declaredViews(manifest).map((v) => v.id);
+    const controller = this.layoutControllerImpl;
+    if (viewIds.length && controller?.closeViews) {
+      if (!(await controller.closeViews(viewIds))) return false;
+    }
+    for (const dispose of (this.disposers.get(id) ?? []).reverse()) {
+      try {
+        dispose();
+      } catch (err) {
+        console.error(`[registry] disposing module "${id}" failed`, err);
+      }
+    }
+    this.disposers.delete(id);
+    this.activationErrors.delete(id);
+    // Anything still attributed to it (a provideService outside activate).
+    for (const [key, owner] of [...this.serviceOwners]) {
+      if (owner === id) this.withdrawService(key, id);
+    }
+    this.modules.delete(id);
+    this.generation += 1;
+    this.changeListeners.forEach((l) => l());
+    return true;
   }
 
   /** Every view a manifest declares, without the read-time explorer wrapping. */
@@ -249,6 +356,8 @@ class ModuleRegistry {
   /** Test-only: drop every registered module (mirrors `layoutStore.resetForTests`). */
   resetForTests(): void {
     this.modules.clear();
+    this.disposers.clear();
+    this.activationErrors.clear();
     this.generation += 1;
     this.changeListeners.forEach((l) => l());
   }
@@ -579,13 +688,48 @@ class ModuleRegistry {
    * surface so the visualizer can open/read buffers without deep-importing the
    * editor module's internals). One impl per id; last registration wins.
    */
-  provideService<T>(id: string, impl: T): void {
+  provideService<K extends ServiceKey>(
+    id: K,
+    impl: ServiceContracts[K],
+    owner?: string,
+  ): () => void;
+  provideService<T>(id: string, impl: T, owner?: string): () => void;
+  provideService(id: string, impl: unknown, owner?: string): () => void {
     this.services.set(id, impl);
+    if (owner) this.serviceOwners.set(id, owner);
+    else this.serviceOwners.delete(id);
+    this.serviceListeners.get(id)?.forEach((l) => l());
+    // Withdraws only if still the registered impl: a later provider is never knocked out.
+    return () => {
+      if (this.services.get(id) === impl) this.withdrawService(id, owner);
+    };
   }
 
-  /** Look up a service by id. Returns undefined if its provider hasn't loaded. */
-  getService<T>(id: string): T | undefined {
-    return this.services.get(id) as T | undefined;
+  private withdrawService(id: string, owner: string | undefined): void {
+    if (owner !== undefined && this.serviceOwners.get(id) !== owner) return;
+    this.services.delete(id);
+    this.serviceOwners.delete(id);
+    this.serviceListeners.get(id)?.forEach((l) => l());
+  }
+
+  /**
+   * Look up a service by id. Returns undefined if its provider hasn't loaded — or
+   * was unloaded: a contract user must tolerate absence, every time it asks.
+   */
+  getService<K extends ServiceKey>(id: K): ServiceContracts[K] | undefined;
+  getService<T>(id: string): T | undefined;
+  getService(id: string): unknown {
+    return this.services.get(id);
+  }
+
+  /** Fire `listener` when service `id` is provided or withdrawn. Returns unsubscribe. */
+  onServiceChange(id: string, listener: () => void): () => void {
+    const set = this.serviceListeners.get(id) ?? new Set<() => void>();
+    set.add(listener);
+    this.serviceListeners.set(id, set);
+    return () => {
+      set.delete(listener);
+    };
   }
 }
 

@@ -37,6 +37,7 @@ from __future__ import annotations
 import importlib
 import logging
 import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -153,9 +154,19 @@ EXTRAS: dict[str, ExtraSpec] = {
     ),
 }
 
-#: Probing imports a package, which is not free the first time. Results are cached
-#: for the process; `reset_cache()` exists for tests and for after an install.
+#: Probing imports a package, which is not free the first time. An *installed*
+#: result is cached for the process; `reset_cache()` exists for tests.
 _cache: dict[str, Availability] = {}
+
+#: How long a "not available" answer is believed. Only "installed" is safe to keep
+#: for the life of the process: an install can turn an absence into a presence at
+#: any moment, and a backend that probed twenty seconds before `uv sync --extra
+#: voice` finished went on telling the user to run the command they had just run
+#: until it was restarted. Short enough that an install is picked up without a
+#: restart, long enough that a caller polling every few seconds (the Clubhouse
+#: room agent posts an STT chunk that often) does not re-walk `sys.path` each time.
+_NEGATIVE_TTL_S = 15.0
+_negative_at: dict[str, float] = {}
 
 
 def _probe_modules(spec: ExtraSpec) -> Availability:
@@ -202,7 +213,10 @@ def probe(extra: str, *, refresh: bool = False) -> Availability:
     """Whether `extra` can be used in this process."""
     if not refresh:
         cached = _cache.get(extra)
-        if cached is not None:
+        if cached is not None and (
+            cached.available
+            or time.monotonic() - _negative_at.get(extra, 0.0) < _NEGATIVE_TTL_S
+        ):
             return cached
 
     spec = EXTRAS.get(extra)
@@ -217,6 +231,10 @@ def probe(extra: str, *, refresh: bool = False) -> Availability:
         )
 
     try:
+        # The import system remembers each directory's listing. Without this a
+        # package written to site-packages after the last probe can still read as
+        # missing, which is exactly the case a re-probe exists for.
+        importlib.invalidate_caches()
         if spec.check is not None:
             result = spec.check()
         elif spec.binary:
@@ -234,6 +252,10 @@ def probe(extra: str, *, refresh: bool = False) -> Availability:
         )
 
     _cache[extra] = result
+    if result.available:
+        _negative_at.pop(extra, None)
+    else:
+        _negative_at[extra] = time.monotonic()
     return result
 
 
@@ -253,3 +275,4 @@ def installed_names() -> list[str]:
 
 def reset_cache() -> None:
     _cache.clear()
+    _negative_at.clear()

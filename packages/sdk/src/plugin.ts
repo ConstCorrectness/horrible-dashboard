@@ -24,8 +24,19 @@ import type {
  * views declare `regions` (per-pane strips) instead.
  * v3: the tiling frame is gone — `defaultDock`, `defaultDockSize`, `dockable`,
  * `DockSide` and `ModuleManifest.frames` are removed; every pane opens in a window.
+ * v4: module packages (`horrible-module.json`, see module.ts) — a web half and a
+ * Python half under one manifest, service contracts, owned tool groups, live
+ * load/unload. Additive: a v3 plugin still loads (see `MIN_SDK_API_VERSION`).
  */
-export const SDK_API_VERSION = 3;
+export const SDK_API_VERSION = 4;
+
+/** The oldest contract version the loader still accepts. */
+export const MIN_SDK_API_VERSION = 3;
+
+/** Whether a package built against `version` can load in this app. */
+export function isSupportedSdkVersion(version: number): boolean {
+  return version >= MIN_SDK_API_VERSION && version <= SDK_API_VERSION;
+}
 
 /** The `horrible-plugin.json` package manifest, as served by the backend. */
 export interface PluginPackageManifest {

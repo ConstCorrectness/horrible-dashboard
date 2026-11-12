@@ -104,6 +104,13 @@ def register_provider(provider: SearchProvider) -> None:
     _providers[provider.id] = provider
 
 
+def unregister_provider(provider_id: str, provider: SearchProvider | None = None) -> None:
+    """Remove a provider. With `provider`, only if it is still the registered one — an
+    unloading module must not drop a later registration that replaced its own."""
+    if provider is None or _providers.get(provider_id) is provider:
+        _providers.pop(provider_id, None)
+
+
 def get_provider(provider_id: str) -> SearchProvider | None:
     return _providers.get(provider_id)
 

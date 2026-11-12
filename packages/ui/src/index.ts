@@ -11,3 +11,4 @@ export {
 export { Spotlight } from './Spotlight';
 export { HomeView } from './HomeView';
 export { Toasts } from './Toasts';
+export { StandalonePane } from './StandalonePane';

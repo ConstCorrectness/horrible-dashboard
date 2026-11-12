@@ -1505,6 +1505,17 @@ export function installFrameController(): void {
       });
       return true;
     },
+    // A module unload: every pane of its views closes through the guarded path, so
+    // each one's pane session is disposed (unmount alone would leave a terminal's
+    // shell running). The first veto stops the unload.
+    closeViews: async (viewIds) => {
+      const ids = new Set(viewIds);
+      const open = listPanes(frame()).filter(({ pane }) => ids.has(pane.viewId));
+      for (const { pane } of open) {
+        if (!(await closePaneGuarded(pane.instanceId))) return false;
+      }
+      return true;
+    },
   };
   registry.setLayoutController(controller);
 }
