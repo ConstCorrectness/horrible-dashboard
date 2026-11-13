@@ -54,6 +54,7 @@ from backend.modules.clubhouse.models import (
     UpdateUsernameRequest,
     ChatSettingsRequest,
 )
+from backend.modules.clubhouse import voice
 from backend.modules.telemetry.instrument import instrumented_client
 from backend import jsonstore, paths
 
@@ -864,9 +865,44 @@ async def get_channel_chat(channel: str) -> dict[str, Any]:
         return {"comments": []}
 
 
+#: The room this node last joined and has not left, so sign-out can leave it.
+#: One account is in at most one room upstream (joining a second moves it out of
+#: the first), so a single slot is the whole truth.
+_joined_channel: str | None = None
+
+
 @router.delete("/auth", response_model=ClubhouseStatus)
-def disconnect() -> ClubhouseStatus:
-    _auth_path().unlink(missing_ok=True)
+async def disconnect() -> ClubhouseStatus:
+    """Sign out: leave the room we are in, then forget the session.
+
+    The leave has to come first -- ``/leave_channel`` needs the token this
+    deletes.  Done the other way round, the leave 409s ("not connected") and
+    Clubhouse keeps listing the account in the room until its missed
+    ``active_ping``s time it out.  The pane leaves before calling this (it owns
+    the Agora/PubNub side); this covers every caller that doesn't, such as the
+    agent's ``clubhouse.disconnect`` tool.
+
+    There is deliberately no upstream logout: the API has no such route, and
+    the token is usually Clubdeck's own session, which revoking would end too.
+    """
+    global _joined_channel
+    channel, _joined_channel = _joined_channel, None
+    path = _auth_path()
+    if channel and path.is_file():
+        try:
+            auth = json.loads(path.read_text())
+            await _ch_authed_post(
+                "/leave_channel",
+                {"channel": channel},
+                auth["auth_token"],
+                auth["user_id"],
+                auth.get("device_id"),
+            )
+        except Exception as exc:  # best effort: sign-out must not fail on it
+            logger.info("Clubhouse sign-out could not leave %s: %s", channel, exc)
+    if channel:
+        voice.drop_session(channel)
+    path.unlink(missing_ok=True)
     return ClubhouseStatus(connected=False)
 
 
@@ -954,6 +990,8 @@ async def join_channel(channel: str) -> dict[str, Any]:
         auth["user_id"],
         auth.get("device_id"),
     )
+    global _joined_channel
+    _joined_channel = channel
     res["user_id"] = auth["user_id"]
     # Log the full response to help diagnose PubNub issues
     logger.info("join_channel response keys: %s", list(res.keys()))
@@ -980,7 +1018,10 @@ async def join_channel(channel: str) -> dict[str, Any]:
 @router.post("/channels/{channel}/leave")
 async def leave_channel(channel: str) -> dict[str, Any]:
     """Leave a room (Clubhouse POST /leave_channel)."""
+    global _joined_channel
     auth = _require_auth()
+    if _joined_channel == channel:
+        _joined_channel = None
     return await _ch_authed_post(
         "/leave_channel",
         {"channel": channel},

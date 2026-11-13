@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost } from '../../api';
+import { leaveClubhouse } from './presence';
 
 export interface ClubhouseStatus {
   connected: boolean;
@@ -38,7 +39,20 @@ export function connectClubhouseWithToken(
   });
 }
 
-export function disconnectClubhouse(): Promise<ClubhouseStatus> {
+/**
+ * Sign out: leave the room this app is in, then forget the session.
+ *
+ * The leave comes first because it needs the token the DELETE removes, and
+ * because only this side can close the Agora and PubNub connections — signing
+ * out underneath a live room used to keep the call playing with its leave
+ * bounced as "not connected". A leave that fails never blocks the sign-out.
+ */
+export async function disconnectClubhouse(): Promise<ClubhouseStatus> {
+  try {
+    await leaveClubhouse();
+  } catch (err) {
+    console.warn('Clubhouse sign-out: leaving the room failed', err);
+  }
   return apiDelete<ClubhouseStatus>('/clubhouse/auth');
 }
 

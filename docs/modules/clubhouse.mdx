@@ -450,12 +450,15 @@ Directly connects an existing session token bypass.
 
 - **Request Schema:** [TokenConnectRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L19) (`auth_token`, `user_id`, `device_id` optional)
 - **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32)
-- **Behavior:** Validates the token against Clubhouse `/me`, sets headers, and persists configuration details.
+- **Behavior:** Validates the token against Clubhouse `/get_profile` for the account's own id (not `/me`, which Cloudflare intermittently blocks), then persists the session.
 
 ### 5. `DELETE /auth`
 
-Disconnects the account and cleans up stored credentials.
+Signs out: leaves the room this node joined, then deletes the stored credentials.
 
+- **Order matters:** `/leave_channel` needs the token this deletes, so the backend leaves the room it last joined (and has not left) _first_, with the token still valid. Done the other way round, the leave is refused as "not connected" and Clubhouse keeps listing the account in the room until its missed `active_ping`s time it out. A failed leave is logged and never blocks the sign-out; the room's voice-agent memory is dropped either way.
+- **The frontend leaves first too:** `disconnectClubhouse()` calls `leaveClubhouse()` (from `presence.ts`) before the `DELETE`, because only the browser can close the Agora and PubNub connections. The widget's Disconnect button and the agent's `clubhouse.disconnect` tool both go through it.
+- **No upstream logout:** Clubhouse's API has no logout route, and the stored token is usually Clubdeck's own session (see Import from Clubdeck), which revoking would end as well. Sign-out only forgets the session on this node.
 - **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32) (resets connected to `False`)
 
 ### 6. `GET /channels`

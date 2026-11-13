@@ -22,6 +22,9 @@ FAKE_PROFILE = {
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    # Process-global like the upstream account it mirrors; a join in one test
+    # must not make the next test's sign-out try to leave it.
+    monkeypatch.setattr(routes, "_joined_channel", None)
     return TestClient(app)
 
 
@@ -478,6 +481,75 @@ def test_disconnect(client: TestClient, monkeypatch) -> None:
     res = client.delete("/api/clubhouse/auth")
     assert res.json()["connected"] is False
     assert client.get("/api/clubhouse/status").json()["connected"] is False
+
+
+def _record_posts(monkeypatch, *, fail: set[str] = frozenset()) -> list[tuple]:
+    """Fake every authed POST, recording (path, payload, token) in call order."""
+    calls: list[tuple] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        calls.append((path, payload, token))
+        if path in fail:
+            raise HTTPException(status_code=400, detail="Clubhouse: nope")
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    return calls
+
+
+def test_sign_out_leaves_the_joined_room_before_forgetting_the_token(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+    calls = _record_posts(monkeypatch)
+    client.post("/api/clubhouse/channels/room-1/join")
+
+    res = client.delete("/api/clubhouse/auth")
+
+    assert res.json()["connected"] is False
+    # The leave went out with the token that sign-out then deleted.
+    assert calls[-1] == ("/leave_channel", {"channel": "room-1"}, "T")
+    assert not (tmp_path / "clubhouse-auth.json").exists()
+
+
+def test_sign_out_after_an_explicit_leave_does_not_leave_again(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+    calls = _record_posts(monkeypatch)
+    client.post("/api/clubhouse/channels/room-1/join")
+    client.post("/api/clubhouse/channels/room-1/leave")
+    before = len(calls)
+
+    client.delete("/api/clubhouse/auth")
+
+    assert len(calls) == before
+
+
+def test_sign_out_survives_a_failed_leave(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+    _record_posts(monkeypatch, fail={"/leave_channel"})
+    client.post("/api/clubhouse/channels/room-1/join")
+
+    res = client.delete("/api/clubhouse/auth")
+
+    assert res.status_code == 200
+    assert client.get("/api/clubhouse/status").json()["connected"] is False
+
+
+def test_sign_out_drops_the_rooms_voice_agent_memory(
+    client, tmp_path, monkeypatch
+) -> None:
+    from backend.modules.clubhouse import voice
+
+    _connect(tmp_path)
+    _record_posts(monkeypatch)
+    client.post("/api/clubhouse/channels/room-1/join")
+    voice.session_for("room-1")
+
+    client.delete("/api/clubhouse/auth")
+
+    assert "room-1" not in voice._sessions
 
 
 def test_join_channel(client, tmp_path, monkeypatch) -> None:
