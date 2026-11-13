@@ -297,19 +297,44 @@ export function VisualizerWidget() {
       }
       const existing = document.getElementById('babylon-cdn-script');
       if (existing) {
-        const check = setInterval(() => {
-          if (win.BABYLON) {
-            clearInterval(check);
-            resolve(win.BABYLON);
-          }
-        }, 50);
+        // Another run already added the tag and it has not finished. Wait on the
+        // tag's own events: the poll that used to stand here never stopped if the
+        // CDN request failed, so every later run added a 20 Hz timer for good.
+        const done = () => {
+          existing.removeEventListener('load', onLoad);
+          existing.removeEventListener('error', onError);
+          clearTimeout(giveUp);
+        };
+        const onLoad = () => {
+          done();
+          resolve(win.BABYLON);
+        };
+        const onError = () => {
+          done();
+          // Drop the dead tag so the next run requests the script again.
+          existing.remove();
+          reject(new Error('Failed to load Babylon.js from CDN'));
+        };
+        // A tag whose events fired before these listeners were attached (it
+        // failed earlier and was left in place) would otherwise wait forever.
+        const giveUp = setTimeout(() => {
+          if (win.BABYLON) onLoad();
+          else onError();
+        }, 15_000);
+        existing.addEventListener('load', onLoad);
+        existing.addEventListener('error', onError);
         return;
       }
       const script = document.createElement('script');
       script.id = 'babylon-cdn-script';
       script.src = 'https://cdn.babylonjs.com/babylon.js';
       script.onload = () => resolve(win.BABYLON);
-      script.onerror = (e) => reject(new Error('Failed to load Babylon.js from CDN: ' + e));
+      script.onerror = () => {
+        // Left in the document, a failed tag makes every retry wait on a script
+        // that is never going to arrive.
+        script.remove();
+        reject(new Error('Failed to load Babylon.js from CDN'));
+      };
       document.body.appendChild(script);
     });
   };
@@ -317,7 +342,12 @@ export function VisualizerWidget() {
   // Periodically refresh the list of open buffers in the dropdown
   useEffect(() => {
     const interval = setInterval(() => {
-      setOpenBuffers(editor()?.listBuffers() ?? []);
+      const next = editor()?.listBuffers() ?? [];
+      // `listBuffers` builds a new array each call. Handing it straight to state
+      // re-rendered the whole pane once a second with nothing changed.
+      setOpenBuffers((prev) =>
+        prev.length === next.length && prev.every((uri, i) => uri === next[i]) ? prev : next,
+      );
     }, 1000);
     return () => clearInterval(interval);
   }, []);

@@ -6,7 +6,10 @@ are added when their settings enable them (filled in by the trust/transport slic
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Coroutine
+from typing import Any
 
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.monitor import peer_monitor
@@ -202,20 +205,51 @@ async def start_network() -> None:
     # Heartbeat the peers for live link health (RTT, throughput).
     await peer_monitor.start()
     logger.info("peer fabric started: node %s", peer_hub.identity().node_id)
-    # Connect to the lobby for discovery + rooms, if configured.
+    # Connect to the lobby for discovery + rooms, if configured, and to the agent
+    # commons (profiles + matchmaking), if enabled. Neither is awaited: both dial
+    # a server somewhere else and the lobby gathers STUN candidates first (a 2 s
+    # timeout when the STUN server does not answer), and uvicorn does not bind
+    # its port until startup returns. A slow or unreachable lobby must not be
+    # able to hold the local app closed. Nothing local needs either connection,
+    # and each reports its own state when it lands.
     from backend.modules.network.lobby import lobby_client
 
-    await lobby_client.start()
-    # Connect to the agent commons (profiles + matchmaking), if enabled.
+    _connect_in_background("lobby", lobby_client.start())
     from backend.modules.network.commons import commons_client
 
-    await commons_client.start()
+    _connect_in_background("commons", commons_client.start())
+
+
+#: The connects started above, held so they are not garbage-collected mid-flight
+#: and so shutdown can cancel one that is still dialing.
+_connecting: set[asyncio.Task[None]] = set()
+
+
+def _connect_in_background(name: str, connect: Coroutine[Any, Any, None]) -> None:
+    async def run() -> None:
+        try:
+            await connect
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed dial must not be an unretrieved task error
+            logger.warning("%s connect failed at startup", name, exc_info=True)
+
+    task = asyncio.create_task(run(), name=f"network-connect-{name}")
+    _connecting.add(task)
+    task.add_done_callback(_connecting.discard)
 
 
 async def stop_network() -> None:
     from backend.modules.network.commons import commons_client
     from backend.modules.network.lobby import lobby_client
     from backend.modules.social import directory as social_directory
+
+    # Before the disconnects below: a connect still in flight would finish after
+    # them and leave a socket open that nothing owns.
+    pending = list(_connecting)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
     # Stop refreshing, but do not unpublish: see `directory.unpublish` for why a
     # record is left to go stale rather than deleted on every restart.

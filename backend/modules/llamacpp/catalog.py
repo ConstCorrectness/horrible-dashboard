@@ -122,7 +122,10 @@ def _header_facts(path: Path, size: int, mtime: int) -> dict[str, Any]:
         return cached
     facts: dict[str, Any] = {}
     try:
-        header = gguf.read_header(path)
+        # Scalars and the tensor directory only. Reading the tokenizer arrays as
+        # well made a scan of a few dozen models take ten seconds, for values
+        # nothing here looks at.
+        header = gguf.read_header(path, skip_arrays_over=64)
         meta = header.metadata
         arch = str(meta.get("general.architecture") or "")
         facts["architecture"] = arch

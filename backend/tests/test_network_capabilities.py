@@ -398,3 +398,60 @@ def test_presence_refreshes_both_fields(monkeypatch, tmp_path):
     hub._apply_presence(session, update)
     assert session.info.capabilities == ["agent", "hassault"]
     assert {c.id: c for c in session.info.caps}["hassault"].attrs["openMatches"] == 4
+
+
+def test_inference_capability_is_never_probed_on_the_event_loop(monkeypatch):
+    """`PeerHub.identity()` is a sync call made from async code, and the probe
+    behind this capability reads every model file's header: seconds, during which
+    the backend answered nothing and at startup had not bound its port. On the
+    loop the probe runs on a worker thread; the caller gets what is known now and
+    peers are told when it lands."""
+    import asyncio
+
+    async def scenario() -> None:
+        import threading
+
+        from backend.modules.llamacpp import capability as inference
+        from backend.modules.network.hub import peer_hub
+
+        loop_thread = threading.get_ident()
+        built_on: list[int] = []
+
+        def build() -> dict:
+            built_on.append(threading.get_ident())
+            return {"modelCount": 1, "models": ["m"], "certain": True}
+
+        announced: list[bool] = []
+
+        async def announce() -> None:
+            announced.append(True)
+
+        monkeypatch.setattr(inference, "_build", build)
+        monkeypatch.setattr(inference, "_cache", None)
+        monkeypatch.setattr(inference, "_refresh_task", None)
+        monkeypatch.setattr(peer_hub, "announce_presence", announce)
+
+        # Nothing known yet: say nothing rather than wait for the probe.
+        assert inference.capability() is None
+        assert built_on == []
+
+        await inference._refresh_task
+        assert built_on and built_on[0] != loop_thread
+        assert announced == [True]
+
+        cap = inference.capability()
+        assert cap is not None and cap.attrs["modelCount"] == 1
+
+        # A change keeps advertising the old answer until the new one is built, then
+        # announces — it does not withdraw the capability in between.
+        monkeypatch.setattr(
+            inference, "_build", lambda: {"modelCount": 1, "models": ["m"], "serving": "m"}
+        )
+        inference.changed()
+        stale = inference.capability()
+        assert stale is not None and "serving" not in stale.attrs
+        await inference._refresh_task
+        assert inference.capability().attrs["serving"] == "m"
+        assert announced == [True, True]
+
+    asyncio.run(scenario())

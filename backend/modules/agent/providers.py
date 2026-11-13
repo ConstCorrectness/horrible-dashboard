@@ -26,11 +26,25 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-import litellm
+
+from backend.lazy_import import lazy_module
 
 # One `chat` span per provider call, at the chokepoint every caller shares.
 from backend.modules.otel.tracing import traced_chat
 from backend.modules.telemetry.instrument import tee_stream
+
+# Loaded on first use rather than at startup: importing litellm costs seconds and
+# only the hosted dialect uses it. `warm_litellm` pays for it off the event loop
+# once the server is up, so the first hosted chat does not. Still a hard
+# dependency — if it is missing, the plain import below fails as it always did.
+litellm: Any = lazy_module("litellm")
+if litellm is None:
+    import litellm  # noqa: F811
+
+
+def warm_litellm() -> None:
+    """Run litellm's import now. Blocking — call it from a worker thread."""
+    litellm.acompletion  # noqa: B018 - the attribute access is the import
 
 # Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
 DeltaSink = Callable[[str, str], Awaitable[None]]

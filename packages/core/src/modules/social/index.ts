@@ -1,6 +1,5 @@
 import { type ModuleManifest } from '../../registry';
 import { socialContextMenu } from './friend-actions';
-import { FriendsPanel } from './FriendsPanel';
 import { initSocial } from './ws';
 
 /**
@@ -23,7 +22,6 @@ export const socialModule: ModuleManifest = {
   // from what the certificates you hand out actually say.
 };
 
-export { FriendsPanel };
 export { initSocial };
 export * from './api';
 export {

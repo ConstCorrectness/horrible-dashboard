@@ -1,7 +1,9 @@
 import { spawn, spawnSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, rmSync, watch, writeFileSync } from 'fs';
 import net from 'net';
-import { setTimeout } from 'timers';
+import os from 'os';
+import path from 'path';
+import { clearTimeout, setTimeout } from 'timers';
 
 // Load .env file if it exists so we inherit any local credentials/config (e.g. GAMES_GOOGLE_CLIENT_ID)
 if (existsSync('.env')) {
@@ -47,8 +49,8 @@ const backendPort = process.env.HORRIBLE_DEV_BACKEND_PORT || '8000';
 // kill a game server the user runs themselves.
 const ownedPorts = [5173, 5180, Number(backendPort), ...(startGameServer ? [9090] : [])];
 
-// On Windows, `uv run`/pnpm wrap uvicorn/vite in a shell and `uvicorn --reload`
-// respawns workers, so an interrupted run can orphan a worker that keeps a port
+// On Windows, `uv run`/pnpm wrap the servers in a shell, so an interrupted run can
+// orphan one that keeps a port
 // bound — which then makes the next `pnpm dev` fail with "port in use". Free our
 // ports synchronously (so it completes before Node moves on), both before starting
 // and on shutdown. No-op on POSIX, where child.kill('SIGINT') is enough.
@@ -116,33 +118,156 @@ if (!existsSync('backend/modules/scrive/static/webml-gguf.worker.js')) {
   });
 }
 
-const backend = spawn(
-  'uv',
-  [
-    'run',
-    'uvicorn',
-    'backend.app:app',
-    '--reload',
-    '--reload-dir',
-    'backend',
-    '--reload-exclude',
-    'logs/*',
-    '--host',
-    host,
-    '--port',
-    backendPort,
-  ],
-  {
-    stdio: 'inherit',
-    shell: useShell,
-    env: {
-      ...process.env,
-      // Only set when asked: an undefined value would still register as a set
-      // key on some platforms, and the resolver treats "set" as "env wins".
-      ...(gamesServerUrl ? { GAMES_SERVER_URL: gamesServerUrl } : {}),
+let cleanedUp = false;
+
+// Tree-kill on Windows: `uv run` / pnpm wrap the real server in a shell, so a plain
+// kill orphans it (and leaves the port bound). Synchronous, so it finishes before
+// Node exits — an async spawn here can be cut off mid-kill.
+function killTree(child) {
+  if (child == null || child.exitCode !== null || child.pid == null) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    child.kill('SIGINT');
+  }
+}
+
+// How long a server gets to shut down cleanly before it is killed instead.
+const STOP_GRACE_MS = 12000;
+// Editors save in bursts (write, rename, touch); one restart per burst.
+const RESTART_DEBOUNCE_MS = 300;
+
+// Run one Python server and restart it when its source changes.
+//
+// This replaces `uvicorn --reload`, which cannot be used here on Windows: it
+// restarts its worker with a console Ctrl+C, every process on the console gets
+// that Ctrl+C, and so a saved backend file stopped this script, Vite and the
+// other server along with the worker. scripts/dev_backend.py has the rest of the
+// reasoning; the short version is that this process does the watching and asks
+// the server to stop by creating a file only that server is looking for.
+function superviseServer({ name, app, port, watchDirs, ignore = [], env, onFirstExit }) {
+  let child = null;
+  let restarting = false;
+  let starts = 0;
+
+  // Creating this file is the request to stop. One per supervised server, and
+  // per run of this script, so two checkouts running at once cannot stop each other.
+  const stopFile = path.join(os.tmpdir(), `horrible-dev-stop-${process.pid}-${port}`);
+
+  const start = () => {
+    starts += 1;
+    rmSync(stopFile, { force: true });
+    const proc = spawn(
+      'uv',
+      [
+        'run',
+        'python',
+        'scripts/dev_backend.py',
+        app,
+        host,
+        String(port),
+        // Quoted for the Windows shell: the temp dir is under the user's profile,
+        // and a profile name can have a space in it.
+        useShell ? `"${stopFile}"` : stopFile,
+        String(process.pid),
+      ],
+      {
+        // No stdin at all. The server starts child processes of its own, and a
+        // pipe here would be inherited by every one of them.
+        stdio: ['ignore', 'inherit', 'inherit'],
+        shell: useShell,
+        env,
+      },
+    );
+    proc.on('exit', (code) => {
+      if (child !== proc) return;
+      child = null;
+      rmSync(stopFile, { force: true });
+      if (cleanedUp) return;
+      if (restarting) {
+        restarting = false;
+        start();
+      } else if (starts === 1) {
+        // Never came up at all: a bad port, a broken environment.
+        onFirstExit(code);
+      } else {
+        // Came up before and has now fallen over, almost always on a syntax or
+        // import error in the file just saved. Stay up and wait for the fix
+        // rather than taking the rest of the stack down over a typo.
+        console.warn(`⚠️  ${name} exited (code ${code}). Waiting for a file change to restart it.`);
+      }
+    });
+    child = proc;
+  };
+
+  const restart = (file) => {
+    if (cleanedUp || restarting) return;
+    console.log(`\n♻️  ${file} changed — restarting ${name}...`);
+    if (child === null) {
+      start();
+      return;
+    }
+    restarting = true;
+    const stopping = child;
+    try {
+      writeFileSync(stopFile, '');
+    } catch {
+      // Falls through to the kill below.
+    }
+    const giveUp = setTimeout(() => killTree(stopping), STOP_GRACE_MS);
+    stopping.once('exit', () => clearTimeout(giveUp));
+  };
+
+  let debounce = null;
+  for (const dir of watchDirs) {
+    try {
+      watch(dir, { recursive: true }, (_event, filename) => {
+        if (!filename || !filename.endsWith('.py')) return;
+        const parts = filename.split(path.sep);
+        if (parts.includes('__pycache__') || ignore.includes(parts[0])) return;
+        clearTimeout(debounce);
+        debounce = setTimeout(() => restart(path.join(dir, filename)), RESTART_DEBOUNCE_MS);
+      });
+    } catch (err) {
+      console.warn(`⚠️  Not watching ${dir} for changes (${err.message}); restart ${name} by hand.`);
+    }
+  }
+
+  start();
+  return {
+    get child() {
+      return child;
     },
+    /** True once the first process has exited without ever being restarted. */
+    get failedToStart() {
+      return child === null && starts === 1;
+    },
+  };
+}
+
+// The node backend. Restarted for any source change under backend/ except the
+// tests and scratch files, which the app never imports: a test edit used to cost
+// a full restart of a backend that takes seconds to come up.
+let backendExitCode = null;
+const backend = superviseServer({
+  name: 'backend',
+  app: 'backend.app:app',
+  port: backendPort,
+  watchDirs: ['backend'],
+  ignore: ['tests', 'scratch'],
+  env: {
+    ...process.env,
+    // Only set when asked: an undefined value would still register as a set
+    // key on some platforms, and the resolver treats "set" as "env wins".
+    ...(gamesServerUrl ? { GAMES_SERVER_URL: gamesServerUrl } : {}),
   },
-);
+  // If the core server never starts, tear the rest down so we don't leave a
+  // half-stack up.
+  onFirstExit: (code) => {
+    backendExitCode = code;
+    cleanup();
+  },
+});
 
 function waitForPort(port, host, timeoutMs = 15000) {
   return new Promise((resolve) => {
@@ -150,7 +275,7 @@ function waitForPort(port, host, timeoutMs = 15000) {
     const clientHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     
     const tryConnect = () => {
-      if (backend.exitCode !== null) {
+      if (backend.failedToStart) {
         resolve(false);
         return;
       }
@@ -177,56 +302,36 @@ function waitForPort(port, host, timeoutMs = 15000) {
 }
 
 const gameserver = startGameServer
-  ? spawn(
-      'uv',
-      [
-        'run',
-        'uvicorn',
-        'backend.games_server.app:app',
-        '--reload',
-        '--reload-dir',
-        'backend/games_server',
-        '--reload-dir',
-        'backend/games_engine',
-        '--host',
-        host,
-        '--port',
-        '9090',
-      ],
-      {
-        stdio: 'inherit',
-        shell: useShell,
-        env: { ...process.env, GAMES_ENABLE_CODE_EXEC: '1' },
+  ? superviseServer({
+      name: 'game server (:9090)',
+      app: 'backend.games_server.app:app',
+      port: 9090,
+      watchDirs: ['backend/games_server', 'backend/games_engine'],
+      env: { ...process.env, GAMES_ENABLE_CODE_EXEC: '1' },
+      // Non-core: if it never starts (commonly because :9090 is already in use by
+      // a game server you started yourself), warn but keep the rest of the stack up.
+      onFirstExit: (code) => {
+        console.warn(
+          `⚠️  game server (:9090) exited (code ${code}); the games module won't work ` +
+            'until one is running. The rest of the app is unaffected.',
+        );
       },
-    )
+    })
   : null;
 
 let frontend;
 let assaultWeb;
-let cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   console.log('\nStopping dev servers...');
-  for (const child of [backend, frontend, gameserver, assaultWeb]) {
-    if (child == null || child.exitCode !== null || child.pid == null) continue;
-    if (process.platform === 'win32') {
-      // `uv run` / pnpm wrap the real server in a shell, so a plain kill orphans
-      // uvicorn (and leaves the port bound). Tree-kill the whole process group —
-      // synchronously, so it finishes before Node exits (an async spawn here can be
-      // cut off mid-kill and orphan the worker).
-      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-    } else {
-      child.kill('SIGINT');
-    }
+  for (const child of [backend.child, frontend, gameserver?.child, assaultWeb]) {
+    killTree(child);
   }
-  // Backstop: kill any reloader worker that respawned onto a port after (or during)
-  // the tree-kill, so the next `pnpm dev` starts clean.
+  // Backstop: kill anything still bound to one of our ports after the tree-kill,
+  // so the next `pnpm dev` starts clean.
   freeOwnedPorts();
 }
-
-// If a *core* server dies, tear the other down so we don't leave a half-stack up.
-backend.on('exit', cleanup);
 
 // Wait for the backend to start listening before launching the frontend
 // to avoid Vite proxy ECONNREFUSED log spam.
@@ -234,8 +339,8 @@ console.log(`⏳ Waiting for backend to start on http://${host}:${backendPort}..
 const backendReady = await waitForPort(Number(backendPort), host);
 if (backendReady) {
   console.log(`✅ Backend is up and listening!`);
-} else if (backend.exitCode !== null) {
-  console.warn(`❌ Backend process exited early with code ${backend.exitCode}.`);
+} else if (backend.failedToStart) {
+  console.warn(`❌ Backend process exited early with code ${backendExitCode}.`);
 } else {
   console.warn(`⚠️  Backend port did not respond within timeout, starting frontend anyway.`);
 }
@@ -267,17 +372,6 @@ if (!process.argv.includes('--no-assault')) {
     }
   });
 }
-
-// The game server is non-core: if it dies (commonly because :9090 is already in use
-// from a game server you started yourself), warn but keep the rest of the stack up.
-gameserver?.on('exit', (code) => {
-  if (!cleanedUp) {
-    console.warn(
-      `⚠️  game server (:9090) exited (code ${code}); the games module won't work ` +
-        'until one is running. The rest of the app is unaffected.',
-    );
-  }
-});
 
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);

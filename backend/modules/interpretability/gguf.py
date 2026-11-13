@@ -30,6 +30,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import mmap
 import os
 import re
 import struct
@@ -177,7 +178,55 @@ def _read_string(handle: BinaryIO) -> str:
     return _read_exact(handle, length).decode("utf-8", errors="replace")
 
 
-def _read_value(handle: BinaryIO, type_id: int) -> Any:
+#: What `_read_value` returns for an array it stepped over instead of reading.
+_SKIPPED: Any = object()
+
+_U64 = struct.Struct("<Q")
+
+
+def _skip_strings(handle: BinaryIO, count: int) -> None:
+    """Move past `count` length-prefixed strings without reading any of them.
+
+    A tokenizer vocabulary is a few hundred thousand of these, and a caller that
+    only wants the tensor directory still has to get past it. Walking the lengths
+    in a memory map costs one unpack per string; reading each through the file
+    object cost two reads and a decode, which is where a catalogue scan's seconds
+    went.
+    """
+    offset = handle.tell()
+    try:
+        # Mapped through a handle of its own. On Windows, mapping a descriptor
+        # moves that descriptor's file position, and the buffered reader above it
+        # does not know: a later seek that lands inside its buffer is then served
+        # from the wrong place in the file.
+        with (
+            open(handle.name, "rb") as mapped,
+            mmap.mmap(mapped.fileno(), 0, access=mmap.ACCESS_READ) as view,
+        ):
+            unpack = _U64.unpack_from
+            for _ in range(count):
+                offset += 8 + unpack(view, offset)[0]
+            if offset > len(view):
+                raise GgufError("Truncated: a string array runs past the end of the file")
+    except struct.error as exc:
+        # A length that points past the end leaves the next unpack out of range.
+        raise GgufError("Truncated: a string array runs past the end of the file") from exc
+    handle.seek(offset)
+
+
+def _skip_array(handle: BinaryIO, item_type: int, count: int) -> None:
+    scalar = _SCALARS.get(item_type)
+    if scalar is not None:
+        handle.seek(count * scalar[1], os.SEEK_CUR)
+    elif item_type == _T_STRING:
+        _skip_strings(handle, count)
+    else:
+        # Arrays of arrays: rare, and never large. Read and discard.
+        for _ in range(count):
+            _read_value(handle, item_type)
+
+
+def _read_value(handle: BinaryIO, type_id: int, skip_arrays_over: int | None = None) -> Any:
     scalar = _SCALARS.get(type_id)
     if scalar is not None:
         fmt, size = scalar
@@ -189,6 +238,9 @@ def _read_value(handle: BinaryIO, type_id: int) -> Any:
         count = _read_u64(handle)
         if count > _MAX_ARRAY:
             raise GgufError(f"Implausible array length {count}")
+        if skip_arrays_over is not None and count > skip_arrays_over:
+            _skip_array(handle, item_type, count)
+            return _SKIPPED
         return [_read_value(handle, item_type) for _ in range(count)]
     raise GgufError(f"Unknown metadata value type {type_id}")
 
@@ -274,8 +326,16 @@ def _n_bytes(type_id: int, elements: int) -> int | None:
 # ── the parser ───────────────────────────────────────────────────────────────
 
 
-def read_header(path: str | os.PathLike[str]) -> GgufFile:
-    """Parse a GGUF file's metadata and tensor directory. Raises `GgufError`."""
+def read_header(
+    path: str | os.PathLike[str], *, skip_arrays_over: int | None = None
+) -> GgufFile:
+    """Parse a GGUF file's metadata and tensor directory. Raises `GgufError`.
+
+    `skip_arrays_over` leaves metadata arrays longer than that out of `metadata`
+    (the key is absent, not empty). For a caller that wants the scalars and the
+    tensor directory — a model catalogue — and not the tokenizer vocabulary, which
+    is nearly all of the header's bytes and nearly all of the time to read it.
+    """
     file_path = Path(path)
     size = file_path.stat().st_size
     with open(file_path, "rb") as handle:
@@ -297,7 +357,9 @@ def read_header(path: str | os.PathLike[str]) -> GgufFile:
         metadata: dict[str, Any] = {}
         for _ in range(kv_count):
             key = _read_string(handle)
-            metadata[key] = _read_value(handle, _read_u32(handle))
+            value = _read_value(handle, _read_u32(handle), skip_arrays_over)
+            if value is not _SKIPPED:
+                metadata[key] = value
 
         tensors: list[TensorInfo] = []
         for _ in range(tensor_count):

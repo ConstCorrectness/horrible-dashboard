@@ -329,17 +329,20 @@ def record_ws_frame(direction: str, data: object) -> None:
     if not observes_ws_frame(channel, str(event_name or "")):
         return
     target = f"{channel}/{event_name}" if event_name else channel
+    # One dump, compact. The panel's `BodyView` pretty-prints JSON when it shows
+    # it, so a second `indent=2` dump here was paid on every frame for a layout
+    # the browser redoes anyway — and its whitespace ate the capture limit.
     try:
         compact = json.dumps(data, separators=(",", ":"), default=str)
-        pretty = json.dumps(data, indent=2, default=str)
     except (TypeError, ValueError):
-        compact = pretty = str(data)
+        compact = str(data)
+    encoded = compact.encode("utf-8")
     recorder.record(
         source="ws",
         method="recv" if direction == "in" else "send",
         target=target,
-        request_bytes=len(compact.encode("utf-8")),
-        request_body=safe_body(pretty.encode("utf-8"), max_chars=_max_body_chars()),
+        request_bytes=len(encoded),
+        request_body=safe_body(encoded, max_chars=_max_body_chars()),
     )
 
 

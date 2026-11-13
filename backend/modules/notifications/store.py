@@ -39,6 +39,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Generator
 
 from backend.modules.database.app_db import ensure_app_db_dir
@@ -75,7 +76,24 @@ def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+#: Database files whose schema this process has already created. The routes call
+#: `init_notifications_db` on every request so they work without the lifespan
+#: having run; without this, each feed read paid for a connection, eight
+#: `CREATE … IF NOT EXISTS` statements and a commit, inside an async handler.
+_schema_ready: set[str] = set()
+
+
 def init_notifications_db() -> None:
+    path = str(ensure_app_db_dir())
+    # The existence check covers a data dir that was removed and recreated under
+    # the same path (a test's tmp dir, a user clearing app data while running).
+    if path in _schema_ready and Path(path).exists():
+        return
+    _create_schema()
+    _schema_ready.add(path)
+
+
+def _create_schema() -> None:
     with get_db_conn() as conn:
         conn.execute(
             """
@@ -383,7 +401,9 @@ def record(
                         row_id,
                     ),
                 )
-                return _view(row_id, category, kind, title, body, person_id, data, dedupe, now)
+                return _view(
+                    row_id, category, kind, title, body, person_id, data, dedupe, now
+                )
         conn.execute(
             "INSERT INTO notifications (id, category, kind, title, body, person_id, "
             "data, dedupe, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)",

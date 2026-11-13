@@ -1,11 +1,10 @@
 import { registry, type ModuleManifest } from '../../registry';
-import { MirrorPanel } from './panels/MirrorPanel';
-import { SessionPanel } from './panels/SessionPanel';
 import { ShareLiveIndicator } from './panels/LiveIndicator';
 import { getLink, revokeLink } from './api';
 import { bindPublishing } from './publish';
 import { bindStreamLifecycle, stopStream } from './stream';
 import { bindGuestMedia } from './watch';
+import { lazyPane } from '../../lazy-pane';
 import {
   initShare as initShareChannel,
   requestShareState,
@@ -13,6 +12,9 @@ import {
   startViaChannel,
   stopViaChannel,
 } from './ws';
+
+const MirrorPanel = lazyPane(() => import('./panels/MirrorPanel'), 'MirrorPanel');
+const SessionPanel = lazyPane(() => import('./panels/SessionPanel'), 'SessionPanel');
 
 /**
  * Start the share channel **and** the workspace projector.
@@ -147,7 +149,6 @@ export const shareModule: ModuleManifest = {
   ],
 };
 
-export { SessionPanel, MirrorPanel };
 export * from './mirror';
 export { probeCapture, type CaptureSupport } from './capture';
 export { WhipPublisher } from './whip';

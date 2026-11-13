@@ -6,6 +6,7 @@ owned by the frontend (see docs/modules/settings.md). Mirrors the dashboard
 layout store.
 """
 
+import copy
 import json
 from pathlib import Path
 from typing import Annotated, Any
@@ -40,21 +41,60 @@ def _lock():
     return jsonstore.locked(_settings_path())
 
 
-def _read() -> dict:
-    text = jsonstore.read_text(_settings_path())
+#: The parsed bag, with the file identity it was parsed from. `get_value` is called
+#: per HTTP request and per WebSocket frame (the telemetry middleware reads its
+#: body cap through it), and a read + `json.loads` of the whole bag each time is
+#: event-loop time. Keyed on the file's stat rather than invalidated on write
+#: alone, because this process is not the only writer: the bundled game server
+#: shares the file, and so does anything that edits it by hand.
+_cache: tuple[Path, tuple[int, int], dict] | None = None
+
+
+def _stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _load() -> dict:
+    """The parsed bag, shared — callers must not mutate it. Hold `_lock()`."""
+    global _cache
+    path = _settings_path()
+    stamp = _stamp(path)
+    if stamp is None:
+        _cache = None
+        return {}
+    if _cache is not None and _cache[0] == path and _cache[1] == stamp:
+        return _cache[2]
+    text = jsonstore.read_text(path)
     if text is None:
+        _cache = None
         return {}
     try:
         data = json.loads(text)
     except ValueError:
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # Stamped *before* the read: a write landing in between leaves a stamp that no
+    # longer matches the file, so the next call re-reads instead of trusting it.
+    _cache = (path, stamp, data)
+    return data
+
+
+def _read() -> dict:
+    """A private copy of the bag, safe to modify and write back."""
+    return dict(_load())
 
 
 def _write(data: dict) -> None:
     """Write the bag atomically. A direct `write_text` truncates first, so a reader
     arriving mid-write (or a crash) sees a half-written file and `_read` falls back
     to `{}` — i.e. every setting the user ever chose, gone."""
+    global _cache
+    _cache = None
     jsonstore.write_text(_settings_path(), json.dumps(data))
 
 
@@ -63,7 +103,13 @@ def get_value(key: str, default: Any) -> Any:
     caller's default. Backend consumers pass their own default because schemas and
     defaults are declared on the frontend (see docs/modules/settings.md)."""
     with _lock():
-        return _read().get(key, default)
+        bag = _load()
+        if key not in bag:
+            return default
+        value = bag[key]
+    # A container is copied so a caller editing what it was handed cannot edit
+    # the cached bag every later reader sees.
+    return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
 
 
 def set_value(key: str, value: Any) -> None:

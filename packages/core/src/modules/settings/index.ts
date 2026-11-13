@@ -6,7 +6,9 @@ import {
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import { DEFAULT_THEME, THEME_SETTING_KEY, THEMES } from '../../theme';
-import { SettingsPanel } from './SettingsPanel';
+import { lazyPane } from '../../lazy-pane';
+
+const SettingsPanel = lazyPane(() => import('./SettingsPanel'), 'SettingsPanel');
 
 /** See docs/modules/settings.md. The user-facing settings page. */
 export const settingsModule: ModuleManifest = {

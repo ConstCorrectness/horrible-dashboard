@@ -44,6 +44,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
+from backend.modules.agent import providers as agent_providers
 from backend.modules.agent import routes as agent_routes
 from backend.modules.agent import browser_provider
 from backend.modules.agent.orchestrator import handle_agent_message
@@ -304,6 +305,11 @@ async def lifespan(app: FastAPI):
     # awaited: a warm is not worth a second of boot, and the lists are fetched on
     # demand anyway if it fails.
     agent_routes.start_warm_model_lists()
+    # litellm is imported on first use (backend/lazy_import.py). Pay for that now,
+    # on a worker thread, so the first hosted chat turn does not pay for it on the
+    # event loop — and so startup does not wait for it either.
+    _warm = asyncio.create_task(asyncio.to_thread(agent_providers.warm_litellm))
+    _warm.add_done_callback(lambda t: t.cancelled() or t.exception())
     # Music: the saved session (paused), interrupted playlist imports, and the
     # scrobble retry loop.
     await start_music()

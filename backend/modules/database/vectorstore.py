@@ -3,11 +3,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-try:
-    import lancedb
-except ImportError:
-    lancedb = None
 from backend import paths
+from backend.lazy_import import lazy_module
+
+#: Loaded on first use: importing it costs seconds, and this file is imported by
+#: every process start through the library and browser routes. None when the
+#: package is not installed, which the functions below already check for.
+lancedb: Any = lazy_module("lancedb")
 
 
 def get_db_path() -> Path:
@@ -48,7 +50,10 @@ def init_db() -> None:
     """Initialize the database. LanceDB handles this automatically on connect/create_table."""
     if lancedb is None:
         return
-    _get_db()
+    # Only the directory: this runs when the database routes are imported, and a
+    # `connect` here would load lancedb (seconds) before the server has started.
+    # Every real use goes through `_get_db`, which connects then.
+    get_db_path().mkdir(parents=True, exist_ok=True)
 
 
 class DimensionMismatch(ValueError):

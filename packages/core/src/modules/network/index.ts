@@ -1,5 +1,4 @@
 import { type ModuleManifest } from '../../registry';
-import { PeerChatPanel } from './PeerChatPanel';
 import { initLobby } from './lobby';
 import { initNetwork } from './ws';
 
@@ -212,7 +211,6 @@ export const networkModule: ModuleManifest = {
   ],
 };
 
-export { PeerChatPanel };
 export { initNetwork };
 export { initLobby };
 export {

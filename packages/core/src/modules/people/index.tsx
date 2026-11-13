@@ -1,11 +1,13 @@
 import { revealSection } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
-import { PeerChatPanel } from '../network/PeerChatPanel';
-import { FriendsPanel } from '../social/FriendsPanel';
+import { lazyPane } from '../../lazy-pane';
 import { DiscoverSection } from './DiscoverSection';
 import { MeSection } from './MeSection';
 import { RequestsSection } from './RequestsSection';
 import './people.css';
+
+const PeerChatPanel = lazyPane(() => import('../network/PeerChatPanel'), 'PeerChatPanel');
+const FriendsPanel = lazyPane(() => import('../social/FriendsPanel'), 'FriendsPanel');
 
 /**
  * **People** — one pane for everyone you know, replacing nine.

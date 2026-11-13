@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from watchfiles import Change, awatch
+    from watchfiles import Change, DefaultFilter, awatch
 except ImportError:
-    Change, awatch = None, None
+    Change, DefaultFilter, awatch = None, None, None
 
 from backend.modules.files.routes import _roots
 
@@ -37,6 +37,20 @@ _CHANGE_NAMES = (
     if Change is not None
     else {}
 )
+
+
+#: On top of what watchfiles already ignores (`.git`, `node_modules`, `.venv`,
+#: caches): build output and the app's own data dir. A cargo build rewrites
+#: thousands of files under `target/`, and `.data` holds the SQLite files and
+#: `settings.json` this backend writes — so without these the watcher reports the
+#: backend's own activity to every open window, as a `files/change` frame each.
+_EXTRA_IGNORED_DIRS = ("target", ".data")
+
+
+def _watch_filter() -> Any:
+    if DefaultFilter is None:
+        return None
+    return DefaultFilter(ignore_dirs=(*DefaultFilter.ignore_dirs, *_EXTRA_IGNORED_DIRS))
 
 
 class FileWatcher:
@@ -79,6 +93,7 @@ class FileWatcher:
             try:
                 async for batch in awatch(
                     *root_strs,
+                    watch_filter=_watch_filter(),
                     yield_on_timeout=True,
                     rust_timeout=_ROOTS_RECHECK_MS,
                 ):

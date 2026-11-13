@@ -135,6 +135,19 @@ export function initAgentManifestSync(): void {
   const push = (): void => {
     sendChannel('agent', 'manifest', { tools: serializeManifest() });
   };
+  // The registry announces every module separately, and loading module packages
+  // and plugins registers a run of them back to back. Each push serializes and
+  // sends the whole manifest, so a run is collapsed into the one push that
+  // follows it — the backend only ever needed the last.
+  let queued = false;
+  const pushSoon = (): void => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      push();
+    });
+  };
   onSocketOpen(push);
-  registry.onChange(push);
+  registry.onChange(pushSoon);
 }

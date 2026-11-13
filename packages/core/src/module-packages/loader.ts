@@ -60,11 +60,13 @@ function wanted(id: string): boolean {
   return state ? state.enabled && state.loaded : true;
 }
 
-async function registerEntry(id: string): Promise<void> {
+type LoadedEntry = Awaited<ReturnType<ModuleEntry['load']>>;
+
+async function registerEntry(id: string, loading?: Promise<LoadedEntry>): Promise<void> {
   const entry = entries.get(id);
   if (!entry || registry.has(id)) return;
   try {
-    const mod = await entry.load();
+    const mod = await (loading ?? entry.load());
     const def = mod.default ?? mod.module;
     if (!def) throw new Error('web entry must export `module` (defineModule) or a default');
     if (def.id !== id) throw new Error(`web entry declares id "${def.id}", manifest says "${id}"`);
@@ -93,7 +95,19 @@ function reconcile(): Promise<void> {
     }
     const toLoad = ids.filter((id) => wanted(id) && !registry.has(id));
     const { order } = loadOrder(toLoad.map((id) => entries.get(id)!.manifest));
-    for (const id of order) await registerEntry(id);
+    // Start every web half's import at once, then register in dependency order.
+    // Only registration has an order to keep; importing one module at a time made
+    // boot wait for the sum of the downloads rather than the slowest. Each load is
+    // called once and its promise handed on, so a failed import is recorded by
+    // `registerEntry` exactly as before. The no-op catch only stops a rejection
+    // being reported as unhandled before that await reaches it.
+    const loading = new Map<string, Promise<LoadedEntry>>();
+    for (const id of order) {
+      const pending = entries.get(id)!.load();
+      pending.catch(() => undefined);
+      loading.set(id, pending);
+    }
+    for (const id of order) await registerEntry(id, loading.get(id));
   });
 }
 

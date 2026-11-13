@@ -172,7 +172,16 @@ class RelayTransport(Transport):
         from backend.modules.network.relay_broker import challenge_bytes
 
         assert self._hub is not None
-        self._ws = await ws_connect(self._url, max_size=self.MAX_FRAME)
+        self._ws = await ws_connect(
+            self._url,
+            max_size=self.MAX_FRAME,
+            # How long `close()` waits for the relay to answer the close frame.
+            # The default is 10 s, and the hosted relay often does not answer:
+            # shutdown sat here for most of that, on every stop and every reload.
+            # Nothing is lost by leaving sooner — a link that is being closed has
+            # no more frames to deliver.
+            close_timeout=1,
+        )
         first = json.loads(await asyncio.wait_for(self._ws.recv(), 15))
         challenge = first.get("challenge") if isinstance(first, dict) else None
         if not isinstance(challenge, str):

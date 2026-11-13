@@ -295,6 +295,14 @@ async function boot(): Promise<void> {
     if (isHosted()) registry.register(hostedModule);
   });
 
+  // The saved settings and keybindings are two requests that depend on nothing
+  // above and on neither loader below, so they go out now and are awaited where
+  // their values are first needed. In sequence, boot waited for four round trips
+  // one after another; the overrides are a plain key→value bag, so it does not
+  // matter whether a plugin's declarations arrive before or after them.
+  const settingsLoaded = bootStep('settings', 'Loading settings', loadSettings);
+  const keymapLoaded = bootStep('keymap', 'Loading keybindings', loadKeymapOverrides);
+
   // Module packages (modules/<id>): registered after the built-ins above, enabled
   // ones only, dependencies first — and from here on they follow the backend, so a
   // module disabled from the marketplace leaves without a reload.
@@ -302,9 +310,9 @@ async function boot(): Promise<void> {
     loadModulePackages(modulePackages),
   );
   await bootStep('plugins', 'Loading plugins', loadPlugins);
-  // After plugins register their declarations, seed the persisted overrides so
-  // widgets read correct values on first render. Backend down ⇒ defaults only.
-  await bootStep('settings', 'Loading settings', loadSettings);
+  // Seed the persisted overrides before the first render so widgets read correct
+  // values. Backend down ⇒ defaults only.
+  await settingsLoaded;
   // Straight after the overrides land and before the SHELL's first render: the
   // theme is a `data-theme` attribute on <html>, so applying it here means the
   // shell paints already themed rather than flashing the default and correcting
@@ -313,7 +321,7 @@ async function boot(): Promise<void> {
   initGraphicsQuality();
   // Same reason as settings: seed the user's overrides before the first render so
   // the palette and the Shortcuts pane show the bindings that will actually fire.
-  await bootStep('keymap', 'Loading keybindings', loadKeymapOverrides);
+  await keymapLoaded;
   // After the overrides load, and subscribed: `keymap.preset` layers a named set
   // (i3) between the shipped defaults and the user's own rebinds.
   initKeymapPreset();

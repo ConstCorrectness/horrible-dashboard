@@ -1,5 +1,10 @@
 import { registry, type ModuleManifest } from '../../registry';
-import { LocalTrackWorkspacePane } from './LocalTrackWorkspacePane';
+import { lazyPane } from '../../lazy-pane';
+
+const LocalTrackWorkspacePane = lazyPane(
+  () => import('./LocalTrackWorkspacePane'),
+  'LocalTrackWorkspacePane',
+);
 
 export const localtrackModule: ModuleManifest = {
   id: 'localtrack',
@@ -41,7 +46,6 @@ export const localtrackModule: ModuleManifest = {
   ],
 };
 
-export { LocalTrackWorkspacePane };
 export { LocalTrackIcon } from './components/LocalTrackIcon';
 export * from './types';
 export * from './store';

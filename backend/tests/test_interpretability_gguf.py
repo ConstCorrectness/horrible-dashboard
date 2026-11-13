@@ -364,3 +364,73 @@ def test_namespaced_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("OLLAMA_MODELS", str(root))
 
     assert gguf.resolve_ollama_model("hf.co/unsloth:q4") is not None
+
+
+# ── skipping long arrays ─────────────────────────────────────────────────────
+
+
+def _with_vocab(tmp_path: Path, tokens: list[str]) -> Path:
+    path = tmp_path / "vocab.gguf"
+    write_gguf(
+        path,
+        metadata=[
+            _kv("general.architecture", _T_STRING, _pstr("llama")),
+            _kv(
+                "tokenizer.ggml.tokens",
+                _T_ARRAY,
+                struct.pack("<IQ", _T_STRING, len(tokens))
+                + b"".join(_pstr(t) for t in tokens),
+            ),
+            _kv(
+                "tokenizer.ggml.scores",
+                _T_ARRAY,
+                struct.pack("<IQ", _T_FLOAT32, len(tokens))
+                + struct.pack(f"<{len(tokens)}f", *([0.5] * len(tokens))),
+            ),
+            # After both arrays on purpose: reaching it proves they were stepped
+            # over by exactly their own length.
+            _kv("llama.context_length", _T_UINT32, struct.pack("<I", 4096)),
+        ],
+        tensors=[("token_embd.weight", (64, 256), 12), ("output.weight", (64, 256), 8)],
+    )
+    return path
+
+
+def test_skipping_long_arrays_leaves_everything_else_identical(tmp_path: Path) -> None:
+    """A model catalogue wants the scalars and the tensor directory, and the
+    directory is *after* the vocabulary. Skipping must land on the same byte a
+    full read does, or every tensor that follows is misread."""
+    path = _with_vocab(tmp_path, [f"tok{i}é" for i in range(300)])
+    full = gguf.read_header(path)
+    fast = gguf.read_header(path, skip_arrays_over=64)
+
+    assert "tokenizer.ggml.tokens" in full.metadata
+    assert "tokenizer.ggml.tokens" not in fast.metadata
+    assert "tokenizer.ggml.scores" not in fast.metadata
+    assert fast.metadata["llama.context_length"] == 4096
+    assert fast.metadata["general.architecture"] == "llama"
+    assert fast.tensors == full.tensors
+    assert fast.data_offset == full.data_offset
+
+
+def test_a_short_array_is_still_read_when_skipping(tmp_path: Path) -> None:
+    path = _with_vocab(tmp_path, ["a", "b", "c"])
+    fast = gguf.read_header(path, skip_arrays_over=64)
+    assert fast.metadata["tokenizer.ggml.tokens"] == ["a", "b", "c"]
+
+
+def test_a_skipped_array_that_runs_off_the_file_raises(tmp_path: Path) -> None:
+    """Stepping over an array reads no bytes, so a truncated one cannot be caught
+    by a short read. It still has to be an error, not a header that parses to
+    garbage."""
+    path = tmp_path / "cut.gguf"
+    head = gguf.GGUF_MAGIC + struct.pack("<IQQ", 3, 0, 1)
+    # Claims 500 strings, supplies two.
+    body = _kv(
+        "tokenizer.ggml.tokens",
+        _T_ARRAY,
+        struct.pack("<IQ", _T_STRING, 500) + _pstr("a") + _pstr("b"),
+    )
+    path.write_bytes(head + body)
+    with pytest.raises(gguf.GgufError):
+        gguf.read_header(path, skip_arrays_over=64)

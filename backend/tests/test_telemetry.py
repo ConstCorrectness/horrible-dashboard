@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -182,9 +183,15 @@ def test_ws_frame_is_recorded() -> None:
     assert len(ws) == 2
     assert ws[0].method == "recv" and ws[0].target == "agent/ask"
     assert ws[1].method == "send" and ws[1].target == "collab/op"
-    # The full frame payload is captured as the (pretty) body.
-    assert ws[0].request_body is not None and '"text": "hi"' in ws[0].request_body
-    assert ws[0].request_bytes is not None
+    # The full frame payload is captured as the body, compact: the panel
+    # pretty-prints it, so the backend dumps each frame once, not twice.
+    assert ws[0].request_body is not None
+    assert json.loads(ws[0].request_body) == {
+        "channel": "agent",
+        "event": "ask",
+        "text": "hi",
+    }
+    assert ws[0].request_bytes == len(ws[0].request_body.encode("utf-8"))
 
 
 def test_ws_telemetry_channel_is_not_recorded() -> None:

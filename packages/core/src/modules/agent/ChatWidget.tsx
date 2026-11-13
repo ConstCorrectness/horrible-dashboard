@@ -12,11 +12,12 @@
  * See docs/modules/agent-chat.md.
  */
 import {
-  Fragment,
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -46,6 +47,7 @@ import { ModelPicker } from './ModelPicker';
 import { ModePicker } from './ModePicker';
 import { asAgentMode, modeInfo, nextMode, parseModeCommand, type AgentMode } from './modes';
 import { answerAgentQuestion, askAgent, newTurnId } from './orchestrator-client';
+import { createPatchBatcher } from './patch-batcher';
 import { PlanCard } from './PlanCard';
 import { TurnTodos } from './TurnTodos';
 import {
@@ -188,6 +190,108 @@ function DrawerHandle() {
     />
   );
 }
+
+interface TurnRowProps {
+  turn: ChatTurn;
+  index: number;
+  agentId: string;
+  /** The first turn still replayed to the model: draw the compaction seam above it. */
+  boundary: boolean;
+  /** The turn the model is writing right now. */
+  live: boolean;
+  canAct: boolean;
+  onAnswer: (questionId: string, answers: Answers | null) => void;
+  onApprove: (index: number) => void;
+  onKeepPlanning: () => void;
+}
+
+/**
+ * One row of the transcript.
+ *
+ * Memoised, and that is the point of it being a component at all: while a turn
+ * streams, only that turn's object changes — every other row gets the same props
+ * and is skipped. Inline in the pane, each streamed frame re-rendered every row
+ * and re-parsed every answer's markdown, so the cost of one token grew with the
+ * length of the conversation.
+ */
+const TurnRow = memo(function TurnRow({
+  turn,
+  index,
+  agentId,
+  boundary,
+  live,
+  canAct,
+  onAnswer,
+  onApprove,
+  onKeepPlanning,
+}: TurnRowProps) {
+  const assistant = turn.role !== 'system' && turn.role !== 'user';
+  // renderMarkdown escapes its input before adding markup.
+  const html = useMemo(
+    () => (assistant && !turn.plan && turn.text ? renderMarkdown(turn.text) : ''),
+    [assistant, turn.plan, turn.text],
+  );
+  // `legacySteps` builds a new array; the timeline below is handed the same one
+  // until the turn itself changes.
+  const steps = useMemo(() => turn.steps ?? legacySteps(turn), [turn]);
+  return (
+    <>
+      {boundary && (
+        // Where the agent's memory of this conversation starts. Silent
+        // compaction is indistinguishable from an agent that forgot, so the
+        // seam is shown rather than inferred from odd answers.
+        <p className="agent-compacted">Earlier messages are no longer sent to the agent</p>
+      )}
+      {turn.role === 'system' ? (
+        <pre className="agent-system">{turn.text}</pre>
+      ) : turn.role === 'user' ? (
+        <div className="agent-msg agent-msg-user">
+          <div className="agent-bubble">{turn.text}</div>
+        </div>
+      ) : (
+        <div className="agent-msg agent-msg-assistant">
+          {turn.todos && turn.todos.length > 0 && <TurnTodos items={turn.todos} />}
+          <ActivityTimeline steps={steps} live={live} onAnswer={onAnswer} />
+          {turn.plan ? (
+            <PlanCard
+              plan={turn.plan}
+              canAct={canAct}
+              onApprove={() => onApprove(index)}
+              onKeepPlanning={onKeepPlanning}
+            />
+          ) : (
+            html && (
+              <div
+                className="agent-bubble agent-markdown"
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            )
+          )}
+          {live ? (
+            <LiveLine turn={turn} />
+          ) : (
+            (turn.steps?.length ?? 0) > 0 && <WorkedFor turn={turn} />
+          )}
+          {turn.turnId && (
+            <button
+              type="button"
+              className="agent-trace-btn"
+              onClick={() => traceTurn(agentId, turn.turnId!)}
+              title="Show this turn's prompt, rounds and tool calls"
+              aria-label="Trace this turn"
+            >
+              <IconBranch width={12} height={12} aria-hidden="true" />
+              <span>trace</span>
+              {turn.subTurns && turn.subTurns.length > 0 && (
+                <span className="agent-trace-sub">+{turn.subTurns.length}</span>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+});
 
 async function getWorkspaceFiles(): Promise<string[]> {
   try {
@@ -747,8 +851,13 @@ export function ChatWidget({
     ]);
     setFollowTarget(agentIdRef.current);
 
-    const patch = (fn: (t: ChatTurn) => ChatTurn) =>
-      setTurns((prev) => prev.map((t, i) => (i === assistantIndex ? fn(t) : t)));
+    // Streamed text is queued and written once per frame; everything else goes
+    // through `patch`, which applies whatever is queued first — see patch-batcher.ts.
+    const batcher = createPatchBatcher<ChatTurn>((fn) =>
+      setTurns((prev) => prev.map((t, i) => (i === assistantIndex ? fn(t) : t))),
+    );
+    const patch = batcher.now;
+    const patchSoon = batcher.defer;
 
     // Delegated sub-agents stream under the parent turn, as a thought of their own
     // headed with the agent's id.
@@ -760,14 +869,22 @@ export function ChatWidget({
       await askAgent(
         text,
         {
-          onToken: (delta) => patch((t) => applyToken(t, delta, Date.now())),
-          onReasoning: (delta) => patch((t) => applyReasoning(t, delta, Date.now())),
+          onToken: (delta) => {
+            const at = Date.now();
+            patchSoon((t) => applyToken(t, delta, at));
+          },
+          onReasoning: (delta) => {
+            const at = Date.now();
+            patchSoon((t) => applyReasoning(t, delta, at));
+          },
           onToolStart: (call) => patch((t) => applyToolStart(t, call, Date.now())),
           onToolEnd: (end) => patch((t) => applyToolEnd(t, end)),
           onApproval: (callId) => patch((t) => applyApproval(t, callId)),
           onQuestion: (q) => patch((t) => applyQuestion(t, q, Date.now())),
           onTodos: (items) => patch((t) => applyTodos(t, items)),
-          onPlan: (planText) =>
+          onPlan: (planText) => {
+            // Text streamed before the plan has to land before it.
+            batcher.flush();
             // An earlier plan in this chat is replaced by this one: only the newest
             // can be approved.
             setTurns((prev) =>
@@ -778,11 +895,13 @@ export function ChatWidget({
                     ? { ...t, plan: { ...t.plan, status: 'superseded' } }
                     : t,
               ),
-            ),
+            );
+          },
           onDelegateToken: (delegateId, delta) => {
             const head = delegateId && !delegatesSeen.has(delegateId) ? `[${delegateId}] ` : '';
             if (head) delegatesSeen.add(delegateId);
-            patch((t) => applyReasoning(t, head + delta, Date.now()));
+            const at = Date.now();
+            patchSoon((t) => applyReasoning(t, head + delta, at));
           },
           onDelegateStart: (subTurnId, delegateId) =>
             patch((t) => ({
@@ -843,6 +962,19 @@ export function ChatWidget({
     setMode('default');
     void sendText('Approved. Carry out the plan above.', false);
   };
+
+  // The handlers a transcript row takes, with identities that never change: a row
+  // is memoised, and a fresh closure per render would re-render every row on every
+  // streamed frame. They call through to whatever this render defined.
+  const rowHandlers = useRef({ answerQuestionCard, approvePlan });
+  rowHandlers.current = { answerQuestionCard, approvePlan };
+  const onRowAnswer = useCallback(
+    (questionId: string, answers: Answers | null) =>
+      rowHandlers.current.answerQuestionCard(questionId, answers),
+    [],
+  );
+  const onRowApprove = useCallback((index: number) => rowHandlers.current.approvePlan(index), []);
+  const onRowKeepPlanning = useCallback(() => inputRef.current?.focus(), []);
 
   // A turn handed in by another pane (`sendInChat`) goes out once this chat can
   // take it: ready, and not in the middle of a turn.
@@ -982,68 +1114,18 @@ export function ChatWidget({
               </div>
             )}
             {turns.map((turn, i) => (
-              <Fragment key={i}>
-                {i === compactionBoundary && (
-                  // Where the agent's memory of this conversation starts. Silent
-                  // compaction is indistinguishable from an agent that forgot, so the
-                  // seam is shown rather than inferred from odd answers.
-                  <p className="agent-compacted">
-                    Earlier messages are no longer sent to the agent
-                  </p>
-                )}
-                {turn.role === 'system' ? (
-                  <pre className="agent-system">{turn.text}</pre>
-                ) : turn.role === 'user' ? (
-                  <div className="agent-msg agent-msg-user">
-                    <div className="agent-bubble">{turn.text}</div>
-                  </div>
-                ) : (
-                  <div className="agent-msg agent-msg-assistant">
-                    {turn.todos && turn.todos.length > 0 && <TurnTodos items={turn.todos} />}
-                    <ActivityTimeline
-                      steps={turn.steps ?? legacySteps(turn)}
-                      live={busy && i === turns.length - 1}
-                      onAnswer={answerQuestionCard}
-                    />
-                    {turn.plan ? (
-                      <PlanCard
-                        plan={turn.plan}
-                        canAct={!busy && ready}
-                        onApprove={() => approvePlan(i)}
-                        onKeepPlanning={() => inputRef.current?.focus()}
-                      />
-                    ) : (
-                      turn.text && (
-                        <div
-                          className="agent-bubble agent-markdown"
-                          // renderMarkdown escapes its input before adding markup.
-                          dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.text) }}
-                        />
-                      )
-                    )}
-                    {busy && i === turns.length - 1 ? (
-                      <LiveLine turn={turn} />
-                    ) : (
-                      (turn.steps?.length ?? 0) > 0 && <WorkedFor turn={turn} />
-                    )}
-                    {turn.turnId && (
-                      <button
-                        type="button"
-                        className="agent-trace-btn"
-                        onClick={() => traceTurn(agentId, turn.turnId!)}
-                        title="Show this turn's prompt, rounds and tool calls"
-                        aria-label="Trace this turn"
-                      >
-                        <IconBranch width={12} height={12} aria-hidden="true" />
-                        <span>trace</span>
-                        {turn.subTurns && turn.subTurns.length > 0 && (
-                          <span className="agent-trace-sub">+{turn.subTurns.length}</span>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </Fragment>
+              <TurnRow
+                key={i}
+                turn={turn}
+                index={i}
+                agentId={agentId}
+                boundary={i === compactionBoundary}
+                live={busy && i === turns.length - 1}
+                canAct={!busy && ready}
+                onAnswer={onRowAnswer}
+                onApprove={onRowApprove}
+                onKeepPlanning={onRowKeepPlanning}
+              />
             ))}
           </div>
           {showJump && (

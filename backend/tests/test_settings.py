@@ -111,3 +111,58 @@ def test_concurrent_writes_do_not_clobber_each_other(client: TestClient) -> None
 
     values = client.get("/api/settings").json()["values"]
     assert values == {k: k for k in keys}
+
+
+def test_reads_are_served_from_memory_until_the_file_changes(
+    client: TestClient, monkeypatch
+) -> None:
+    """`get_value` runs per request and per socket frame (the telemetry middleware
+    reads its body cap through it), so a repeat read must not touch the disk."""
+    from backend import jsonstore
+    from backend.modules.settings import routes
+
+    client.put("/api/settings/observability.maxBodyChars", json={"value": 123})
+    assert routes.get_value("observability.maxBodyChars", 0) == 123
+
+    reads = 0
+    real = jsonstore.read_text
+
+    def counting(path):
+        nonlocal reads
+        reads += 1
+        return real(path)
+
+    monkeypatch.setattr(jsonstore, "read_text", counting)
+    for _ in range(50):
+        assert routes.get_value("observability.maxBodyChars", 0) == 123
+    assert reads == 0
+
+    # A write through the API is visible on the very next read.
+    client.put("/api/settings/observability.maxBodyChars", json={"value": 456})
+    assert routes.get_value("observability.maxBodyChars", 0) == 456
+
+
+def test_a_write_from_outside_this_process_is_seen(client: TestClient, tmp_path) -> None:
+    """The bundled game server shares settings.json, so the cache cannot assume
+    this process is the only writer: it is keyed on the file, not on our writes."""
+    import json
+
+    from backend.modules.settings import routes
+
+    client.put("/api/settings/a.key", json={"value": "ours"})
+    assert routes.get_value("a.key", None) == "ours"
+
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"a.key": "theirs, and longer"}), encoding="utf-8"
+    )
+    assert routes.get_value("a.key", None) == "theirs, and longer"
+
+
+def test_a_caller_cannot_edit_the_cached_bag(client: TestClient) -> None:
+    from backend.modules.settings import routes
+
+    client.put("/api/settings/a.list", json={"value": ["x"]})
+    routes.get_value("a.list", []).append("leaked")
+    assert routes.get_value("a.list", []) == ["x"]
+    routes._read()["injected"] = True
+    assert routes.get_value("injected", False) is False
