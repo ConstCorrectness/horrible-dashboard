@@ -34,6 +34,10 @@
 //! live HUD*: the card is drawn last and its scrim is the only thing stopping
 //! the ammo counter and the kill feed showing through it.
 //!
+//! `full` and `low` swap the wounded player for one at 100/100 with a full
+//! magazine and one nearly dead with nothing left; `flash` whites the screen
+//! as a flashbang half way through its fade does.
+//!
 //! `radar` draws the radar over a synthetic floor plan with one of every layer
 //! on it — bands, walls, sites, a planted bomb, teammates, a spotted enemy, a
 //! last-known `?`, a gunfire dot mid-arrival, footstep blobs and the own-noise
@@ -322,7 +326,26 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
     healthy.hurt.clear();
     hud.on_self(&healthy);
 
-    let you = wounded();
+    // `full` and `low` are the two ends the default deliberately is not: every
+    // figure at its widest (three digits in both cells of the health panel, a
+    // full magazine), and nearly dead with nothing left — the red state, an
+    // empty armour cell, a dry magazine and the spawn shield's notice.
+    let variant = |name: &str| std::env::args().any(|a| a == name);
+    let mut you = wounded();
+    if variant("full") {
+        you.hp = 100.0;
+        you.armour = 100.0;
+        you.ammo = 20;
+        you.reserve = 120;
+        you.reloading = false;
+        you.hurt.clear();
+    } else if variant("low") {
+        you.hp = 18.0;
+        you.armour = 0.0;
+        you.ammo = 0;
+        you.reloading = false;
+        you.protected = true;
+    }
     hud.on_self(&you);
     hud.on_hits(&you.hits);
     // A kill of ours, so the centre notice is in the picture. It is the one
@@ -549,7 +572,8 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         crosshair: Default::default(),
         radar: show_radar.then(|| radar_map.view()),
         utility: Some(&utility),
-        flash: 0.0,
+        // `flash` draws the tail of a flashbang's fade over everything.
+        flash: if variant("flash") { 0.55 } else { 0.0 },
         console: console_view,
         chat: show_chat.then_some(&chat),
         voice_transmitting: false,

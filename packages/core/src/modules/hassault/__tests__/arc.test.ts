@@ -71,6 +71,7 @@ const PHYSICS: ThrowPhysics = (() => {
     throwSpeed: num(source, 'THROW_SPEED'),
     lobScale: num(source, 'LOB_SCALE'),
     throwInherit: num(source, 'THROW_INHERIT'),
+    throwInheritUp: num(source, 'THROW_INHERIT_UP'),
     throwForward: num(source, 'THROW_FORWARD'),
     throwDrop: num(source, 'THROW_DROP'),
     restSpeed: num(source, 'REST_SPEED'),

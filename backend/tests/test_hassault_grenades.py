@@ -276,11 +276,12 @@ def test_looking_away_from_a_flash_is_the_counter_it_is_supposed_to_be():
     # Standing in the same place, one facing it and one facing away.
     at_it = grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0)
     away = grenades.flash_effect(world, nade, 10, 10, 4.5, math.pi, 0.0)
-    # Facing it is a white-out held for a while; turned round, it never reaches
-    # white and is never held. That gap is the counter.
-    assert at_it.peak == 1.0 and at_it.hold > 0.5
-    assert away.peak < 0.9 and away.hold == 0.0
-    assert at_it.dose > away.dose * 5
+    # Facing it is a white-out held for a long while; turned round, it stops
+    # short of white and is held a fifth as long. That gap is the counter —
+    # Counter-Strike's, which shortens a flash rather than cancelling it.
+    assert at_it.peak == 1.0 and at_it.hold > 2.0
+    assert away.peak < 0.9 and away.hold < at_it.hold * 0.25
+    assert at_it.dose > away.dose * 4
     # Not nothing: a bang at your heels still rattles you, or turning round would
     # be a perfect counter rather than a good one.
     assert away.fade > 0
@@ -348,14 +349,14 @@ def _flash_at(x: float, y: float, z: float = 4.0) -> grenades.Grenade:
         (0, 1.0, True),
         (45, 1.0, True),
         (60, 1.0, True),
-        (85, 0.9, True),
-        (135, 0.5, False),
-        (180, 0.5, False),
+        (85, 1.0, True),
+        (135, 0.8, True),
+        (180, 0.8, True),
     ],
 )
 def test_the_facing_bands_are_sharp_like_counter_strikes(degrees, peak, held):
-    """The counter has to be sharp: on screen is a white-out, off the edge of the
-    screen a flicker, behind you a jolt that never reaches white."""
+    """The counter has to be sharp: on screen is a full white-out, off the edge
+    of the screen a shorter one, behind you one that stops short of white."""
     world = flat_world(64, floor=0, ceil=16)
     nade = _flash_at(20, 10, 4.5)
     effect = grenades.flash_effect(world, nade, 10, 10, 4.5, math.radians(degrees), 0.0)
@@ -363,12 +364,42 @@ def test_the_facing_bands_are_sharp_like_counter_strikes(degrees, peak, held):
     assert (effect.hold > 0) is held
 
 
-def test_the_side_band_is_a_flicker_not_a_blind():
+def test_the_side_band_is_half_a_flash_not_a_flicker():
     world = flat_world(64, floor=0, ceil=16)
     nade = _flash_at(20, 10, 4.5)
     front = grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0)
     side = grenades.flash_effect(world, nade, 10, 10, 4.5, math.radians(85), 0.0)
-    assert side.hold < front.hold * 0.1
+    # Counter-Strike keeps about two thirds of a flash side-on. A side flash
+    # that was a flicker made every flash not thrown dead ahead a wasted one.
+    assert side.hold == pytest.approx(front.hold * 0.5)
+    assert side.fade == pytest.approx(front.fade * 0.7)
+    assert side.peak == 1.0
+
+
+def test_a_flash_across_a_room_is_still_most_of_a_flash():
+    """Half the radius away keeps three quarters of the length, not half."""
+    world = flat_world(96, floor=0, ceil=16)
+    radius = grenades.BY_ID["flash"].radius
+    nade = _flash_at(10 + radius / 2, 10, 4.5)
+    effect = grenades.flash_effect(world, nade, 10, 10, 4.5, 0.0, 0.0)
+    assert effect.peak == 1.0
+    assert effect.hold == pytest.approx(grenades.FLASH_HOLD_MAX * 0.75)
+    assert effect.fade == pytest.approx(grenades.FLASH_FADE_MAX * 0.75)
+
+
+def test_a_jump_throw_is_carried_much_further_than_a_standing_one():
+    """Rising takes `THROW_INHERIT_UP` of the jump; falling takes the gentle one."""
+    from backend.modules.hassault import physics
+
+    still = grenades.throw_velocity(0.0, 0.3)
+    jumped = grenades.throw_velocity(0.0, 0.3, inherit=(0.0, 0.0, physics.JUMP_SPEED))
+    assert jumped[2] - still[2] == pytest.approx(
+        physics.JUMP_SPEED * grenades.THROW_INHERIT_UP
+    )
+    # Time aloft over flat ground is 2 * vz / g, so range scales with vz.
+    assert jumped[2] > still[2] * 3
+    falling = grenades.throw_velocity(0.0, 0.3, inherit=(0.0, 0.0, -20.0))
+    assert falling[2] - still[2] == pytest.approx(-20.0 * grenades.THROW_INHERIT)
 
 
 def test_distance_shortens_a_flash_but_does_not_grey_it():

@@ -26,8 +26,8 @@
 export const FLASH_BLIND = 0.6;
 
 /**
- * How white the screen is right now, 0..1. Held at `peak`, then a smoothstep
- * down over the fade. Port of `grenades.flash_alpha`.
+ * How white the screen is right now, 0..1. Held at `peak`, then an ease-out
+ * down over the fade: still three quarters white half way through. Port of `grenades.flash_alpha`.
  */
 export function flashAlpha(
   peak: number,
@@ -39,7 +39,7 @@ export function flashAlpha(
   if (holdLeft > 0) return Math.min(1, peak);
   if (fadeLeft <= 0 || fadeTotal <= 0) return 0;
   const t = Math.max(0, Math.min(1, fadeLeft / fadeTotal));
-  return Math.min(1, peak * t * t * (3 - 2 * t));
+  return Math.min(1, peak * t * (2 - t));
 }
 
 /** The four numbers the server sends, as seconds left. */

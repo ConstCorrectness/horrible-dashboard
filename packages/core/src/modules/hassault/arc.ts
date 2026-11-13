@@ -4,7 +4,7 @@
  * ## Why this exists at all
  *
  * The server has *always* added the thrower's own velocity to a throw
- * (`grenades.THROW_INHERIT`, 0.6 of it) — running forward sends a grenade
+ * (`grenades.THROW_INHERIT`, 0.6 of it, and 1.25 of a jump) — running forward sends a grenade
  * further, jumping sends it higher. Nothing on screen said so, so the feature
  * was real and invisible: the only way to learn it was to notice that grenades
  * sometimes went further than expected and guess why.
@@ -117,10 +117,13 @@ export function throwVelocity(
   const dx = Math.cos(yaw) * cp;
   const dy = Math.sin(yaw) * cp;
   const dz = Math.sin(pitch);
+  // Rising takes more of the jump than running does of the run: the jump-throw
+  // (`grenades.THROW_INHERIT_UP`).
+  const up = physics.throwInheritUp || physics.throwInherit;
   return [
     dx * speed + inherit[0] * physics.throwInherit,
     dy * speed + inherit[1] * physics.throwInherit,
-    dz * speed + inherit[2] * physics.throwInherit,
+    dz * speed + inherit[2] * (inherit[2] > 0 ? up : physics.throwInherit),
   ];
 }
 
