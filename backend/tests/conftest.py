@@ -87,12 +87,6 @@ def reset_process_global_stores():
     test's data is visible to all the tests after it, and the failure surfaces
     somewhere else entirely as an ordering-dependent flake.
 
-    That is exactly how `test_bios_reach_the_prompt_when_known` failed: an earlier
-    test in `test_clubhouse_voice_routes.py` legitimately exercised the people
-    store with a member named Ada carrying no bio, and `voice.render_bios`
-    deliberately prefers learned memory over a static bio — so the later test's
-    room, whose Ada *does* have a bio, rendered the remembered line instead.
-
     Imported lazily and only when already loaded: a test that never touches
     clubhouse should not pay for importing it, and importing modules from a
     blanket autouse fixture is how a fast suite becomes a slow one.
@@ -100,10 +94,6 @@ def reset_process_global_stores():
     import sys
 
     yield
-
-    memory = sys.modules.get("backend.modules.clubhouse.people_memory")
-    if memory is not None:
-        memory.people_memory_store.reset()
 
     # The port learned from the first request. `TestClient` reports its fake server
     # as `("testserver", 80)`, so without this every test after one that drove the

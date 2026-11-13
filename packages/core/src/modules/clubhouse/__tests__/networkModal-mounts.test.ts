@@ -82,18 +82,27 @@ describe('the network inspector', () => {
      * paused (the state the panel opens in) the button was not on the page at all.
      * Nothing about UDP, PubNub or Agora depends on the agent running.
      *
-     * Asserted by ordering: the row is hoisted above the `agentEnabled` block, so
-     * its index must precede that block's.
+     * The panel now lives in `AgentSidebar.tsx`, where the row is a direct child of
+     * the scrolling body: nothing is allowed to wrap it, and it has to be wired to
+     * the pane's toggle. Asserted against that file's source for the same reason as
+     * the rest of this suite.
      */
-    const inspect = SRC.indexOf('📡 Protocols & Media Telemetry');
-    expect(inspect).toBeGreaterThan(-1);
+    const sidebar = readFileSync(
+      fileURLToPath(new URL('../AgentSidebar.tsx', import.meta.url)),
+      'utf8',
+    );
+    const row = sidebar.indexOf('Media telemetry');
+    expect(row).toBeGreaterThan(-1);
 
-    // Anchored to the start of a line, because the comment above the hoisted row
-    // *quotes* `{agentEnabled && (` — an unanchored indexOf matches that prose and
-    // compares the row against a sentence about the row.
-    const blocks = [...SRC.matchAll(/^[ \t]*\{agentEnabled && \(/gm)].map((m) => m.index!);
-    const gate = blocks.find((i) => i > SRC.search(/^[ \t]*\{!agentEnabled && \(/m));
-    expect(gate).toBeDefined();
-    expect(inspect).toBeLessThan(gate!);
+    // The row's opening tag, and the characters just before it. A gate wrapping it
+    // would end in `&& (` (or `? (`) right there; its previous sibling would not.
+    const open = sidebar.lastIndexOf('className="ag-notice"', row);
+    const before = sidebar.slice(Math.max(0, open - 160), open);
+    expect(before).not.toMatch(/(?:&&|\?)\s*\(\s*<div\s*$/);
+    expect(before).toContain('<LogCard');
+
+    // And the button is the pane's toggle, not a local no-op.
+    expect(sidebar).toContain('onClick={props.onToggleNetwork}');
+    expect(SRC).toContain('onToggleNetwork={() => setShowNetworkModal((open) => !open)}');
   });
 });

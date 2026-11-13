@@ -2,7 +2,8 @@
 
 These cover the wiring the pure tests in `test_clubhouse_voice.py` cannot: that a
 turn reaches the model with the room in it, that a refusal is reported rather than
-silently 200-ing with an empty body, and that the session survives across requests.
+silently 200-ing with an empty body, that the session survives across requests, and
+that every decision lands in the debug log.
 """
 
 from __future__ import annotations
@@ -71,9 +72,14 @@ def _turn(client: TestClient, text: str, **kw) -> dict:
     return res.json()
 
 
+def _events(client: TestClient, channel: str = "c1") -> list[dict]:
+    res = client.get("/api/clubhouse/voice/state", params={"channel": channel})
+    return res.json()["events"]
+
+
 def test_an_addressed_utterance_gets_a_reply(client, captured):
     _enable(client)
-    body = _turn(client, "agent, what's the topic?")
+    body = _turn(client, "Sidekick, what's the topic?")
     assert body["spoke"] is True
     assert body["reply"] == "Sure, happy to help."
 
@@ -82,7 +88,7 @@ def test_the_room_reaches_the_model(client, captured):
     """The whole point of the rewrite: the agent is told who is here rather than
     guessing. If this passes vacuously the feature does not exist."""
     _enable(client)
-    _turn(client, "agent, who is here?")
+    _turn(client, "Sidekick, who is here?")
     # The room rides the *turn*, not the system message: it changes every turn, so
     # pinning it ahead of a twelve-turn history described a room twelve turns stale.
     turn = captured[0][-1]["content"]
@@ -105,16 +111,29 @@ def test_the_agent_still_remembers_turns_it_stayed_out_of(client, captured):
     a question the room already answered."""
     _enable(client)
     _turn(client, "I think compilers are neat")
-    _turn(client, "agent, what were we discussing?")
+    _turn(client, "Sidekick, what were we discussing?")
     replayed = [m["content"] for m in captured[0]]
     assert any("compilers are neat" in c for c in replayed)
+
+
+def test_each_line_the_agent_overheard_reaches_the_model_as_its_own_message(
+    client, captured
+):
+    _enable(client)
+    _turn(client, "first thing", speaker="Ada")
+    _turn(client, "second thing", speaker="Ada")
+    _turn(client, "Sidekick, thoughts?", speaker="Ada")
+    messages = captured[0]
+    assert [m["role"] for m in messages] == ["system", "user", "user", "user"]
+    assert messages[1]["content"] == "Ada: first thing"
+    assert messages[2]["content"] == "Ada: second thing"
 
 
 def test_memory_persists_across_requests(client, captured):
     """The session is keyed by channel, so a pane reload rejoins the conversation."""
     _enable(client)
-    _turn(client, "agent, hello")
-    _turn(client, "agent, again")
+    _turn(client, "Sidekick, hello")
+    _turn(client, "Sidekick, again")
     # Second call replays the first exchange: room turn + the agent's own reply.
     roles = [m["role"] for m in captured[1]]
     assert roles == ["system", "user", "assistant", "user"]
@@ -131,7 +150,7 @@ def test_force_bypasses_the_posture_gate(client, captured):
 def test_force_does_not_bypass_the_echo_check(client, captured):
     """An echo is a bug at any posture — the agent answering its own voice."""
     _enable(client)
-    _turn(client, "agent, hello")
+    _turn(client, "Sidekick, hello")
     body = _turn(client, "Sure, happy to help.", force=True)
     assert body["spoke"] is False
     assert body["reason"] == "own speech"
@@ -147,131 +166,99 @@ def test_a_speaker_id_matching_us_is_our_own_speech(client, captured):
 def test_help_lists_the_commands_without_calling_the_model(client, captured):
     _enable(client)
     body = _turn(client, "/agent")
-    assert "/agent search" in (body["notice"] or "")
+    assert "/agent forget" in (body["notice"] or "")
+    assert captured == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/agent play lofi",
+        "/agent search who won",
+        "/agent whois @ada",
+        "/agent topic x",
+    ],
+)
+def test_a_removed_command_is_reported_not_answered_in_character(
+    client, captured, command
+):
+    """The agent has no tools, no memory of people and no moderation: those commands
+    used to act, and now say they don't exist instead of reaching the model."""
+    _enable(client)
+    body = _turn(client, command)
+    assert body["spoke"] is False
+    assert body["reason"] == "unknown command"
     assert captured == []
 
 
 def test_forget_clears_the_conversation(client, captured):
     _enable(client)
-    _turn(client, "agent, hello")
+    _turn(client, "Sidekick, hello")
     assert client.get("/api/clubhouse/voice/state?channel=c1").json()["turns"]
     _turn(client, "/agent forget")
     assert client.get("/api/clubhouse/voice/state?channel=c1").json()["turns"] == []
 
 
-def test_a_moderator_command_is_refused_for_a_non_moderator(
-    client, captured, monkeypatch
-):
-    """The check reads the room snapshot, and `Sidekick` is a speaker, not a mod."""
-    _enable(client)
-    body = _turn(client, "/agent topic Something else")
-    assert body["notice"] == "Only moderators can do that."
-
-
-def test_a_moderator_command_reaches_the_clubhouse_api(client, captured, monkeypatch):
-    calls: list[tuple] = []
-
-    async def fake_topic(channel, body):
-        calls.append((channel, body.topic))
-        return {}
-
-    monkeypatch.setattr(
-        "backend.modules.clubhouse.routes.update_channel_topic", fake_topic
-    )
-    _enable(client)
-    room = {
-        **ROOM,
-        "members": [{"user_id": 9, "name": "Sidekick", "is_moderator": True}],
-    }
-    res = client.post(
-        "/api/clubhouse/voice/turn",
-        json={"channel": "c1", "text": "/agent topic Type systems", "room": room},
-    )
-    assert res.json()["notice"] == "Room topic set to: Type systems"
-    assert calls == [("c1", "Type systems")]
-
-
-def test_search_with_no_results_says_so_instead_of_inventing(
-    client, captured, monkeypatch
-):
-    """The exact failure `/agent search` used to have by design: it asked the model
-    to 'perform a simulated web search', which is a hallucination with a prompt."""
-
-    async def nothing(query, config):
-        return None
-
-    monkeypatch.setattr(R, "gather_context", nothing)
-    _enable(client)
-    body = _turn(client, "/agent search who won in 1998")
-    assert body["spoke"] is False
-    assert "Couldn't find anything" in (body["notice"] or "")
-    assert captured == []
-
-
-def test_retrieved_context_is_injected_into_the_prompt(client, captured, monkeypatch):
-    async def found(query, config):
-        return f"You looked these up just now: France won the 1998 World Cup. ({query})"
-
-    monkeypatch.setattr(R, "gather_context", found)
-    _enable(client)
-    body = _turn(client, "/agent search who won in 1998")
-    assert body["spoke"] is True
-    assert body["retrieved"] is True
-    assert "France won the 1998 World Cup" in captured[0][-1]["content"]
+def test_the_removed_endpoints_are_gone(client):
+    assert client.get("/api/clubhouse/voice/music/s1").status_code == 404
+    assert client.get("/api/clubhouse/people-memory").status_code == 404
 
 
 def test_config_round_trips(client):
-    _enable(client, posture="conversational", wakeWords=["hey you"], cooldownS=3)
+    _enable(
+        client,
+        posture="conversational",
+        cooldownS=3,
+        ttsVolume="+25%",
+        endpointingDelayMs=900,
+        allowBargeIn=False,
+    )
     got = client.get("/api/clubhouse/voice/config?channel=c1").json()
     assert got["posture"] == "conversational"
-    assert got["wakeWords"] == ["hey you"]
     assert got["cooldownS"] == 3
+    # Dropped by `to_dict` until 2026-11-11, so the server's copy disagreed with the
+    # pane's and the volume looked like it never saved.
+    assert got["ttsVolume"] == "+25%"
+    assert got["endpointingDelayMs"] == 900
+    assert got["allowBargeIn"] is False
 
 
-def test_a_dropped_partial_leaves_no_trace_in_the_history(client, captured):
-    """The finished utterance follows seconds later and contains the fragment.
-
-    Remembering both is how the model ends up answering a sentence that was cut off
-    mid-word, having seen it twice.
-    """
-    client.post(
-        "/api/clubhouse/voice/config",
-        json={"channel": "c1", "config": {"enabled": True, "posture": "always"}},
+def test_a_config_saved_by_an_older_pane_still_loads(client):
+    """Wake words, eagerness, the filler, the silence timeout and the interject
+    interval are gone. Their keys must not break a config that still carries them, and
+    the interject posture becomes the nearest one that remains."""
+    _enable(
+        client,
+        posture="interject",
+        wakeWords=["hey you"],
+        turnEagerness="fast",
+        thinkingFiller=True,
+        silenceTimeoutS=30,
+        interjectAfterS=4,
+        retrieval="auto",
+        library="default",
     )
-    dropped = client.post(
-        "/api/clubhouse/voice/turn",
-        json={
-            "channel": "c1",
-            "text": "so the thing about compilers is",
-            "speaker": "Ada",
-            "partial": True,
-            "room": ROOM,
-        },
-    ).json()
-    assert dropped["spoke"] is False
-    assert dropped["reason"] == "waiting for a pause"
-
-    state = client.get("/api/clubhouse/voice/state", params={"channel": "c1"}).json()
-    assert state["turns"] == []
+    got = client.get("/api/clubhouse/voice/config?channel=c1").json()
+    assert got["posture"] == "conversational"
+    for dead in (
+        "wakeWords",
+        "turnEagerness",
+        "thinkingFiller",
+        "silenceTimeoutS",
+        "interjectAfterS",
+        "retrieval",
+        "library",
+    ):
+        assert dead not in got
 
 
-def test_the_interject_posture_answers_a_partial(client, captured):
-    client.post(
-        "/api/clubhouse/voice/config",
-        json={"channel": "c2", "config": {"enabled": True, "posture": "interject"}},
-    )
-    res = client.post(
-        "/api/clubhouse/voice/turn",
-        json={
-            "channel": "c2",
-            "text": "so the thing about compilers is",
-            "speaker": "Ada",
-            "partial": True,
-            "room": ROOM,
-        },
-    ).json()
-    assert res["spoke"] is True
-    assert res["reply"] == "Sure, happy to help."
+def test_junk_in_a_config_falls_back_instead_of_failing(client):
+    _enable(client, temperature="", maxTokens="lots", cooldownS=-5, memoryTurns=9999)
+    got = client.get("/api/clubhouse/voice/config?channel=c1").json()
+    assert got["temperature"] == 0.7
+    assert got["maxTokens"] == V.DEFAULT_MAX_TOKENS
+    assert got["cooldownS"] == 0
+    assert got["memoryTurns"] == 40
 
 
 def test_turn_with_config_payload_syncs_session(client, captured):
@@ -281,7 +268,7 @@ def test_turn_with_config_payload_syncs_session(client, captured):
         "/api/clubhouse/voice/turn",
         json={
             "channel": "c_sync",
-            "text": "agent, what is truth?",
+            "text": "Sidekick, what is truth?",
             "room": ROOM,
             "config": {
                 "enabled": True,
@@ -302,58 +289,18 @@ def test_turn_with_config_payload_syncs_session(client, captured):
     assert state["config"]["persona"] == custom_persona
 
 
-def test_a_plain_reply_costs_exactly_one_generation(client, captured):
-    _enable(client)
-    _turn(client, "agent, hello")
-    assert len(captured) == 1
-
-
-def test_a_tool_call_runs_and_its_result_reaches_a_second_generation(
-    client, monkeypatch
-):
+def test_a_reply_costs_exactly_one_generation_and_offers_no_tools(client, monkeypatch):
     calls: list[tuple[list[dict], list | None]] = []
 
     async def fake_generate(messages, config, tools=None):
         calls.append((messages, tools))
-        if len(calls) == 1:
-            call = P.ToolCall(
-                id="1", name="play_music", arguments={"query": "Africa by Toto"}
-            )
-            return P.ChatResult({"role": "assistant", "content": ""}, [call], "")
-        return _said("Putting on Africa now.")
-
-    async def fake_play(query):
-        action = {"type": "music.play", "songId": "s1", "title": query, "ready": True}
-        return f"Now playing '{query}'.", action
+        return _said("Hello.")
 
     monkeypatch.setattr(R, "generate_reply", fake_generate)
-    monkeypatch.setattr(R, "play_music", fake_play)
     _enable(client)
-    body = _turn(client, "agent, play Africa by Toto")
-
-    assert body["reply"] == "Putting on Africa now."
-    assert body["actions"] == [
-        {"type": "music.play", "songId": "s1", "title": "Africa by Toto", "ready": True}
-    ]
-    assert "play_music" in [t["function"]["name"] for t in calls[0][1]]
-    assert "Now playing 'Africa by Toto'." in calls[1][0][-1]["content"]
-    # The follow-up offers no tools, so it has to speak rather than call again.
-    assert not calls[1][1]
-    roles = [m["role"] for m in calls[1][0]]
-    assert roles[-1] == "user" and roles.count("user") == 1
-
-
-def test_agent_play_command_needs_no_model(client, captured, monkeypatch):
-    async def fake_play(query):
-        action = {"type": "music.play", "songId": "s2", "title": query, "ready": False}
-        return "Found it, downloading.", action
-
-    monkeypatch.setattr(R, "play_music", fake_play)
-    _enable(client)
-    body = _turn(client, "/agent play lofi beats")
-    assert body["notice"] == "Found it, downloading."
-    assert body["actions"][0]["songId"] == "s2"
-    assert captured == []
+    _turn(client, "Sidekick, hello")
+    assert len(calls) == 1
+    assert not calls[0][1]
 
 
 def test_the_first_name_wakes_the_agent_through_the_route(client, captured):
@@ -364,78 +311,6 @@ def test_the_first_name_wakes_the_agent_through_the_route(client, captured):
         json={"channel": "c1", "text": "Horrible, you there?", "room": room},
     ).json()
     assert body["spoke"] is True
-
-
-def test_music_volume_is_clamped():
-    said, action = R.music_control("volume", 5)
-    assert action == {"type": "music.volume", "value": 1.0}
-    assert R.music_control("rewind")[1] is None
-
-
-def test_the_music_status_route_reports_a_download(client, monkeypatch):
-    def fake_get(song_id):
-        if song_id != "s1":
-            return None
-        return {"id": "s1", "status": "downloading", "title": "Africa", "error": None}
-
-    monkeypatch.setattr("backend.modules.music.library.get_track", fake_get)
-    assert client.get("/api/clubhouse/voice/music/s1").json()["status"] == "downloading"
-    assert client.get("/api/clubhouse/voice/music/nope").status_code == 404
-
-
-@pytest.fixture
-def recorded(monkeypatch) -> list[tuple[list[dict], list | None]]:
-    calls: list[tuple[list[dict], list | None]] = []
-
-    async def fake_generate(messages, config, tools=None):
-        calls.append((messages, tools))
-        return _said("Done.")
-
-    monkeypatch.setattr(R, "generate_reply", fake_generate)
-    return calls
-
-
-def _say(client: TestClient, text: str, **room) -> dict:
-    res = client.post(
-        "/api/clubhouse/voice/turn",
-        json={"channel": "c1", "text": text, "room": {**ROOM, **room}},
-    )
-    assert res.status_code == 200, res.text
-    return res.json()
-
-
-def test_a_clear_music_command_is_one_generation_with_the_action_taken(
-    client, recorded
-):
-    _enable(client)
-    body = _say(client, "agent, stop the music", music="Africa")
-    assert body["actions"] == [{"type": "music.stop"}]
-    assert len(recorded) == 1 and not recorded[0][1]
-    assert "Music stopped." in recorded[0][0][-1]["content"]
-
-
-def test_stopping_music_when_none_is_playing_says_so(client, recorded):
-    _enable(client)
-    body = _say(client, "agent, stop the music")
-    assert body["actions"] == []
-    assert "Nothing is playing right now." in recorded[0][0][-1]["content"]
-
-
-def test_turn_it_down_is_a_relative_step(client, recorded):
-    _enable(client)
-    body = _say(client, "agent, turn it down a bit", music="Africa")
-    assert body["actions"] == [{"type": "music.volume", "step": -R.VOLUME_STEP}]
-
-
-def test_look_up_phrasing_runs_the_search(client, recorded, monkeypatch):
-    async def found(query, config):
-        return f"You looked these up just now:\n- {query}: Argentina won."
-
-    monkeypatch.setattr(R, "gather_context", found)
-    _enable(client)
-    _say(client, "agent, look up who won the 2022 World Cup final")
-    assert len(recorded) == 1 and not recorded[0][1]
-    assert "Argentina won." in recorded[0][0][-1]["content"]
 
 
 def test_an_acknowledgement_of_the_prompt_is_neither_spoken_nor_remembered(
@@ -449,11 +324,86 @@ def test_an_acknowledgement_of_the_prompt_is_neither_spoken_nor_remembered(
 
     monkeypatch.setattr(R, "generate_reply", acknowledge)
     _enable(client)
-    body = _turn(client, "agent, hello")
+    body = _turn(client, "Sidekick, hello")
     assert body["spoke"] is False
     assert "acknowledged the prompt" in body["reason"]
     turns = client.get("/api/clubhouse/voice/state?channel=c1").json()["turns"]
     assert [t["role"] for t in turns] == ["room"]
+
+
+# --- the debug log -----------------------------------------------------------------
+
+
+def test_every_decision_is_a_row_in_the_log(client, captured):
+    """ "Why did it not answer Chaya?" has to be a row to read."""
+    _enable(client)
+    _turn(client, "just chatting", speaker="Chaya")
+    _turn(client, "Sidekick, hello", speaker="Chaya")
+    skipped, replied = _events(client)
+    assert (skipped["kind"], skipped["reason"], skipped["speaker"]) == (
+        "skipped",
+        "not addressed",
+        "Chaya",
+    )
+    assert skipped["text"] == "just chatting"
+    assert replied["kind"] == "replied"
+    assert replied["text"] == "Sure, happy to help."
+    assert replied["ms"] is not None and replied["ms"] >= 0
+
+
+def test_a_failed_generation_is_logged_with_its_cause(client, monkeypatch):
+    async def boom(messages, config, tools=None):
+        raise RuntimeError("the model fell over")
+
+    monkeypatch.setattr(R, "generate_reply", boom)
+    _enable(client)
+    body = _turn(client, "Sidekick, hello")
+    assert body["reason"] == "model error"
+    last = _events(client)[-1]
+    assert last["kind"] == "error"
+    assert last["reason"] == "model error"
+    assert "the model fell over" in last["detail"]
+
+
+def test_a_dropped_reply_is_logged_as_silent(client, monkeypatch):
+    async def nothing(messages, config, tools=None):
+        return _said("")
+
+    monkeypatch.setattr(R, "generate_reply", nothing)
+    _enable(client)
+    _turn(client, "Sidekick, hello")
+    last = _events(client)[-1]
+    assert (last["kind"], last["reason"]) == ("silent", "model returned nothing")
+
+
+def test_a_command_and_a_memory_reset_are_logged(client, captured):
+    _enable(client)
+    _turn(client, "/agent forget")
+    client.post("/api/clubhouse/voice/reset", json={"channel": "c1"})
+    kinds = [(e["kind"], e["reason"]) for e in _events(client)]
+    assert kinds == [("command", "forgot"), ("command", "memory cleared")]
+
+
+def test_the_log_is_bounded(client, captured):
+    _enable(client, posture="always")
+    for i in range(V.VoiceSession(channel="x").events.maxlen + 10):
+        _turn(client, f"line {i}", speaker="Ada", force=False)
+    session = V.session_for("c1")
+    assert len(session.events) == session.events.maxlen
+    # And the route only ever returns the newest handful.
+    assert len(_events(client)) <= 60
+
+
+def test_the_log_is_also_written_to_the_backend_log(client, captured, caplog):
+    import logging
+
+    _enable(client)
+    with caplog.at_level(logging.INFO, logger="backend.modules.clubhouse.voice"):
+        _turn(client, "just chatting", speaker="Chaya")
+    assert any(
+        "voice[c1] skipped" in r.getMessage() and "not addressed" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 # --- health ------------------------------------------------------------------------

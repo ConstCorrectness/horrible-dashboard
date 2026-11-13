@@ -8,49 +8,44 @@
  */
 import { apiUrl } from '../../origin';
 
-export type VoicePosture = 'addressed' | 'conversational' | 'always' | 'interject';
-export type RetrievalMode = 'off' | 'command' | 'auto';
-
-export type TurnEagerness = 'fast' | 'normal' | 'patient';
+/**
+ * When the agent answers.
+ *
+ * - `addressed`: only when someone says its name.
+ * - `conversational`: also joins in, but waits `cooldownS` between replies.
+ * - `always`: answers every line, no waiting.
+ */
+export type VoicePosture = 'addressed' | 'conversational' | 'always';
 
 export interface VoiceAgentConfig {
   enabled: boolean;
   posture: VoicePosture;
-  wakeWords: string[];
   persona: string;
   temperature: number;
   maxTokens: number;
   memoryTurns: number;
+  /** Seconds between unprompted replies. Only the `conversational` posture reads it. */
   cooldownS: number;
   respondToVoice: boolean;
   respondToChat: boolean;
-  retrieval: RetrievalMode;
-  library: string;
   speak: boolean;
   postToChat: boolean;
   robotEmojiPrefix: boolean;
   ttsVoice: string;
   ttsRate: string;
   ttsPitch: string;
-  ttsVolume?: string;
-  model?: string;
-  turnEagerness: TurnEagerness;
+  ttsVolume: string;
+  /** Per-room model override. Blank means the dashboard's own agent model. */
+  model: string;
+  /** How long a pause has to last before it ends someone's sentence. */
   endpointingDelayMs: number;
-  thinkingFiller: boolean;
-  silenceTimeoutS: number;
+  /** Whether a person starting to talk stops the agent mid-sentence. */
   allowBargeIn: boolean;
-  /**
-   * Seconds one person must hold the floor before the agent may cut in mid-sentence.
-   * Only consulted under the `interject` posture — every other posture waits for the
-   * pause, so this is inert rather than merely unused there.
-   */
-  interjectAfterS: number;
 }
 
 export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   enabled: false,
   posture: 'addressed',
-  wakeWords: ['agent', 'assistant', 'bot'],
   persona:
     'You are a participant in a live Clubhouse audio room. You are speaking out loud to a room of people, not writing.',
   temperature: 0.7,
@@ -59,8 +54,6 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   cooldownS: 6,
   respondToVoice: true,
   respondToChat: false,
-  retrieval: 'command',
-  library: 'default',
   speak: true,
   postToChat: true,
   robotEmojiPrefix: false,
@@ -69,13 +62,81 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   ttsPitch: '+0Hz',
   ttsVolume: '+0%',
   model: '',
-  turnEagerness: 'normal',
   endpointingDelayMs: 750,
-  thinkingFiller: true,
-  silenceTimeoutS: 0,
   allowBargeIn: true,
-  interjectAfterS: 6,
 };
+
+/** Bounds the panel offers for the pause that ends a sentence (ms). */
+export const ENDPOINTING_RANGE = { min: 400, max: 1500, step: 50 } as const;
+
+const POSTURES: readonly VoicePosture[] = ['addressed', 'conversational', 'always'];
+
+function clamp(value: unknown, fallback: number, lo: number, hi: number): number {
+  const n = typeof value === 'string' && value.trim() === '' ? NaN : Number(value);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+}
+
+/**
+ * Turn whatever was saved (or pushed by an older pane) into a valid config.
+ *
+ * The saved shape has changed: wake words, "turn eagerness", the thinking filler, the
+ * silence timeout, the interject posture and its interval, and the look-up settings
+ * are gone. A config written before that carries those keys; they are dropped here,
+ * not carried forward, and the interject posture becomes the nearest one that remains.
+ * Anything missing or malformed falls back to the default rather than throwing, since
+ * this reads `localStorage`, which anyone can have hand-edited.
+ */
+export function normalizeVoiceConfig(raw: unknown): VoiceAgentConfig {
+  const d = DEFAULT_VOICE_CONFIG;
+  const r: Record<string, unknown> =
+    raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const str = (v: unknown, fallback: string): string =>
+    typeof v === 'string' ? v : fallback;
+  const bool = (v: unknown, fallback: boolean): boolean =>
+    typeof v === 'boolean' ? v : fallback;
+
+  let posture = str(r.posture, d.posture);
+  if (posture === 'interject') posture = 'conversational';
+
+  // An older config expressed the pause as a "turn eagerness" preset and only wrote the
+  // number when it was changed by hand.
+  const presetDelay = { fast: 400, normal: 750, patient: 1200 } as const;
+  const legacyDelay =
+    typeof r.turnEagerness === 'string'
+      ? presetDelay[r.turnEagerness as keyof typeof presetDelay]
+      : undefined;
+
+  return {
+    enabled: bool(r.enabled, d.enabled),
+    posture: (POSTURES as readonly string[]).includes(posture)
+      ? (posture as VoicePosture)
+      : d.posture,
+    persona: str(r.persona, d.persona),
+    temperature: clamp(r.temperature, d.temperature, 0, 2),
+    maxTokens: Math.round(clamp(r.maxTokens, d.maxTokens, 20, 1000)),
+    memoryTurns: Math.round(clamp(r.memoryTurns, d.memoryTurns, 0, 40)),
+    cooldownS: clamp(r.cooldownS, d.cooldownS, 0, 120),
+    respondToVoice: bool(r.respondToVoice, d.respondToVoice),
+    respondToChat: bool(r.respondToChat, d.respondToChat),
+    speak: bool(r.speak, d.speak),
+    postToChat: bool(r.postToChat, d.postToChat),
+    robotEmojiPrefix: bool(r.robotEmojiPrefix, d.robotEmojiPrefix),
+    ttsVoice: str(r.ttsVoice, d.ttsVoice) || d.ttsVoice,
+    ttsRate: str(r.ttsRate, d.ttsRate) || d.ttsRate,
+    ttsPitch: str(r.ttsPitch, d.ttsPitch) || d.ttsPitch,
+    ttsVolume: str(r.ttsVolume, d.ttsVolume) || d.ttsVolume,
+    model: str(r.model, d.model).trim(),
+    endpointingDelayMs: Math.round(
+      clamp(
+        r.endpointingDelayMs ?? legacyDelay,
+        d.endpointingDelayMs,
+        ENDPOINTING_RANGE.min,
+        ENDPOINTING_RANGE.max,
+      ),
+    ),
+    allowBargeIn: bool(r.allowBargeIn, d.allowBargeIn),
+  };
+}
 
 /** One member of the room as the pane currently sees them. */
 export interface VoiceRoomMember {
@@ -95,32 +156,13 @@ export interface VoiceRoom {
   members: VoiceRoomMember[];
   my_user_id: number | null;
   my_name: string;
-  /** Title of the music the agent is playing into the room, if any. */
-  music?: string | null;
 }
-
-/** Something the server asks the pane to do besides speaking. */
-export type VoiceAction =
-  | { type: 'music.play'; songId: string; title: string; ready: boolean }
-  | { type: 'music.stop' | 'music.pause' | 'music.resume' }
-  /** `value` sets an absolute level (0–1); `step` moves it ("louder" / "quieter"). */
-  | { type: 'music.volume'; value?: number; step?: number };
 
 export interface VoiceTurnResult {
   spoke: boolean;
   reason: string;
   reply: string;
   notice: string | null;
-  retrieved: boolean;
-  filler?: string | null;
-  actions?: VoiceAction[];
-}
-
-export interface MusicStatus {
-  song_id: string;
-  status: string;
-  title: string;
-  error: string | null;
 }
 
 /**
@@ -139,18 +181,6 @@ export function chatSpeakerLabel(comment: {
   if (name && handle) return `${name} (@${handle})`;
   if (handle) return `@${handle}`;
   return name || undefined;
-}
-
-/** Where a song the agent resolved is served from (the music library's media route). */
-export function musicUrl(songId: string): string {
-  return apiUrl(`/api/music/media/${encodeURIComponent(songId)}`);
-}
-
-/** Whether a song the agent asked for has finished downloading. */
-export async function getMusicStatus(songId: string): Promise<MusicStatus> {
-  const res = await fetch(apiUrl(`/api/clubhouse/voice/music/${encodeURIComponent(songId)}`));
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as MusicStatus;
 }
 
 export interface VoiceStateTurn {
@@ -189,12 +219,6 @@ export function takeVoiceTurn(params: {
   source?: 'voice' | 'chat' | 'nudge';
   /** A human pressed "Speak Now" — bypasses posture and cooldown, not echo checks. */
   force?: boolean;
-  /**
-   * The speaker has not stopped talking — this was flushed mid-breath. The server
-   * drops it unless the room is on the `interject` posture, and never remembers it:
-   * the finished utterance follows and contains it.
-   */
-  partial?: boolean;
   room: VoiceRoom;
   /** Active client-side agent config to ensure server session stays perfectly synchronized. */
   config?: VoiceAgentConfig;
@@ -211,7 +235,6 @@ export function takeVoiceTurn(params: {
       speaker_id: params.speakerId ?? null,
       source: params.source ?? 'voice',
       force: params.force ?? false,
-      partial: params.partial ?? false,
       room: params.room,
       config: params.config,
       is_self: params.isSelf,
@@ -235,9 +258,30 @@ export function resetVoiceMemory(
   });
 }
 
-export async function getVoiceState(
-  channel: string,
-): Promise<{ config: VoiceAgentConfig; turns: VoiceStateTurn[]; lastReplyTs: number | null }> {
+/**
+ * One row of the agent's debug log. The server writes these at each decision (the gate
+ * said no, a reply was spoken, a reply was thrown away, the model failed); the pane adds
+ * its own for what only it can see (speech recognition and playback errors, barge-in).
+ */
+export interface VoiceEvent {
+  kind: 'skipped' | 'replied' | 'silent' | 'command' | 'error' | 'pane';
+  text: string;
+  reason: string;
+  source: 'voice' | 'chat' | 'nudge';
+  speaker: string;
+  /** Generation time, when there was one. */
+  ms: number | null;
+  model: string;
+  detail: string;
+  ts: number;
+}
+
+export async function getVoiceState(channel: string): Promise<{
+  config: VoiceAgentConfig;
+  turns: VoiceStateTurn[];
+  events: VoiceEvent[];
+  lastReplyTs: number | null;
+}> {
   const res = await fetch(
     apiUrl(`/api/clubhouse/voice/state?channel=${encodeURIComponent(channel)}`),
   );

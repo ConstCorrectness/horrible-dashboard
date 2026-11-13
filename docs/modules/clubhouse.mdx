@@ -645,9 +645,10 @@ Two Clubhouse refusals showed up in a live room, and the agent's posts swallowed
 - **`429 Less is more! Please wait a bit and try again`** — a rate limit. It fired between
   sends 3 s and 7 s apart, so the old fixed 300 ms between a long reply's chunks never
   cleared it, and a rejected message was simply lost.
-- **`400 Looks like that's been said already!`** — an exact repeat. With a silence timeout
-  set, the nudge asks the model to "say something" every interval, a low-temperature model
-  says the same 48 characters each time, and the room got one refusal a minute, forever.
+- **`400 Looks like that's been said already!`** — an exact repeat. The old silence timer
+  asked the model to "say something" every interval, a low-temperature model said the same
+  48 characters each time, and the room got one refusal a minute, forever. (The timer is
+  gone; `dedupe` still skips a line the room has already been told.)
 
 Every post now goes through one `ChatSender`
 ([chatSender.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/chatSender.ts)),
@@ -831,7 +832,7 @@ remembers — is the **voice session**, and it lives on the server.
 `backend/modules/clubhouse/voice.py` holds one session **per channel**, process-global
 (the [karaoke](./karaoke.mdx) precedent): a pane reload, a second pane, or a workspace
 switch rejoins the same conversation instead of resetting it. `voice_runtime.py` is the
-impure half — retrieval, generation, room commands — so the policy in `voice.py` is
+impure half — building the prompt and generating — so the policy in `voice.py` is
 testable without a model, a network, or a connected account.
 
 This replaced a one-shot `POST /api/agent/generate` issued from the pane with the raw
@@ -841,91 +842,72 @@ utterance as the entire prompt. That shape had three faults:
   follow a conversation or answer "what did you just say?".
 - **No room knowledge.** It did not know the topic, who was on stage, who was
   moderating, or its own name — so "who's here?" was answered by invention.
-- **No way to look anything up.** `/agent search` built a prompt asking the model to
-  "perform a simulated web search", which is a hallucination with extra steps.
+- **No honesty about what it could not do.** `/agent search` built a prompt asking the
+  model to "perform a simulated web search", which is a hallucination with extra steps.
+  The agent now has no tools at all: it talks, and says so when it does not know.
 
-### One generation per turn, unless a tool is called
+### One generation per turn, and no tools
 
 A live room is a realtime medium: every extra round against a local model is seconds
-of silence while people talk. So the **server** still decides, deterministically,
-everything a turn gets for free:
+of silence while people talk. So a turn is **exactly one generation with no tools
+offered**, and the **server** decides, deterministically, everything the model gets:
 
-| Need | How it is met | Cost |
-| --- | --- | --- |
-| Who is here, the topic, who is talking, what music is on | `render_room_brief` — on the turn message every turn | none |
-| Who these people are | bios fetched for **speakers only**, cached per session | one profile fetch each |
-| A fact, when the utterance looks like a question | `gather_context` — real `quick_search` + library RAG, run **before** the generation | one concurrent lookup |
-| Change the room (topic, chat, hands, invite) | an explicit `/agent` command, never a model decision | no generation at all |
+| Need | How it is met |
+| --- | --- |
+| Who is here, the topic, who is talking | `render_room_brief` — on the turn message every turn |
+| Who these people are | bios fetched for **speakers only**, cached per session |
+| What was said | the transcript, one `user` message per utterance |
 
-On top of that the model is offered three tools (`voice_tools`), and only these —
-a room is strangers talking to your agent, so nothing that acts on a person or a file:
-
-| Tool | Does | Notes |
-| --- | --- | --- |
-| `play_music(query)` | a track from the [music](./music.mdx) library (the same lookup as the `music.play` agent tool), else the music resolver's scored search and a background download into that library; a match below `music.play`'s confidence floor is not fetched, the model is told to ask which one | returns a `music.play` action; never queues on the music player |
-| `music_control(action, value)` | `stop` / `pause` / `resume` / `volume` (0–1, clamped) / `louder` / `quieter` (±0.2 step) | a pane action only; "Nothing is playing" when the room brief says so |
-| `look_up(query)` | web + library snippets via `gather_context` | not offered when `retrieval` is `off` |
-
-A turn where the model calls nothing costs one generation, as before. A turn that
-calls a tool pays a **second** generation with no tools offered, whose prompt is the
-same turn message plus a report of what the tools returned — so the reply describes
-what actually happened. The report rides the turn message rather than `tool` role
-messages, which keeps the roles alternating for strict templates. At most three calls
-per turn are honoured. `/agent play <song>`, `/agent stop`, `/agent pause`,
-`/agent resume` and `/agent volume <0-1>` do the same with no model, for when a small
-one fumbles the call. Anyone who can address the agent can play music.
-
-**Unambiguous requests do not wait for the model to choose a tool.** Measured on
-gemma-4-e2b: offered `music_control`, it answered "stop the music" with "I will stop
-the music" and made no call, and it never called `look_up` even when told to "look
-up" something — `play_music` was the only tool it used reliably. So `detect_intent`
-(pure, in `voice.py`, the `wants_retrieval` precedent) routes a narrow set of
-phrasings directly: stop / pause / resume + a music word, "turn it up/down" (only
-while music is playing — "it" names nothing otherwise), and "look up / search for /
-google X". The tool runs first and the turn costs **one** generation with no tools
-offered. Everything fuzzier still goes to the model with its tools.
-
-**Music is resolved on the server and played by the pane**, because the room's
-published audio track exists only in the pane. The turn response carries `actions`
-(declared on `TurnResponse`, or FastAPI's response model drops them). For a song still
-downloading the pane polls `GET /api/clubhouse/voice/music/{song_id}` and starts it
-when the file lands; a newer request or a stop cancels the wait. Playback runs through
-a gain node into `agentAudioDest` (what the room hears) and a `clubhouse-music` mixer
-strip (what you hear), and the agent's voice ducks it to a quarter while speaking.
-Like TTS, it unmutes the channel while playing and restores the mute when it stops —
-and TTS no longer re-mutes the channel while a song is on. Room teardown stops it.
-
-Moderation is command-only on purpose: `invite_speaker` acts on a real person, and a
-small model asked to pick one will eventually pick wrong. For the same reason
-`_resolve_member` refuses an **ambiguous** name rather than taking the first match, and
-resolves only against people actually in the room — a global user search for "dave"
-would happily return a stranger.
+The agent used to be offered music, look-up and room-moderation tools, remembered
+people across rooms, and could be driven with `/agent play`, `/agent search`,
+`/agent invite` and friends. All of it is gone: a room is strangers talking to your
+agent, small models fumbled the tool calls, and every one was a way for the agent to
+claim an action it had not taken. Two commands remain, `/agent forget` (clear what it
+remembers) and `/agent help`; any other `/agent …` is reported as unknown rather than
+answered in character.
 
 ### When it speaks
 
 `should_respond` is a pure function, and every refusal carries a **reason** that the
-pane renders. A silent agent and a broken one are otherwise indistinguishable, which is
-the single most common "it doesn't respond" report.
+pane renders and the debug log records. A silent agent and a broken one are otherwise
+indistinguishable, which is the single most common "it doesn't respond" report.
 
-- **`addressed`** (default) — only when a wake word or its own name is said. Safest in
-  a room of strangers.
-- **`conversational`** — replies more freely, with a cooldown so two people talking
-  cannot produce two overlapping answers.
-- **`always`** — the old behaviour, now opt-in.
-- **`interject`** — may cut in *while someone is still talking*. See below.
+There are three modes, each meaning one thing (the panel's **When it answers**):
 
-Two rules are load-bearing. Wake words match on **word boundaries**, so "bot" does not
-fire inside "robot". And the agent never answers **its own voice**: its TTS is published
-into the room and comes back through the same transcription path, so `is_own_speech`
-compares a normalized word set with a similarity floor — an exact-match check would let
-every echo through, and the result sounds exactly like a broken agent talking to itself.
+- **`addressed`** (default, "When called by name") — only when its own name is said.
+  Safest in a room of strangers.
+- **`conversational`** ("Join the conversation") — also joins in on its own, but waits
+  `cooldownS` between unprompted replies so two people talking cannot produce two
+  overlapping answers. Being called by name always gets through the cooldown.
+- **`always`** ("Reply to everything") — every line, **no cooldown**. (It used to
+  share the conversational cooldown, so "reply to everything" still went quiet for six
+  seconds after each reply.)
+
+There are no wake words. `is_addressed` matches the agent's **own name** — the full
+name or its first word ("Horrible" for "Horrible Program") — on word boundaries, so a
+name of "Bo" does not fire inside "bottle". Because the utterance came through speech
+recognition, which spells an unusual name differently each time, a first word of six or
+more letters also matches **one edit away** ("horible", "horrable") when the first
+letter agrees. A first word under three letters or a generic one (`the`, `dr`, `dj`, …)
+is skipped: the fallback name "the agent" would otherwise fire on every "the". The cost
+is a false positive when the name is also an ordinary word ("that's horrible").
+
+The old `interject` mode, which cut into a speaker mid-sentence, is gone, along with
+the partial-utterance path that fed it. A config that still says `interject` loads as
+`conversational`.
+
+The agent also never answers **its own voice**: its TTS is published into the room and
+comes back through the same transcription path, so `is_own_speech` compares a
+normalized word set with a similarity floor — an exact-match check would let every echo
+through, and the result sounds exactly like a broken agent talking to itself.
 Utterances shorter than three words are never treated as an echo, or one person saying
 "yes" would be silenced.
 
 Turn-taking (when an utterance ends) stays client-side in
 [useClubhouseVoice.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/useClubhouseVoice.ts):
-a VAD watches the mixed stream and a silence delay closes the utterance, so the agent
-waits for a pause instead of interrupting.
+a VAD watches the mixed stream and a pause closes the utterance, so the agent waits for
+the speaker to stop instead of interrupting. How long a pause counts is the panel's
+**Wait after someone stops talking** (`endpointingDelayMs`, 0.4–1.5 s).
 
 ### Live transcription — PCM, not `MediaRecorder`
 
@@ -958,39 +940,17 @@ Measured on CPU `whisper-tiny.en`: a caption costs 0.2–0.4 s and grows a word 
 per second; the final arrives ~0.4 s after the speaker stops. A cold model load is
 ~8 s, which is why the health check warms it (below).
 
-### Interrupting, in both directions
+### Barge-in
 
-These are two separate mechanisms and only one of them is new.
-
-**A human cuts off the agent** — *barge-in*, `allowBargeIn`, on by default. The VAD is
+**Stop talking when someone starts** (`allowBargeIn`, on by default). The VAD is
 watching the mixed stream, which carries the remote speakers *and* the local mic but
 never the agent's own TTS, so any real voice in the room stops playback: the audio
-source is stopped, the TTS fetch is aborted, and the pending queue is dropped. It stops
-at a **TTS chunk boundary**, so it cannot cut a word in half.
-
-**The agent cuts into the room** — the `interject` posture. Every other posture only
-ever sees finished utterances, because a turn is only sent once the endpointing silence
-closes the utterance. Under `interject` the pane also sends the utterance so far
-*mid-breath* once one person has held the floor past `interjectAfterS` (default 6s),
-and marks it `partial`.
-
-Three things about that partial are easy to get wrong:
-
-- **The server, not the pane, decides.** A `partial` is dropped with the reason
-  `waiting for a pause` under every posture but `interject` — being eager
-  (`always`) is about *how often* the agent speaks, not about talking over people.
-  A partial that names the agent is always answered: that is a request, not an
-  interruption, and making the speaker finish their sentence first is exactly the
-  behaviour that reads as broken.
-- **A partial is never remembered.** The finished utterance follows seconds later and
-  contains it; keeping both puts the same sentence in the history twice, once truncated
-  mid-word, and the model starts answering the fragment.
-- **The capture is not interrupted.** The partial is a snapshot of the PCM buffer, so
-  the finished utterance is still the whole sentence after the agent has already cut in
-  on its first half. (The `MediaRecorder` version had to stop the recorder and stitch
-  the pieces back together.) Cutting in is also skipped while the agent is already speaking, and a
-  partial that arrives to a busy queue is dropped rather than queued: a partial is only
-  worth acting on while the speaker is still inside it.
+source is stopped, the TTS fetch and any generation in flight are aborted, and the
+pending queue is dropped. It stops at a **TTS chunk boundary**, so it cannot cut a word
+in half. With the setting off the agent finishes its sentence even if someone talks
+over it. The setting is honoured in both places that act on a barge-in — the audio
+layer and the pane's handler — which used to disagree: the pane cut the agent off
+regardless, so turning the setting off changed nothing.
 
 ### Utterances queue; they are not dropped
 
@@ -1009,47 +969,6 @@ about?" has no answer.
 small models emit both regardless of the prompt, and TTS reads them aloud — flattens
 markdown, and truncates on a **sentence boundary**, since a reply cut mid-word sounds
 like the connection dropped.
-
-### A tool call is not speech, and neither is a tool's name
-
-Offered tools, a small model regularly writes the call out as its _answer_ instead of
-emitting one. Measured on llama-3.2-3b asked what it thought about coffee: once
-`lookup query="coffee"`, and once, with the syntax abandoned entirely, `look up
-coffee`. Both were spoken into the room in a synthesized voice — which does not read
-as a bad answer, it reads as the agent reciting its own source.
-
-`is_tool_call_text` catches all three shapes: the call with arguments, a JSON call
-object, and the bare **phrase**. The phrase rule is the delicate one, since those
-words are ordinary English, so three things must hold at once — the reply _begins_
-with the tool's name (a real sentence that mentions searching says something first:
-"I'll look up the weather"), it is short, and it carries no sentence punctuation (a
-fumbled call is a fragment, not a sentence). "Play music now" is the cost of that
-rule, and is also not an answer worth speaking.
-
-What happens next depends on when it is caught:
-
-- **After the first generation**, the turn is regenerated **with no tools offered** —
-  it cannot reach for syntax it has just fumbled, so it has to use words. That costs
-  a second generation only on the turns a small model gets wrong.
-- **After that**, the reply is dropped with
-  `reason: "dropped a reply that was a tool call, not speech"`. Silence is the right
-  answer here, and the reason says which of the two happened.
-
-### Retrieved is not relevant
-
-`_library_snippets` requires a cosine similarity of **0.6** (`LIBRARY_RELEVANCE_FLOOR`)
-before a library chunk is quoted into a turn. A vector search always returns its
-nearest neighbours, and nearest is not the same as relevant: with two documents
-indexed, "coffee" retrieved the Python standard library at 0.484, and since the turn
-prompt says these were looked up _for this question_, the agent answered a question
-about coffee with `xml.sax.saxutils`. Measured on this embedder an unrelated query
-scores 0.46–0.51 and a genuinely relevant one 0.69–0.83, so the floor sits in the gap.
-If nothing clears it `gather_context` returns `None` and the model is told nothing,
-which is the honest input for "your library has nothing on this".
-
-The floor is meaningful only because the score really is a cosine similarity here —
-the library's `search_documents` pins `.metric("cosine")`. It would mean nothing over
-a squared-L2 table, where `1 - distance` is negative.
 
 ### A transient provider failure is retried once, and every failure is legible
 
@@ -1150,7 +1069,7 @@ and hears a model that mostly ignores it, with nothing to point at. And a bio is
 in the highest-authority message meant anyone could put "ignore your persona" in
 their Clubhouse profile and have it arrive with the standing of a rule we wrote.
 
-So `render_turn_context` puts the room brief, the retrieval and the bios on the
+So `render_turn_context` puts the room brief and the bios on the
 **current turn**, with the bios explicitly labelled as information about people
 rather than instructions to the model. There is still exactly one system message,
 deliberately: strict Jinja chat templates reject a second one outright, so a tidier
@@ -1169,13 +1088,9 @@ per turn, or text we did not write.
 
 Three pieces keep it from coming back:
 
-- **The turn ends on a cue** (`REPLY_CUE`: call a tool if the request needs one,
-  otherwise write only what you say next; do not acknowledge these notes), because the
-  last thing a small model reads decides what it writes. **The tool clause is
-  load-bearing and comes first.** The first version said only "write only the words
-  you say next", and gemma-4-e2b obeyed it over the tools it was offered: asked to play
-  a song it called `play_music` 0/5 times with that cue and 5/5 without, replying
-  "playing Africa by Toto now" while nothing played.
+- **The turn ends on a cue** (`REPLY_CUE`: write only what you say next; do not
+  acknowledge these notes), because the last thing a small model reads decides what it
+  writes.
 - **`is_meta_reply` drops an acknowledgement** — it is neither spoken nor remembered,
   and the turn returns `reason: "dropped a reply that only acknowledged the prompt"`.
   It needs both an acknowledging opening ("I understand", "I will respond/keep/speak…")
@@ -1189,35 +1104,40 @@ every turn — who is on stage, who has a hand up, who is talking right now — 
 pinning it ahead of a twelve-turn history described the room as it was twelve turns
 ago.
 
-Bios are **speakers only**, which this page has always said and the memory path did
-not do: it passed every member, so a silent listener the store happened to know was
-reintroduced by name and biography every turn. The audience is a count in the room
-brief precisely so that does not happen. A listener cannot say anything the agent
-has to answer, so their biography buys nothing and costs a hundred-odd characters.
+Bios are **speakers only**. The audience is a count in the room brief: a listener
+cannot say anything the agent has to answer, so their biography buys nothing and costs
+a hundred-odd characters.
 
-### Room lines are folded, and chat has a real sender
+### Each room line is its own message, and chat has a real sender
 
-History is replayed with **every run of consecutive room lines folded into one
-`user` message**, one line per utterance (`Ada: …`, `Grace (@grace) in chat: …`), and
-room lines just before the current turn fold into the turn message itself. Replayed
-one message each, an agent that mostly listens sent a dozen `user` messages in a row,
-which templates enforcing strict user/assistant alternation (older Gemma, Mistral)
-reject. A window that opens on the agent's own line carries it as `(Earlier, you
-said: …)` inside the first user message, since an assistant message straight after
-the system prompt is the other shape those templates refuse.
+History is replayed with **one `user` message per remembered utterance**
+(`Ada: …`, `Grace (@grace) in chat: …`), the agent's own replies as `assistant`
+messages, and the current turn (room brief, the line being answered) as a
+final `user` message of its own. The transcript reaches the model as the conversation
+it is, not as a block glued onto the turn.
+
+An agent that mostly listens therefore sends several `user` messages in a row, which
+templates enforcing strict user/assistant alternation (older Gemma, Mistral) reject.
+That is handled at the point of failure: when a server refuses the shape
+(`alternate`, `jinja`, `roles must …`), `generate_reply` resends the same
+conversation through `fold_consecutive_roles` — each run joined into one message —
+and remembers the `(endpoint, model)` so later turns fold up front instead of
+paying a rejected round trip. A window that opens on the agent's own line carries it
+as `(Earlier, you said: …)` inside the first user message, since an assistant
+message straight after the system prompt is the other shape those templates refuse.
 
 A chat turn carries the sender the pane actually saw: the display name and
 `@username` (`chatSpeakerLabel`) as `speaker`, and the user id as `speaker_id`. It
 used to be enqueued with no sender at all, so every chat line reached the model as
 "Someone in chat", and the model — told to address people by name — picked a name
-off the stage. People memory now learns against `speaker_id` ahead of a name match,
-because an `@handle` label matches no roster name.
+off the stage.
 
-The agent answers to the **first word of its own name** as well as the full name and
-the wake words — "Horrible" for "Horrible Program". A first word under three letters
-or a generic one (`the`, `dr`, `dj`, …) is skipped: the fallback name "the agent"
-would otherwise fire on every "the". The cost is a false positive when the name is
-also an ordinary word ("that's horrible").
+**Every utterance is its own `user` message**, which a few chat templates (older Gemma,
+Mistral) reject as consecutive same-role messages. That is handled at the point of
+failure: `generate_reply` resends the same conversation folded
+(`fold_consecutive_roles`) and remembers the `(endpoint, model)` so later turns fold
+up front. Models that accept the shape — gemma-4-e2b on LM Studio does — are never
+degraded for the sake of those that do not.
 
 ### Switching rooms tears the old one down first
 
@@ -1281,13 +1201,12 @@ an effect's dependency list is not reachable without rendering the whole pane.
 
 ### A nudge is a direction, not speech
 
-The pane's **Speak Now** button and its silence probe both ask the agent to take the
-floor. They used to do it by enqueuing an ordinary `voice` utterance, so the model
-received `A speaker said out loud: Say something to the room — pick up the current
-conversation` and answered *that*: it replied to a speaker who did not exist. The
-silence probe was worse — it passed the speaker name `Room Atmosphere`, inventing a
-participant, whose "utterance" the people-memory store then tried to learn facts
-about.
+The pane's **Speak Now** button asks the agent to take the floor. It used to do it by
+enqueuing an ordinary `voice` utterance, so the model received `A speaker said out
+loud: Say something to the room — pick up the current conversation` and answered
+*that*: it replied to a speaker who did not exist. (A "take a turn after silence"
+timer used to do the same on a schedule, with an invented speaker called `Room
+Atmosphere`; it fired while someone was mid-sentence and has been removed.)
 
 There is now a third `Source`, **`nudge`**, and the last message is rendered
 `Direction (nobody said this aloud; act on it): …` instead of `X said …`. Three
@@ -1295,7 +1214,6 @@ consequences follow from "nobody said it":
 
 - it is **not remembered** — a nudge in the twelve-turn history is a phantom line the
   agent will later summarise back at the room, and it crowds out real speech;
-- it does **not** feed people-memory, which has no speaker to attribute it to;
 - it carries **no speaker name**; the pane's `'A speaker'` fallback is skipped.
 
 What it does *not* change is the gate. `should_respond` treats `nudge` exactly as
@@ -1337,33 +1255,55 @@ text-overlap check still runs underneath as a backstop.
 | `POST /api/clubhouse/voice/turn` | One utterance in, one decision out (`spoke` / `reason` / `reply` / `notice`). Optionally carries the pane's live `config` and an explicit `is_self` — see above |
 | `POST /api/clubhouse/voice/config` | Replace a room's agent settings |
 | `GET /api/clubhouse/voice/config` | Read them back |
-| `GET /api/clubhouse/voice/state` | What the agent currently remembers (rendered in the Agent tab) |
+| `GET /api/clubhouse/voice/state` | What the agent currently remembers, plus the last 60 debug-log events (rendered in the Agent panel) |
 | `POST /api/clubhouse/voice/reset` | Forget the conversation, keep the settings |
-| `GET /api/clubhouse/voice/music/{song_id}` | Download status of a song a `music.play` action named (`queued` / `downloading` / `ready` / `failed`) |
 
 A turn carries a **room snapshot** pushed by the pane rather than polled by the server:
 the pane holds the PubNub feed and the Agora volume indicator, so it is seconds fresher
 about who is muted, has a hand up, or is speaking right now.
 
-### People memory outranks the room's bio
+### The debug log
 
-`voice.render_bios` prefers what `people_memory_store` has *learned* about a member
-over the `bio` the room reported, deliberately: the bio is what Clubhouse says today,
-memory is what the agent has actually observed across rooms.
+Every decision is recorded twice. `VoiceSession.log` appends a `TurnEvent` to a bounded
+per-room deque (200) **and** writes one line to `logs/backend.log`
+(`voice[<channel>] skipped voice 'Chaya' (not addressed): '…'`; failures at WARNING,
+with the traceback), so the story survives a pane reload and a crash alike. Kinds:
 
-The store (`people_memory.py`) is a **process-global singleton constructed at import
-time**, which had two consequences worth knowing:
+| Kind | Meaning |
+| --- | --- |
+| `skipped` | the gate said no — the `reason` is the gate's (`not addressed`, `cooldown (4s left)`, `own speech`, …) |
+| `replied` | spoken; carries generation time, model and token usage when the provider reported them |
+| `silent` | the model answered but the reply was dropped (`model returned nothing`, acknowledged the prompt) |
+| `command` | `/agent forget`, `/agent help`, or a memory reset from the panel |
+| `error` | generation failed or timed out; `detail` has the provider's own message |
 
-- **Its path is resolved lazily**, not in `__init__`. `paths.data_dir()` reads the
-  environment, so a path pinned at construction would follow whatever the data dir was
-  when the module first loaded, and every later read would answer from the wrong
-  directory. `_ensure_loaded` compares the path it last loaded from and re-reads when
-  it changes, rather than caching a boolean.
-- **`reset()` exists for tests.** Its in-memory dict otherwise outlives every test in a
-  run, so one test's people are visible to all the tests after it — which produced an
-  ordering-dependent failure in a test about *bios*, several files away from where the
-  state was written. `backend/tests/conftest.py` clears it after each test, beside the
-  data-dir isolation and for the same reason.
+`GET /voice/state` returns the newest 60. The pane merges them with its own events —
+speech-recognition and playback errors, barge-ins, a failed settings sync — which only
+it can see, and shows them newest-first in the panel's **Debug log** card, with
+errors-only, Copy and Clear.
+
+### The side panel
+
+The panel is `AgentSidebar.tsx` (it was ~1,100 lines of inline JSX in `RoomsPanel.tsx`);
+the room pane owns the voice session and passes it config, status and actions.
+
+- **Collapsible**: sections are cards whose open/closed state is remembered, and the
+  whole panel hides from its ✕ or the top-bar **Agent panel** button. Hidden, a thin
+  rail stays on the edge with a dot for what the agent is doing (off, listening,
+  thinking, speaking, or an error such as a failed health leg) and reopens it. Whether
+  it is open, and its width, persist.
+- **Settings**: persona (presets, save/delete your own, apply with or without clearing
+  memory), when it answers, hearing, voice, model. Every control changes something the
+  agent does in every mode.
+- **Model for this room** is the per-room override only. It used to be paired with an
+  "Active Engine Model" select that rewrote the *dashboard-wide* agent config.
+- **Config hygiene**: every change goes through `normalizeVoiceConfig`, which clamps
+  numbers, rejects wrongly typed values and migrates old saved configs (wake words,
+  turn eagerness, thinking filler, silence timeout, interject posture and interval,
+  and the look-up settings are dropped). Settings are pushed to the server debounced;
+  a failure is shown in the panel and logged instead of only reaching the console.
+- **Presets**: built-ins ship in code; only your own are stored (`agentPresets`). Saving
+  uses the app's prompt dialog, not the browser's native `prompt()`.
 
 A provider failure is **reported, never raised** — the route answers 200 with
 `reason: "model error"` and the provider's own message ("Failed to load model X"). A 500
@@ -1455,7 +1395,7 @@ so Whisper never loaded. The reader is now lossy and runs to EOF
 STT service disables Hugging Face progress bars.
 :::
 
-The pane now **surfaces** that 503 as a toast and a line in the Agent tab. It used
+The pane now **surfaces** that 503 as a toast and a line in the Agent panel. It used
 to call `res.json()` on the error body, read `undefined` off it and return silently,
 which made a missing install indistinguishable from a quiet room — the agent simply
 never heard anything and never said why.

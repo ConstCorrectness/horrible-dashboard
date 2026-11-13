@@ -287,6 +287,15 @@
         ],
         "createdAt": "2026-10-21T21:07:17.168Z",
         "reason": "project rule: CLAUDE.local.md asks for faint grid overlays; DESIGN.md specifies the 28px hairline grid at 40% for cards. Used on the mirror video waiting stage."
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/clubhouse/AgentSidebar.tsx"
+        ],
+        "createdAt": "2026-11-12T11:16:58.930Z",
+        "reason": "user decision: CLAUDE.local.md section 2 asks for subtle faint grid overlays on agent/tactical panels; the grid is on the section cards, sourced from the user's own design brief"
       }
     ]
   }

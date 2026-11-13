@@ -9,15 +9,16 @@ faults this module exists to fix:
   itself. A room is a *conversation*; a stateless completion cannot hold one.
 - **No room knowledge.** It did not know the topic, who was on stage, who was
   moderating, or even its own name — so "who's here?" was answered by hallucination.
-- **No way to look anything up.** ``/agent search`` built a prompt politely asking
-  the model to "perform a simulated web search", which is not a search.
+- **No honesty about what it could not do.** ``/agent search`` built a prompt politely
+  asking the model to "perform a simulated web search", which is not a search. The
+  agent now has no tools at all -- it talks -- and says so when it does not know.
 
-**Single generation per turn, deliberately.** The model never emits a tool call and
-never gets a second round: a live room is a realtime medium, and a tool-calling loop
-against a local model spends seconds per round while people are talking over the
-silence. Instead the *server* decides — deterministically, before generating — what
-context this turn needs (room brief, transcript, retrieval), assembles it, and runs
-exactly one completion. Capability without the latency of agency.
+**Single generation per turn, deliberately.** The model is offered no tools and never
+gets a second round: a live room is a realtime medium, and a tool-calling loop against
+a local model spends seconds per round while people are talking over the silence.
+Instead the *server* decides -- deterministically, before generating -- what context
+this turn needs (room brief, transcript), assembles it, and runs exactly one
+completion.
 
 The session is **process-global and keyed by channel** (the karaoke precedent): the
 pane is a renderer, so a reload, a second pane, or a workspace switch rejoins the same
@@ -36,7 +37,7 @@ from typing import Any, Literal
 logger = logging.getLogger(__name__)
 
 # How many prior turns ride in the prompt. Small on purpose: this is a spoken
-# conversation on a local model, and the room brief + retrieval already cost tokens.
+# conversation on a local model, and the room brief already costs tokens.
 DEFAULT_MEMORY_TURNS = 12
 
 # Hard ceiling on one spoken reply. TTS reads every character aloud, so a model that
@@ -48,12 +49,15 @@ DEFAULT_MAX_TOKENS = 160
 # answers and the agent argues with itself.
 DEFAULT_COOLDOWN_S = 6.0
 
-# How long one person must hold the floor before the "interject" posture may cut in.
-# Short enough that the agent feels present, long enough that it is not finishing
-# everybody's sentences: below about four seconds it fires on ordinary clauses.
-DEFAULT_INTERJECT_AFTER_S = 6.0
+# How long a pause has to last before it counts as the end of someone's sentence.
+# The pane's voice detector applies it; the server only carries it.
+DEFAULT_ENDPOINTING_MS = 750
 
-Posture = Literal["addressed", "conversational", "always", "interject"]
+Posture = Literal["addressed", "conversational", "always"]
+_POSTURES = ("addressed", "conversational", "always")
+# Postures an older pane may still send. "interject" cut in mid-sentence and is gone;
+# the nearest behaviour that remains is joining the conversation.
+_POSTURE_ALIASES = {"interject": "conversational"}
 """Where a turn came from.
 
 ``nudge`` is the operator asking the agent to take the floor -- the pane's *Speak
@@ -66,8 +70,6 @@ and the bookkeeping differ.
 """
 
 Source = Literal["voice", "chat", "nudge"]
-
-DEFAULT_WAKE_WORDS = ["agent", "assistant", "bot"]
 
 DEFAULT_PERSONA = (
     "You are a participant in a live Clubhouse audio room. You are speaking out "
@@ -136,9 +138,6 @@ class RoomSnapshot:
     members: list[RoomMember] = field(default_factory=list)
     my_user_id: int | None = None
     my_name: str = "the agent"
-    # The title of what the pane is playing into the room, if anything. Pushed with
-    # the room so "what's this song?" and "stop the music" are answered from fact.
-    music: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RoomSnapshot:
@@ -149,7 +148,6 @@ class RoomSnapshot:
             members=[RoomMember.from_dict(u) for u in (raw.get("members") or [])],
             my_user_id=raw.get("my_user_id") or raw.get("myUserId"),
             my_name=str(raw.get("my_name") or raw.get("myName") or "the agent"),
-            music=str(raw["music"]) if raw.get("music") else None,
         )
 
     def member(self, user_id: int | None) -> RoomMember | None:
@@ -168,22 +166,27 @@ class RoomSnapshot:
 
 @dataclass
 class VoiceConfig:
-    """Per-room agent settings. Owned by the pane, persisted by the caller."""
+    """Per-room agent settings. Owned by the pane, persisted by the caller.
+
+    Deliberately small: every field here is something the agent or the pane actually
+    acts on, in every mode. It used to carry wake words, a "turn eagerness" preset, a
+    thinking filler, a silence timeout and an interject interval -- most of which only
+    did anything under one posture, or nothing at all -- and `from_dict` still accepts
+    (and ignores) those keys, so a config saved by an older pane loads instead of
+    failing.
+    """
 
     enabled: bool = False
     posture: Posture = "addressed"
-    wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
     persona: str = DEFAULT_PERSONA
     temperature: float = 0.7
     max_tokens: int = DEFAULT_MAX_TOKENS
     memory_turns: int = DEFAULT_MEMORY_TURNS
+    # Only read by the "conversational" posture; "addressed" ignores everything not
+    # aimed at it and "always" never waits.
     cooldown_s: float = DEFAULT_COOLDOWN_S
     respond_to_voice: bool = True
     respond_to_chat: bool = False
-    # Whether a turn may reach the web / the user's libraries. "command" restricts it
-    # to an explicit `/agent search`; "auto" also lets a question trigger a lookup.
-    retrieval: Literal["off", "command", "auto"] = "command"
-    library: str = "default"
     # Which model answers. Blank = whatever the agent is configured with. A live room
     # is a latency budget, not a reasoning budget: the orchestrator may be on a 27B
     # that takes 20 seconds a turn, which is unusable when people are talking.
@@ -196,111 +199,72 @@ class VoiceConfig:
     tts_rate: str = "+0%"
     tts_pitch: str = "+0Hz"
     tts_volume: str = "+0%"
-    # Conversational flow and human-like timing
-    turn_eagerness: Literal["fast", "normal", "patient"] = "normal"
-    endpointing_delay_ms: int = 750
-    thinking_filler: bool = True
-    silence_timeout_s: float = 0.0
+    # Pane-side timing, carried here so the server's copy of the config round-trips
+    # what the pane pushed. How long a pause ends someone's sentence, and whether the
+    # agent stops talking when a person starts.
+    endpointing_delay_ms: int = DEFAULT_ENDPOINTING_MS
     allow_barge_in: bool = True
-    # Seconds a single speaker must run before the agent may cut in mid-utterance.
-    # Only consulted under the "interject" posture; every other posture waits for a
-    # pause no matter what this says.
-    interject_after_s: float = DEFAULT_INTERJECT_AFTER_S
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> VoiceConfig:
         base = cls()
-        words = raw.get("wake_words") or raw.get("wakeWords")
-        eagerness = (
-            raw.get("turn_eagerness") or raw.get("turnEagerness") or base.turn_eagerness
-        )
-        endpointing = int(
-            raw.get(
-                "endpointing_delay_ms",
-                raw.get("endpointingDelayMs", base.endpointing_delay_ms),
-            )
-        )
-        if (
-            eagerness == "fast"
-            and "endpointing_delay_ms" not in raw
-            and "endpointingDelayMs" not in raw
-        ):
-            endpointing = 400
-        elif (
-            eagerness == "patient"
-            and "endpointing_delay_ms" not in raw
-            and "endpointingDelayMs" not in raw
-        ):
-            endpointing = 1200
 
+        def pick(snake: str, camel: str, default: Any) -> Any:
+            if snake in raw:
+                return raw[snake]
+            return raw.get(camel, default)
+
+        posture = str(raw.get("posture") or base.posture)
+        posture = _POSTURE_ALIASES.get(posture, posture)
+        if posture not in _POSTURES:
+            posture = base.posture
+        persona = raw.get("persona")
         return cls(
             enabled=bool(raw.get("enabled", base.enabled)),
-            posture=raw.get("posture") or base.posture,
-            wake_words=[str(w).strip().lower() for w in words if str(w).strip()]
-            if isinstance(words, list)
-            else base.wake_words,
-            persona=str(raw["persona"])
-            if "persona" in raw and raw["persona"] is not None
-            else base.persona,
-            temperature=float(raw.get("temperature", base.temperature)),
-            max_tokens=int(
-                raw.get("max_tokens", raw.get("maxTokens", base.max_tokens))
+            posture=posture,  # type: ignore[arg-type]
+            persona=str(persona) if persona is not None else base.persona,
+            temperature=_number(
+                raw.get("temperature"), base.temperature, 0.0, 2.0, float
             ),
-            memory_turns=int(
-                raw.get("memory_turns", raw.get("memoryTurns", base.memory_turns))
+            max_tokens=_number(
+                pick("max_tokens", "maxTokens", None), base.max_tokens, 20, 1000, int
             ),
-            cooldown_s=float(
-                raw.get("cooldown_s", raw.get("cooldownS", base.cooldown_s))
+            memory_turns=_number(
+                pick("memory_turns", "memoryTurns", None), base.memory_turns, 0, 40, int
             ),
-            respond_to_voice=bool(
-                raw.get("respond_to_voice", raw.get("respondToVoice", True))
+            cooldown_s=_number(
+                pick("cooldown_s", "cooldownS", None),
+                base.cooldown_s,
+                0.0,
+                120.0,
+                float,
             ),
-            respond_to_chat=bool(
-                raw.get("respond_to_chat", raw.get("respondToChat", False))
-            ),
-            retrieval=raw.get("retrieval") or base.retrieval,
-            library=str(raw.get("library") or base.library),
+            respond_to_voice=bool(pick("respond_to_voice", "respondToVoice", True)),
+            respond_to_chat=bool(pick("respond_to_chat", "respondToChat", False)),
             model=str(raw.get("model") or base.model),
             speak=bool(raw.get("speak", base.speak)),
-            post_to_chat=bool(raw.get("post_to_chat", raw.get("postToChat", True))),
+            post_to_chat=bool(pick("post_to_chat", "postToChat", True)),
             robot_emoji_prefix=bool(
-                raw.get("robot_emoji_prefix", raw.get("robotEmojiPrefix", False))
+                pick("robot_emoji_prefix", "robotEmojiPrefix", False)
             ),
-            tts_voice=str(raw.get("tts_voice", raw.get("ttsVoice", base.tts_voice))),
-            tts_rate=str(raw.get("tts_rate", raw.get("ttsRate", base.tts_rate))),
-            tts_pitch=str(raw.get("tts_pitch", raw.get("ttsPitch", base.tts_pitch))),
-            tts_volume=str(
-                raw.get("tts_volume", raw.get("ttsVolume", base.tts_volume))
+            tts_voice=str(pick("tts_voice", "ttsVoice", base.tts_voice)),
+            tts_rate=str(pick("tts_rate", "ttsRate", base.tts_rate)),
+            tts_pitch=str(pick("tts_pitch", "ttsPitch", base.tts_pitch)),
+            tts_volume=str(pick("tts_volume", "ttsVolume", base.tts_volume)),
+            endpointing_delay_ms=_number(
+                pick("endpointing_delay_ms", "endpointingDelayMs", None),
+                base.endpointing_delay_ms,
+                300,
+                2500,
+                int,
             ),
-            turn_eagerness=eagerness,  # type: ignore[arg-type]
-            endpointing_delay_ms=endpointing,
-            thinking_filler=bool(
-                raw.get(
-                    "thinking_filler", raw.get("thinkingFiller", base.thinking_filler)
-                )
-            ),
-            silence_timeout_s=float(
-                raw.get(
-                    "silence_timeout_s",
-                    raw.get("silenceTimeoutS", base.silence_timeout_s),
-                )
-            ),
-            allow_barge_in=bool(
-                raw.get("allow_barge_in", raw.get("allowBargeIn", base.allow_barge_in))
-            ),
-            interject_after_s=float(
-                raw.get(
-                    "interject_after_s",
-                    raw.get("interjectAfterS", base.interject_after_s),
-                )
-            ),
+            allow_barge_in=bool(pick("allow_barge_in", "allowBargeIn", True)),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "posture": self.posture,
-            "wakeWords": self.wake_words,
             "persona": self.persona,
             "temperature": self.temperature,
             "maxTokens": self.max_tokens,
@@ -308,8 +272,6 @@ class VoiceConfig:
             "cooldownS": self.cooldown_s,
             "respondToVoice": self.respond_to_voice,
             "respondToChat": self.respond_to_chat,
-            "retrieval": self.retrieval,
-            "library": self.library,
             "model": self.model,
             "speak": self.speak,
             "postToChat": self.post_to_chat,
@@ -317,13 +279,24 @@ class VoiceConfig:
             "ttsVoice": self.tts_voice,
             "ttsRate": self.tts_rate,
             "ttsPitch": self.tts_pitch,
-            "turnEagerness": self.turn_eagerness,
+            "ttsVolume": self.tts_volume,
             "endpointingDelayMs": self.endpointing_delay_ms,
-            "thinkingFiller": self.thinking_filler,
-            "silenceTimeoutS": self.silence_timeout_s,
             "allowBargeIn": self.allow_barge_in,
-            "interjectAfterS": self.interject_after_s,
         }
+
+
+def _number(value: Any, default: Any, lo: Any, hi: Any, kind: type) -> Any:
+    """`value` as `kind`, clamped to [lo, hi]; `default` when it is not a number.
+
+    A config arrives from a browser's localStorage by way of a settings form: a
+    cleared number box is "" and a hand-edited one can be anything. Neither is worth a
+    500 on the route the whole room agent is driven through.
+    """
+    try:
+        number = kind(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, number))
 
 
 @dataclass
@@ -349,40 +322,64 @@ def _norm(text: str) -> str:
 _GENERIC_NAME_WORDS = frozenset({"the", "mr", "mrs", "ms", "dr", "dj", "mc", "sir"})
 
 
-def is_addressed(text: str, wake_words: list[str], my_name: str = "") -> bool:
-    """Whether this utterance is aimed at the agent.
+def _edit_distance_at_most_one(a: str, b: str) -> bool:
+    """Whether two words differ by at most one insertion, deletion or substitution."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    if len(a) == len(b):
+        return a[i + 1 :] == b[i + 1 :]
+    return a[i:] == b[i + 1 :]
 
-    Matches on **word boundaries**, not substrings: a wake word of "bot" firing
-    inside "robot" or "bottle" is how an agent ends up answering a conversation that
-    had nothing to do with it, and in a room of strangers that reads as broken rather
-    than eager.
+
+def is_addressed(text: str, my_name: str = "") -> bool:
+    """Whether this utterance is aimed at the agent, by name.
+
+    The agent answers to its own name, not to a list of wake words the user has to
+    invent: the full name ("Horrible Coder") or its first word ("Horrible"), because
+    that is what people call someone in a room. A short or generic first word is
+    skipped; it would fire on ordinary speech.
+
+    Matched on **word boundaries**, never substrings, so a name of "Bo" does not fire
+    inside "bottle". And because the utterance came through speech recognition, which
+    spells an unusual name a different way each time, a first word of six or more
+    letters also matches one edit away ("horible", "horrable") provided the first
+    letter agrees -- that is the difference between an agent that answers to its name
+    and one that does so only when Whisper happens to spell it right.
     """
-    haystack = f" {_norm(text)} "
-    candidates = [w for w in wake_words if w]
-    if my_name:
-        candidates.append(my_name)
-        # And the first word of it -- "Horrible" for "Horrible Program" -- because
-        # that is what people call someone in a room. A short or generic first word
-        # is skipped; it would fire on ordinary speech.
-        words = _norm(my_name).split()
-        if (
-            len(words) > 1
-            and len(words[0]) >= 3
-            and words[0] not in _GENERIC_NAME_WORDS
-        ):
-            candidates.append(words[0])
-    for word in candidates:
-        needle = _norm(str(word)).strip()
-        if not needle:
-            continue
-        if f" {needle} " in haystack:
-            return True
+    if not my_name:
+        return False
+    tokens = _norm(text).split()
+    haystack = " " + " ".join(tokens) + " "
+    full = " ".join(_norm(my_name).split())
+    if full and f" {full} " in haystack:
+        return True
+    words = full.split()
+    first = words[0] if words else ""
+    if len(words) > 1 and (len(first) < 3 or first in _GENERIC_NAME_WORDS):
+        return False
+    if len(first) < 3:
+        return False
+    if first in tokens:
+        return True
+    if len(first) >= 6:
+        return any(
+            t[0] == first[0] and _edit_distance_at_most_one(t, first)
+            for t in tokens
+            if len(t) >= 5
+        )
     return False
 
 
 @dataclass
 class Decision:
-    """Why the agent is or isn't speaking. The reason is surfaced in the pane —
+    """Why the agent is or isn't speaking. The reason is surfaced in the pane --
     a silent agent is indistinguishable from a broken one otherwise, which is the
     single most common "it doesn't respond" report."""
 
@@ -399,15 +396,12 @@ def should_respond(
     last_reply_ts: float | None,
     now: float,
     is_self: bool = False,
-    partial: bool = False,
 ) -> Decision:
     """The gate, as a pure function so the policy is testable without a model.
 
-    ``partial`` marks an utterance the speaker has **not finished** — the pane flushes
-    one mid-breath once someone has held the floor past ``interject_after_s``. Cutting
-    into a live room is the one thing an agent cannot take back, so it is opt-in per
-    room (the ``interject`` posture) rather than a property of being eager: every
-    other posture waits for the pause, and says so.
+    Three postures, each meaning one thing: ``addressed`` answers only to its name,
+    ``conversational`` also joins in but waits ``cooldown_s`` between replies, and
+    ``always`` answers everything with no waiting.
     """
     if not config.enabled:
         return Decision(False, "agent disabled")
@@ -425,17 +419,17 @@ def should_respond(
     if source == "chat" and not config.respond_to_chat:
         return Decision(False, "chat replies off")
 
-    addressed = is_addressed(text, config.wake_words, room.my_name)
     # A command is always honored: someone typed it deliberately.
     if text.strip().startswith("/agent"):
         return Decision(True, "command")
-    if partial and config.posture != "interject" and not addressed:
-        # The floor is still occupied and this room did not ask to be cut into.
-        # Dropping it is safe: the pane sends the finished utterance moments later.
-        return Decision(False, "waiting for a pause")
+    addressed = is_addressed(text, room.my_name)
     if config.posture == "addressed" and not addressed:
         return Decision(False, "not addressed")
-    if not addressed and last_reply_ts is not None:
+    if (
+        config.posture == "conversational"
+        and not addressed
+        and last_reply_ts is not None
+    ):
         elapsed = now - last_reply_ts
         if elapsed < config.cooldown_s:
             return Decision(
@@ -449,93 +443,22 @@ def should_respond(
 
 @dataclass
 class Command:
-    """A parsed ``/agent …`` directive. Deterministic: the model never decides
-    whether to moderate a room, because a hallucinated ``invite_speaker`` acts on a
-    real person."""
+    """A parsed ``/agent ...`` directive. Deterministic: the model never decides
+    whether to act on one."""
 
     name: str
     arg: str = ""
-    # Whether it changes the room for everyone (as opposed to the agent's own state).
-    moderator_only: bool = False
-
-
-_MOD_COMMANDS = {"topic", "chat", "handraise", "invite", "questionnaire"}
 
 
 def parse_command(text: str) -> Command | None:
-    """``/agent <name> <arg…>`` → a Command, or None when it isn't one."""
+    """``/agent <name> <arg...>`` -> a Command, or None when it isn't one."""
     stripped = text.strip()
     if not stripped.startswith("/agent"):
         return None
     parts = stripped.split()
     if len(parts) < 2:
         return Command("help")
-    name = parts[1].lower()
-    return Command(
-        name=name,
-        arg=" ".join(parts[2:]).strip(),
-        moderator_only=name in _MOD_COMMANDS,
-    )
-
-
-# --- intents ------------------------------------------------------------------------
-
-_MUSIC_WORD = r"(?:music|song|track|tune)"
-_TRANSPORT = [
-    (
-        re.compile(
-            rf"\b(?:stop|kill|cut|turn off)\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I
-        ),
-        "stop",
-    ),
-    (re.compile(rf"\bpause\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I), "pause"),
-    (
-        re.compile(rf"\b(?:resume|unpause)\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I),
-        "resume",
-    ),
-]
-# "Turn it down" names no music, so it only counts while something is playing.
-_VOLUME = [
-    (
-        re.compile(r"\b(?:turn|crank)\b(?:\s+\w+){0,3}\s+up\b|\blouder\b", re.I),
-        "louder",
-    ),
-    (
-        re.compile(
-            r"\bturn\b(?:\s+\w+){0,3}\s+down\b|\b(?:quieter|softer)\b"
-            r"|\blower\s+(?:the\s+)?(?:volume|music)\b",
-            re.I,
-        ),
-        "quieter",
-    ),
-]
-_LOOKUP = re.compile(r"\b(?:look\s+up|search\s+for|google)\s+(?P<q>.{3,})", re.I)
-
-
-def detect_intent(
-    text: str, *, music_playing: bool
-) -> tuple[str, dict[str, Any]] | None:
-    """A tool call the utterance asks for unambiguously, or None.
-
-    Heuristic on purpose, the ``wants_retrieval`` precedent. Measured on
-    gemma-4-e2b: offered ``music_control`` it answered "stop the music" with "I will
-    stop the music" and no call at all, and it never called ``look_up`` even when told
-    to "look up" something -- a small model claiming an action it did not take is
-    worse than silence. These phrasings are narrow enough to route without asking the
-    model; anything fuzzier still goes to the model with its tools.
-    """
-    for pattern, action in _TRANSPORT:
-        if pattern.search(text):
-            return "music_control", {"action": action}
-    if music_playing:
-        for pattern, action in _VOLUME:
-            if pattern.search(text):
-                return "music_control", {"action": action}
-    if match := _LOOKUP.search(text):
-        query = match.group("q").strip().rstrip("?.!").strip()
-        if query:
-            return "look_up", {"query": query}
-    return None
+    return Command(name=parts[1].lower(), arg=" ".join(parts[2:]).strip())
 
 
 # --- prompt assembly ---------------------------------------------------------------
@@ -593,9 +516,6 @@ def render_room_brief(room: RoomSnapshot) -> str:
         )
     if talking:
         lines.append("Currently talking: " + ", ".join(m.name or "?" for m in talking))
-    if room.music:
-        lines.append(f"Music you are playing into the room: {room.music}")
-
     role = (
         "You are a moderator of this room."
         if room.am_i_moderator()
@@ -611,25 +531,14 @@ def render_room_brief(room: RoomSnapshot) -> str:
 
 
 def render_bios(room: RoomSnapshot) -> str | None:
-    """Profile and learned memory lines for the people who can actually talk.
+    """Profile lines for the people who can actually talk.
 
-    **Speakers only**, which is what the pane fetches bios for and what the module's
-    docs have always claimed. The memory path used to pass every member, so a silent
-    listener the store happened to know about was described at length in the prompt
-    -- the audience is a *count* in the room brief for exactly that reason, and this
-    was the hole in it. A listener cannot say anything the agent has to answer, so
-    their biography buys nothing and costs a hundred-odd characters each.
+    **Speakers only**, which is what the pane fetches bios for. A silent listener
+    described at length would bury the prompt -- the audience is a *count* in the room
+    brief for exactly that reason -- and a listener cannot say anything the agent has
+    to answer, so their biography buys nothing and costs a hundred-odd characters each.
     """
     speakers = [m for m in room.members if m.is_speaker]
-    try:
-        from backend.modules.clubhouse.people_memory import people_memory_store
-
-        user_ids = [m.user_id for m in speakers if m.user_id]
-        if memory_brief := people_memory_store.format_room_memory(user_ids):
-            return memory_brief
-    except Exception:
-        pass
-
     withbio = [m for m in speakers if m.bio and m.name]
     if not withbio:
         return None
@@ -648,16 +557,20 @@ def build_messages(
     *,
     speaker: str = "",
     source: Source = "voice",
-    retrieval: str | None = None,
 ) -> list[dict[str, str]]:
     """The full prompt for one turn.
 
-    History is replayed as real ``user``/``assistant`` turns, with **every run of
-    consecutive room lines folded into one user message** (one line per utterance).
-    Replayed one message each, an agent that mostly listens sent a dozen user messages
-    in a row, and chat templates that enforce strict user/assistant alternation (older
-    Gemma, Mistral) reject that outright. Room lines just before the current turn fold
-    into the turn message itself, so the roles always alternate and always end on user.
+    History is replayed as real ``user``/``assistant`` turns, **one ``user`` message per
+    remembered utterance**, each carrying its speaker (``Ada: ...``). The transcript
+    reaches the model as the conversation it is, and the current turn -- the room brief
+    and the line being answered -- is its own final message rather than something the
+    last few transcript lines are glued onto.
+
+    That means an agent that mostly listens sends several ``user`` messages in a row,
+    which chat templates that enforce strict user/assistant alternation (older Gemma,
+    Mistral) reject. Those are handled at the point of failure, not by degrading every
+    prompt for their sake: see ``fold_consecutive_roles``, which the runtime applies
+    when a server says it cannot take this shape and remembers that it said so.
     """
     # The system message carries the **persona and nothing else**.
     #
@@ -686,28 +599,33 @@ def build_messages(
     ]
     # `history[-0:]` is the whole list, so a zero window has to be spelled out.
     window = history[-config.memory_turns :] if config.memory_turns > 0 else []
-    pending: list[str] = []
+    # Text that has to ride the *next* user message because no user message exists yet
+    # to carry it (see the window-opens-on-the-agent case below).
+    lead = ""
     heard = False
     for turn in window:
         if turn.role == "agent" and is_meta_reply(turn.text):
             # Replayed, one acknowledgement teaches the model to write the next.
             continue
         if turn.role != "agent":
-            pending.append(_room_line(turn))
+            line = _room_line(turn)
+            if lead:
+                line = f"{lead}\n{line}"
+                lead = ""
+            messages.append({"role": "user", "content": line})
             heard = True
         elif not heard:
             # The window opens on the agent's own line. An assistant message straight
             # after the system prompt is the other shape strict templates refuse, so
             # it rides the first user message instead.
-            pending.append(f"(Earlier, you said: {turn.text})")
-        elif pending:
-            messages.append({"role": "user", "content": "\n".join(pending)})
-            pending = []
+            said = f"(Earlier, you said: {turn.text})"
+            lead = f"{lead}\n{said}" if lead else said
+        elif messages[-1]["role"] == "user":
             messages.append({"role": "assistant", "content": turn.text})
         else:
             # Two replies with nothing heard between them (a nudge is not remembered).
             messages[-1]["content"] += "\n" + turn.text
-    context = render_turn_context(room, retrieval=retrieval)
+    context = render_turn_context(room)
     if source == "nudge":
         # Nobody said this. Framing it as speech ("Someone said out loud: Say
         # something to the room") gives the model a line to reply *to* -- it thanks
@@ -721,8 +639,8 @@ def build_messages(
         who = speaker or "Someone"
         channel = "in the room chat" if source == "chat" else "out loud"
         last = f"{context}\n\n{who} said {channel}: {utterance}"
-    if pending:
-        last = "\n".join(pending) + "\n\n" + last
+    if lead:
+        last = f"{lead}\n\n{last}"
     # The last thing a small model reads decides what it writes, so the turn ends on
     # what to produce rather than on a block of facts it might summarise back.
     last += "\n\n" + REPLY_CUE
@@ -730,15 +648,39 @@ def build_messages(
     return messages
 
 
-# Tools come first on purpose. The previous wording ("Write only the words you say
-# next to the room…") suppressed tool calls outright: measured on gemma-4-e2b with
-# "Horrible, play Africa by Toto", play_music was called 0/5 times with it and 5/5
-# without — the model obeyed "write only words" and replied "playing Africa by Toto
-# now" with nothing playing.
+def fold_consecutive_roles(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The same conversation with every run of same-role messages joined into one.
+
+    The shape `build_messages` used to send always, now kept for the servers that need
+    it: a chat template that enforces strict user/assistant alternation raises on
+    ``user, user`` and the whole turn is lost. Lines in a run are joined with a
+    newline; the final message -- the turn itself, which opens with the room brief --
+    is set apart by a blank line so the brief does not read as one more thing said.
+    """
+    folded: list[dict[str, str]] = []
+    last_index = len(messages) - 1
+    for i, msg in enumerate(messages):
+        if folded and msg["role"] != "system" and folded[-1]["role"] == msg["role"]:
+            sep = "\n\n" if i == last_index else "\n"
+            folded[-1] = {
+                **folded[-1],
+                "content": folded[-1]["content"] + sep + msg["content"],
+            }
+        else:
+            folded.append(dict(msg))
+    return folded
+
+
+def has_consecutive_roles(messages: list[dict[str, str]]) -> bool:
+    """Whether any two adjacent non-system messages share a role."""
+    return any(
+        a["role"] == b["role"] != "system" for a, b in zip(messages, messages[1:])
+    )
+
+
 REPLY_CUE = (
-    "(If what was asked needs one of your tools, call the tool. Otherwise write only "
-    "the words you say next to the room. Do not acknowledge, repeat or discuss these "
-    "notes.)"
+    "(Write only the words you say next to the room. Do not acknowledge, repeat or "
+    "discuss these notes.)"
 )
 
 
@@ -750,22 +692,20 @@ def _room_line(turn: Turn) -> str:
     return f"{who}: {turn.text}"
 
 
-def render_turn_context(room: RoomSnapshot, *, retrieval: str | None = None) -> str:
+def render_turn_context(room: RoomSnapshot) -> str:
     """Everything the model needs for *this* turn that is not in the system message.
 
     Facts, not instructions: the speech rules live in the system message (see
     `build_messages`) because imperatives on a user turn get acknowledged rather than
-    followed. What stays here changes per turn or is untrusted. The room brief and the
-    retrieval are ours; the bios are written by the people in the room, and are
-    labelled as information about them rather than left to read as instructions.
+    followed. What stays here changes per turn or is untrusted. The room brief is
+    ours; the bios are written by the people in the room, and are labelled as
+    information about them rather than left to read as instructions.
 
     There is exactly one system message by design: strict Jinja chat templates
     reject a second one outright ("must be at the beginning"), so a second "context"
     system message is not an option here even though it would read more naturally.
     """
     parts = [render_room_brief(room)]
-    if retrieval:
-        parts.append(retrieval)
     if bios := render_bios(room):
         parts.append(
             bios
@@ -800,62 +740,6 @@ def is_meta_reply(text: str) -> bool:
     understand your point, Piper" and "I will say the rules of logic apply" survive.
     """
     return bool(_META_OPENING.search(text or "") and _META_SUBJECT.search(text or ""))
-
-
-#: A tool call the model wrote as prose instead of emitting as a call.
-#:
-#: Measured on llama-3.2-3b: offered `look_up`, it answered "lookup query=\"coffee\""
-#: as ordinary content, which the pane then read aloud into the room in a synthesized
-#: voice. Small models do this whenever the template's call syntax and the tool list
-#: disagree, and it is worse than saying nothing -- it sounds like the agent has
-#: started reciting its own source. Matched against the whole reply (after stripping),
-#: never as a substring: "I'll look up the weather for you" is a real sentence.
-_TOOL_CALL_JSON = re.compile(
-    r"""^\s*(?:```[a-z]*\s*)?\{\s*"(?:name|function|tool|tool_name)"\s*:.*\}\s*(?:```)?\s*$""",
-    re.I | re.X | re.S,
-)
-
-_TOOL_CALL_TEXT = re.compile(
-    r"""^\s*
-    (?:```[a-z]*\s*)?                                   # a fenced block, sometimes
-    (?:<\s*)?(?:tool_call|function_call|call)?\s*[:>]?\s*
-    (?P<name>look_?up|search|play_?music|music_control|invite_speaker)
-    \s*(?:\(|\s)\s*
-    (?:query|action|q|args?|arguments|value)?\s*[=:]\s*
-    .{0,200}?
-    \s*\)?\s*(?:```)?\s*$""",
-    re.I | re.X | re.S,
-)
-
-
-#: The same failure without the syntax: the reply *is* the tool's name and its
-#: argument, in words. Measured on llama-3.2-3b, asked what it thought about coffee:
-#: "look up coffee".
-#:
-#: Narrow on purpose, because the phrases are ordinary English. All three must hold:
-#: the reply **begins** with the tool's name (a real sentence that mentions looking
-#: something up says something first -- "I'll look up the weather"), it is short, and
-#: it contains no sentence punctuation (a fumbled call is a fragment, not a sentence).
-#: "Play music now" is the cost of this rule; it is also not an answer worth speaking.
-_TOOL_CALL_PHRASE = re.compile(
-    r"^(?:look\s?up|looking\s?up|lookup|search(?:\s+for)?|play\s?music"
-    r"|playing\s?music|music\s?control)\b[^.!?\n]{0,80}$",
-    re.I,
-)
-
-
-def is_tool_call_text(text: str) -> bool:
-    """Whether the model wrote a tool call out as its spoken reply.
-
-    Matched against the whole reply, never as a substring: the point is to catch a
-    reply that *is* a call, not one that mentions searching.
-    """
-    stripped = (text or "").strip()
-    return bool(
-        _TOOL_CALL_TEXT.match(stripped)
-        or _TOOL_CALL_JSON.match(stripped)
-        or _TOOL_CALL_PHRASE.match(stripped)
-    )
 
 
 _SPEAKER_PREFIX = re.compile(r"^\s*(?:agent|assistant|bot|you)\s*[:\-—]\s*", re.I)
@@ -897,6 +781,40 @@ def clean_reply(text: str, *, max_chars: int = 700) -> str:
 
 
 @dataclass
+class TurnEvent:
+    """One line of the agent's debug log.
+
+    Recorded by the server at each decision point -- the gate said no, a reply was
+    spoken, a reply was thrown away, the model failed -- because the pane can only see
+    the outcome. "Why did it not answer Chaya?" is then a row to read, not a thing to
+    reconstruct from three processes' logs.
+    """
+
+    kind: Literal["skipped", "replied", "silent", "command", "error"]
+    text: str = ""
+    reason: str = ""
+    source: Source = "voice"
+    speaker: str = ""
+    ms: int | None = None
+    model: str = ""
+    detail: str = ""
+    ts: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "text": self.text,
+            "reason": self.reason,
+            "source": self.source,
+            "speaker": self.speaker,
+            "ms": self.ms,
+            "model": self.model,
+            "detail": self.detail,
+            "ts": self.ts,
+        }
+
+
+@dataclass
 class VoiceSession:
     """One room's conversation. Process-global, keyed by channel."""
 
@@ -908,9 +826,31 @@ class VoiceSession:
     # Text the agent has spoken, kept briefly so its own voice coming back through
     # transcription can be recognized and ignored.
     spoken: deque[str] = field(default_factory=lambda: deque(maxlen=8))
+    # The debug log: bounded, newest last. See `TurnEvent`.
+    events: deque[TurnEvent] = field(default_factory=lambda: deque(maxlen=200))
 
     def remember(self, turn: Turn) -> None:
         self.history.append(turn)
+
+    def log(self, event: TurnEvent) -> None:
+        """Record a decision, and say it in the backend log too.
+
+        One line per event at INFO (WARNING for a failure), so `logs/backend.log` tells
+        the same story the pane's debug log does -- the pane's copy is lost on a reload
+        and the file is what survives a crash.
+        """
+        self.events.append(event)
+        logger.log(
+            logging.WARNING if event.kind == "error" else logging.INFO,
+            "voice[%s] %s %s%s%s: %r%s",
+            self.channel,
+            event.kind,
+            event.source,
+            f" {event.speaker!r}" if event.speaker else "",
+            f" ({event.reason})" if event.reason else "",
+            event.text[:120],
+            f" [{event.ms} ms, {event.model}]" if event.ms is not None else "",
+        )
 
     def is_own_speech(self, text: str) -> bool:
         """Whether this transcript is (a garbled version of) something we just said.

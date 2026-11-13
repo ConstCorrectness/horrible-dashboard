@@ -35,9 +35,6 @@ class TurnRequest(BaseModel):
     # stop the agent interrupting people, and an explicit request is not that. It
     # does **not** skip the self-speech check: an echo is a bug at any posture.
     force: bool = False
-    # The speaker has not finished — the pane flushed this mid-breath because they
-    # have held the floor a while. Only the "interject" posture acts on one.
-    partial: bool = False
     # The live room, pushed by the pane — it holds the PubNub feed and the Agora
     # volume indicator, so it is seconds fresher than anything this server could poll.
     room: dict[str, Any] = Field(default_factory=dict)
@@ -55,12 +52,6 @@ class TurnResponse(BaseModel):
     # A line for the pane to show (and optionally post to chat) that is *not* the
     # agent speaking: command confirmations, failures, "found nothing".
     notice: str | None = None
-    retrieved: bool = False
-    filler: str | None = None
-    # Things for the pane to do besides speaking -- today, room music
-    # (`music.play` / `music.stop` / `music.pause` / `music.resume` / `music.volume`).
-    # Declared here or FastAPI's response model silently drops it.
-    actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LegHealth(BaseModel):
@@ -93,13 +84,6 @@ class VoiceHealth(BaseModel):
     provider: str = ""
     endpoint: str = ""
     model_name: str = ""
-
-
-class MusicStatus(BaseModel):
-    song_id: str
-    status: str
-    title: str = ""
-    error: str | None = None
 
 
 class ConfigRequest(BaseModel):
@@ -142,51 +126,57 @@ async def turn(req: TurnRequest) -> TurnResponse:
             last_reply_ts=session.last_reply_ts,
             now=time.time(),
             is_self=is_self,
-            partial=req.partial,
         )
     if not decision.respond:
         # Still remembered: the agent should know what was said in the room even on
         # the turns it stays out of, or "what were we just talking about?" has no
         # answer and it re-asks a question somebody already answered.
-        # A partial is deliberately *not* remembered: the finished utterance follows
-        # seconds later and contains it, so keeping both puts the same sentence in the
-        # history twice — once truncated mid-word — and the model answers the fragment.
         # A nudge is excluded for the same reason it is on the answering path: it was
         # never said in the room, so remembering it puts an instruction the agent was
         # given into the transcript of what people supposedly told each other.
-        if not is_self and not req.partial and source != "nudge" and req.text.strip():
+        if not is_self and source != "nudge" and req.text.strip():
             session.remember(
                 V.Turn(role="room", text=req.text, speaker=req.speaker, source=source)
             )
+        session.log(
+            V.TurnEvent(
+                kind="skipped",
+                text=req.text,
+                reason=decision.reason,
+                source=source,
+                speaker=req.speaker,
+            )
+        )
         return TurnResponse(spoke=False, reason=decision.reason)
 
     command = V.parse_command(req.text)
     if command is not None:
-        if command.name == "help":
-            return TurnResponse(
-                spoke=False,
-                reason="help",
-                notice=(
-                    "Commands: /agent search <query>, /agent topic <text>, "
-                    "/agent chat on|off, /agent handraise on|off, "
-                    "/agent invite <name>, /agent play <song>, /agent stop, "
-                    "/agent forget"
-                ),
-            )
         if command.name == "forget":
             session.history.clear()
             session.spoken.clear()
+            session.log(
+                V.TurnEvent(
+                    kind="command", text=req.text, reason="forgot", source=source
+                )
+            )
             return TurnResponse(
                 spoke=False, reason="forgot", notice="Forgot the conversation so far."
             )
-        handled = await R.run_command(command, room, session)
-        if handled is not None:
-            return TurnResponse(
-                spoke=False,
-                reason="command",
-                notice=handled.get("notice"),
-                actions=handled.get("actions") or [],
+        # `help`, and anything else: the agent has two commands, and a typo is not a
+        # sentence to answer in character.
+        session.log(
+            V.TurnEvent(
+                kind="command",
+                text=req.text,
+                reason=command.name if command.name == "help" else "unknown command",
+                source=source,
             )
+        )
+        return TurnResponse(
+            spoke=False,
+            reason="help" if command.name == "help" else "unknown command",
+            notice="Commands: /agent forget (clear what the agent remembers)",
+        )
 
     result = await R.run_turn(
         session,
@@ -201,9 +191,6 @@ async def turn(req: TurnRequest) -> TurnResponse:
         reason=str(result.get("reason", "")),
         reply=str(result.get("reply", "")),
         notice=result.get("notice"),
-        retrieved=bool(result.get("retrieved")),
-        filler=result.get("filler"),
-        actions=result.get("actions") or [],
     )
 
 
@@ -335,33 +322,12 @@ async def health(channel: str | None = None) -> VoiceHealth:
     )
 
 
-@router.get("/music/{song_id}", response_model=MusicStatus)
-def music_status(song_id: str) -> MusicStatus:
-    """Whether a song the agent asked for has finished downloading.
-
-    Polled by the pane after a `music.play` action with `ready: false`: the file is
-    fetched in the background so the turn can answer immediately.
-    """
-    from fastapi import HTTPException
-
-    from backend.modules.music import library
-
-    song = library.get_track(song_id)
-    if song is None:
-        raise HTTPException(status_code=404, detail="song not found")
-    return MusicStatus(
-        song_id=song_id,
-        status=str(song.get("status") or ""),
-        title=str(song.get("title") or ""),
-        error=song.get("error"),
-    )
-
-
 @router.post("/config")
 def set_config(req: ConfigRequest) -> dict[str, Any]:
     """Replace a room's agent config. The pane owns these knobs."""
     session = V.session_for(req.channel)
     session.config = V.VoiceConfig.from_dict(req.config)
+    logger.debug("voice[%s] config set: %s", req.channel, session.config.to_dict())
     return session.config.to_dict()
 
 
@@ -372,10 +338,12 @@ def get_config(channel: str) -> dict[str, Any]:
 
 @router.get("/state")
 def state(channel: str) -> dict[str, Any]:
-    """What the agent currently remembers — rendered in the pane's Agent tab so the
-    conversation it thinks it is having is inspectable."""
+    """What the agent currently remembers and what it has decided -- rendered in the
+    pane's Agent panel so the conversation it thinks it is having, and why it did or
+    did not answer each line, are inspectable."""
     session = V.session_for(channel)
     return {
+        "events": [e.to_dict() for e in list(session.events)[-60:]],
         "channel": channel,
         "config": session.config.to_dict(),
         "turns": [
@@ -399,6 +367,13 @@ def reset(req: ResetRequest) -> dict[str, Any]:
     session.history.clear()
     session.spoken.clear()
     session.last_reply_ts = None
+    session.log(
+        V.TurnEvent(
+            kind="command",
+            reason="memory cleared"
+            + (" and persona reset" if req.reset_persona else ""),
+        )
+    )
     if req.reset_persona:
         session.config.persona = (
             req.persona if req.persona is not None else V.DEFAULT_PERSONA

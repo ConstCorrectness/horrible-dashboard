@@ -97,6 +97,112 @@ def test_the_voice_agent_asks_for_no_thinking(stub_provider):
     assert stub_provider.calls[0]["think"] is False
 
 
+def _strict_template_chat(monkeypatch, seen: list[list[dict]]):
+    """A provider whose chat template refuses ``user, user`` the way Mistral's does."""
+
+    async def strict_chat(client, info, endpoint, model, messages, tools, **kw):
+        seen.append(messages)
+        roles = [m["role"] for m in messages if m["role"] != "system"]
+        if any(a == b for a, b in zip(roles, roles[1:])):
+            request = httpx.Request("POST", "http://x/v1/chat/completions")
+            raise httpx.HTTPStatusError(
+                "400: Conversation roles must alternate user/assistant/user/assistant",
+                request=request,
+                response=httpx.Response(
+                    400,
+                    request=request,
+                    text="Error rendering prompt with jinja template: roles must alternate",
+                ),
+            )
+        return P.ChatResult(
+            assistant_message={"role": "assistant", "content": "ok"},
+            tool_calls=[],
+            content="ok",
+        )
+
+    monkeypatch.setattr(P, "chat", strict_chat)
+    monkeypatch.setattr(R, "_FOLD_REQUIRED", set())
+
+
+def _two_user_lines() -> list[dict]:
+    return [
+        {"role": "system", "content": "persona"},
+        {"role": "user", "content": "Ada: first"},
+        {"role": "user", "content": "Grace: second"},
+    ]
+
+
+def test_a_strict_template_gets_the_same_conversation_folded(
+    stub_provider, monkeypatch
+):
+    """One message per utterance is the default; a model that cannot take it costs a
+    single rejected request, not a lost turn."""
+    seen: list[list[dict]] = []
+    _strict_template_chat(monkeypatch, seen)
+
+    out = asyncio.run(R.generate_reply(_two_user_lines(), V.VoiceConfig()))
+
+    assert out.content == "ok"
+    assert len(seen) == 2  # the rejection, then the folded resend
+    assert [m["role"] for m in seen[0]] == ["system", "user", "user"]
+    assert [m["role"] for m in seen[1]] == ["system", "user"]
+    assert "Ada: first" in seen[1][1]["content"]
+    assert "Grace: second" in seen[1][1]["content"]
+
+
+def test_a_model_that_rejected_the_shape_is_folded_up_front_next_time(
+    stub_provider, monkeypatch
+):
+    """A live room cannot spend a failed round trip on every utterance."""
+    seen: list[list[dict]] = []
+    _strict_template_chat(monkeypatch, seen)
+
+    asyncio.run(R.generate_reply(_two_user_lines(), V.VoiceConfig()))
+    seen.clear()
+    asyncio.run(R.generate_reply(_two_user_lines(), V.VoiceConfig()))
+
+    assert len(seen) == 1
+    assert [m["role"] for m in seen[0]] == ["system", "user"]
+
+
+def test_a_lenient_template_is_sent_the_conversation_as_it_is(
+    stub_provider, monkeypatch
+):
+    monkeypatch.setattr(R, "_FOLD_REQUIRED", set())
+    sent: list[list[dict]] = []
+
+    async def lenient_chat(client, info, endpoint, model, messages, tools, **kw):
+        sent.append(messages)
+        return P.ChatResult(
+            assistant_message={"role": "assistant", "content": "ok"},
+            tool_calls=[],
+            content="ok",
+        )
+
+    monkeypatch.setattr(P, "chat", lenient_chat)
+    asyncio.run(R.generate_reply(_two_user_lines(), V.VoiceConfig()))
+    assert [m["role"] for m in sent[0]] == ["system", "user", "user"]
+
+
+def test_an_unrelated_provider_error_is_not_mistaken_for_a_role_problem(
+    stub_provider, monkeypatch
+):
+    monkeypatch.setattr(R, "_FOLD_REQUIRED", set())
+
+    async def failing(client, info, endpoint, model, messages, tools, **kw):
+        request = httpx.Request("POST", "http://x/v1/chat/completions")
+        raise httpx.HTTPStatusError(
+            "400: model not loaded",
+            request=request,
+            response=httpx.Response(400, request=request, text="model not loaded"),
+        )
+
+    monkeypatch.setattr(P, "chat", failing)
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(R.generate_reply(_two_user_lines(), V.VoiceConfig()))
+    assert not R._FOLD_REQUIRED
+
+
 def test_a_reply_that_is_all_reasoning_is_an_error_not_silence(stub_provider):
     """A model that thinks regardless of the switch must be reported, not rendered
     as an agent that decided to say nothing."""

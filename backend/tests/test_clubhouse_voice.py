@@ -41,21 +41,59 @@ def _room(**kw) -> V.RoomSnapshot:
 # --- addressing --------------------------------------------------------------------
 
 
-def test_wake_word_matches_whole_words_only():
+def test_the_agents_own_name_addresses_it():
+    assert V.is_addressed("what does Sidekick reckon", "Sidekick")
+
+
+def test_there_are_no_wake_words_only_the_name():
+    """The agent answers to its own name; 'agent' and 'bot' are ordinary words."""
+    assert not V.is_addressed("hey agent, what do you think?", "Sidekick")
+    assert not V.is_addressed("bot, say something", "Sidekick")
+
+
+def test_a_name_matches_whole_words_only():
     """A substring match is how an agent joins a conversation it wasn't in: 'bot'
     inside 'robot' would fire on a room discussing robotics."""
-    assert V.is_addressed("hey agent, what do you think?", ["agent"])
-    assert not V.is_addressed("we were discussing robotics", ["bot"])
-    assert not V.is_addressed("pass me the bottle", ["bot"])
-    assert V.is_addressed("bot, say something", ["bot"])
-
-
-def test_the_agents_own_name_addresses_it():
-    assert V.is_addressed("what does Sidekick reckon", [], "Sidekick")
+    assert V.is_addressed("bot, say something", "Bot")
+    assert not V.is_addressed("we were discussing robotics", "Bot")
+    assert not V.is_addressed("pass me the bottle", "Bot")
 
 
 def test_punctuation_and_case_do_not_defeat_addressing():
-    assert V.is_addressed("AGENT!! are you there?", ["agent"])
+    assert V.is_addressed("SIDEKICK!! are you there?", "Sidekick")
+
+
+def test_the_first_word_of_the_agents_name_addresses_it():
+    assert V.is_addressed("horrible, play something", "Horrible Program")
+    assert V.is_addressed("Hey Horrible!", "Horrible Program")
+
+
+def test_a_short_or_generic_first_word_is_not_a_name():
+    """The pane's fallback name is "the agent"; its first word is in every sentence."""
+    assert not V.is_addressed("the room is quiet", "the agent")
+    assert not V.is_addressed("al fresco dining", "Al Smith")
+    assert not V.is_addressed("anything at all", "")
+
+
+@pytest.mark.parametrize(
+    "heard",
+    ["horible, what do you think", "Horrable are you there", "hey horriblle"],
+)
+def test_a_name_survives_the_way_speech_recognition_spells_it(heard):
+    """Whisper spells an unusual name a different way each time; an agent that answers
+    only to the exact spelling is one that mostly doesn't answer."""
+    assert V.is_addressed(heard, "Horrible Coder")
+
+
+@pytest.mark.parametrize("heard", ["that was terrible", "what a horrific day"])
+def test_a_near_miss_of_a_different_word_does_not_address_it(heard):
+    assert not V.is_addressed(heard, "Horrible Coder")
+
+
+def test_a_short_name_must_match_exactly():
+    """One edit on a four-letter word is a different word ("cake" / "bake")."""
+    assert V.is_addressed("hey cake, hello", "Cake")
+    assert not V.is_addressed("bake some bread", "Cake")
 
 
 # --- the gate ----------------------------------------------------------------------
@@ -70,18 +108,17 @@ def _decide(config: V.VoiceConfig, text: str, **kw):
         last_reply_ts=kw.pop("last_reply_ts", None),
         now=kw.pop("now", 1000.0),
         is_self=kw.pop("is_self", False),
-        partial=kw.pop("partial", False),
     )
 
 
 def test_addressed_posture_stays_quiet_until_named():
     config = V.VoiceConfig(enabled=True, posture="addressed")
     assert not _decide(config, "I think compilers are great").respond
-    assert _decide(config, "agent, what do you think?").respond
+    assert _decide(config, "Sidekick, what do you think?").respond
 
 
 def test_disabled_agent_never_speaks():
-    assert not _decide(V.VoiceConfig(enabled=False), "agent hello").respond
+    assert not _decide(V.VoiceConfig(enabled=False), "Sidekick hello").respond
 
 
 def test_the_agent_never_answers_its_own_voice():
@@ -111,14 +148,22 @@ def test_cooldown_holds_the_floor_open_but_addressing_overrides_it():
     config = V.VoiceConfig(enabled=True, posture="conversational", cooldown_s=6)
     assert not _decide(config, "interesting point", last_reply_ts=998.0).respond
     # Being named cuts through: someone asked it directly.
-    assert _decide(config, "agent, thoughts?", last_reply_ts=998.0).respond
+    assert _decide(config, "Sidekick, thoughts?", last_reply_ts=998.0).respond
     assert _decide(config, "interesting point", last_reply_ts=990.0).respond
+
+
+def test_always_means_always_with_no_cooldown():
+    """It used to behave exactly like conversational: the cooldown applied to every
+    posture but 'addressed', so 'reply to everything' still went quiet for six seconds
+    after each reply."""
+    config = V.VoiceConfig(enabled=True, posture="always", cooldown_s=6)
+    assert _decide(config, "interesting point", last_reply_ts=999.0).respond
 
 
 def test_a_command_is_always_honored():
     """Someone typed it deliberately; posture is about unsolicited speech."""
     config = V.VoiceConfig(enabled=True, posture="addressed")
-    assert _decide(config, "/agent topic Compilers").respond
+    assert _decide(config, "/agent forget").respond
 
 
 def test_source_switches_are_respected():
@@ -182,35 +227,19 @@ def test_bios_reach_the_prompt_when_known():
     assert "Ada: Writes compilers." in (V.render_bios(room) or "")
 
 
-def test_learned_memory_wins_over_the_bio_the_room_reported():
-    """The deliberate preference, pinned so it is not "fixed" by mistake.
-
-    This test used to pass by accident and fail by accident: the people store is a
-    process-global singleton, so whether an earlier test had learned this user
-    decided which branch ran — and the failure surfaced here, in a test about bios,
-    rather than where the state was written. `conftest.reset_process_global_stores`
-    clears it between tests; this asserts the branch itself on purpose.
-
-    A remembered person outranks a bio because the bio is what Clubhouse reports
-    today, while memory is what the agent has actually learned about them.
-    """
-    from backend.modules.clubhouse.people_memory import people_memory_store
-
-    people_memory_store.learn_user(user_id=1, name="Ada", bio="Ships compilers.")
-    people_memory_store.add_note(1, "Prefers Rust")
-
+def test_only_speakers_bios_are_rendered():
+    """A silent listener's biography buys nothing and costs a hundred-odd characters."""
     room = _room(
         members=[
             V.RoomMember(
                 user_id=1, name="Ada", is_speaker=True, bio="Writes compilers."
-            )
+            ),
+            V.RoomMember(user_id=2, name="Linus", bio="Ships a kernel."),
         ]
     )
     rendered = V.render_bios(room) or ""
-    assert "What you remember" in rendered
-    assert "Prefers Rust" in rendered
-    # The room's own bio does not appear; the remembered one does.
-    assert "Writes compilers." not in rendered
+    assert "Ada: Writes compilers." in rendered
+    assert "Linus" not in rendered
 
 
 # --- prompt assembly -----------------------------------------------------------------
@@ -235,13 +264,16 @@ def test_history_is_replayed_as_turns_not_pasted_as_a_transcript():
 def test_memory_is_capped_to_the_configured_window():
     config = V.VoiceConfig(enabled=True, memory_turns=4)
     history = [V.Turn(role="room", text=f"line {i}", speaker="A") for i in range(20)]
-    turn = V.build_messages(config, _room(), history, "now what")[-1]["content"]
-    assert "A: line 16" in turn and "A: line 19" in turn
-    assert "line 15" not in turn
+    messages = V.build_messages(config, _room(), history, "now what")
+    sent = "\n".join(m["content"] for m in messages)
+    assert "A: line 16" in sent and "A: line 19" in sent
+    assert "line 15" not in sent
 
 
-def test_consecutive_room_lines_fold_into_one_message():
-    """Twelve user messages in a row is a shape strict chat templates reject."""
+def test_each_remembered_utterance_is_its_own_user_message():
+    """The transcript is the conversation: one message per line, each with its
+    speaker, and the turn (room brief + the line being answered) is a message of its
+    own rather than something the last few lines are glued onto."""
     history = [
         V.Turn(role="room", text="first", speaker="Ada"),
         V.Turn(role="room", text="second", speaker="Grace (@grace)", source="chat"),
@@ -251,13 +283,23 @@ def test_consecutive_room_lines_fold_into_one_message():
     messages = V.build_messages(
         V.VoiceConfig(enabled=True), _room(), history, "fourth", speaker="Grace"
     )
-    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
-    assert messages[1]["content"] == "Ada: first\nGrace (@grace) in chat: second"
-    assert messages[-1]["content"].startswith("Ada: third\n\n")
+    assert [m["role"] for m in messages] == [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "user",
+    ]
+    assert messages[1]["content"] == "Ada: first"
+    assert messages[2]["content"] == "Grace (@grace) in chat: second"
+    assert messages[4]["content"] == "Ada: third"
+    # The transcript line is no longer a prefix of the turn message.
+    assert not messages[-1]["content"].startswith("Ada:")
     assert "Grace said out loud: fourth" in messages[-1]["content"]
 
 
-def test_roles_strictly_alternate_whatever_the_history_looks_like():
+def test_the_history_never_opens_on_or_repeats_an_assistant_message():
     history = [
         V.Turn(role="agent", text="hi all"),
         V.Turn(role="agent", text="anyone?"),
@@ -266,13 +308,37 @@ def test_roles_strictly_alternate_whatever_the_history_looks_like():
         V.Turn(role="agent", text="so"),
         V.Turn(role="room", text="ok", speaker="Grace"),
     ]
-    roles = [
-        m["role"]
-        for m in V.build_messages(V.VoiceConfig(enabled=True), _room(), history, "hm")
-    ]
+    messages = V.build_messages(V.VoiceConfig(enabled=True), _room(), history, "hm")
+    roles = [m["role"] for m in messages]
     assert roles[:2] == ["system", "user"]
-    assert all(a != b for a, b in zip(roles[1:], roles[2:]))
+    assert "assistant" not in roles[:2]
+    assert all(not (a == b == "assistant") for a, b in zip(roles, roles[1:]))
     assert roles[-1] == "user"
+    # What the agent said before the window opened is not lost, it rides a user line.
+    assert "(Earlier, you said: hi all\nanyone?)" not in messages[1]["content"]
+    assert "Earlier, you said: hi all" in messages[1]["content"]
+    assert messages[1]["content"].endswith("Ada: yes")
+
+
+def test_folding_restores_strict_alternation_without_losing_a_line():
+    history = [
+        V.Turn(role="room", text="first", speaker="Ada"),
+        V.Turn(role="room", text="second", speaker="Grace"),
+        V.Turn(role="agent", text="reply"),
+        V.Turn(role="room", text="third", speaker="Ada"),
+    ]
+    messages = V.build_messages(
+        V.VoiceConfig(enabled=True), _room(), history, "fourth", speaker="Grace"
+    )
+    assert V.has_consecutive_roles(messages)
+    folded = V.fold_consecutive_roles(messages)
+    assert not V.has_consecutive_roles(folded)
+    assert [m["role"] for m in folded] == ["system", "user", "assistant", "user"]
+    assert folded[1]["content"] == "Ada: first\nGrace: second"
+    assert folded[-1]["content"].startswith("Ada: third\n\n")
+    assert "Grace said out loud: fourth" in folded[-1]["content"]
+    # Pure: the original is left as it was.
+    assert len(messages) == 6
 
 
 def test_a_zero_memory_window_replays_nothing():
@@ -282,52 +348,6 @@ def test_a_zero_memory_window_replays_nothing():
     assert (
         "secret" not in V.build_messages(config, _room(), history, "hi")[-1]["content"]
     )
-
-
-def test_the_first_word_of_the_agents_name_addresses_it():
-    assert V.is_addressed("horrible, play something", [], "Horrible Program")
-    assert V.is_addressed("Hey Horrible!", [], "Horrible Program")
-
-
-def test_a_short_or_generic_first_word_is_not_a_wake_word():
-    """The pane's fallback name is "the agent"; its first word is in every sentence."""
-    assert not V.is_addressed("the room is quiet", [], "the agent")
-    assert not V.is_addressed("al fresco dining", [], "Al Smith")
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("Horrible, can you stop the music?", ("music_control", {"action": "stop"})),
-        ("pause the song", ("music_control", {"action": "pause"})),
-        ("resume the music please", ("music_control", {"action": "resume"})),
-        ("turn the music down a bit", ("music_control", {"action": "quieter"})),
-        ("Horrible, turn it up", ("music_control", {"action": "louder"})),
-        (
-            "look up who won the 2022 World Cup final?",
-            ("look_up", {"query": "who won the 2022 World Cup final"}),
-        ),
-        ("google Toto's first album", ("look_up", {"query": "Toto's first album"})),
-    ],
-)
-def test_unambiguous_requests_are_routed_without_the_model(text, expected):
-    """gemma-4-e2b answered "stop the music" with "I will stop the music" and no
-    tool call; these phrasings no longer depend on it choosing one."""
-    assert V.detect_intent(text, music_playing=True) == expected
-
-
-def test_ordinary_speech_is_not_an_intent():
-    assert V.detect_intent("stop talking over each other", music_playing=True) is None
-    assert V.detect_intent("I looked into it", music_playing=True) is None
-    # "Turn it up" names no music, so with nothing playing it is just a sentence.
-    assert (
-        V.detect_intent("turn it up a notch, the debate", music_playing=False) is None
-    )
-
-
-def test_music_in_the_room_is_in_the_brief():
-    brief = V.render_room_brief(_room(music="Africa - Toto"))
-    assert "Music you are playing into the room: Africa - Toto" in brief
 
 
 def test_the_system_message_is_the_persona_then_the_speech_rules_only():
@@ -363,15 +383,6 @@ def test_the_turn_carries_no_instructions_to_acknowledge():
     turn = V.build_messages(V.VoiceConfig(enabled=True), _room(), [], "hi")[-1]
     assert "How to speak here" not in turn["content"]
     assert turn["content"].endswith(V.REPLY_CUE)
-
-
-def test_the_reply_cue_leaves_room_for_a_tool_call():
-    """ "Write only the words you say next" took tool calls from 5/5 to 0/5 on
-    gemma-4-e2b — it said "playing Africa by Toto now" and played nothing. The cue
-    must name tools before it asks for words."""
-    cue = V.REPLY_CUE.lower()
-    assert "tool" in cue
-    assert cue.index("tool") < cue.index("write only")
 
 
 @pytest.mark.parametrize(
@@ -410,7 +421,7 @@ def test_remembered_acknowledgements_are_not_replayed():
         V.Turn(role="room", text="idiot", speaker="Walter"),
     ]
     messages = V.build_messages(V.VoiceConfig(enabled=True), _room(), history, "hm")
-    assert [m["role"] for m in messages] == ["system", "user"]
+    assert [m["role"] for m in messages] == ["system", "user", "user", "user"]
     assert "I understand the instructions" not in str(messages)
 
 
@@ -498,73 +509,11 @@ def test_truncation_lands_on_a_sentence_boundary():
 # --- commands ----------------------------------------------------------------------------
 
 
-def test_commands_parse_with_their_argument():
-    cmd = V.parse_command("/agent topic Compilers and type systems")
-    assert cmd and cmd.name == "topic"
-    assert cmd.arg == "Compilers and type systems"
-    assert cmd.moderator_only
-
-
-def test_search_is_not_moderator_gated():
-    cmd = V.parse_command("/agent search who won the world cup")
-    assert cmd and not cmd.moderator_only
-
-
 def test_non_commands_parse_as_none():
     assert V.parse_command("I was going to say /agent is useful") is None
 
 
-def test_an_unrecognized_toggle_argument_reads_as_off():
-    """These are also spoken through imperfect transcription, and the safe default
-    for 'enable chat for the whole room' is not to."""
-    assert R._is_on("on") and R._is_on("yes")
-    assert not R._is_on("orn")  # a plausible mistranscription of "on"
-    assert not R._is_on("")
-
-
-def test_invite_only_resolves_someone_actually_in_the_room():
-    room = _room()
-    assert R._resolve_member(room, "Ada").user_id == 1
-    assert R._resolve_member(room, "@grace").user_id == 2
-    assert R._resolve_member(room, "Nobody") is None
-
-
-def test_an_ambiguous_invite_resolves_to_nothing():
-    """Inviting the wrong person onto a stage is not an error you take back
-    quietly, so ambiguity refuses rather than picking the first match."""
-    room = _room(
-        members=[
-            V.RoomMember(user_id=1, name="Chris P"),
-            V.RoomMember(user_id=2, name="Chris M"),
-        ]
-    )
-    assert R._resolve_member(room, "Chris") is None
-
-
 # --- retrieval gating --------------------------------------------------------------------
-
-
-def test_retrieval_is_off_unless_configured():
-    assert not R.wants_retrieval("who is Ada Lovelace", V.VoiceConfig(retrieval="off"))
-
-
-def test_command_mode_only_retrieves_for_an_explicit_search():
-    config = V.VoiceConfig(retrieval="command")
-    assert R.wants_retrieval("/agent search who is Ada Lovelace", config)
-    assert not R.wants_retrieval("who is Ada Lovelace", config)
-
-
-def test_auto_mode_retrieves_for_question_shaped_utterances():
-    config = V.VoiceConfig(retrieval="auto")
-    assert R.wants_retrieval("who is Ada Lovelace", config)
-    assert not R.wants_retrieval("I agree with that completely", config)
-
-
-def test_stripping_a_command_leaves_the_query():
-    assert (
-        R._strip_command("/agent search best coffee in Rome") == "best coffee in Rome"
-    )
-    assert R._strip_command("plain text") == "plain text"
 
 
 # --- sessions ------------------------------------------------------------------------------
@@ -582,21 +531,6 @@ def test_a_session_is_shared_per_channel_not_per_pane():
 # --- interjecting -------------------------------------------------------------------
 
 
-def test_partial_utterance_is_ignored_unless_the_room_asked_to_be_cut_into():
-    """Every posture but ``interject`` waits for the pause.
-
-    "always" is the trap here: it is the most eager posture and reads like it should
-    also be the one that interrupts, but eagerness is about *how often* the agent
-    speaks, not about talking over somebody mid-sentence.
-    """
-    for posture in ("addressed", "conversational", "always"):
-        config = V.VoiceConfig(enabled=True, posture=posture)
-        decision = _decide(config, "so the thing about compilers is", partial=True)
-        assert not decision.respond, posture
-    config = V.VoiceConfig(enabled=True, posture="interject")
-    assert _decide(config, "so the thing about compilers is", partial=True).respond
-
-
 def test_a_partial_that_names_the_agent_is_answered_at_any_posture():
     """Being addressed is a request, not an interruption — the speaker said the wake
     word and is waiting. Making them finish the sentence first is the behaviour that
@@ -605,110 +539,10 @@ def test_a_partial_that_names_the_agent_is_answered_at_any_posture():
     assert _decide(config, "agent, what do you think about", partial=True).respond
 
 
-def test_a_partial_still_answers_to_the_cooldown():
-    """Otherwise the interject posture fires on every flush while one person talks."""
-    config = V.VoiceConfig(enabled=True, posture="interject", cooldown_s=6)
-    decision = _decide(
-        config, "and then we drove all the way to", partial=True, last_reply_ts=997.0
-    )
-    assert not decision.respond
-    assert "cooldown" in decision.reason
-
-
-def test_the_reason_names_the_pause_so_a_quiet_agent_is_explicable():
-    config = V.VoiceConfig(enabled=True, posture="always")
-    assert (
-        _decide(config, "half a sentence", partial=True).reason == "waiting for a pause"
-    )
-
-
-def test_interject_after_s_survives_both_spellings():
-    assert V.VoiceConfig.from_dict({"interjectAfterS": 3.5}).interject_after_s == 3.5
-    assert V.VoiceConfig.from_dict({"interject_after_s": 2}).interject_after_s == 2.0
-    assert V.VoiceConfig().to_dict()["interjectAfterS"] == V.DEFAULT_INTERJECT_AFTER_S
-
-
 # --- what must never reach a speech synthesizer ------------------------------------
 
 
-def test_a_tool_call_written_as_prose_is_not_speech():
-    """Measured on llama-3.2-3b, offered `look_up`: it answered in content, not as a
-    call, and the pane read it into the room in a synthesized voice."""
-    assert V.is_tool_call_text('lookup query="coffee"')
-    assert V.is_tool_call_text('look_up(query="best coffee in Rome")')
-    assert V.is_tool_call_text('{"name": "play_music", "arguments": {"query": "Toto"}}')
-    assert V.is_tool_call_text('```json\nmusic_control(action="stop")\n```')
-
-
-def test_the_same_fumble_without_the_syntax_is_caught_too():
-    """Measured on llama-3.2-3b, asked what it thought about coffee: "look up
-    coffee" — the tool's name and its argument, in words."""
-    assert V.is_tool_call_text("look up coffee")
-    assert V.is_tool_call_text("lookup best coffee in Rome")
-    assert V.is_tool_call_text("search for the weather in Berlin")
-
-
-def test_speech_that_merely_mentions_looking_something_up_survives():
-    """The check runs against the whole reply, never as a substring: the alternative
-    silences ordinary sentences about searching."""
-    assert not V.is_tool_call_text("I'll look up the weather for you in a second.")
-    assert not V.is_tool_call_text("Sure — playing music now.")
-    assert not V.is_tool_call_text("Search me. I have no idea who wrote it.")
-    # Begins with a word, not a tool: the phrase rule anchors at the start.
-    assert not V.is_tool_call_text("We could look up the answer if you want.")
-    # A real sentence, even though it opens on one: punctuation ends the fragment.
-    assert not V.is_tool_call_text("Look up when you get a chance. I'm curious too.")
-    assert not V.is_tool_call_text("")
-
-
 # --- retrieval relevance -----------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_a_library_hit_below_the_floor_is_not_quoted(monkeypatch):
-    """A vector search always returns its nearest neighbours, and nearest is not
-    relevant: "coffee" retrieved the Python standard library at 0.484, and the turn
-    prompt says these were looked up *for this question*, so the agent answered a
-    question about coffee with `xml.sax.saxutils`."""
-
-    class _Group:
-        def __init__(self, title, score, text):
-            self.title = title
-            self.top_score = score
-            self.chunks = [type("C", (), {"text": text})()]
-
-    async def fake_search(req):
-        return type(
-            "R",
-            (),
-            {
-                "groups": [
-                    _Group("The Python Standard Library", 0.484, "xml.sax.saxutils"),
-                    _Group("A Survey of Multi-Agent RL", 0.465, "decentralized"),
-                ]
-            },
-        )()
-
-    monkeypatch.setattr("backend.modules.library.routes.search", fake_search)
-    assert await R._library_snippets("coffee", "default") == []
-
-
-@pytest.mark.anyio
-async def test_a_library_hit_above_the_floor_is_quoted(monkeypatch):
-    class _Group:
-        def __init__(self, title, score, text):
-            self.title = title
-            self.top_score = score
-            self.chunks = [type("C", (), {"text": text})()]
-
-    async def fake_search(req):
-        return type(
-            "R", (), {"groups": [_Group("A Survey of Multi-Agent RL", 0.828, "MARL")]}
-        )()
-
-    monkeypatch.setattr("backend.modules.library.routes.search", fake_search)
-    lines = await R._library_snippets("multi-agent reinforcement learning", "default")
-    assert lines and "A Survey of Multi-Agent RL" in lines[0]
 
 
 # --- provider failures -------------------------------------------------------------

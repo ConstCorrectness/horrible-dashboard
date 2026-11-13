@@ -96,16 +96,13 @@ export interface UseClubhouseVoiceProps {
   onLiveUsersChange?: (users: LiveUserState[]) => void;
   onCommentsChange?: (comments: ChatComment[]) => void;
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
+  /** One finished utterance heard in the room. */
+  onTranscribe?: (text: string, speakerName?: string, speakerId?: number | null) => void;
   /**
-   * One utterance heard in the room. `partial` means the speaker is *still talking* —
-   * only the `interject` posture acts on one, and the finished utterance follows.
+   * A person started talking. Fired for every run of speech, whether or not the agent
+   * is speaking: the pane uses it to cut the agent off, and to stop a queued reply
+   * going out over someone mid-sentence.
    */
-  onTranscribe?: (
-    text: string,
-    speakerName?: string,
-    speakerId?: number | null,
-    partial?: boolean,
-  ) => void;
   onBargeIn?: () => void;
   onSpeakerInvite?: (invite: SpeakerInvite) => void;
   onHandRaise?: (userId: number, userName: string) => void;
@@ -113,13 +110,10 @@ export interface UseClubhouseVoiceProps {
   onVoiceError?: (message: string) => void;
   /** How often the live caption re-transcribes the utterance in progress. */
   liveCaptionMs?: number;
+  /** How long a pause has to last before it ends someone's sentence. */
   endpointingDelayMs?: number;
+  /** Whether a person talking stops the agent that is speaking. */
   allowBargeIn?: boolean;
-  /**
-   * Flush a partial transcript once one person has held the floor this long, so the
-   * agent can cut in. `0` disables it — which is every posture but `interject`.
-   */
-  interjectAfterMs?: number;
 }
 
 export interface PubNubRoomMessage {
@@ -490,10 +484,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         let isSpeaking = false;
         let bargeInTicks = 0;
         let activeSpeakerUidDuringSpeech: number | null = null;
-        /** When the current unbroken run of speech began, for the interject timer. */
-        let speechStartedAt = 0;
-        /** One interjection per run of speech — otherwise it fires every tick. */
-        let interjectedThisRun = false;
         let lastLiveAt = 0;
         /** One live caption at the server at a time, so a slow model sets the pace. */
         let liveInFlight = false;
@@ -590,20 +580,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         };
 
         /**
-         * The interject posture's cut-in: the utterance so far, handed to the agent
-         * as a partial. The capture is *not* interrupted — the finished sentence
-         * still arrives whole when the speaker stops.
-         */
-        const sendPartial = (speakerUid: number | null) => {
-          const id = utterance.id;
-          void transcribe(utterance.snapshot()).then((text) => {
-            if (!text || !current()) return;
-            if (utterance.id === id && utterance.active) showCaption(id, text, speakerUid);
-            session.handlers.onTranscribe?.(text, undefined, speakerUid, true);
-          });
-        };
-
-        /**
          * End the utterance and transcribe all of it. Queued behind the previous
          * one, so the agent hears sentences in the order they were spoken.
          */
@@ -621,7 +597,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               captionFor = -1;
               session.patch({ liveCaption: null });
             }
-            if (text) session.handlers.onTranscribe?.(text, undefined, speakerUid, false);
+            if (text) session.handlers.onTranscribe?.(text, undefined, speakerUid);
           });
         };
 
@@ -690,25 +666,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             // Human is speaking
             if (!isSpeaking) {
               session.handlers.onBargeIn?.();
-              speechStartedAt = now;
-              interjectedThisRun = false;
             }
             isSpeaking = true;
             silenceTicks = 0;
             if (!utterance.active) utterance.begin();
             utterance.hasSpeech = true;
-
-            // The agent cutting in
-            const interjectAfterMs = propsRef.current?.interjectAfterMs ?? 0;
-            if (
-              interjectAfterMs > 0 &&
-              !interjectedThisRun &&
-              !session.isAgentSpeaking &&
-              now - speechStartedAt >= interjectAfterMs
-            ) {
-              interjectedThisRun = true;
-              sendPartial(activeSpeakerUidDuringSpeech);
-            }
 
             // Nobody has paused in a long time. Cut here, or Whisper's 30 s window
             // drops the rest — and nothing reaches the agent until a pause that, in

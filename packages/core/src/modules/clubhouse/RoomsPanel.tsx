@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
-import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
+import { getAgentStatus, type AgentStatus } from '../agent/api';
 import {
   getClubhouseChannels,
   getClubhouseStatus,
@@ -26,16 +26,11 @@ import {
   updateClubhouseChatSettings,
   searchClubhouseUsers,
   getClubhouseFollowing,
-  listPeopleMemory,
-  addPersonNote,
-  removePersonNote,
-  forgetPersonMemory,
   type Channel,
   type ChannelUser,
   type ClubhouseUserProfile,
   type SearchUserResult,
   type FollowUser,
-  type PersonMemory,
   type TtsVoiceOption,
   searchClubhouseGiphy,
   type GiphyResult,
@@ -59,303 +54,30 @@ import {
   normalizeCustomReaction,
   parseCustomReactions,
 } from './reactions';
-import { useClubhouseVoice, type EarsHealth } from './useClubhouseVoice';
+import {
+  AgentRail,
+  AgentSidebar,
+  HEARD_LINES_KEPT,
+  type AgentRailState,
+  type HeardLine,
+} from './AgentSidebar';
+import { useClubhouseVoice } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
   DEFAULT_VOICE_CONFIG,
-  getMusicStatus,
   getVoiceHealth,
   getVoiceState,
-  musicUrl,
-  type VoiceAction,
+  normalizeVoiceConfig,
   pushVoiceConfig,
   resetVoiceMemory,
   takeVoiceTurn,
   type VoiceAgentConfig,
+  type VoiceEvent,
   type VoiceHealth,
-  type VoiceLegHealth,
   type VoiceRoom,
   type VoiceStateTurn,
 } from './voiceAgent';
 
-// Shared styling for the Agent tab's form fields — the panel styles inline, and
-// repeating these objects per control is what made the old block hard to extend.
-const agentFieldStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.4rem',
-  flex: 1,
-  minWidth: '140px',
-};
-const agentLabelStyle: React.CSSProperties = {
-  fontSize: '0.75rem',
-  color: '#94a3b8',
-  fontWeight: 600,
-};
-
-interface HeardLine {
-  id: number;
-  text: string;
-  speaker?: string;
-  time: string;
-}
-
-/** Finished utterances kept on screen. The agent's memory holds the rest. */
-const HEARD_LINES_KEPT = 6;
-
-/**
- * The room as the agent hears it: the last few finished sentences, then the one
- * being spoken right now, re-transcribed about once a second while it lasts. The
- * live line is dimmed and marked, because Whisper revises it as more audio arrives —
- * it is a preview of the sentence, not what the agent will be given.
- */
-function TranscriptLines({
-  lines,
-  live,
-}: {
-  lines: HeardLine[];
-  live: { text: string; speaker?: string } | null;
-}) {
-  const meta: React.CSSProperties = {
-    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    fontSize: '0.6rem',
-    color: 'var(--text-dim)',
-    flexShrink: 0,
-  };
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      {lines.map((line, i) => (
-        <div
-          key={line.id}
-          style={{
-            display: 'flex',
-            gap: '0.45rem',
-            alignItems: 'baseline',
-            color: 'var(--text)',
-            // Older lines recede, so the eye lands on the newest.
-            opacity: 0.55 + (0.45 * (i + 1)) / lines.length,
-            animation: 'ch-fade-in 0.2s ease-out',
-          }}
-        >
-          <span style={meta}>{line.time}</span>
-          <span>
-            <strong style={{ color: 'var(--accent)' }}>{line.speaker || 'Room'}:</strong>{' '}
-            {line.text}
-          </span>
-        </div>
-      ))}
-      {live && (
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.45rem',
-            alignItems: 'baseline',
-            color: 'var(--text-muted)',
-            fontStyle: 'italic',
-          }}
-        >
-          <span style={{ ...meta, color: 'var(--success)', fontStyle: 'normal', fontWeight: 700 }}>
-            LIVE
-          </span>
-          <span>
-            <strong style={{ color: 'var(--accent)', fontStyle: 'normal' }}>
-              {live.speaker || 'Room'}:
-            </strong>{' '}
-            {live.text}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * What the agent's ears are doing, under the transcript.
- *
- * The panel it replaces said "Microphone listening for room audio…" and meant three
- * different things by it: the room is quiet, nobody's audio ever reached the agent,
- * or the level is crossing no threshold. Those need different fixes and looked
- * identical, which is why "it just stops hearing" was unactionable.
- *
- * So this shows the VAD's own decision variable with the line it has to cross drawn
- * on it, plus the things that are either true or not: how many remote tracks are
- * wired in, whether the PCM tap exists, whether the context is running. Polled at
- * 4 Hz — the VAD writes its level fifty times a second, and pushing that through
- * React would re-render this pane at 50 Hz.
- */
-function EarsReadout({ getHealth, hasHeard }: { getHealth: () => EarsHealth; hasHeard: boolean }) {
-  const [h, setH] = useState<EarsHealth>(getHealth);
-  useEffect(() => {
-    const interval = setInterval(() => setH(getHealth()), 250);
-    return () => clearInterval(interval);
-  }, [getHealth]);
-
-  // The one reading that is always wrong, in priority order. Nothing wired in beats
-  // a dead recorder beats a suspended context: each makes the next unknowable.
-  const fault =
-    h.tracksConnected === 0
-      ? 'No room audio is reaching the agent — nobody is publishing, or the subscribe failed.'
-      : h.recorderState === null
-        ? 'The audio tap is down; rebuilding it.'
-        : h.contextState !== 'running'
-          ? `Audio is ${h.contextState ?? 'unavailable'} — the browser suspended it.`
-          : null;
-
-  const pct = Math.min(100, (h.level / 40) * 100);
-  const thresholdPct = Math.min(100, (h.speechLevel / 40) * 100);
-  const over = h.level > h.speechLevel;
-  const secsSinceHeard = h.lastHeardAt ? Math.round((Date.now() - h.lastHeardAt) / 1000) : null;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
-      {!hasHeard && !fault && (
-        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.7rem' }}>
-          {over
-            ? 'Hearing the room — transcribing…'
-            : 'Listening. Nothing above the speech line yet.'}
-        </span>
-      )}
-      {fault && (
-        <span style={{ color: 'var(--danger)', fontSize: '0.7rem', fontWeight: 600 }}>{fault}</span>
-      )}
-
-      {/* Input level, with the threshold drawn on it. */}
-      <div
-        style={{
-          position: 'relative',
-          height: '6px',
-          borderRadius: '3px',
-          background: 'rgba(255,255,255,0.06)',
-          overflow: 'hidden',
-        }}
-        title={`Input level ${h.level.toFixed(1)} of the ${h.speechLevel} needed to count as speech`}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: '100%',
-            background: over ? 'var(--success)' : 'var(--text-dim)',
-            transition: 'width 120ms linear',
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            left: `${thresholdPct}%`,
-            top: 0,
-            bottom: 0,
-            width: '2px',
-            background: 'var(--text)',
-            opacity: 0.55,
-          }}
-        />
-      </div>
-
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.6rem',
-          flexWrap: 'wrap',
-          fontSize: '0.62rem',
-          color: 'var(--text-dim)',
-          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-        }}
-      >
-        <span>
-          lvl {h.level.toFixed(1)}/{h.speechLevel}
-        </span>
-        <span>
-          {h.tracksConnected} track{h.tracksConnected === 1 ? '' : 's'}
-        </span>
-        <span>tap {h.recorderState ? 'live' : 'down'}</span>
-        {h.restarts > 0 && (
-          <span title="Times the watchdog rebuilt the audio tap">↻ {h.restarts}</span>
-        )}
-        <span>
-          {secsSinceHeard === null ? 'no transcript yet' : `heard ${secsSinceHeard}s ago`}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The three legs of a voice turn, as pills beside the last turn's reason.
- *
- * Quiet when everything works — one green "READY", because a row of three green
- * badges in a pane that is already dense is noise, and noise is what gets ignored
- * on the day one of them turns red. A leg that is down names itself and carries its
- * own fix in the tooltip.
- *
- * A leg whose probe is `certain: false` renders as **unknown**, never as broken:
- * "we asked and it is absent" and "we could not ask" are different facts, and the
- * hardware module exists because conflating them tells a working machine to
- * reinstall what it already has.
- */
-function VoiceHealthChips({ health }: { health: VoiceHealth }) {
-  const legs: [string, VoiceLegHealth][] = [
-    ['HEARS', health.ears],
-    ['THINKS', health.model],
-    ['SPEAKS', health.mouth],
-  ];
-  const bad = legs.filter(([, leg]) => !leg.ok);
-
-  const pill = (label: string, tone: 'ok' | 'bad' | 'unknown', title: string) => {
-    const colors = {
-      ok: { fg: '#4ade80', bg: 'rgba(74,222,128,0.12)', dot: '#4ade80' },
-      bad: { fg: '#f87171', bg: 'rgba(248,113,113,0.12)', dot: '#f87171' },
-      unknown: { fg: '#94a3b8', bg: 'rgba(148,163,184,0.12)', dot: '#94a3b8' },
-    }[tone];
-    return (
-      <span
-        key={label}
-        title={title}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.35rem',
-          padding: '0.1rem 0.5rem',
-          borderRadius: '999px',
-          background: colors.bg,
-          color: colors.fg,
-          fontSize: '0.65rem',
-          fontWeight: 700,
-          letterSpacing: '0.08em',
-          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-        }}
-      >
-        <span
-          style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            background: colors.dot,
-          }}
-        />
-        {label}
-      </span>
-    );
-  };
-
-  if (bad.length === 0) {
-    return pill(
-      'READY',
-      'ok',
-      `${health.provider || 'model'} · ${health.model_name || 'default'} @ ${health.endpoint}`,
-    );
-  }
-  return (
-    <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-      {bad.map(([label, leg]) =>
-        pill(
-          `NO ${label}`,
-          leg.certain ? 'bad' : 'unknown',
-          [leg.detail, leg.fix && `Fix: ${leg.fix}`].filter(Boolean).join(' — '),
-        ),
-      )}
-    </span>
-  );
-}
 /**
  * **Horizontal padding only.** `controls.css` gives every `<input>`/`<select>` a
  * fixed `height: var(--control-h)` (30px) with its vertical padding removed —
@@ -376,43 +98,30 @@ const agentInputStyle: React.CSSProperties = {
   borderRadius: '4px',
 };
 
-const DEFAULT_PRESETS: { name: string; prompt: string; chipLabel?: string }[] = [
-  {
-    name: 'Room Co-Host & Assistant',
-    chipLabel: '🤖 Co-Host',
-    prompt:
-      'You are a friendly and proactive co-host in a live Clubhouse audio room. You answer questions concisely in 1-3 spoken sentences, engage with attendees naturally, and keep the discussion flowing.',
-  },
-  {
-    name: 'Podcast & Interview Host',
-    chipLabel: '🎙️ Podcast Host',
-    prompt:
-      'You are an energetic podcast host. You ask insightful follow-up questions, introduce speakers warmly, and summarize key takeaways in a charismatic, broadcast-ready speaking style.',
-  },
-  {
-    name: 'Debater & Critical Thinker',
-    chipLabel: '⚔️ Debater',
-    prompt:
-      'You are an intellectually sharp, respectful debate participant. You probe underlying assumptions, highlight alternative perspectives, and construct logical arguments.',
-  },
-  {
-    name: 'Concise & Direct (No Fluff)',
-    chipLabel: '⚡ Concise',
-    prompt:
-      'You are an ultra-concise assistant. You give immediate, direct answers in 1-2 punchy spoken sentences without fluff, preambles, or conversational filler.',
-  },
-  {
-    name: 'Tech & Architecture Expert',
-    chipLabel: '💡 Tech Expert',
-    prompt:
-      'You are a senior software architect and tech expert. You explain complex technical concepts, system tradeoffs, algorithms, and engineering patterns clearly and concisely for an engineering audience.',
-  },
-];
-
 /**
  * Live Clubhouse rooms panel. Handles searching, joining rooms, active call stage,
  * real-time comments chat, reactions, raising hands, and speaking.
  */
+const SIDEBAR_OPEN_KEY = 'clubhouseAgentSidebar';
+const SIDEBAR_WIDTH_KEY = 'clubhouseAgentSidebarWidth';
+const SIDEBAR_MIN = 240;
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable: the setting simply does not outlive the page */
+  }
+}
+
 export function RoomsPanel() {
   const [state, setState] = useState<'loading' | 'disconnected' | 'ready' | 'error'>('loading');
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -521,8 +230,7 @@ export function RoomsPanel() {
   // channel); this is the settings mirror plus the local "is it talking" flag.
   const [agentConfig, setAgentConfig] = useState<VoiceAgentConfig>(() => {
     try {
-      const saved = localStorage.getItem('clubhouseVoiceConfig');
-      return saved ? { ...DEFAULT_VOICE_CONFIG, ...JSON.parse(saved) } : DEFAULT_VOICE_CONFIG;
+      return normalizeVoiceConfig(JSON.parse(readStored('clubhouseVoiceConfig') ?? 'null'));
     } catch {
       return DEFAULT_VOICE_CONFIG;
     }
@@ -530,41 +238,44 @@ export function RoomsPanel() {
   const agentEnabled = agentConfig.enabled;
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const [isAgentThinking, setIsAgentThinking] = useState(false);
-  // Why the agent stayed quiet on the last turn. Rendered in the Agent tab, because
+  // Why the agent stayed quiet on the last turn. Rendered in the Agent panel, because
   // a deliberate silence and a broken pipeline are indistinguishable without it.
   const [agentReason, setAgentReason] = useState<string | null>(null);
   const [voiceHealth, setVoiceHealth] = useState<VoiceHealth | null>(null);
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
-
-  const [wakeWordsInput, setWakeWordsInput] = useState(() =>
-    (agentConfig.wakeWords || []).join(', '),
-  );
-  const [personaDraft, setPersonaDraft] = useState(
-    () => agentConfig.persona || DEFAULT_VOICE_CONFIG.persona,
-  );
-  const [selectedPreset, setSelectedPreset] = useState('');
+  /** The server's debug log for this room, as last polled. */
+  const [serverEvents, setServerEvents] = useState<VoiceEvent[]>([]);
+  /** Log lines only this pane can write: ears, mouth, barge-in, a failed settings sync. */
+  const [paneEvents, setPaneEvents] = useState<VoiceEvent[]>([]);
+  /** Why the last attempt to send settings to the server failed, or null. */
+  const [syncError, setSyncError] = useState<string | null>(null);
   /** The last few finished utterances, oldest first; the live caption follows them. */
   const [heardLines, setHeardLines] = useState<HeardLine[]>([]);
 
-  const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
-    () => {
-      try {
-        const saved = JSON.parse(localStorage.getItem('agentPresets') || '[]');
-        return Array.isArray(saved) && saved.length > 0 ? saved : DEFAULT_PRESETS;
-      } catch {
-        return DEFAULT_PRESETS;
-      }
-    },
-  );
+  const logPane = (text: string, reason = '', detail = '') =>
+    setPaneEvents((prev) =>
+      [
+        ...prev,
+        {
+          kind: 'pane' as const,
+          text,
+          reason,
+          source: 'voice' as const,
+          speaker: '',
+          ms: null,
+          model: '',
+          detail,
+          ts: Date.now() / 1000,
+        },
+      ].slice(-100),
+    );
 
+  // Every change goes through `normalizeVoiceConfig`, so a half-typed or out-of-range
+  // value is clamped here once instead of being re-validated by each reader.
   const patchAgentConfig = (patch: Partial<VoiceAgentConfig>) =>
     setAgentConfig((prev) => {
-      const next = { ...prev, ...patch };
-      try {
-        localStorage.setItem('clubhouseVoiceConfig', JSON.stringify(next));
-      } catch {
-        /* storage unavailable — the backend still has the live config */
-      }
+      const next = normalizeVoiceConfig({ ...prev, ...patch });
+      writeStored('clubhouseVoiceConfig', JSON.stringify(next));
       return next;
     });
   const [myUserId, setMyUserId] = useState<number | null>(null);
@@ -592,13 +303,24 @@ export function RoomsPanel() {
   const [loadingPeople, setLoadingPeople] = useState(false);
 
   // Voice Agent Settings sidebar visibility (right-hand column) and resizable splitter
-  const [showAgentSidebar, setShowAgentSidebar] = useState(true);
+  const [showAgentSidebar, setShowAgentSidebar] = useState(
+    () => readStored(SIDEBAR_OPEN_KEY) !== 'hidden',
+  );
   const [showNetworkModal, setShowNetworkModal] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(340);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = Number(readStored(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(saved) && saved >= SIDEBAR_MIN ? saved : 340;
+  });
   const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const [agentEngineStatus, setAgentEngineStatus] = useState<AgentStatus | null>(null);
-  const [switchingModel, setSwitchingModel] = useState(false);
+
+  useEffect(() => {
+    writeStored(SIDEBAR_OPEN_KEY, showAgentSidebar ? 'open' : 'hidden');
+  }, [showAgentSidebar]);
+  useEffect(() => {
+    if (!isDraggingSplitter) writeStored(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth, isDraggingSplitter]);
 
   // Resize drag handling for vertical splitter between stage/chat and agent sidebar
   useEffect(() => {
@@ -607,7 +329,7 @@ export function RoomsPanel() {
       if (!splitContainerRef.current) return;
       const rect = splitContainerRef.current.getBoundingClientRect();
       const newWidth = rect.right - e.clientX;
-      const minW = 240;
+      const minW = SIDEBAR_MIN;
       const maxW = Math.max(minW, rect.width - 280);
       setSidebarWidth(Math.min(maxW, Math.max(minW, newWidth)));
     };
@@ -622,31 +344,12 @@ export function RoomsPanel() {
     };
   }, [isDraggingSplitter]);
 
-  // People Knowledge & Memory
-  const [peopleMemory, setPeopleMemory] = useState<PersonMemory[]>([]);
-  const [peopleMemoryQuery, setPeopleMemoryQuery] = useState('');
-  const [peopleMemoryLoading, setPeopleMemoryLoading] = useState(false);
-  const [newNoteInputs, setNewNoteInputs] = useState<{ [uid: number]: string }>({});
-
   const [ttsVoices, setTtsVoices] = useState<TtsVoiceOption[]>([]);
-
-  const refreshPeopleMemory = async (q = peopleMemoryQuery) => {
-    setPeopleMemoryLoading(true);
-    try {
-      const data = await listPeopleMemory(q);
-      setPeopleMemory(data);
-    } catch {
-      // ignore
-    } finally {
-      setPeopleMemoryLoading(false);
-    }
-  };
 
   useEffect(() => {
     void getAgentStatus()
       .then(setAgentEngineStatus)
       .catch(() => {});
-    void refreshPeopleMemory();
     void getAgentTtsVoices()
       .then(setTtsVoices)
       .catch(() => {});
@@ -1130,7 +833,6 @@ export function RoomsPanel() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatScrollTopRef = useRef<number | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
-  const lastRoomActivityTsRef = useRef<number>(Date.now());
   const heardLineSeq = useRef(0);
   const enqueueUtteranceRef = useRef<
     (
@@ -1139,7 +841,6 @@ export function RoomsPanel() {
       force?: boolean,
       speakerName?: string,
       speakerId?: number | null,
-      partial?: boolean,
       isSelf?: boolean,
     ) => void
   >(() => {});
@@ -1160,10 +861,6 @@ export function RoomsPanel() {
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
-    playRoomMusic,
-    stopRoomMusic,
-    controlRoomMusic,
-    getRoomMusic,
     loading: voiceLoading,
     error: voiceError,
     voiceError: speechError,
@@ -1179,14 +876,17 @@ export function RoomsPanel() {
     getNetworkInsights,
     getEarsHealth,
   } = useClubhouseVoice({
-    endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
-    allowBargeIn: agentConfig.allowBargeIn !== false,
-    // Zero everywhere but the interject posture: the flush is what *creates* a
-    // partial, so leaving it running under another posture would have the pane
-    // cutting recordings in half for turns the server is only going to drop.
-    interjectAfterMs:
-      agentConfig.posture === 'interject' ? (agentConfig.interjectAfterS ?? 6) * 1000 : 0,
+    endpointingDelayMs: agentConfig.endpointingDelayMs,
+    allowBargeIn: agentConfig.allowBargeIn,
     onBargeIn: () => {
+      // "Stop talking when someone starts" is the setting this honours. It used to be
+      // read only by the audio layer, while this handler cut the agent off regardless,
+      // so turning the setting off changed nothing.
+      if (!agentConfigRef.current.allowBargeIn) return;
+      const wasActive =
+        agentAbortControllerRef.current !== null ||
+        agentQueueRef.current.length > 0 ||
+        agentSpeakingRef.current;
       if (agentAbortControllerRef.current) {
         try {
           agentAbortControllerRef.current.abort();
@@ -1199,9 +899,9 @@ export function RoomsPanel() {
       agentQueueRef.current = [];
       setIsAgentThinking(false);
       setIsAgentSpeaking(false);
+      if (wasActive) logPane('A person started talking, so the agent stopped.', 'barge-in');
     },
-    onTranscribe: (text, _speakerName, speakerId, partial) => {
-      lastRoomActivityTsRef.current = Date.now();
+    onTranscribe: (text, _speakerName, speakerId) => {
       // Resolve actual speaker name from room user roster
       let resolvedName: string | undefined;
       if (speakerId === 0 || (myUserId != null && speakerId === myUserId)) {
@@ -1214,31 +914,19 @@ export function RoomsPanel() {
         if (userInDetails?.name) resolvedName = userInDetails.name;
       }
       if (text.trim().length > 0) {
-        // A partial is the interject posture's cut-in, not a finished sentence: the
-        // live caption already shows it, and the whole utterance follows.
-        if (!partial) {
-          const line: HeardLine = {
-            id: ++heardLineSeq.current,
-            text: text.trim(),
-            speaker: resolvedName,
-            time: new Date().toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            }),
-          };
-          setHeardLines((prev) => [...prev, line].slice(-HEARD_LINES_KEPT));
-        }
+        const line: HeardLine = {
+          id: ++heardLineSeq.current,
+          text: text.trim(),
+          speaker: resolvedName,
+          time: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+        };
+        setHeardLines((prev) => [...prev, line].slice(-HEARD_LINES_KEPT));
         const isSelf = isAgentSpeaking;
-        enqueueUtteranceRef.current(
-          text.trim(),
-          'voice',
-          false,
-          resolvedName,
-          speakerId,
-          partial,
-          isSelf,
-        );
+        enqueueUtteranceRef.current(text.trim(), 'voice', false, resolvedName, speakerId, isSelf);
       }
     },
 
@@ -1284,7 +972,7 @@ export function RoomsPanel() {
         return;
       }
       setMyUserId(status.user_id);
-      // The agent introduces itself by this name and answers to it as a wake word.
+      // The agent introduces itself by this name and answers to it.
       setMyProfileName(status.name || '');
       const res = await getClubhouseChannels();
       setChannels(res.channels ?? []);
@@ -1424,7 +1112,6 @@ export function RoomsPanel() {
       members,
       my_user_id: myUserId,
       my_name: myProfileName || 'the agent',
-      music: getRoomMusic()?.title ?? null,
     };
   };
 
@@ -1444,67 +1131,11 @@ export function RoomsPanel() {
       force?: boolean;
       speakerName?: string;
       speakerId?: number | null;
-      partial?: boolean;
       isSelf?: boolean;
     }[]
   >([]);
   const agentBusyRef = useRef(false);
   const agentSentTextsRef = useRef<Set<string>>(new Set());
-  /** What the last silence nudge said, so a repeat can be recognised and dropped. */
-  const lastNudgeReplyRef = useRef('');
-
-  /**
-   * Carry out what the server asked for alongside a reply. Music is played here, not
-   * on the server, because only this pane holds the room's published track.
-   *
-   * A `music.play` for a song still downloading polls until the file lands. Any newer
-   * request — or a stop — bumps the counter and cancels the wait, so "play X… no,
-   * play Y" never ends with both.
-   */
-  const musicRequestRef = useRef(0);
-  const applyVoiceActions = async (actions: VoiceAction[] | undefined) => {
-    for (const action of actions ?? []) {
-      if (action.type === 'music.play') {
-        const request = ++musicRequestRef.current;
-        void (async () => {
-          let ready = action.ready;
-          // ~5 minutes: a long video on a slow link is minutes of download.
-          for (let i = 0; !ready && i < 150; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-            if (request !== musicRequestRef.current) return;
-            try {
-              const status = await getMusicStatus(action.songId);
-              if (status.status === 'ready') ready = true;
-              else if (status.status === 'failed') {
-                toastsStore.add(
-                  'warning',
-                  'Agent',
-                  `Couldn't download "${action.title}": ${status.error ?? 'unknown error'}`,
-                );
-                return;
-              }
-            } catch {
-              /* a transient poll failure — keep waiting */
-            }
-          }
-          if (request !== musicRequestRef.current) return;
-          if (!ready) {
-            toastsStore.add('warning', 'Agent', `"${action.title}" is still downloading.`);
-            return;
-          }
-          await playRoomMusic(musicUrl(action.songId), action.title);
-        })();
-      } else if (action.type === 'music.stop') {
-        musicRequestRef.current++;
-        await stopRoomMusic();
-      } else if (action.type === 'music.volume') {
-        if (action.step != null) controlRoomMusic('step', action.step);
-        else if (action.value != null) controlRoomMusic('volume', action.value);
-      } else {
-        controlRoomMusic(action.type === 'music.pause' ? 'pause' : 'resume');
-      }
-    }
-  };
 
   const drainAgentQueue = async () => {
     if (agentBusyRef.current) return;
@@ -1532,7 +1163,6 @@ export function RoomsPanel() {
             speakerId: item.speakerId,
             source: item.source,
             force: item.force,
-            partial: item.partial,
             room: buildRoomSnapshot(),
             config: agentConfigRef.current,
             isSelf: item.isSelf,
@@ -1541,7 +1171,6 @@ export function RoomsPanel() {
           setIsAgentThinking(false);
           agentAbortControllerRef.current = null;
           setAgentReason(result.reason);
-          void applyVoiceActions(result.actions);
           if (result.notice) {
             toastsStore.add('info', 'Agent', result.notice);
             if (agentConfigRef.current.postToChat) {
@@ -1557,21 +1186,6 @@ export function RoomsPanel() {
             }
           }
           if (result.spoke && result.reply) {
-            // The silence nudge asks the model to "say something" every interval, and a
-            // low-temperature model says the same thing each time — which Clubhouse
-            // refused as "said already" once a minute, forever. A nudge that repeats
-            // the last one has nothing new to add: say nothing, and wait a full extra
-            // interval before asking again rather than re-asking at once.
-            if (item.source === 'nudge') {
-              const said = result.reply.trim();
-              if (said === lastNudgeReplyRef.current) {
-                setAgentReason('nothing new to say');
-                lastRoomActivityTsRef.current =
-                  Date.now() + (agentConfigRef.current.silenceTimeoutS || 0) * 1000;
-                continue;
-              }
-              lastNudgeReplyRef.current = said;
-            }
             setIsAgentSpeaking(true);
             if (agentConfigRef.current.postToChat) {
               const textToSend = agentConfigRef.current.robotEmojiPrefix
@@ -1585,15 +1199,6 @@ export function RoomsPanel() {
               void sendComment(textToSend, { dedupe: true }).catch(() => {});
             }
             if (agentConfigRef.current.speak) {
-              // If backend provided a natural thinking filler, speak it first
-              if (result.filler && agentConfigRef.current.thinkingFiller) {
-                await playAgentAudio(result.filler, {
-                  voice: agentConfigRef.current.ttsVoice,
-                  rate: agentConfigRef.current.ttsRate,
-                  pitch: agentConfigRef.current.ttsPitch,
-                  volume: agentConfigRef.current.ttsVolume,
-                });
-              }
               await playAgentAudio(result.reply, {
                 voice: agentConfigRef.current.ttsVoice,
                 rate: agentConfigRef.current.ttsRate,
@@ -1613,10 +1218,13 @@ export function RoomsPanel() {
             String(e).includes('aborted')
           ) {
             setAgentReason('interrupted');
+            logPane('The turn was interrupted.', 'interrupted');
             break;
           }
           console.error('Voice agent turn failed:', e);
-          setAgentReason(e instanceof Error ? e.message : String(e));
+          const message = e instanceof Error ? e.message : String(e);
+          setAgentReason(message);
+          logPane(`The turn failed: ${message}`, 'turn failed');
         }
       }
     } finally {
@@ -1632,66 +1240,21 @@ export function RoomsPanel() {
     force = false,
     speakerName?: string,
     speakerId?: number | null,
-    partial = false,
     isSelf?: boolean,
   ) => {
     if (!activeChannelRef.current) return;
-    lastRoomActivityTsRef.current = Date.now();
-    // A partial is only worth acting on while the speaker is still inside it. Queueing
-    // one behind a reply that is still being spoken means cutting in on a sentence that
-    // finished ten seconds ago, which is the interruption at its most annoying.
-    if (partial && (agentBusyRef.current || agentQueueRef.current.length > 0)) return;
-    agentQueueRef.current.push({ text, source, force, speakerName, speakerId, partial, isSelf });
+    agentQueueRef.current.push({ text, source, force, speakerName, speakerId, isSelf });
     if (agentQueueRef.current.length > 6)
       agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
     void drainAgentQueue();
   };
   enqueueUtteranceRef.current = enqueueUtterance;
 
-  // Silence Floor Probing: Proactively break long silences in conversational mode
-  useEffect(() => {
-    if (
-      !activeChannel ||
-      !agentEnabled ||
-      agentConfig.posture !== 'conversational' ||
-      !agentConfig.silenceTimeoutS ||
-      agentConfig.silenceTimeoutS <= 0
-    )
-      return;
-
-    const interval = setInterval(() => {
-      const elapsedSec = (Date.now() - lastRoomActivityTsRef.current) / 1000;
-      if (
-        elapsedSec >= agentConfig.silenceTimeoutS &&
-        !isAgentSpeaking &&
-        agentQueueRef.current.length === 0
-      ) {
-        lastRoomActivityTsRef.current = Date.now();
-        // `nudge`, and with no speaker name: this is the pane asking, not a person
-        // talking. It used to be sent as speech attributed to "Room Atmosphere",
-        // which the model answered as though a participant by that name had
-        // spoken -- and which the people-memory store then tried to learn about.
-        enqueueUtterance(
-          'The room has gone quiet. Make a brief, natural remark to keep things moving.',
-          'nudge',
-          false,
-        );
-      }
-    }, 2500);
-
-    return () => clearInterval(interval);
-  }, [
-    activeChannel,
-    agentEnabled,
-    agentConfig.posture,
-    agentConfig.silenceTimeoutS,
-    isAgentSpeaking,
-  ]);
-
   // Refs so the queue drain reads current values without being re-created (and
   // without the stale closures the old `useEffect`-driven version captured).
   const activeChannelRef = useRef<string | null>(null);
   const agentConfigRef = useRef(agentConfig);
+  const agentSpeakingRef = useRef(false);
   const activeRoomInfoRef = useRef<Channel | null>(null);
   const liveUsersRef = useRef(liveUsers);
   const speakingVolumesRef = useRef(speakingVolumes);
@@ -1714,6 +1277,9 @@ export function RoomsPanel() {
     agentConfigRef.current = agentConfig;
   }, [agentConfig]);
   useEffect(() => {
+    agentSpeakingRef.current = isAgentSpeaking;
+  }, [isAgentSpeaking]);
+  useEffect(() => {
     activeRoomInfoRef.current = activeRoomInfo;
   }, [activeRoomInfo]);
   useEffect(() => {
@@ -1722,6 +1288,17 @@ export function RoomsPanel() {
   useEffect(() => {
     speakingVolumesRef.current = speakingVolumes;
   }, [speakingVolumes]);
+
+  const mergedEvents = [...serverEvents, ...paneEvents].sort((a, b) => a.ts - b.ts);
+  const railState: AgentRailState = !agentEnabled
+    ? 'off'
+    : (voiceHealth && !voiceHealth.ok) || speechError || syncError
+      ? 'error'
+      : isAgentSpeaking
+        ? 'speaking'
+        : isAgentThinking
+          ? 'thinking'
+          : 'idle';
 
   const handleInterrupt = () => {
     if (agentAbortControllerRef.current) {
@@ -1767,9 +1344,10 @@ export function RoomsPanel() {
     }
   };
 
-  const handleApplyPersona = async (newPersona: string, clearMemory = true) => {
+  const handleApplyPersona = async (requested: string, clearMemory = true) => {
+    // An empty persona means "the default": the Reset button sends it.
+    const newPersona = requested.trim() ? requested : DEFAULT_VOICE_CONFIG.persona;
     patchAgentConfig({ persona: newPersona });
-    setPersonaDraft(newPersona);
     const channel = activeChannelRef.current;
     if (channel) {
       try {
@@ -1811,12 +1389,22 @@ export function RoomsPanel() {
   };
 
   // Push settings to the backend session whenever they change (and on join, since
-  // the session is created there and starts on defaults).
+  // the session is created there and starts on defaults). Debounced: the persona box
+  // changes the config on every keystroke. A failure is shown, not just logged to the
+  // console, because settings that quietly never arrive look exactly like an agent
+  // that ignores them.
   useEffect(() => {
     if (!activeChannel) return;
-    void pushVoiceConfig(activeChannel, agentConfig).catch((e) =>
-      console.warn('Failed to sync voice agent config:', e),
-    );
+    const timer = setTimeout(() => {
+      pushVoiceConfig(activeChannel, agentConfig)
+        .then(() => setSyncError(null))
+        .catch((e) => {
+          const message = e instanceof Error ? e.message : String(e);
+          setSyncError(message);
+          logPane(`Could not send settings to the server: ${message}`, 'config sync failed');
+        });
+    }, 300);
+    return () => clearTimeout(timer);
   }, [activeChannel, agentConfig]);
 
   /**
@@ -1858,10 +1446,13 @@ export function RoomsPanel() {
     if (!activeChannel || !agentEnabled) return;
     const tick = () =>
       void getVoiceState(activeChannel)
-        .then((s) => setAgentMemory(s.turns))
+        .then((s) => {
+          setAgentMemory(s.turns);
+          setServerEvents(s.events ?? []);
+        })
         .catch(() => {});
     tick();
-    const interval = setInterval(tick, 5000);
+    const interval = setInterval(tick, 3000);
     return () => clearInterval(interval);
   }, [activeChannel, agentEnabled]);
 
@@ -1901,8 +1492,10 @@ export function RoomsPanel() {
     setIsAgentThinking(false);
     setIsAgentSpeaking(false);
     setHeardLines([]);
-    lastNudgeReplyRef.current = '';
     setAgentReason(null);
+    setServerEvents([]);
+    setPaneEvents([]);
+    setSyncError(null);
     // Not left to the 5s poll: until it lands the Agent tab shows the previous
     // room's conversation under the new room's name.
     setAgentMemory([]);
@@ -1911,6 +1504,12 @@ export function RoomsPanel() {
     // from the send path.
     setCommentText('');
   }, [activeChannel, stopAgentAudio]);
+
+  // Ears and mouth failures reach the log as well as the status line, so they are
+  // still there after the next successful turn clears the line.
+  useEffect(() => {
+    if (speechError) logPane(speechError, 'speech error');
+  }, [speechError]);
 
   const prevCommentsLengthRef = useRef(0);
   useEffect(() => {
@@ -3625,9 +3224,10 @@ export function RoomsPanel() {
                   : '1px solid transparent',
               }}
               onClick={() => setShowAgentSidebar((v) => !v)}
-              title="Toggle Voice Agent panel on the right side"
+              aria-pressed={showAgentSidebar}
+              title={showAgentSidebar ? 'Hide the voice agent panel' : 'Show the voice agent panel'}
             >
-              🤖 {showAgentSidebar ? 'Agent Panel (Open)' : 'Agent Panel'}
+              Agent panel
             </button>
           </div>
 
@@ -3875,1477 +3475,59 @@ export function RoomsPanel() {
             />
           )}
 
-          {/* Right Column: Voice Agent Settings Sidebar */}
-          {showAgentSidebar && (
-            <div
-              className="ch-agent-section"
-              style={{
-                width: `${sidebarWidth}px`,
-                minWidth: '240px',
-                flexShrink: 0,
-                background: '#12151b',
-                display: 'flex',
-                flexDirection: 'column',
-                minHeight: 0,
-                overflow: 'hidden',
+          {/* Right Column: Voice Agent. The rail keeps it one click away while hidden. */}
+          {showAgentSidebar ? (
+            <AgentSidebar
+              width={sidebarWidth}
+              config={agentConfig}
+              onPatch={patchAgentConfig}
+              agentName={myProfileName}
+              audienceOnly={!isCurrentUserSpeaker}
+              speaking={isAgentSpeaking}
+              thinking={isAgentThinking}
+              lastReason={agentReason}
+              health={voiceHealth}
+              speechError={speechError}
+              syncError={syncError}
+              heardLines={heardLines}
+              liveCaption={
+                liveCaption
+                  ? { text: liveCaption.text, speaker: speakerNameFor(liveCaption.speakerId) }
+                  : null
+              }
+              getEarsHealth={getEarsHealth}
+              memory={agentMemory}
+              events={mergedEvents}
+              onClearLog={() => {
+                setServerEvents([]);
+                setPaneEvents([]);
               }}
-            >
-              {/* Sticky Sidebar Header */}
-              <div
-                style={{
-                  padding: '0.65rem 0.9rem',
-                  background: '#161922',
-                  borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexShrink: 0,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent)' }}>
-                    🤖 Voice Agent
-                  </span>
-                  {agentEnabled && (
-                    <>
-                      {isAgentSpeaking ? (
-                        <div
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            background: 'rgba(34, 197, 94, 0.15)',
-                            border: '1px solid rgba(34, 197, 94, 0.3)',
-                            padding: '1px 6px',
-                            borderRadius: '10px',
-                          }}
-                          title="Agent is currently speaking audio into the room"
-                        >
-                          <span
-                            style={{
-                              fontSize: '0.62rem',
-                              color: 'var(--success)',
-                              fontWeight: 700,
-                            }}
-                          >
-                            SPEAKING
-                          </span>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: '2px',
-                              height: '8px',
-                              background: 'var(--success)',
-                              borderRadius: '1px',
-                            }}
-                          />
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: '2px',
-                              height: '12px',
-                              background: 'var(--success)',
-                              borderRadius: '1px',
-                            }}
-                          />
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: '2px',
-                              height: '6px',
-                              background: 'var(--success)',
-                              borderRadius: '1px',
-                            }}
-                          />
-                        </div>
-                      ) : isAgentThinking ? (
-                        <span
-                          style={{
-                            fontSize: '0.62rem',
-                            background: 'rgba(56, 189, 248, 0.2)',
-                            color: 'var(--accent)',
-                            border: '1px solid rgba(56, 189, 248, 0.3)',
-                            padding: '1px 6px',
-                            borderRadius: 6,
-                            fontWeight: 700,
-                          }}
-                          title="Agent is generating a response"
-                        >
-                          ⚡ THINKING
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            fontSize: '0.62rem',
-                            background: 'rgba(167, 139, 250, 0.2)',
-                            color: 'var(--accent)',
-                            padding: '1px 6px',
-                            borderRadius: 6,
-                            fontWeight: 700,
-                          }}
-                        >
-                          ACTIVE
-                        </span>
-                      )}
-                    </>
-                  )}
-                </div>
-                <button
-                  className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-                  onClick={() => patchAgentConfig({ enabled: !agentEnabled })}
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', borderRadius: '12px' }}
-                >
-                  {agentEnabled ? '🤖 ON' : '🤖 OFF'}
-                </button>
-              </div>
-
-              {/* Scrollable Sidebar Body */}
-              <div
-                style={{
-                  flex: 1,
-                  overflowY: 'auto',
-                  padding: '0.85rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.85rem',
-                }}
-              >
-                {!agentEnabled && (
-                  <div
-                    style={{
-                      padding: '1rem',
-                      background: 'rgba(255,255,255,0.02)',
-                      border: '1px dashed rgba(255,255,255,0.1)',
-                      borderRadius: '8px',
-                      textAlign: 'center',
-                      color: '#94a3b8',
-                      fontSize: '0.78rem',
-                    }}
-                  >
-                    <p style={{ margin: '0 0 0.5rem' }}>
-                      Voice Agent is currently paused in this room.
-                    </p>
-                    <button
-                      className="ch-btn-action mic-active"
-                      onClick={() => patchAgentConfig({ enabled: true })}
-                      style={{ padding: '0.35rem 0.8rem', fontSize: '0.75rem' }}
-                    >
-                      Turn On Agent
-                    </button>
-                  </div>
-                )}
-
-                {/*
-                 * The transport inspector, outside both agent branches on purpose.
-                 *
-                 * It used to live deep inside `{agentEnabled && (…)}`, so with the
-                 * voice agent paused — the state this panel opens in — the row did
-                 * not exist and the button people were told to click was simply not
-                 * on the page. Nothing about UDP, PubNub or Agora depends on whether
-                 * the agent is running; gating a transport readout on an unrelated
-                 * feature being switched on is the same mistake as gating the lobby's
-                 * opener on `state === 'ready'`.
-                 */}
-                <div
-                  style={{
-                    background: 'rgba(0,0,0,0.2)',
-                    borderRadius: '8px',
-                    padding: '0.6rem 0.8rem',
-                    border: '1px solid rgba(255,255,255,0.05)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
-                      📡 Protocols & Media Telemetry
-                    </span>
-                    <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
-                      UDP/Opus • PubNub WSS • Agora RTN
-                    </span>
-                  </div>
-                  <button
-                    className="ch-btn-action"
-                    style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
-                    onClick={() => setShowNetworkModal((open) => !open)}
-                    aria-pressed={showNetworkModal}
-                  >
-                    Inspect
-                  </button>
-                </div>
-
-                {agentEnabled && (
-                  <div
-                    style={{
-                      padding: '1rem',
-                      background: 'rgba(0,0,0,0.2)',
-                      borderRadius: '8px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '1rem',
-                    }}
-                  >
-                    {/* General Output & Trigger Modes */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: '0.8rem',
-                        flexWrap: 'wrap',
-                        padding: '0.6rem 0.8rem',
-                        background: 'rgba(255,255,255,0.02)',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.05)',
-                      }}
-                    >
-                      {(
-                        [
-                          ['respondToVoice', '🎙️ Voice (Stage)'],
-                          ['respondToChat', '💬 Live Chat'],
-                          ['speak', '🔊 Speak aloud (TTS)'],
-                          ['postToChat', '📝 Post to chat'],
-                          ['robotEmojiPrefix', '🤖 Prefix with robot'],
-                        ] as const
-                      ).map(([key, label]) => (
-                        <label
-                          key={key}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            fontSize: '0.74rem',
-                            color: 'var(--text)',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={agentConfig[key]}
-                            onChange={(e) => patchAgentConfig({ [key]: e.target.checked })}
-                            style={{ accentColor: 'var(--accent)' }}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-
-                    {/* CARD 1: Persona & Prompting */}
-                    <div
-                      style={{
-                        background: 'rgba(255,255,255,0.025)',
-                        border: '1px solid rgba(255,255,255,0.07)',
-                        borderRadius: '8px',
-                        padding: '0.75rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.6rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <span
-                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}
-                        >
-                          🎭 Persona &amp; Identity
-                        </span>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                          {personaDraft.length} chars
-                        </span>
-                      </div>
-
-                      {/* Quick Persona Chips */}
-                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                        {DEFAULT_PRESETS.map((p, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            className="ch-btn-action"
-                            style={{
-                              padding: '0.2rem 0.5rem',
-                              fontSize: '0.68rem',
-                              borderRadius: '12px',
-                              background:
-                                personaDraft === p.prompt
-                                  ? 'rgba(168, 85, 247, 0.25)'
-                                  : 'rgba(255,255,255,0.04)',
-                              border:
-                                personaDraft === p.prompt
-                                  ? '1px solid var(--accent)'
-                                  : '1px solid rgba(255,255,255,0.08)',
-                              color:
-                                personaDraft === p.prompt ? 'var(--text-strong)' : 'var(--text)',
-                              fontWeight: personaDraft === p.prompt ? 600 : 400,
-                            }}
-                            title={p.prompt}
-                            onClick={() => {
-                              setSelectedPreset(p.name);
-                              void handleApplyPersona(p.prompt, true);
-                            }}
-                          >
-                            {p.chipLabel || p.name}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Preset Selector & Action Buttons */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: '0.4rem',
-                          alignItems: 'center',
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        <select
-                          value={selectedPreset}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSelectedPreset(val);
-                            if (val) {
-                              const p = agentPromptPresets.find((pr) => pr.prompt === val);
-                              if (p) {
-                                void handleApplyPersona(p.prompt, true);
-                              }
-                            }
-                          }}
-                          style={{
-                            padding: '0 0.4rem',
-                            fontSize: '0.7rem',
-                            background: 'var(--bg-elevated)',
-                            color: 'var(--text)',
-                            border: '1px solid var(--border)',
-                            borderRadius: '4px',
-                            flex: 1,
-                            minWidth: '130px',
-                          }}
-                        >
-                          <option value="">Choose preset...</option>
-                          {agentPromptPresets.map((p, i) => (
-                            <option key={i} value={p.prompt}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                          title="Save current prompt as a custom preset"
-                          onClick={() => {
-                            const name = prompt('Name for this custom preset:');
-                            if (name && name.trim()) {
-                              const newPresets = [
-                                ...agentPromptPresets,
-                                { name: name.trim(), prompt: personaDraft },
-                              ];
-                              setAgentPromptPresets(newPresets);
-                              localStorage.setItem('agentPresets', JSON.stringify(newPresets));
-                              toastsStore.add(
-                                'success',
-                                'Preset Saved',
-                                `Saved preset "${name.trim()}".`,
-                              );
-                            }
-                          }}
-                        >
-                          Save Preset...
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.2rem 0.5rem',
-                            fontSize: '0.7rem',
-                            background: 'var(--bg-elevated)',
-                          }}
-                          title="Restore default assistant persona and clear conversation memory"
-                          onClick={() => {
-                            setSelectedPreset('');
-                            void handleApplyPersona(DEFAULT_VOICE_CONFIG.persona, true);
-                          }}
-                        >
-                          Reset Default
-                        </button>
-                      </div>
-
-                      {/* Textarea */}
-                      <textarea
-                        value={personaDraft}
-                        onChange={(e) => {
-                          setPersonaDraft(e.target.value);
-                          patchAgentConfig({ persona: e.target.value });
-                        }}
-                        placeholder="System Prompt / Persona (instruction for the voice agent)"
-                        rows={3}
-                        style={{
-                          width: '100%',
-                          minHeight: '80px',
-                          padding: '0.65rem',
-                          fontSize: '0.78rem',
-                          background: 'var(--bg-elevated)',
-                          color: 'var(--text)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '6px',
-                          resize: 'vertical',
-                        }}
-                      />
-
-                      {/* Apply & Save Buttons */}
-                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.25rem 0.6rem',
-                            fontSize: '0.72rem',
-                            background: 'var(--bg-elevated)',
-                            border: '1px solid var(--border)',
-                          }}
-                          title="Update persona for upcoming turns without erasing existing context memory"
-                          onClick={() => void handleApplyPersona(personaDraft, false)}
-                        >
-                          💾 Save Prompt
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.25rem 0.75rem',
-                            fontSize: '0.72rem',
-                            background: 'var(--accent)',
-                            color: 'var(--text-strong)',
-                            border: 'none',
-                            fontWeight: 600,
-                          }}
-                          title="Apply new persona and wipe conversation memory so the agent switches identity immediately"
-                          onClick={() => void handleApplyPersona(personaDraft, true)}
-                        >
-                          ✨ Apply &amp; Clear Memory
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* CARD 2: Voice & Speech Synthesis (TTS) */}
-                    <div
-                      style={{
-                        background: 'rgba(255,255,255,0.025)',
-                        border: '1px solid rgba(255,255,255,0.07)',
-                        borderRadius: '8px',
-                        padding: '0.75rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.6rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <span
-                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}
-                        >
-                          🔊 Voice &amp; Speech Synthesis (TTS)
-                        </span>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.15rem 0.55rem',
-                            fontSize: '0.68rem',
-                            background: 'rgba(56, 189, 248, 0.15)',
-                            color: 'var(--accent)',
-                            border: '1px solid rgba(56, 189, 248, 0.3)',
-                            borderRadius: '10px',
-                          }}
-                          title="Audition selected neural voice, speed, and pitch directly on your speakers"
-                          onClick={() => {
-                            void previewTtsVoice({
-                              voice: agentConfig.ttsVoice,
-                              rate: agentConfig.ttsRate,
-                              pitch: agentConfig.ttsPitch,
-                              volume: agentConfig.ttsVolume,
-                            });
-                          }}
-                        >
-                          ▶️ Test Voice
-                        </button>
-                      </div>
-
-                      {/* Voice Selector */}
-                      <div style={agentFieldStyle}>
-                        <span style={agentLabelStyle}>Neural Voice Model:</span>
-                        <select
-                          style={agentInputStyle}
-                          value={agentConfig.ttsVoice || 'en-US-ChristopherNeural'}
-                          onChange={(e) => patchAgentConfig({ ttsVoice: e.target.value })}
-                        >
-                          {ttsVoices.length > 0 ? (
-                            ttsVoices.map((v) => (
-                              <option key={v.name} value={v.name}>
-                                {v.label || v.name}
-                              </option>
-                            ))
-                          ) : (
-                            <>
-                              <option value="en-US-AndrewMultilingualNeural">
-                                Andrew (US Male - Ultra-Natural &amp; Warm)
-                              </option>
-                              <option value="en-US-AvaMultilingualNeural">
-                                Ava (US Female - Ultra-Natural &amp; Conversational)
-                              </option>
-                              <option value="en-US-BrianMultilingualNeural">
-                                Brian (US Male - Engaging &amp; Friendly)
-                              </option>
-                              <option value="en-US-EmmaMultilingualNeural">
-                                Emma (US Female - Cheerful &amp; Clear)
-                              </option>
-                              <option value="en-US-ChristopherNeural">
-                                Christopher (US Male - Warm &amp; Authoritative)
-                              </option>
-                              <option value="en-US-JennyNeural">
-                                Jenny (US Female - Clear &amp; Conversational)
-                              </option>
-                              <option value="en-US-GuyNeural">
-                                Guy (US Male - Casual &amp; Friendly)
-                              </option>
-                              <option value="en-US-AriaNeural">
-                                Aria (US Female - Expressive)
-                              </option>
-                              <option value="en-US-EricNeural">Eric (US Male - Crisp)</option>
-                              <option value="en-GB-RyanNeural">Ryan (UK Male - Natural)</option>
-                              <option value="en-GB-SoniaNeural">Sonia (UK Female - Clear)</option>
-                              <option value="en-AU-NatNeural">Nat (AU Female)</option>
-                              <option value="en-AU-WilliamNeural">William (AU Male)</option>
-                              <option value="en-IN-NeerjaNeural">
-                                Neerja (IN Female - Professional)
-                              </option>
-                              <option value="ja-JP-KeitaNeural">Keita (Japanese Male)</option>
-                              <option value="es-ES-AlvaroNeural">Alvaro (Spanish Male)</option>
-                              <option value="fr-FR-HenriNeural">Henri (French Male)</option>
-                              <option value="de-DE-ConradNeural">Conrad (German Male)</option>
-                            </>
-                          )}
-                        </select>
-                      </div>
-
-                      {/* Audio Tuning: Volume, Rate, Pitch */}
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                          <span style={agentLabelStyle}>Output Volume:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.ttsVolume || '+0%'}
-                            onChange={(e) => patchAgentConfig({ ttsVolume: e.target.value })}
-                          >
-                            <option value="-50%">50% (Soft)</option>
-                            <option value="-25%">75%</option>
-                            <option value="+0%">100% (Normal)</option>
-                            <option value="+25%">125%</option>
-                            <option value="+50%">150% (Loud)</option>
-                          </select>
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                          <span style={agentLabelStyle}>Speech Rate:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.ttsRate || '+0%'}
-                            onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
-                          >
-                            <option value="-20%">0.8x (Slow)</option>
-                            <option value="-10%">0.9x</option>
-                            <option value="+0%">1.0x (Normal)</option>
-                            <option value="+10%">1.1x (Fast)</option>
-                            <option value="+20%">1.2x</option>
-                            <option value="+30%">1.3x</option>
-                          </select>
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                          <span style={agentLabelStyle}>Voice Pitch:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.ttsPitch || '+0Hz'}
-                            onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
-                          >
-                            <option value="-10Hz">-10Hz (Deeper)</option>
-                            <option value="-5Hz">-5Hz</option>
-                            <option value="+0Hz">Default (+0Hz)</option>
-                            <option value="+5Hz">+5Hz</option>
-                            <option value="+10Hz">+10Hz (Higher)</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* CARD 3: Speech Recognition (STT) & Floor Dynamics */}
-                    <div
-                      style={{
-                        background: 'rgba(255,255,255,0.025)',
-                        border: '1px solid rgba(255,255,255,0.07)',
-                        borderRadius: '8px',
-                        padding: '0.75rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.6rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <span
-                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--success)' }}
-                        >
-                          🎙️ Hearing &amp; Speech Recognition (STT)
-                        </span>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                          Whisper / VAD Filtered
-                        </span>
-                      </div>
-
-                      {/* Live transcript */}
-                      <div
-                        style={{
-                          padding: '0.45rem 0.65rem',
-                          background: 'rgba(0, 0, 0, 0.3)',
-                          borderTop: '2px solid var(--success)',
-                          fontSize: '0.72rem',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '3px',
-                        }}
-                      >
-                        <span
-                          style={{
-                            color: 'var(--text-dim)',
-                            fontSize: '0.62rem',
-                            fontWeight: 700,
-                            letterSpacing: '0.14em',
-                            textTransform: 'uppercase',
-                          }}
-                        >
-                          Live transcript
-                        </span>
-                        <TranscriptLines
-                          lines={heardLines}
-                          live={
-                            liveCaption
-                              ? {
-                                  text: liveCaption.text,
-                                  speaker: speakerNameFor(liveCaption.speakerId),
-                                }
-                              : null
-                          }
-                        />
-                        {/*
-                         * Always rendered, not only while waiting: a transcript that
-                         * arrived ten minutes ago is not evidence that the ears still
-                         * work, and the old placeholder said "listening…" whether the
-                         * room was quiet, nobody's audio had ever reached the agent,
-                         * or the level simply never crossed the threshold.
-                         */}
-                        <EarsReadout
-                          getHealth={getEarsHealth}
-                          hasHeard={heardLines.length > 0 || !!liveCaption}
-                        />
-                      </div>
-
-                      {/* When to speak & Wake Words */}
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                          <span style={agentLabelStyle}>When to speak:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.posture}
-                            onChange={(e) =>
-                              patchAgentConfig({
-                                posture: e.target.value as VoiceAgentConfig['posture'],
-                              })
-                            }
-                          >
-                            <option value="addressed">Only when addressed</option>
-                            <option value="conversational">Conversational (with cooldown)</option>
-                            <option value="always">Always (replies to everything)</option>
-                            <option value="interject">Interject (cuts in mid-sentence)</option>
-                          </select>
-                        </div>
-
-                        {agentConfig.posture === 'interject' && (
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '100px' }}>
-                            <span style={agentLabelStyle}>Cut in after:</span>
-                            <input
-                              type="number"
-                              min={2}
-                              max={60}
-                              step={1}
-                              style={agentInputStyle}
-                              value={agentConfig.interjectAfterS ?? 6}
-                              onChange={(e) =>
-                                patchAgentConfig({
-                                  interjectAfterS: Math.max(2, Number(e.target.value) || 6),
-                                })
-                              }
-                            />
-                          </div>
-                        )}
-
-                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
-                          <span style={agentLabelStyle}>Wake words (comma separated):</span>
-                          <input
-                            type="text"
-                            style={agentInputStyle}
-                            value={wakeWordsInput}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setWakeWordsInput(val);
-                              patchAgentConfig({
-                                wakeWords: val
-                                  .split(',')
-                                  .map((w) => w.trim().toLowerCase())
-                                  .filter(Boolean),
-                              });
-                            }}
-                            onBlur={() => {
-                              const cleaned = wakeWordsInput
-                                .split(',')
-                                .map((w) => w.trim().toLowerCase())
-                                .filter(Boolean);
-                              setWakeWordsInput(cleaned.join(', '));
-                            }}
-                            placeholder="agent, assistant, bot"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Conversational Timing */}
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                          <span style={agentLabelStyle}>Turn Eagerness (Speed):</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.turnEagerness || 'normal'}
-                            onChange={(e) => {
-                              const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
-                              const delay =
-                                eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
-                              patchAgentConfig({
-                                turnEagerness: eagerness,
-                                endpointingDelayMs: delay,
-                              });
-                            }}
-                          >
-                            <option value="fast">⚡ Fast (400ms pause)</option>
-                            <option value="normal">⚖️ Normal (750ms pause)</option>
-                            <option value="patient">🧘 Patient (1200ms pause)</option>
-                          </select>
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                          <span style={agentLabelStyle}>Take Turn After Silence:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.silenceTimeoutS || 0}
-                            onChange={(e) =>
-                              patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })
-                            }
-                          >
-                            <option value={0}>Disabled</option>
-                            <option value={15}>After 15s quiet</option>
-                            <option value={30}>After 30s quiet</option>
-                            <option value={60}>After 60s quiet</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Natural Flow & Interruption Toggles */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: '1rem',
-                          flexWrap: 'wrap',
-                          padding: '0.1rem 0',
-                        }}
-                      >
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            fontSize: '0.74rem',
-                            color: 'var(--text)',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={agentConfig.thinkingFiller !== false}
-                            onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
-                            style={{ accentColor: 'var(--accent)' }}
-                          />
-                          Soft thinking filler ("Hmm, let me check...")
-                        </label>
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            fontSize: '0.74rem',
-                            color: 'var(--text)',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={agentConfig.allowBargeIn !== false}
-                            onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
-                            style={{ accentColor: 'var(--accent)' }}
-                          />
-                          Allow users to interrupt agent while speaking (Barge-in)
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* CARD 4: Model & Reasoning Parameters */}
-                    <div
-                      style={{
-                        background: 'rgba(255,255,255,0.025)',
-                        border: '1px solid rgba(255,255,255,0.07)',
-                        borderRadius: '8px',
-                        padding: '0.75rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.6rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <span
-                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--warning)' }}
-                        >
-                          🧠 Model &amp; Reasoning Parameters
-                        </span>
-                        {agentEngineStatus?.provider && (
-                          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
-                            Provider: {agentEngineStatus.provider}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Engine Model Selector */}
-                      <div style={agentFieldStyle}>
-                        <label style={agentLabelStyle}>Active Engine Model:</label>
-                        <select
-                          style={agentInputStyle}
-                          value={agentEngineStatus?.model || ''}
-                          disabled={switchingModel}
-                          onChange={async (e) => {
-                            const newModel = e.target.value;
-                            if (!agentEngineStatus?.provider) return;
-                            setSwitchingModel(true);
-                            try {
-                              await saveAgentConfig(
-                                newModel,
-                                agentEngineStatus.provider,
-                                agentEngineStatus.endpoint || undefined,
-                              );
-                              const updated = await getAgentStatus();
-                              setAgentEngineStatus(updated);
-                              toastsStore.add(
-                                'success',
-                                'Model Switched',
-                                `Voice Agent now using ${newModel}`,
-                              );
-                            } catch (err) {
-                              toastsStore.add(
-                                'error',
-                                'Model Switch Failed',
-                                err instanceof Error ? err.message : String(err),
-                              );
-                            } finally {
-                              setSwitchingModel(false);
-                            }
-                          }}
-                        >
-                          {agentEngineStatus?.available_models &&
-                          agentEngineStatus.available_models.length > 0 ? (
-                            agentEngineStatus.available_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m.includes('3b') || m.includes('2b') || m.includes('1b')
-                                  ? `⚡ ${m} (Fast - Recommended)`
-                                  : m}
-                              </option>
-                            ))
-                          ) : (
-                            <option value={agentEngineStatus?.model || ''}>
-                              {agentEngineStatus?.model || 'Loading...'}
-                            </option>
-                          )}
-                        </select>
-                      </div>
-
-                      {/* Model override, Temperature, Max Tokens */}
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
-                          <span style={agentLabelStyle}>Model Override (optional):</span>
-                          <input
-                            type="text"
-                            placeholder="System default"
-                            value={agentConfig.model || ''}
-                            onChange={(e) =>
-                              patchAgentConfig({ model: e.target.value.trim() || undefined })
-                            }
-                            style={agentInputStyle}
-                          />
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                          <span style={agentLabelStyle}>
-                            Temperature ({agentConfig.temperature}):
-                          </span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="1.5"
-                            step="0.1"
-                            value={agentConfig.temperature}
-                            onChange={(e) =>
-                              patchAgentConfig({ temperature: Number(e.target.value) })
-                            }
-                            style={agentInputStyle}
-                          />
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                          <span style={agentLabelStyle}>Max Tokens:</span>
-                          <input
-                            type="number"
-                            min="20"
-                            max="400"
-                            step="10"
-                            value={agentConfig.maxTokens}
-                            onChange={(e) =>
-                              patchAgentConfig({ maxTokens: Number(e.target.value) })
-                            }
-                            style={agentInputStyle}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Memory and Cooldown */}
-                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
-                          <span style={agentLabelStyle}>Remember turns:</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="40"
-                            step="2"
-                            style={agentInputStyle}
-                            value={agentConfig.memoryTurns}
-                            onChange={(e) =>
-                              patchAgentConfig({ memoryTurns: Number(e.target.value) })
-                            }
-                          />
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
-                          <span style={agentLabelStyle}>Cooldown (seconds):</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="60"
-                            step="1"
-                            style={agentInputStyle}
-                            value={agentConfig.cooldownS}
-                            onChange={(e) =>
-                              patchAgentConfig({ cooldownS: Number(e.target.value) })
-                            }
-                          />
-                        </div>
-                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '130px' }}>
-                          <span style={agentLabelStyle}>Look things up:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.retrieval}
-                            onChange={(e) =>
-                              patchAgentConfig({
-                                retrieval: e.target.value as VoiceAgentConfig['retrieval'],
-                              })
-                            }
-                          >
-                            <option value="off">Never</option>
-                            <option value="command">Only on /agent search</option>
-                            <option value="auto">Automatically for questions</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Why it did or didn't speak, and what it currently remembers. */}
-                    <div
-                      style={{
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        padding: '0.75rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          flexWrap: 'wrap',
-                          gap: '0.5rem',
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: '0.75rem',
-                            color: 'var(--text-dim)',
-                            fontWeight: 600,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <span>
-                            Last turn:{' '}
-                            <strong style={{ color: 'var(--text-strong)' }}>
-                              {agentReason ?? '—'}
-                            </strong>
-                          </span>
-                          {voiceHealth && <VoiceHealthChips health={voiceHealth} />}
-                          {isAgentThinking && (
-                            <span
-                              style={{
-                                color: 'var(--accent)',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                              }}
-                            >
-                              ⚡ Generating response...
-                            </span>
-                          )}
-                          {isAgentSpeaking && (
-                            <span
-                              style={{
-                                color: 'var(--success)',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                              }}
-                            >
-                              🔊 Speaking
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.2rem 0.5rem',
-                            fontSize: '0.7rem',
-                            background: 'var(--bg-elevated)',
-                          }}
-                          onClick={() => void handleClearContext(false)}
-                        >
-                          🧹 Clear Context Window
-                        </button>
-                      </div>
-                      {speechError && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--warning)' }}>
-                          ⚠️ {speechError}
-                        </div>
-                      )}
-                      {agentMemory.length > 0 && (
-                        <details>
-                          <summary
-                            style={{ fontSize: '0.75rem', color: '#94a3b8', cursor: 'pointer' }}
-                          >
-                            Conversation memory ({agentMemory.length})
-                          </summary>
-                          <div
-                            style={{
-                              maxHeight: '160px',
-                              overflowY: 'auto',
-                              marginTop: '0.5rem',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.25rem',
-                            }}
-                          >
-                            {agentMemory.map((t, i) => (
-                              <div
-                                key={i}
-                                style={{
-                                  fontSize: '0.72rem',
-                                  color: t.role === 'agent' ? '#a5b4fc' : '#cbd5e1',
-                                }}
-                              >
-                                <strong>
-                                  {t.role === 'agent' ? 'Agent' : t.speaker || 'Room'}:
-                                </strong>{' '}
-                                {t.text}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-
-                      {/* People Knowledge & Profile Memory */}
-                      <div
-                        style={{
-                          background: 'rgba(0,0,0,0.25)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
-                          border: '1px solid rgba(255,255,255,0.06)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.6rem',
-                          marginTop: '0.4rem',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
-                            👥 People Knowledge ({peopleMemory.length})
-                          </span>
-                          <button
-                            className="ch-btn-action"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                            onClick={() => void refreshPeopleMemory()}
-                            disabled={peopleMemoryLoading}
-                          >
-                            {peopleMemoryLoading ? '...' : '🔄 Refresh'}
-                          </button>
-                        </div>
-
-                        <input
-                          type="text"
-                          placeholder="Search remembered people..."
-                          value={peopleMemoryQuery}
-                          onChange={(e) => {
-                            setPeopleMemoryQuery(e.target.value);
-                            void refreshPeopleMemory(e.target.value);
-                          }}
-                          // Vertical padding stays out — see agentInputStyle.
-                          style={{ ...agentInputStyle, fontSize: '0.75rem' }}
-                        />
-
-                        {peopleMemory.length === 0 ? (
-                          <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0.2rem 0' }}>
-                            No users remembered yet. The agent automatically learns people and their
-                            facts when they speak or chat!
-                          </p>
-                        ) : (
-                          <div
-                            style={{
-                              maxHeight: '220px',
-                              overflowY: 'auto',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.5rem',
-                            }}
-                          >
-                            {peopleMemory.map((p) => {
-                              const noteInput = newNoteInputs[p.user_id] || '';
-                              return (
-                                <div
-                                  key={p.user_id}
-                                  style={{
-                                    background: 'rgba(255,255,255,0.03)',
-                                    borderRadius: '6px',
-                                    padding: '0.5rem 0.6rem',
-                                    border: '1px solid rgba(255,255,255,0.04)',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '0.3rem',
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'space-between',
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.4rem',
-                                      }}
-                                    >
-                                      {p.photo_url ? (
-                                        <img
-                                          src={p.photo_url}
-                                          alt=""
-                                          style={{
-                                            width: '20px',
-                                            height: '20px',
-                                            borderRadius: '6px',
-                                          }}
-                                        />
-                                      ) : (
-                                        <div
-                                          style={{
-                                            width: '20px',
-                                            height: '20px',
-                                            borderRadius: '6px',
-                                            background: 'var(--bg-elevated)',
-                                            fontSize: '0.6rem',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: '#cbd5e1',
-                                          }}
-                                        >
-                                          {p.name.slice(0, 1).toUpperCase()}
-                                        </div>
-                                      )}
-                                      <span
-                                        style={{
-                                          fontSize: '0.78rem',
-                                          fontWeight: 600,
-                                          color: 'var(--text-strong)',
-                                        }}
-                                      >
-                                        {p.name}
-                                      </span>
-                                      {p.username && (
-                                        <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                                          @{p.username}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <button
-                                      style={{
-                                        background: 'transparent',
-                                        border: 'none',
-                                        color: '#ef4444',
-                                        fontSize: '0.65rem',
-                                        cursor: 'pointer',
-                                        padding: '2px 4px',
-                                      }}
-                                      title="Forget this person"
-                                      onClick={async () => {
-                                        await forgetPersonMemory(p.user_id);
-                                        void refreshPeopleMemory();
-                                      }}
-                                    >
-                                      ✕
-                                    </button>
-                                  </div>
-
-                                  {p.bio && (
-                                    <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
-                                      {p.bio.slice(0, 90)}
-                                      {p.bio.length > 90 ? '...' : ''}
-                                    </div>
-                                  )}
-
-                                  {/* Notes / Learned Facts */}
-                                  {p.notes.length > 0 && (
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: '2px',
-                                      }}
-                                    >
-                                      {p.notes.map((note, nIdx) => (
-                                        <div
-                                          key={nIdx}
-                                          style={{
-                                            fontSize: '0.68rem',
-                                            color: '#a78bfa',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            background: 'rgba(167, 139, 250, 0.08)',
-                                            padding: '2px 6px',
-                                            borderRadius: '4px',
-                                          }}
-                                        >
-                                          <span>💡 {note}</span>
-                                          <button
-                                            style={{
-                                              background: 'transparent',
-                                              border: 'none',
-                                              color: '#94a3b8',
-                                              cursor: 'pointer',
-                                              fontSize: '0.6rem',
-                                              padding: '0 2px',
-                                            }}
-                                            onClick={async () => {
-                                              await removePersonNote(p.user_id, nIdx);
-                                              void refreshPeopleMemory();
-                                            }}
-                                          >
-                                            ✕
-                                          </button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  {/* Add Note Input */}
-                                  <form
-                                    onSubmit={async (e) => {
-                                      e.preventDefault();
-                                      if (!noteInput.trim()) return;
-                                      await addPersonNote(p.user_id, noteInput.trim());
-                                      setNewNoteInputs((prev) => ({ ...prev, [p.user_id]: '' }));
-                                      void refreshPeopleMemory();
-                                    }}
-                                    style={{ display: 'flex', gap: '0.3rem', marginTop: '2px' }}
-                                  >
-                                    <input
-                                      type="text"
-                                      placeholder="+ Add note / fact..."
-                                      value={noteInput}
-                                      onChange={(e) =>
-                                        setNewNoteInputs((prev) => ({
-                                          ...prev,
-                                          [p.user_id]: e.target.value,
-                                        }))
-                                      }
-                                      style={{
-                                        ...agentInputStyle,
-                                        padding: '0 0.4rem',
-                                        fontSize: '0.68rem',
-                                        flex: 1,
-                                      }}
-                                    />
-                                    <button
-                                      type="submit"
-                                      className="ch-btn-action"
-                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.68rem' }}
-                                    >
-                                      Add
-                                    </button>
-                                  </form>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                        <span style={{ fontSize: '0.65rem', color: '#64748b' }}>
-                          💡 Spoken / Chat commands: <code>/agent whois @name</code>,{' '}
-                          <code>/agent remember @name fact</code>, <code>/agent people</code>
-                        </span>
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        gap: '0.5rem',
-                        marginTop: '0.5rem',
-                        borderTop: '1px solid rgba(255,255,255,0.05)',
-                        paddingTop: '1rem',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="ch-btn-action"
-                        style={{
-                          padding: '0.6rem 1.2rem',
-                          fontSize: '0.85rem',
-                          background: '#e11d48',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '20px',
-                          cursor: !isAgentThinking && !isAgentSpeaking ? 'not-allowed' : 'pointer',
-                          opacity: !isAgentThinking && !isAgentSpeaking ? 0.5 : 1,
-                        }}
-                        onClick={handleInterrupt}
-                        disabled={!isAgentThinking && !isAgentSpeaking}
-                        title="Immediately stop speaking and abort in-flight LLM generation"
-                      >
-                        ✋ Interrupt
-                      </button>
-                      <button
-                        type="button"
-                        className="ch-btn-action"
-                        style={{
-                          padding: '0.6rem 1.2rem',
-                          fontSize: '0.85rem',
-                          background: '#2e333d',
-                          border: 'none',
-                          borderRadius: '20px',
-                          cursor: isAgentThinking || isAgentSpeaking ? 'not-allowed' : 'pointer',
-                          opacity: isAgentThinking || isAgentSpeaking ? 0.6 : 1,
-                        }}
-                        onClick={() =>
-                          enqueueUtterance(
-                            'Take the floor now: pick up the current conversation, or open one if it has gone quiet.',
-                            'nudge',
-                            true,
-                          )
-                        }
-                        disabled={isAgentThinking || isAgentSpeaking}
-                      >
-                        {isAgentThinking
-                          ? '⏳ Generating…'
-                          : isAgentSpeaking
-                            ? '🔊 Speaking…'
-                            : '🗣️ Speak Now'}
-                      </button>
-                      <button
-                        type="button"
-                        className="ch-btn-action"
-                        style={{
-                          padding: '0.6rem 1.2rem',
-                          fontSize: '0.85rem',
-                          background: '#2e333d',
-                          border: 'none',
-                          borderRadius: '20px',
-                          cursor: 'pointer',
-                        }}
-                        onClick={() => void handleClearContext(false)}
-                        title="Wipe conversation history so agent forgets recent context"
-                      >
-                        🧹 Forget
-                      </button>
-                    </div>
-                    {!isCurrentUserSpeaker && (
-                      <p
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#94a3b8',
-                          margin: '0',
-                          textAlign: 'right',
-                        }}
-                      >
-                        ℹ️ You are in the audience. Agent will respond in text chat only.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+              engine={agentEngineStatus}
+              ttsVoices={ttsVoices}
+              networkOpen={showNetworkModal}
+              onToggleNetwork={() => setShowNetworkModal((open) => !open)}
+              onApplyPersona={handleApplyPersona}
+              onClearContext={() => void handleClearContext(false)}
+              onInterrupt={handleInterrupt}
+              onSpeakNow={() =>
+                enqueueUtterance(
+                  'Take the floor now: pick up the current conversation, or open one if it has gone quiet.',
+                  'nudge',
+                  true,
+                )
+              }
+              onTestVoice={() =>
+                void previewTtsVoice({
+                  voice: agentConfig.ttsVoice,
+                  rate: agentConfig.ttsRate,
+                  pitch: agentConfig.ttsPitch,
+                  volume: agentConfig.ttsVolume,
+                })
+              }
+              onHide={() => setShowAgentSidebar(false)}
+            />
+          ) : (
+            <AgentRail state={railState} onShow={() => setShowAgentSidebar(true)} />
           )}
         </div>
 

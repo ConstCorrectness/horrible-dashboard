@@ -2,20 +2,17 @@
  * Agent tool definitions for the Clubhouse module.
  *
  * Exposes full query and control capabilities over the connected Clubhouse account,
- * live audio rooms, user profiles, following list, chat, and persistent people memory.
+ * live audio rooms, user profiles, following list and chat.
  */
 import type { AgentToolDecl } from '../../registry';
 import {
-  addPersonNote,
   disconnectClubhouse,
-  forgetPersonMemory,
   getClubhouseChannelChat,
   getClubhouseChannelDetails,
   getClubhouseChannels,
   getClubhouseFollowing,
   getClubhouseStatus,
   getClubhouseUserProfile,
-  listPeopleMemory,
   searchClubhouseUsers,
   sendChannelMessage,
 } from './api';
@@ -23,7 +20,8 @@ import {
 export const clubhouseAgentTools: AgentToolDecl[] = [
   {
     name: 'clubhouse.status',
-    description: 'Read the connected Clubhouse account status (name, username, user ID, connected state).',
+    description:
+      'Read the connected Clubhouse account status (name, username, user ID, connected state).',
     sideEffect: false,
     handler: async () => {
       const status = await getClubhouseStatus();
@@ -32,7 +30,8 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
   },
   {
     name: 'clubhouse.listRooms',
-    description: 'List all currently active live Clubhouse audio rooms with topics, channels, active speakers, and member counts.',
+    description:
+      'List all currently active live Clubhouse audio rooms with topics, channels, active speakers, and member counts.',
     sideEffect: false,
     handler: async () => {
       const res = await getClubhouseChannels();
@@ -42,7 +41,8 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
   },
   {
     name: 'clubhouse.getChannelDetails',
-    description: 'Fetch detailed information about a specific Clubhouse room / channel, including who is on stage, in the audience, and room topic.',
+    description:
+      'Fetch detailed information about a specific Clubhouse room / channel, including who is on stage, in the audience, and room topic.',
     params: {
       type: 'object',
       properties: {
@@ -60,7 +60,8 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
   },
   {
     name: 'clubhouse.getUserProfile',
-    description: 'Query a Clubhouse user profile by their numeric user_id. Returns full bio, display name, username, Twitter/Instagram handles, follower count, and clubs.',
+    description:
+      'Query a Clubhouse user profile by their numeric user_id. Returns full bio, display name, username, Twitter/Instagram handles, follower count, and clubs.',
     params: {
       type: 'object',
       properties: {
@@ -106,7 +107,8 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
   },
   {
     name: 'clubhouse.getChat',
-    description: 'Read the recent live text comments and chat messages in an active Clubhouse channel.',
+    description:
+      'Read the recent live text comments and chat messages in an active Clubhouse channel.',
     params: {
       type: 'object',
       properties: {
@@ -139,60 +141,6 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
       const message = String(args.message || '');
       if (!channel || !message.trim()) return { error: 'channel and message are required' };
       const res = await sendChannelMessage(channel, message);
-      return res;
-    },
-  },
-  {
-    name: 'clubhouse.listPeopleMemory',
-    description: 'Search or list persistent learned user memories, background notes, and tags stored by the voice agent.',
-    params: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Optional name, username, or topic keyword filter' },
-      },
-    },
-    sideEffect: false,
-    handler: async (args: Record<string, unknown>) => {
-      const query = args.query ? String(args.query) : '';
-      const list = await listPeopleMemory(query);
-      return { count: list.length, people: list };
-    },
-  },
-  {
-    name: 'clubhouse.rememberUserFact',
-    description: 'Save a learned note or fact about a Clubhouse user into long-term agent memory.',
-    params: {
-      type: 'object',
-      properties: {
-        userId: { type: 'number', description: 'The numeric user ID of the person' },
-        note: { type: 'string', description: 'Fact or note to remember about this person' },
-      },
-      required: ['userId', 'note'],
-    },
-    sideEffect: true,
-    handler: async (args: Record<string, unknown>) => {
-      const userId = Number(args.userId);
-      const note = String(args.note || '');
-      if (!userId || !note.trim()) return { error: 'userId and note are required' };
-      const updated = await addPersonNote(userId, note.trim());
-      return { success: true, person: updated };
-    },
-  },
-  {
-    name: 'clubhouse.forgetUserMemory',
-    description: 'Erase all persistent memories and learned notes for a given Clubhouse user ID.',
-    params: {
-      type: 'object',
-      properties: {
-        userId: { type: 'number', description: 'The numeric user ID of the person' },
-      },
-      required: ['userId'],
-    },
-    sideEffect: true,
-    handler: async (args: Record<string, unknown>) => {
-      const userId = Number(args.userId);
-      if (!userId) return { error: 'userId is required' };
-      const res = await forgetPersonMemory(userId);
       return res;
     },
   },
