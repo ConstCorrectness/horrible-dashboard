@@ -118,17 +118,26 @@ impl Front {
             h,
         };
         if self.account.is_none() {
+            // Everything on the sign-in page hangs off one centred panel, and
+            // the painter reads the same rectangle.
+            let panel = signin_panel(width, k, top);
+            let inner = |y: f32, h: f32| Hit {
+                x: panel.x + SIGNIN_PAD * k,
+                y: panel.y + y * k,
+                w: panel.w - SIGNIN_PAD * 2.0 * k,
+                h: h * k,
+            };
             match self.signin {
                 SignIn::Idle | SignIn::Failed(_) => {
                     for i in 0..PROVIDERS.len() {
                         out.push((
                             Target::Provider(i),
-                            wide(top + (150.0 + 52.0 * i as f32) * k, 44.0 * k),
+                            inner(SIGNIN_BUTTONS + 56.0 * i as f32, 46.0),
                         ));
                     }
                 }
                 SignIn::Starting(_) | SignIn::Waiting { .. } => {
-                    out.push((Target::SignInCancel, wide(top + 236.0 * k, 40.0 * k)));
+                    out.push((Target::SignInCancel, inner(SIGNIN_CANCEL, 40.0)));
                 }
             }
             return;
@@ -270,7 +279,7 @@ impl Front {
         let right = width - MARGIN * k;
         let area_x = left + (COLUMN + 32.0) * k;
         let Some(account) = &self.account else {
-            return self.paint_signin(p, hits, k, top);
+            return self.paint_signin(p, hits, width, k, top);
         };
 
         if self.tab == Tab::Inventory {
@@ -512,35 +521,103 @@ impl Front {
         }
     }
 
-    /// The sign-in panel: what an account is for, and the way in.
-    fn paint_signin(&self, p: &mut Painter, hits: &[(Target, Hit)], k: f32, top: f32) {
-        let left = MARGIN * k;
-        heading(p, left, top, k, "ACCOUNT");
-        p.text(left, top + 30.0 * k, 2.4 * k, theme::TEXT, "SIGN IN");
-        for (i, line) in [
-            "AN ACCOUNT KEEPS YOUR SKINS, CREDITS, CASES AND RATING.",
-            "YOU CAN PLAY WITHOUT ONE, AS A GUEST.",
-            "SIGNING IN HAPPENS IN YOUR BROWSER. NO PASSWORD IS TYPED HERE.",
-        ]
-        .iter()
-        .enumerate()
-        {
-            p.num(
-                left,
-                top + (70.0 + 18.0 * i as f32) * k,
-                1.05 * k,
-                theme::TEXT_DIM,
-                line,
-            );
-        }
+    /// The sign-in page: one panel in the middle of the screen that says what
+    /// an account is for and offers the ways in, and — once one is picked —
+    /// turns into the two things to do in the browser.
+    fn paint_signin(&self, p: &mut Painter, hits: &[(Target, Hit)], width: f32, k: f32, top: f32) {
+        let panel = signin_panel(width, k, top);
+        let pad = SIGNIN_PAD * k;
+        let (x, y) = (panel.x + pad, panel.y);
+        let inner = panel.w - pad * 2.0;
+
+        // A shadow under it, then the house panel: the page has one object on
+        // it and it should sit above the field, not in it.
+        p.gradient_v(
+            panel.x,
+            panel.y + panel.h,
+            panel.w,
+            18.0 * k,
+            [0.0, 0.0, 0.0, 0.35],
+            [0.0, 0.0, 0.0, 0.0],
+        );
+        p.grid_panel(
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            14.0 * k,
+            Some(theme::ACCENT),
+            6.0 * k,
+        );
+        p.gradient_v(
+            panel.x + 14.0 * k,
+            panel.y + 2.0,
+            panel.w - 28.0 * k,
+            90.0 * k,
+            theme::with_alpha(theme::ACCENT, 0.13),
+            theme::with_alpha(theme::ACCENT, 0.0),
+        );
+
+        heading(p, x, y + 24.0 * k, k, "ACCOUNT");
+        p.text(x, y + 50.0 * k, 2.6 * k, theme::TEXT, "SIGN IN");
+        // Who you are right now, opposite the title: a guest, by this name.
+        p.text_right(x + inner, y + 26.0 * k, 1.0 * k, theme::FAINT, "PLAYING AS A GUEST");
+        let name_w = p.name_width(&self.callsign, 1.35 * k);
+        p.name(x + inner - name_w, y + 46.0 * k, 1.35 * k, theme::AMBER, &self.callsign);
+        p.rule(x, y + 84.0 * k, inner, [1.0, 1.0, 1.0, 0.10], theme::ACCENT);
+
         match &self.signin {
-            SignIn::Starting(i) => {
+            SignIn::Idle | SignIn::Failed(_) => {
+                for (i, line) in [
+                    "AN ACCOUNT KEEPS YOUR SKINS, CREDITS, CASES AND RATING.",
+                    "SIGNING IN HAPPENS IN YOUR BROWSER. NO PASSWORD IS TYPED HERE.",
+                    "YOU CAN PLAY WITHOUT ONE, AS A GUEST.",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let ly = y + (102.0 + 22.0 * i as f32) * k;
+                    p.rect(x, ly + 2.0 * k, 5.0 * k, 5.0 * k, theme::ACCENT);
+                    p.num(x + 16.0 * k, ly, 1.05 * k, theme::TEXT_DIM, line);
+                }
+                // The foot of the panel: the other way on, which is no way at
+                // all — a guest is already playing.
+                let fy = y + (SIGNIN_H - 44.0) * k;
+                p.rect(x, fy, inner, 1.0, [1.0, 1.0, 1.0, 0.10]);
                 p.num(
-                    left,
-                    top + 160.0 * k,
-                    1.2 * k,
+                    x,
+                    fy + 14.0 * k,
+                    1.0 * k,
+                    theme::FAINT,
+                    "NO ACCOUNT NEEDED  /  THE PLAY TAB WORKS AS YOU ARE",
+                );
+                if let SignIn::Failed(why) = &self.signin {
+                    let fy = y + (SIGNIN_BUTTONS - 32.0) * k;
+                    p.rect(x, fy, inner, 24.0 * k, theme::with_alpha(theme::RED, 0.14));
+                    p.rect(x, fy, 2.0, 24.0 * k, theme::RED);
+                    p.num(
+                        x + 12.0 * k,
+                        fy + 8.0 * k,
+                        1.05 * k,
+                        theme::RED,
+                        &why.to_uppercase(),
+                    );
+                }
+            }
+            SignIn::Starting(i) => {
+                p.text(
+                    x,
+                    y + 104.0 * k,
+                    1.45 * k,
                     theme::AMBER,
-                    &format!("ASKING THE SERVER TO START {} SIGN-IN", PROVIDERS[*i].1),
+                    &format!("STARTING {} SIGN-IN", PROVIDERS[*i].1),
+                );
+                p.num(
+                    x,
+                    y + 132.0 * k,
+                    1.05 * k,
+                    theme::TEXT_DIM,
+                    &format!("ASKING THE SERVER{}", waiting_dots(self.clock)),
                 );
             }
             SignIn::Waiting {
@@ -549,76 +626,193 @@ impl Front {
                 code,
             } => {
                 p.text(
-                    left,
-                    top + 140.0 * k,
-                    1.5 * k,
+                    x,
+                    y + 100.0 * k,
+                    1.45 * k,
                     theme::AMBER,
                     &format!("FINISH {} SIGN-IN IN YOUR BROWSER", PROVIDERS[*provider].1),
                 );
-                p.num(
-                    left,
-                    top + 166.0 * k,
-                    1.0 * k,
-                    theme::FAINT,
-                    "IF IT DID NOT OPEN, GO TO",
-                );
-                // The address as it is: case matters in a link.
-                p.name(left, top + 182.0 * k, 1.15 * k, theme::TEXT, url);
+                // Step one: the page. The address as it is — case matters in
+                // a link — in a field, because it is a thing to copy.
+                step_label(p, x, y + 130.0 * k, k, "1", "IF IT DID NOT OPEN, GO TO");
+                let field = Hit {
+                    x,
+                    y: y + 148.0 * k,
+                    w: inner,
+                    h: 32.0 * k,
+                };
+                p.rect(field.x, field.y, field.w, field.h, [0.0, 0.0, 0.0, 0.34]);
+                p.rect(field.x, field.y, 2.0, field.h, theme::ACCENT);
+                p.name(field.x + 12.0 * k, field.y + 10.0 * k, 1.2 * k, theme::TEXT, url);
+                // Step two: the code, one character to a cell, so it is read
+                // in the groups it is typed in.
                 if let Some(code) = code {
-                    p.num(
-                        left + (COLUMN + 32.0) * k,
-                        top + 140.0 * k,
-                        1.0 * k,
-                        theme::FAINT,
-                        "AND ENTER THIS CODE",
-                    );
-                    p.num(
-                        left + (COLUMN + 32.0) * k,
-                        top + 158.0 * k,
-                        3.0 * k,
-                        theme::AMBER,
-                        code,
-                    );
+                    step_label(p, x, y + 198.0 * k, k, "2", "AND ENTER THIS CODE");
+                    code_cells(p, x, y + 216.0 * k, inner, k, code);
                 }
-            }
-            SignIn::Failed(why) => {
                 p.num(
-                    left,
-                    top + 126.0 * k,
-                    1.1 * k,
-                    theme::RED,
-                    &why.to_uppercase(),
+                    x,
+                    y + (SIGNIN_CANCEL - 24.0) * k,
+                    1.0 * k,
+                    theme::TEXT_DIM,
+                    &format!("WAITING FOR YOUR BROWSER{}", waiting_dots(self.clock)),
                 );
             }
-            SignIn::Idle => {}
         }
+
         for (target, rect) in hits {
             let hot = self.hovered(rect);
             match target {
                 Target::Provider(i) => {
                     let on = self.providers.get(*i).copied().unwrap_or(false);
-                    button(
-                        p,
-                        rect,
-                        k,
-                        &format!("SIGN IN WITH {}", PROVIDERS[*i].1),
-                        on,
-                        hot && on,
-                    );
-                    if !on {
-                        p.num_right(
-                            rect.x + rect.w - 10.0 * k,
-                            rect.y + rect.h - 14.0 * k,
-                            0.9 * k,
-                            theme::FAINT,
-                            "NOT SET UP HERE",
-                        );
-                    }
+                    provider_button(p, rect, k, PROVIDERS[*i].1, on, hot && on);
                 }
                 Target::SignInCancel => button(p, rect, k, "CANCEL", false, hot),
                 _ => {}
             }
         }
+    }
+}
+
+/// The sign-in panel's padding, and where its buttons sit below its top edge,
+/// in 720p pixels. Named because the hits and the painter both read them.
+const SIGNIN_PAD: f32 = 28.0;
+const SIGNIN_BUTTONS: f32 = 206.0;
+const SIGNIN_CANCEL: f32 = 302.0;
+const SIGNIN_H: f32 = 370.0;
+
+/// Where the sign-in panel is: centred, and never wider than the window.
+fn signin_panel(width: f32, k: f32, top: f32) -> Hit {
+    let w = (580.0 * k).min(width - MARGIN * 2.0 * k);
+    Hit {
+        x: (width - w) * 0.5,
+        y: top + 6.0 * k,
+        w,
+        h: SIGNIN_H * k,
+    }
+}
+
+/// Dots that walk, for a line that is waiting on something elsewhere.
+fn waiting_dots(clock: f32) -> &'static str {
+    [" .", " . .", " . . ."][(clock * 2.0) as usize % 3]
+}
+
+/// A numbered step's heading: the number in a small filled square.
+fn step_label(p: &mut Painter, x: f32, y: f32, k: f32, number: &str, text: &str) {
+    p.rect(x, y - 2.0 * k, 13.0 * k, 13.0 * k, theme::with_alpha(theme::ACCENT, 0.9));
+    p.num(x + 3.5 * k, y + 1.0 * k, 1.0 * k, [0.03, 0.05, 0.09, 1.0], number);
+    p.num(x + 21.0 * k, y, 1.0 * k, theme::FAINT, text);
+}
+
+/// A device code, one character to a cell. A dash in the code is drawn as a
+/// dash between groups rather than in a cell of its own.
+fn code_cells(p: &mut Painter, x: f32, y: f32, room: f32, k: f32, code: &str) {
+    let (cell_w, cell_h, gap, dash) = (32.0 * k, 44.0 * k, 6.0 * k, 16.0 * k);
+    let scale = 2.6 * k;
+    let needed: f32 = code
+        .chars()
+        .map(|c| if c == '-' || c == ' ' { dash } else { cell_w } + gap)
+        .sum();
+    // A code too long for its cells is still a code: written out plainly.
+    if needed > room {
+        p.num(x, y + 8.0 * k, scale, theme::AMBER, code);
+        return;
+    }
+    let mut cx = x;
+    for c in code.chars() {
+        if c == '-' || c == ' ' {
+            p.rect(cx + 3.0 * k, y + cell_h * 0.5 - 1.0 * k, dash - 6.0 * k, 2.0 * k, theme::FAINT);
+            cx += dash + gap;
+            continue;
+        }
+        p.rect(cx, y, cell_w, cell_h, [0.0, 0.0, 0.0, 0.36]);
+        p.rect(cx, y + cell_h - 2.0, cell_w, 2.0, theme::AMBER);
+        let glyph = c.to_string();
+        let w = p.num_width(&glyph, scale);
+        p.num(
+            cx + (cell_w - w) * 0.5,
+            y + (cell_h - 7.0 * scale) * 0.5,
+            scale,
+            theme::AMBER,
+            &glyph,
+        );
+        cx += cell_w + gap;
+    }
+}
+
+/// One way to sign in: the provider's initial in a block, its name, and a
+/// chevron — or, where the server has not set it up, the same row greyed with
+/// the reason written on it.
+fn provider_button(p: &mut Painter, r: &Hit, k: f32, name: &str, on: bool, hot: bool) {
+    let fill = match (on, hot) {
+        (true, true) => theme::with_alpha(theme::ACCENT, 0.30),
+        (true, false) => theme::with_alpha(theme::ACCENT, 0.16),
+        (false, _) => [1.0, 1.0, 1.0, 0.03],
+    };
+    p.rect(r.x, r.y, r.w, r.h, fill);
+    let edge = if !on {
+        [1.0, 1.0, 1.0, 0.07]
+    } else if hot {
+        theme::with_alpha(theme::ACCENT, 0.95)
+    } else {
+        theme::with_alpha(theme::ACCENT, 0.5)
+    };
+    p.rect(r.x, r.y, r.w, 1.0, edge);
+    p.rect(r.x, r.y + r.h - 1.0, r.w, 1.0, edge);
+    p.rect(r.x, r.y, 1.0, r.h, edge);
+    p.rect(r.x + r.w - 1.0, r.y, 1.0, r.h, edge);
+    // The mark: the provider's initial, in a block the height of the row.
+    let mark = r.h;
+    p.rect(
+        r.x,
+        r.y,
+        mark,
+        r.h,
+        if on {
+            theme::with_alpha(theme::ACCENT, if hot { 1.0 } else { 0.85 })
+        } else {
+            [1.0, 1.0, 1.0, 0.05]
+        },
+    );
+    // Two letters where one would not tell two providers apart.
+    let initial: String = if name == "GITHUB" {
+        "GH".to_string()
+    } else {
+        name.chars().take(1).collect()
+    };
+    let scale = if initial.len() > 1 { 1.7 } else { 2.2 } * k;
+    let w = p.text_width(&initial, scale);
+    p.text(
+        r.x + (mark - w) * 0.5,
+        r.y + (r.h - 7.0 * scale) * 0.5,
+        scale,
+        if on { [0.03, 0.05, 0.09, 1.0] } else { theme::FAINT },
+        &initial,
+    );
+    let label_scale = 1.45 * k;
+    p.text(
+        r.x + mark + 16.0 * k,
+        r.y + (r.h - 7.0 * label_scale) * 0.5,
+        label_scale,
+        if on { theme::TEXT } else { theme::FAINT },
+        &format!("CONTINUE WITH {name}"),
+    );
+    if on {
+        let (cx, cy) = (
+            r.x + r.w - 22.0 * k + if hot { 3.0 * k } else { 0.0 },
+            r.y + r.h * 0.5,
+        );
+        let ink = if hot { theme::TEXT } else { theme::TEXT_DIM };
+        p.line(cx - 4.0 * k, cy - 7.0 * k, cx + 3.0 * k, cy, 2.0 * k, ink);
+        p.line(cx + 3.0 * k, cy, cx - 4.0 * k, cy + 7.0 * k, 2.0 * k, ink);
+    } else {
+        p.num_right(
+            r.x + r.w - 14.0 * k,
+            r.y + (r.h - 7.0 * 0.95 * k) * 0.5,
+            0.95 * k,
+            theme::FAINT,
+            "NOT SET UP ON THIS SERVER",
+        );
     }
 }
 

@@ -1148,6 +1148,26 @@ fn front_fixture(which: &str) -> hassault_native::front::Front {
             ));
         }
         "front-name" => f.editing = Some("Sab".into()),
+        // The guest's INVENTORY tab: the sign-in page, idle, waiting on the
+        // browser with a device code, and refused.
+        "front-signin" => {
+            f.tab = Tab::Inventory;
+            f.providers = [true, false];
+        }
+        "front-signin-wait" => {
+            f.tab = Tab::Inventory;
+            f.providers = [true, true];
+            f.signin = SignIn::Waiting {
+                provider: 0,
+                url: "https://github.com/login/device".into(),
+                code: Some("WDJB-MJHT".into()),
+            };
+        }
+        "front-signin-fail" => {
+            f.tab = Tab::Inventory;
+            f.providers = [true, true];
+            f.signin = SignIn::Failed("the server did not answer".into());
+        }
         _ => {}
     }
     f
