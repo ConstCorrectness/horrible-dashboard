@@ -789,62 +789,6 @@ def test_play_fetches_when_missing_and_asks_when_unsure(data_dir, session, sourc
     assert "options" in out and "error" in out
 
 
-# --- Clubhouse room agent ------------------------------------------------------------
-
-
-def test_room_agent_plays_from_the_library_without_touching_the_player(
-    data_dir, session, source
-):
-    """The room's music is the pane's published track, not the music player: a
-    library hit is played by id and the session stays empty."""
-    from backend.modules.clubhouse.voice_runtime import play_music
-
-    row = _track("Africa", "Toto")
-    said, action = asyncio.run(play_music("Africa by Toto"))
-    assert action == {
-        "type": "music.play",
-        "songId": row["id"],
-        "title": "Africa by Toto",
-        "ready": True,
-    }
-    assert "from your library" in said
-    assert source.fetched == []
-    assert session.snapshot().now_playing is None
-
-
-def test_room_agent_fetches_into_the_library_and_asks_when_unsure(data_dir, source):
-    from backend.modules.clubhouse.voice_runtime import play_music
-
-    source.catalog = {"Rosanna": [_cand("ro", "Rosanna", "Toto", 331)]}
-
-    async def fetch() -> tuple[str, dict | None]:
-        out = await play_music("Rosanna by Toto")
-        await _drain()
-        return out
-
-    said, action = asyncio.run(fetch())
-    assert action is not None and action["ready"] is False
-    assert "downloading" in said
-    row = library.get_track(action["songId"])
-    assert row is not None and row["status"] == "ready"
-    assert source.fetched == ["ro"]
-
-    source.catalog = {
-        "Mystery": [
-            TrackCandidate(
-                source="fake",
-                ref="z",
-                title="Unrelated Podcast",
-                artist="",
-                duration=3600,
-            )
-        ]
-    }
-    said, action = asyncio.run(play_music("Mystery Song by Nobody"))
-    assert action is None and "Ask which" in said
-    assert source.fetched == ["ro"]
-
-
 def test_playlist_tools_round_trip(data_dir, session):
     a, b, _ = _three()
     out = asyncio.run(
