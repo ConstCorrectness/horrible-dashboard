@@ -73,6 +73,17 @@ LOB_SCALE = 0.42
 #: it further, which is both correct and the thing every player expects.
 THROW_INHERIT = 0.6
 
+#: The same, for the thrower's **upward** speed: the jump-throw.
+#:
+#: Counter-Strike adds 1.25 of the player's velocity to a grenade on every axis,
+#: and the jump is where that shows: a throw released on the way up leaves with
+#: a third more height than the arm alone gives it, which is the difference
+#: between a smoke that lands in the doorway and one that clears the building.
+#: At the shared 0.6 a jump added eleven cubes a second to a 34 throw and was
+#: not worth the jump. Upward only — a throw released while *falling* still
+#: takes the gentler figure, or dropping off a ledge spikes it into the floor.
+THROW_INHERIT_UP = 1.25
+
 #: How small a bounce has to get before the grenade is treated as settled. Without
 #: it a grenade jitters against the floor forever, and a smoke that never comes to
 #: rest is a smoke whose cloud centre keeps moving.
@@ -166,7 +177,9 @@ GRENADES: tuple[GrenadeSpec, ...] = (
         kind="flash",
         fuse=1.6,
         impact=False,
-        radius=34.0,
+        # Counter-Strike's 1500 units against a 72-unit player is twenty-one
+        # body heights; this is the same reach in cubes.
+        radius=44.0,
         duration=0.0,
         damage=0.0,
         damage_per_second=0.0,
@@ -401,7 +414,8 @@ def throw_velocity(
     Yaw/pitch use the same convention as `weapons.aim_vector`, so a grenade goes
     where the crosshair is pointing. The thrower's own velocity is added at a
     fraction: at 1.0 a player running backwards can drop a grenade that never
-    leaves them, which reads as the throw having failed.
+    leaves them, which reads as the throw having failed. Rising is the
+    exception (`THROW_INHERIT_UP`): a jump-throw gets more than the jump.
     """
     scale = power if power is not None else (LOB_SCALE if lob else 1.0)
     speed = THROW_SPEED * max(0.2, min(1.5, scale))
@@ -412,7 +426,8 @@ def throw_velocity(
     return (
         dx * speed + inherit[0] * THROW_INHERIT,
         dy * speed + inherit[1] * THROW_INHERIT,
-        dz * speed + inherit[2] * THROW_INHERIT,
+        dz * speed
+        + inherit[2] * (THROW_INHERIT_UP if inherit[2] > 0 else THROW_INHERIT),
     )
 
 
@@ -578,14 +593,15 @@ def visible(
 
 
 #: Seconds of solid white for a flash at your feet with your crosshair on it.
-#: Counter-Strike's measured figure for a full flash is about 1.9 s of hold; this
-#: is a little longer because the radius here is shorter, so a full hold is rarer.
-FLASH_HOLD_MAX = 2.2
+#: Counter-Strike's own code holds a faced flash for `1.25 x` and fades it over
+#: `2.5 x` its distance-scaled strength — a third of the time solid, two thirds
+#: clearing — and a full one costs about five and a half seconds in all.
+FLASH_HOLD_MAX = 2.8
 
 #: Seconds the white then takes to clear, after the hold. The fade is where
 #: the afterimage lives, and where most of a flash's real cost is paid: you can
 #: see shapes again before you can see a player.
-FLASH_FADE_MAX = 3.0
+FLASH_FADE_MAX = 3.6
 
 #: The longest a flash can take from bang to clear. What a test that waits for
 #: one to wear off waits for.
@@ -599,13 +615,21 @@ FLASH_MAX = FLASH_HOLD_MAX + FLASH_FADE_MAX
 #: product gave a flash at 90° five eighths of a frontal one and a flash directly
 #: behind a quarter — turning round halved it, which is a nuisance rather than a
 #: counter. These are Counter-Strike's: the screen's own width (~53° off centre
-#: at 16:9) is a full flash, past the edge of the screen is a flicker, and behind
-#: you is a jolt that never reaches white.
+#: at 16:9) is a full flash, past the edge of the screen is a shorter one, and
+#: behind you is a short one that stops just short of white.
+#:
+#: The *angles* are the community's measured ones; the *strengths* are from the
+#: game's own `RadiusFlash`, which is much less forgiving than the first tuning
+#: here was. Side-on it keeps 64% of the hold and 70% of the fade; facing dead
+#: away it still keeps 60% and 40%, at 200/255 of the white. Turning away
+#: shortens a flash — it does not cancel one. The old table gave a flash at 90°
+#: a twenty-fifth of the hold, which made every flash thrown from the side a
+#: wasted grenade.
 FLASH_BANDS: tuple[tuple[float, float, float, float], ...] = (
     (53.0, 1.0, 1.0, 1.0),
-    (72.0, 1.0, 0.45, 0.8),
-    (101.0, 0.9, 0.04, 0.45),
-    (180.0, 0.5, 0.0, 0.25),
+    (72.0, 1.0, 0.8, 0.9),
+    (101.0, 1.0, 0.5, 0.7),
+    (180.0, 0.8, 0.2, 0.4),
 )
 
 #: Above this much white a player sees nothing: a bot cannot acquire a target
@@ -672,8 +696,11 @@ def flash_alpha(
     own frame rate, so the fade is smooth whatever the tick rate — and nobody
     squares anything on the way in, because the shaping is in here.
 
-    Held flat at `peak`, then a smoothstep down: bright for most of the fade's
-    first half, then clearing quickly, so the tail is not a long pale wash.
+    Held flat at `peak`, then an ease-out down — `1 - (1 - t)^2` — so the
+    screen is still three quarters white half way through the fade and clears
+    at speed only at the end. The smoothstep this replaced was down to half at
+    the midpoint, which gave back a readable screen with half the fade still to
+    run: a player could shoot through the second half of every flash.
     """
     if peak <= 0.0:
         return 0.0
@@ -682,7 +709,24 @@ def flash_alpha(
     if fade_left <= 0.0 or fade_total <= 0.0:
         return 0.0
     t = max(0.0, min(1.0, fade_left / fade_total))
-    return min(1.0, peak * t * t * (3.0 - 2.0 * t))
+    return min(1.0, peak * t * (2.0 - t))
+
+
+def _flash_reach(distance: float, radius: float) -> float:
+    """How much of a flash's length survives a distance, 0..1.
+
+    **Not `_falloff`'s straight line.** Light does not thin out the way a
+    blast does, and a linear falloff made the flash a point-blank weapon: at
+    half its radius — an ordinary throw across a room — it kept half its
+    length, and the thrower was through the door before it mattered. This is
+    `1 - (d/r)^2`: three quarters at half the radius, falling away only over
+    the last third, so a flash that pops in your screen at range still costs
+    you most of a full one.
+    """
+    if distance >= radius:
+        return 0.0
+    ratio = distance / radius
+    return 1.0 - ratio * ratio
 
 
 def _flash_band(angle_deg: float, distance: float) -> tuple[float, float, float]:
@@ -741,8 +785,9 @@ def flash_effect(
 
     The terms, each a counter a player can use:
 
-    - **Distance** shortens it, linearly to nothing at the spec's radius. It
-      shortens the hold and the fade; it does not make a frontal flash grey.
+    - **Distance** shortens it, to nothing at the spec's radius
+      (`_flash_reach`). It shortens the hold and the fade; it does not make a
+      frontal flash grey.
     - **Facing** picks a band (`FLASH_BANDS`): how white, and how much of the
       hold and fade.
     - **Line of sight**, sampled from several points round the bang
@@ -751,7 +796,7 @@ def flash_effect(
     eye = (x, y, eye_z)
     dx, dy, dz = nade.x - x, nade.y - y, nade.z - eye_z
     distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-    reach = _falloff(distance, nade.spec.radius)
+    reach = _flash_reach(distance, nade.spec.radius)
     if reach <= 0:
         return NO_FLASH
     light = flash_light_fraction(world, nade, eye, zones, now)

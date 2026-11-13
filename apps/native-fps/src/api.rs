@@ -346,6 +346,11 @@ pub struct ThrowPhysics {
     /// The invisible one, and the reason the preview exists.
     #[serde(rename = "throwInherit", default)]
     pub throw_inherit: f32,
+    /// The same for the thrower's *upward* speed — the jump-throw
+    /// (`grenades.THROW_INHERIT_UP`). Zero from a server that predates it,
+    /// which `inherit_up` reads as "the same as the rest".
+    #[serde(rename = "throwInheritUp", default)]
+    pub throw_inherit_up: f32,
     #[serde(rename = "throwForward", default)]
     pub throw_forward: f32,
     #[serde(rename = "throwDrop", default)]
@@ -356,6 +361,17 @@ pub struct ThrowPhysics {
     pub substep: f32,
     #[serde(rename = "maxSubsteps", default)]
     pub max_substeps: i32,
+}
+
+impl ThrowPhysics {
+    /// How much of the thrower's upward speed a throw takes.
+    pub fn inherit_up(&self) -> f32 {
+        if self.throw_inherit_up > 0.0 {
+            self.throw_inherit_up
+        } else {
+            self.throw_inherit
+        }
+    }
 }
 
 /// Mirrors one row of `GET /api/hassault/weapons`.

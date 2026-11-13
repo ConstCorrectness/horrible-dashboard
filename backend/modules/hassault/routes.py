@@ -1061,6 +1061,7 @@ async def throw_physics() -> ThrowPhysicsOut:
         throwSpeed=grenades.THROW_SPEED,
         lobScale=grenades.LOB_SCALE,
         throwInherit=grenades.THROW_INHERIT,
+        throwInheritUp=grenades.THROW_INHERIT_UP,
         throwForward=grenades.THROW_FORWARD,
         throwDrop=grenades.THROW_DROP,
         restSpeed=grenades.REST_SPEED,

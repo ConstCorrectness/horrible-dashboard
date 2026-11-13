@@ -6832,12 +6832,18 @@ know how to play against:
 - **Whiteness and duration are separate.** `grenades.flash_effect` returns a
   `FlashEffect(peak, hold, fade)`: how white at its height, seconds held there,
   and seconds to clear. Distance shortens the hold and the fade. It does not make
-  a frontal flash grey.
+  a frontal flash grey. A full one is 2.8 s held and 3.6 s clearing.
+- **Distance falls off as `1 - (d/r)²`, not linearly** (`_flash_reach`), over a
+  44-cube radius. A linear falloff made the flash a point-blank weapon: a throw
+  across a room kept half its length. Now half the radius keeps three quarters.
 - **Facing picks a band**, by angle off the crosshair (`FLASH_BANDS`). Within 53°
-  (the edge of a 16:9 screen) is a full hold. 53–72° is white but with less than
-  half the hold. 72–101° is a flicker. Past 101° it never reaches white and is
-  never held. Within `FLASH_POINT_BLANK` the band is never worse than the second
-  one, because light that close wraps round your head.
+  (the edge of a 16:9 screen) is a full flash. 53–72° is white with 80% of the
+  hold. 72–101° is still white, with half the hold and 70% of the fade. Past
+  101° it stops at 0.8 white with a fifth of the hold. The strengths follow
+  Counter-Strike's own `RadiusFlash`, which keeps about two thirds of a flash
+  side-on and over a third facing away: turning away shortens a flash, it does
+  not cancel one. Within `FLASH_POINT_BLANK` the band is never worse than the
+  second one, because light that close wraps round your head.
 - **Light is sampled from six points round the bang** (`FLASH_PROBES`), so a flash
   half round a corner is half a flash. With one ray to its centre, a lip of floor
   between you and it was a hard zero.
@@ -6849,7 +6855,8 @@ know how to play against:
 
 **The wire carries the inputs, not the output.** `you.flashPeak`, `flashHold`,
 `flashFade` and `flashFadeTotal` are seconds *remaining*. Each client runs the
-shared curve, `flash_alpha` (held at the peak, then a smoothstep down), at its own
+shared curve, `flash_alpha` (held at the peak, then an ease-out `1 - (1 - t)²`
+down, so the screen is still three quarters white half way through the fade), at its own
 frame rate, and counts the hold and fade down between snapshots exactly as
 `MatchPlayer.step_flash` does. Drawing `you.flash` as received was a 20 Hz
 staircase. The curve and the countdown exist three times (`grenades.py`,
@@ -6932,8 +6939,13 @@ weapon stowed and both buttons doing nothing.
 ### The predicted arc, and the constants it is served
 
 **Running and jumping have always fed a throw.** `throw_velocity` has added the
-thrower's own velocity at `THROW_INHERIT` (0.6 of it) since grenades existed, and
-nothing on screen ever said so: the only way to learn it was to notice grenades
+thrower's own velocity at `THROW_INHERIT` (0.6 of it) since grenades existed.
+**A jump is carried at `THROW_INHERIT_UP`, 1.25** — Counter-Strike's figure —
+so a throw released on the way up leaves with 24 cubes a second more height
+than a standing one and flies much further. It applies to rising only; falling
+keeps 0.6, or dropping off a ledge would spike the grenade into the floor. It
+is served as `throwInheritUp`, and a client that predates it reads
+`throwInherit` for both. Nothing on screen ever said any of this: the only way to learn it was to notice grenades
 sometimes going further than expected and guess why. While a grenade is equipped
 both clients now draw the arc it would take.
 

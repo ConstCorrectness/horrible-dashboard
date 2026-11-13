@@ -168,6 +168,9 @@ export interface ThrowPhysics {
   lobScale: number;
   /** How much of the thrower's own velocity is added. The invisible one. */
   throwInherit: number;
+  /** The same for the thrower's *upward* speed — the jump-throw. Absent from a
+   * server that predates it, which reads as `throwInherit`. */
+  throwInheritUp?: number;
   /** How far in front of the eye, and below it, a grenade appears. */
   throwForward: number;
   throwDrop: number;

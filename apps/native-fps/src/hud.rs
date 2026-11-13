@@ -198,10 +198,11 @@ const OUTLINE: [f32; 4] = [0.02, 0.02, 0.03, 0.85];
 const GREEN: [f32; 4] = theme::GREEN;
 /// `0x6f97c4` — the browser's armour colour, unchanged.
 const ARMOUR: [f32; 4] = [0.4353, 0.5922, 0.7686, 0.95];
-const PANEL: [f32; 4] = theme::panel(0.45);
-/// The trough a bar is drawn in. Darker than `PANEL` so a bar reads as
-/// *inset* rather than as another panel stacked on the first.
-const TROUGH: [f32; 4] = [0.06, 0.08, 0.10, 0.72];
+const PANEL: [f32; 4] = theme::panel(0.62);
+/// The empty part of a bar. Lighter than the panel it sits on: the dark
+/// trough this replaced disappeared into the panel, and a bar with no visible
+/// end says how much is left but not out of how much.
+const BAR_TROUGH: [f32; 4] = [0.72, 0.78, 0.86, 0.17];
 /// The lag trail behind a health bar that has just dropped: the same red the
 /// number turns, at a fraction of its weight, so the eye reads "this much, just
 /// now" without the trail competing with the bar itself.
@@ -1044,8 +1045,8 @@ impl Hud {
         if self.damage_age < FLASH_LIFE {
             // An edge wash rather than a full-screen tint: taking a hit must not
             // hide the person who is shooting at you.
-            let a = 0.45 * (1.0 - self.damage_age / FLASH_LIFE);
-            p.vignette([0.85, 0.12, 0.12, a], u * 14.0);
+            let a = 0.6 * (1.0 - self.damage_age / FLASH_LIFE);
+            p.vignette([0.85, 0.12, 0.12, a], u * 26.0);
         }
 
         self.paint_feed(&mut p, u);
@@ -1151,9 +1152,10 @@ impl Hud {
 
     fn paint_feed(&self, p: &mut Painter, u: f32) {
         let scale = u * 0.75;
-        let mut y = u * 6.0;
-        let icon_size = (scale * 1.8).max(12.0);
-        let gap = scale * 1.2;
+        // The first plate's top edge is on the margin; `y` is its text.
+        let mut y = u * MARGIN + u * FEED_PAD_Y;
+        let icon_size = (scale * 6.0).max(12.0);
+        let gap = scale * 1.6;
 
         for note in &self.feed {
             // The last second is a fade rather than a disappearance, so a line
@@ -1218,41 +1220,7 @@ impl Hud {
                 let x = p.width - total_w - u * 6.0 + shift;
                 // A little deeper than the cap box: names are set in a face
                 // with descenders.
-                let h = 7.0 * scale + scale * 2.6;
-                let cut = scale * 1.6;
-
-                p.rect(
-                    x - scale + cut,
-                    y - scale,
-                    total_w + scale * 2.0 - cut,
-                    h,
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-                p.tri(
-                    (x - scale, y - scale + cut),
-                    (x - scale + cut, y - scale),
-                    (x - scale + cut, y - scale + cut),
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-                p.tri(
-                    (x - scale, y - scale + h - cut),
-                    (x - scale + cut, y - scale + h - cut),
-                    (x - scale + cut, y - scale + h),
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-
-                let mut accent = if note.mine { AMBER } else { FAINT };
-                accent[3] *= fade;
-                p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
-
-                if note.mine {
-                    // Glowing border outline for local player involvement
-                    let mut border = AMBER;
-                    border[3] *= 0.85 * fade;
-                    p.rect(x - scale + cut, y - scale, total_w + scale * 2.0 - cut, 1.5, border);
-                    p.rect(x - scale + cut, y - scale + h - 1.5, total_w + scale * 2.0 - cut, 1.5, border);
-                    p.rect(x - scale + total_w + scale * 2.0 - 1.5, y - scale, 1.5, h, border);
-                }
+                feed_plate(p, x, y, total_w, scale, u, fade, note.mine);
 
                 let mut cur_x = x;
                 p.name(cur_x, y, scale, k_color, &note.killer_name);
@@ -1266,101 +1234,68 @@ impl Hud {
                 cur_x += gap;
 
                 if note.airborne {
-                    draw_airborne_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_airborne_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
                 if note.blind {
-                    draw_blind_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_blind_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
                 if note.smoke {
-                    draw_smoke_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_smoke_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
                 if note.noscope {
-                    draw_noscope_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_noscope_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
                 if note.wallbang {
-                    draw_wallbang_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_wallbang_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
 
                 cur_x += draw_weapon_badge(p, cur_x, y, wep_label, scale, fade) + gap;
 
                 if note.nutshot {
-                    draw_nutshot_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_nutshot_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
                 if note.head {
-                    draw_headshot_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    draw_headshot_icon(p, cur_x, y + (7.0 * scale - icon_size) * 0.5, icon_size, fade);
                     cur_x += icon_size + gap;
                 }
 
                 p.name(cur_x, y, scale, v_color, &note.victim_name);
-                y += 7.0 * scale + u * 3.0;
+                y += feed_step(scale, u);
             } else {
                 let mut color = if note.mine { AMBER } else { DIM };
                 color[3] *= fade;
                 let w = p.text_width(&note.text, scale);
                 let x = p.width - w - u * 6.0 + shift;
-                let h = 7.0 * scale + scale * 2.6;
-                let cut = scale * 1.6;
-                p.rect(
-                    x - scale + cut,
-                    y - scale,
-                    w + scale * 2.0 - cut,
-                    h,
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-                p.tri(
-                    (x - scale, y - scale + cut),
-                    (x - scale + cut, y - scale),
-                    (x - scale + cut, y - scale + cut),
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-                p.tri(
-                    (x - scale, y - scale + h - cut),
-                    (x - scale + cut, y - scale + h - cut),
-                    (x - scale + cut, y - scale + h),
-                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-                );
-                let mut accent = if note.mine { AMBER } else { FAINT };
-                accent[3] *= fade;
-                p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
+                feed_plate(p, x, y, w, scale, u, fade, note.mine);
                 p.text(x, y, scale, color, &note.text);
-                y += 7.0 * scale + u * 3.0;
+                y += feed_step(scale, u);
             }
         }
     }
 
     fn paint_health(&self, p: &mut Painter, view: &HudView, u: f32) {
         let Some(you) = view.you else { return };
-        let big = u * 2.4;
-        let small = u * 0.8;
-        let left = u * 6.0;
-        // Laid out **upwards from the movement line**, which owns the bottom margin.
-        // Anchoring downwards from a top instead puts the last line off the bottom
-        // of the screen on a small window — where it is not clipped with a warning,
-        // it is simply absent.
-        let bar_h = u * 2.6;
-        let armour_h = u * 1.2;
-        // The floor is the top of the movement line, which owns the bottom-left
-        // corner — **including this block's own panel padding**, which is the
-        // part that is easy to leave out. The block used to be positioned so its
-        // last bar cleared the line while the panel drawn around it did not, so
-        // the two overlapped by exactly the padding: invisible at 720p, obvious
-        // at 1440p, and a function of the window size either way.
-        // The armour row is **always** reserved, like the reload line opposite.
-        // Taking the space only when there is armour means the health bar — the
-        // one thing on this HUD read continuously — moves the instant a vest
-        // runs out, which is the instant it is being watched hardest.
+        let big = u * HEALTH_FIGURE;
+        let mid = u * ARMOUR_FIGURE;
+        let tiny = u * 0.62;
+        let left = u * HUD_SIDE;
+        // Laid out **upwards from the movement chip**, which owns the bottom
+        // margin. Anchoring downwards from a top instead puts the last row off
+        // the bottom of the screen on a small window — where it is not clipped
+        // with a warning, it is simply absent.
         let HealthRows {
-            armour_y,
             bar_y,
             number_y,
+            panel_top,
+            panel_bottom,
         } = health_rows(p.height, u);
-        debug_assert_eq!((armour_h, bar_h, big), (u * 1.2, u * 2.6, u * 2.4));
+        let bar_h = u * HEALTH_BAR_H;
 
         // The rolled figure — unless it is not tracking this value at all (a
         // view built without `on_self`, as the tests and the preview do), in
@@ -1370,50 +1305,65 @@ impl Hud {
         } else {
             you.hp.max(0.0).round() as i64
         };
+        let armour = if (self.armour_roll.target() - you.armour.max(0.0)).abs() < 0.5 {
+            self.armour_roll.shown()
+        } else {
+            you.armour.max(0.0).round() as i64
+        };
         let low = you.hp <= 30.0;
         let color = if low { RED } else { WHITE };
-        let label = hp.to_string();
-        let bar_w = u * 44.0;
-        // The armour bar sits *under* the health bar and is thinner, so the two
-        // never compete: health is the number you die at, armour is a modifier
-        // on the way there.
+
+        // **Two cells in one panel**: health, then armour. Each is an icon, a
+        // figure and a bar under it, so "how much can I take" is one glance
+        // along one row instead of a figure in one place and two bars stacked
+        // under it. Health is the wider cell and the bigger figure, because it
+        // is the number you die at; armour is a modifier on the way there.
+        let health_w = u * HEALTH_CELL_W;
+        let armour_w = u * ARMOUR_CELL_W;
+        let gutter = u * 5.0;
+        let pad = u * HUD_PANEL_PAD;
+        let panel_w = health_w + gutter + armour_w + pad * 2.0;
         p.panel(
-            left - u * 1.5,
-            number_y - u * 1.2,
-            bar_w + u * 3.0,
-            armour_y + armour_h - number_y + u * 1.8,
-            u * 1.2,
-            Some(if low { RED } else { [0.35, 0.55, 0.78, 0.75] }),
+            left - pad,
+            panel_top,
+            panel_w,
+            panel_bottom - panel_top,
+            u * 1.4,
+            Some(if low { RED } else { theme::ACCENT }),
         );
-
-        let cross_size = u * 4.2;
-        let cross_y = number_y + (7.0 * big - cross_size) * 0.5;
-        draw_medical_cross(p, left, cross_y, cross_size, if low { RED } else { [0.85, 0.22, 0.22, 0.95] });
-
-        let num_x = left + cross_size + u * 2.0;
-        p.num(num_x, number_y, big, color, &label);
-        p.text(
-            num_x + p.num_width(&label, big) + small * 1.5,
-            number_y + 7.0 * big - 7.0 * small,
-            small,
-            DIM,
-            "HP",
-        );
-
+        // A wash up from the bottom of the panel in the state's colour: the
+        // panel itself goes red when you are nearly dead, which is read without
+        // looking at it.
         if low {
-            let crit_w = p.text_width("CRITICAL", small);
-            p.text(
-                left + bar_w - crit_w,
-                number_y + 7.0 * big - 7.0 * small,
-                small,
-                [0.99, 0.32, 0.28, 0.95],
-                "CRITICAL",
+            p.gradient_v(
+                left - pad + u * 1.4,
+                panel_top + (panel_bottom - panel_top) * 0.35,
+                panel_w - u * 2.8,
+                (panel_bottom - panel_top) * 0.65,
+                [RED[0], RED[1], RED[2], 0.0],
+                [RED[0], RED[1], RED[2], 0.22],
             );
+        }
+
+        // -- health cell --
+        let figure_h = 7.0 * big;
+        let cross_size = u * 6.0;
+        draw_medical_cross(
+            p,
+            left,
+            number_y + (figure_h - cross_size) * 0.5,
+            cross_size,
+            if low { RED } else { [0.85, 0.22, 0.22, 0.95] },
+        );
+        let label = hp.to_string();
+        p.num(left + cross_size + u * 1.8, number_y, big, color, &label);
+        if low {
+            p.text_right(left + health_w, number_y, tiny, RED, "LOW");
         }
 
         // A bar as well as a number: a number is exact and a bar is instant, and
         // in a firefight only one of those gets read.
-        p.rect(left, bar_y, bar_w, bar_h, TROUGH);
+        p.rect(left, bar_y, health_w, bar_h, BAR_TROUGH);
         let frac = (you.hp / 100.0).clamp(0.0, 1.0);
         // The lag trail, drawn between the trough and the bar so the bar covers
         // its own share of it. What is left is the gap between where health is
@@ -1422,49 +1372,75 @@ impl Hud {
         let ghost = (self.ghost_hp / 100.0).clamp(0.0, 1.0);
         if ghost > frac {
             p.rect(
-                left + bar_w * frac,
+                left + health_w * frac,
                 bar_y,
-                bar_w * (ghost - frac),
+                health_w * (ghost - frac),
                 bar_h,
                 GHOST,
             );
         }
-        p.rect(left, bar_y, bar_w * frac, bar_h, color);
+        p.rect(left, bar_y, health_w * frac, bar_h, color);
+        // A lit top half, so the bar reads as a solid thing and not a stripe.
+        p.rect(left, bar_y, health_w * frac, bar_h * 0.4, [1.0, 1.0, 1.0, 0.16]);
         // Segment rules over the top, every 25. Ticks rather than separate
         // bars, so the bar stays one continuous length and the marks only give
         // the eye something to measure it against.
         for i in 1..4 {
-            let x = left + bar_w * (i as f32 / 4.0);
-            p.rect(x, bar_y, (u * 0.2).max(1.0), bar_h, TROUGH);
+            let x = left + health_w * (i as f32 / 4.0);
+            p.rect(x, bar_y, (u * 0.25).max(1.0), bar_h, theme::panel(0.9));
         }
 
-        // Shield icon beside the armour bar
-        let shield_size = (armour_h * 1.5).min(u * 2.4);
-        draw_shield_icon(p, left, armour_y + (armour_h - shield_size) * 0.5, shield_size, ARMOUR);
-        let ar_left = left + shield_size + u * 1.5;
-        let ar_w = bar_w - (shield_size + u * 1.5);
+        // -- the rule between the cells --
+        let rule_x = left + health_w + gutter * 0.5;
+        p.rect(
+            rule_x,
+            panel_top + u * 2.4,
+            1.0f32.max(u * 0.2),
+            panel_bottom - panel_top - u * 4.8,
+            FAINT,
+        );
 
+        // -- armour cell --
+        let ar_left = left + health_w + gutter;
+        let worn = you.armour > 0.0;
+        let ar_color = if worn { ARMOUR } else { FAINT };
+        let shield = u * 5.0;
+        let ar_figure_y = number_y + figure_h - 7.0 * mid;
+        draw_shield_icon(
+            p,
+            ar_left,
+            ar_figure_y + (7.0 * mid - shield * 1.1) * 0.5,
+            shield,
+            ar_color,
+        );
+        p.num(
+            ar_left + shield + u * 2.0,
+            ar_figure_y,
+            mid,
+            if worn { WHITE } else { FAINT },
+            &armour.to_string(),
+        );
+        // The cell's label, in the height the smaller figure leaves free. It
+        // doubles as the spawn shield's notice: that is the same question —
+        // "what is between me and the next bullet" — answered for three seconds
+        // by something other than a vest.
+        if you.protected {
+            p.text(ar_left, number_y, tiny, AMBER, "SHIELDED");
+        } else {
+            p.text(ar_left, number_y, tiny, DIM, "ARMOR");
+        }
         // The trough is drawn whether or not there is armour: an empty trough
         // says "you could be wearing some and are not", which is a different
         // statement from the blank space that says nothing at all.
-        p.rect(ar_left, armour_y, ar_w, armour_h, TROUGH);
-        if you.armour > 0.0 {
+        p.rect(ar_left, bar_y, armour_w, bar_h, BAR_TROUGH);
+        if worn {
             let af = (you.armour / 100.0).clamp(0.0, 1.0);
-            p.rect(ar_left, armour_y, ar_w * af, armour_h, ARMOUR);
+            p.rect(ar_left, bar_y, armour_w * af, bar_h, ARMOUR);
+            p.rect(ar_left, bar_y, armour_w * af, bar_h * 0.4, [1.0, 1.0, 1.0, 0.16]);
             for i in 1..4 {
-                let x = ar_left + ar_w * (i as f32 / 4.0);
-                p.rect(x, armour_y, (u * 0.2).max(1.0), armour_h, TROUGH);
+                let x = ar_left + armour_w * (i as f32 / 4.0);
+                p.rect(x, bar_y, (u * 0.25).max(1.0), bar_h, theme::panel(0.9));
             }
-        }
-
-        if you.protected {
-            p.text(
-                left + bar_w + u * 2.0,
-                bar_y - u * 0.5,
-                small,
-                AMBER,
-                "SPAWN SHIELD",
-            );
         }
     }
 
@@ -1740,6 +1716,45 @@ impl Hud {
                 badge_s * 0.85,
             );
         }
+    }
+}
+
+/// A kill-feed row's padding inside its plate, in HUD units.
+const FEED_PAD_X: f32 = 2.0;
+const FEED_PAD_Y: f32 = 1.8;
+
+/// How far one feed row is from the next: the plate, and a gap.
+fn feed_step(scale: f32, u: f32) -> f32 {
+    7.0 * scale + u * FEED_PAD_Y * 2.0 + u * 0.9
+}
+
+/// The plate behind one kill-feed row whose text starts at `(x, y)` and is
+/// `w` wide: the house panel's fill, cut on the left, with the row's accent
+/// down that edge. A kill of ours is outlined as well, so it can be found in a
+/// feed that is scrolling.
+#[allow(clippy::too_many_arguments)]
+fn feed_plate(p: &mut Painter, x: f32, y: f32, w: f32, scale: f32, u: f32, fade: f32, mine: bool) {
+    let (px, py) = (u * FEED_PAD_X, u * FEED_PAD_Y);
+    let (left, top) = (x - px, y - py);
+    let (pw, ph) = (w + px * 2.0, 7.0 * scale + py * 2.0);
+    let cut = u * 1.2;
+    let fill = theme::faded(PANEL, fade);
+    p.rect(left + cut, top, pw - cut, ph, fill);
+    p.rect(left, top + cut, cut, ph - cut * 2.0, fill);
+    p.tri((left, top + cut), (left + cut, top), (left + cut, top + cut), fill);
+    p.tri(
+        (left, top + ph - cut),
+        (left + cut, top + ph - cut),
+        (left + cut, top + ph),
+        fill,
+    );
+    let accent = theme::faded(if mine { AMBER } else { FAINT }, fade);
+    p.rect(left, top + cut, (u * 0.5).max(2.0), ph - cut * 2.0, accent);
+    if mine {
+        let border = theme::faded(AMBER, 0.85 * fade);
+        p.rect(left + cut, top, pw - cut, 1.5, border);
+        p.rect(left + cut, top + ph - 1.5, pw - cut, 1.5, border);
+        p.rect(left + pw - 1.5, top, 1.5, ph, border);
     }
 }
 
@@ -2131,34 +2146,51 @@ fn draw_shield_icon(p: &mut Painter, x: f32, y: f32, size: f32, color: [f32; 4])
     p.line(x + half_w, y + h * 0.2, x + half_w, y + h * 0.8, 1.2, inner_col);
 }
 
+/// The bottom-left block's proportions, in HUD units. Named because three
+/// things are laid out from them — the health panel, the movement chip under
+/// it and the chat above it — and a size typed twice is a chat that slides
+/// under the health figure the first time one copy is touched.
+const HUD_SIDE: f32 = 6.0;
+const HUD_PANEL_PAD: f32 = 2.0;
+const HEALTH_FIGURE: f32 = 2.8;
+const ARMOUR_FIGURE: f32 = 1.9;
+const HEALTH_BAR_H: f32 = 2.4;
+const HEALTH_CELL_W: f32 = 58.0;
+const ARMOUR_CELL_W: f32 = 40.0;
+/// The movement chip's height, and the gap between it and the panel above.
+const MOVE_CHIP_H: f32 = 10.4;
+const MOVE_CHIP_GAP: f32 = 1.2;
+
 /// Where the health panel's rows sit. Its own function because chat stacks
 /// above the panel and has to know where that is without drawing it — two
 /// copies of this arithmetic would be a chat that slides under the health
 /// figure the first time either is touched (it did: chat inherited an anchor
 /// from before the panel grew, and covered the HP number).
 struct HealthRows {
-    armour_y: f32,
     bar_y: f32,
     number_y: f32,
+    panel_top: f32,
+    panel_bottom: f32,
 }
 
 fn health_rows(height: f32, u: f32) -> HealthRows {
-    let padding = u * 1.8;
-    let floor = height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - padding;
-    let armour_y = floor - u * 1.2;
-    let bar_y = armour_y - u * 0.6 - u * 2.6;
-    let number_y = bar_y - u * 1.6 - 7.0 * (u * 2.4);
+    // The floor is the top of the movement chip, which owns the bottom-left
+    // corner, less the gap between the two.
+    let panel_bottom = height - MARGIN * u - u * MOVE_CHIP_H - u * MOVE_CHIP_GAP;
+    let bar_y = panel_bottom - u * 2.0 - u * HEALTH_BAR_H;
+    let number_y = bar_y - u * 2.6 - 7.0 * (u * HEALTH_FIGURE);
+    let panel_top = number_y - u * 2.6;
     HealthRows {
-        armour_y,
         bar_y,
         number_y,
+        panel_top,
+        panel_bottom,
     }
 }
 
-/// The health panel's top edge (`paint_health` draws it `u * 1.2` above the
-/// figure), less a gap: the floor chat sits on.
+/// The health panel's top edge, less a gap: the floor chat sits on.
 fn chat_floor(height: f32, u: f32) -> f32 {
-    health_rows(height, u).number_y - u * 1.2 - u * 2.0
+    health_rows(height, u).panel_top - u * 2.0
 }
 
 /// A colour from 0–255 sRGB bytes, the way chat's colours were written when
@@ -2516,23 +2548,37 @@ fn paint_damage_numbers(p: &mut Painter, numbers: &[Placed], u: f32) {
 /// counter at the moment the magazine empties, which is the moment it is being
 /// read hardest.
 fn weapon_rows(view: &HudView, height: f32, u: f32) -> (f32, f32, f32, f32, f32) {
-    let big = u * 2.4;
+    let big = u * WEAPON_FIGURE;
     let small = u * 0.8;
-    let strip_h = u * 1.4;
-    // Clear of the net graph, which shares this corner.
-    let floor = height - MARGIN * u - net_graph_height(&net_graph_lines(view), u);
+    let strip_h = u * 1.6;
+    // Clear of the net graph, which shares this corner — by the panel's own
+    // bottom padding and a gap, so it is the *panel* that clears it and not
+    // only the strip inside. With no graph the panel sits on the margin, level
+    // with the movement chip in the other corner.
+    let graph = net_graph_height(&net_graph_lines(view), u);
+    let lift = if graph > 0.0 { u * 1.2 } else { 0.0 };
+    let floor = height - MARGIN * u - graph - lift - u * WEAPON_PAD_BOTTOM;
     let strip_y = floor - strip_h;
-    let reload_y = strip_y - u * 1.2 - 7.0 * small;
-    let ammo_y = reload_y - u * 1.2 - 7.0 * big;
-    let name_y = ammo_y - u * 1.5 - 7.0 * small;
+    let ammo_y = strip_y - u * 2.6 - 7.0 * big;
+    let name_y = ammo_y - u * 2.0 - 7.0 * small;
+    // The reload dial rides the name row; there is no row of its own to keep
+    // empty for the four fifths of a match nobody is reloading in.
+    let reload_y = name_y;
     (strip_y, strip_h, reload_y, ammo_y, name_y)
 }
 
+/// The inner width of the two bottom-corner blocks, in HUD units.
+const BOTTOM_BLOCK_W: f32 = HEALTH_CELL_W + 5.0 + ARMOUR_CELL_W;
+const WEAPON_FIGURE: f32 = 2.8;
+const WEAPON_PAD_BOTTOM: f32 = 1.8;
+
 fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     let Some(you) = view.you else { return };
-    let big = u * 2.4;
+    let big = u * WEAPON_FIGURE;
+    let mid = u * 1.3;
     let small = u * 0.8;
-    let right = p.width - u * 6.0;
+    let right = p.width - u * HUD_SIDE;
+    let pad = u * HUD_PANEL_PAD;
     let (strip_y, strip_h, reload_y, ammo_y, name_y) = weapon_rows(view, p.height, u);
 
     // A magazine of zero is a weapon that has none — the knife — and "0 rounds
@@ -2553,11 +2599,20 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     let tail = if reserve.is_empty() {
         String::new()
     } else {
-        format!(" / {reserve}")
+        format!("/ {reserve}")
     };
-    let tail_w = p.num_width(&tail, small);
-    let ammo_color = if you.mag > 0 && you.ammo == 0 {
+    let tail_w = if tail.is_empty() {
+        0.0
+    } else {
+        p.num_width(&tail, mid) + u * 1.6
+    };
+    let dry = you.mag > 0 && you.ammo == 0;
+    // Red at empty, amber for the last quarter of a magazine: the figure warns
+    // before it accuses.
+    let ammo_color = if dry {
         RED
+    } else if you.mag > 0 && you.ammo * 4 <= you.mag {
+        AMBER
     } else {
         WHITE
     };
@@ -2565,39 +2620,42 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     // The panel spans from the weapon name down past the strip, so the whole
     // block reads as one object the way the health side does.
     let name = view.weapon_name.to_uppercase();
-    let sil_w = u * 15.0;
-    let content = (p.text_width(&name, small) + sil_w + u * 3.0)
-        .max(p.num_width(&ammo, big) + tail_w + sil_w + u * 3.0)
-        .max(u * 38.0);
-    let panel_left = right - content - u * 1.5;
+    let sil_w = u * 34.0;
+    let dial = u * 8.0;
+    // As wide as the health panel in the opposite corner, so the two bottom
+    // corners are a pair — and wider only if a long name needs it.
+    let content = (p.text_width(&name, small) + dial)
+        .max(p.num_width(&ammo, big) + tail_w + sil_w + u * 4.0)
+        .max(u * BOTTOM_BLOCK_W)
+        .max(view.utility.map_or(0.0, |tray| tray_width(p.kit, tray, u)) - pad * 2.0);
+    let panel_left = right - content - pad;
+    let panel_top = name_y - u * 2.0;
+    let panel_bottom = strip_y + strip_h + u * WEAPON_PAD_BOTTOM;
     p.panel(
         panel_left,
-        name_y - u * 1.2,
-        right - panel_left + u * 1.5,
-        strip_y + strip_h - name_y + u * 2.4,
-        u * 1.2,
-        Some(if you.mag > 0 && you.ammo == 0 {
-            RED
-        } else {
-            FAINT
-        }),
+        panel_top,
+        right - panel_left + pad,
+        panel_bottom - panel_top,
+        u * 1.4,
+        Some(if dry { RED } else { theme::ACCENT }),
     );
+    let inner_left = panel_left + pad;
 
-    // Weapon silhouette on the left side of the weapon card
+    // The weapon's shape, filling the height of the figure beside it.
     draw_weapon_silhouette(
         p,
-        panel_left + u * 1.5,
-        ammo_y + u * 1.0,
+        inner_left,
+        ammo_y + 7.0 * big * 0.12,
         sil_w,
-        7.0 * big,
+        7.0 * big * 0.76,
         &name,
-        [0.68, 0.75, 0.85, 0.75],
+        [0.74, 0.80, 0.88, 0.85],
     );
 
     p.text_right(right, name_y, small, DIM, &name);
     p.num_right(right - tail_w, ammo_y, big, ammo_color, &ammo);
     if !tail.is_empty() {
-        p.num_right(right, ammo_y + 7.0 * big - 7.0 * small, small, DIM, &tail);
+        p.num_right(right, ammo_y + 7.0 * big - 7.0 * mid, mid, DIM, &tail);
     }
 
     // The magazine, one tick per round. A count says how many are left; the
@@ -2608,53 +2666,26 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     // no strip rather than an empty one, the same distinction the dash above
     // makes. A strip of zero ticks would claim it takes rounds and has none.
     if you.mag > 0 {
-        let full = right - panel_left - u * 1.5;
+        let full = right - inner_left;
         // Above ~20 rounds a per-round tick is thinner than a pixel and the
         // strip turns into a smear, so it becomes a plain bar instead. The
         // threshold is where a tick plus its gap stops being drawable, not a
         // round number.
-        let gap = (u * 0.25).max(1.0);
+        let gap = (u * 0.3).max(1.0);
         let tick = (full - gap * (you.mag - 1) as f32) / you.mag as f32;
-        if tick >= 2.0 {
+        let lit = if dry { RED } else if ammo_color == AMBER { AMBER } else { [0.88, 0.72, 0.26, 0.95] };
+        if tick >= 1.2 {
             for i in 0..you.mag {
-                let x = panel_left + u * 0.75 + (tick + gap) * i as f32;
-                let loaded = i < you.ammo;
-                if loaded {
-                    let casing_col = if you.ammo <= 5 { [0.98, 0.35, 0.25, 0.95] } else { [0.88, 0.72, 0.26, 0.95] };
-                    let tip_col = if you.ammo <= 5 { [1.0, 0.55, 0.40, 0.95] } else { [0.94, 0.48, 0.20, 0.95] };
-                    // Pointed bullet tip
-                    p.tri((x, strip_y + strip_h * 0.35), (x + tick, strip_y + strip_h * 0.35), (x + tick * 0.5, strip_y), tip_col);
-                    // Brass casing
-                    p.rect(x, strip_y + strip_h * 0.35, tick, strip_h * 0.65, casing_col);
-                } else {
-                    p.rect(x, strip_y, tick, strip_h, TROUGH);
-                }
-            }
-        } else if tick >= 1.2 {
-            for i in 0..you.mag {
-                let x = panel_left + u * 0.75 + (tick + gap) * i as f32;
-                let loaded = i < you.ammo;
-                p.rect(
-                    x,
-                    strip_y,
-                    tick,
-                    strip_h,
-                    if loaded { ammo_color } else { TROUGH },
-                );
+                let x = inner_left + (tick + gap) * i as f32;
+                p.rect(x, strip_y, tick, strip_h, if i < you.ammo { lit } else { BAR_TROUGH });
             }
         } else {
-            p.rect(panel_left + u * 0.75, strip_y, full, strip_h, TROUGH);
+            p.rect(inner_left, strip_y, full, strip_h, BAR_TROUGH);
             let frac = (you.ammo as f32 / you.mag as f32).clamp(0.0, 1.0);
-            p.rect(
-                panel_left + u * 0.75,
-                strip_y,
-                full * frac,
-                strip_h,
-                ammo_color,
-            );
+            p.rect(inner_left, strip_y, full * frac, strip_h, lit);
             for i in 1..5 {
-                let x = panel_left + u * 0.75 + (full / 5.0) * i as f32;
-                p.rect(x, strip_y, 1.0, strip_h, TROUGH);
+                let x = inner_left + (full / 5.0) * i as f32;
+                p.rect(x, strip_y, 1.0, strip_h, theme::panel(0.9));
             }
         }
     }
@@ -2667,16 +2698,14 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
         // With no served reload time the arc cannot be drawn honestly, so the
         // word comes back rather than a full ring implying it is nearly done.
         if view.reload_time > 0.0 {
-            let r = u * 2.4;
-            // Inset by the panel's own chamfer, not flush with `right`: an arc
-            // centred on the margin has half of itself outside the panel.
-            let cx = right - r - u * 1.2;
+            let r = u * 2.6;
+            let cx = inner_left + r;
             let cy = reload_y + 7.0 * small * 0.5;
             let done = ((view.reload_time - you.reload_in) / view.reload_time).clamp(0.0, 1.0);
-            p.ring(cx, cy, r - u * 0.5, r, TROUGH);
-            p.arc(cx, cy, r - u * 0.5, r, done, AMBER);
+            p.ring(cx, cy, r - u * 0.7, r, BAR_TROUGH);
+            p.arc(cx, cy, r - u * 0.7, r, done, AMBER);
         } else {
-            p.text_right(right, reload_y, small, AMBER, "RELOADING");
+            p.text(inner_left, reload_y, small, AMBER, "RELOADING");
         }
     }
 }
@@ -2715,17 +2744,43 @@ fn tray_metrics_with(
     u: f32,
 ) -> (f32, f32, f32, f32, f32) {
     let label_scale = u * 0.7;
-    let count_scale = u * 1.1;
-    let pad = u * 1.2;
+    let count_scale = u * 1.5;
+    let pad = u * 1.6;
     let widest = labels
         .iter()
-        .map(|label| measure(kit, Face::Display, label, label_scale))
+        // The label, a gap, and the kind's pip beside it.
+        .map(|label| measure(kit, Face::Display, label, label_scale) + u * 2.6)
         .fold(0.0f32, f32::max)
         // A two-digit count, so a cell does not resize as a pouch fills.
-        .max(measure(kit, Face::Display, "00", count_scale));
+        .max(measure(kit, Face::Display, "00", count_scale))
+        // And never a sliver: four cells read as a tray, four chips do not.
+        .max(u * 11.0);
     let cell_w = widest + pad * 2.0;
     let cell_h = pad * 2.0 + 7.0 * label_scale + u * 0.8 + 7.0 * count_scale;
     (cell_w, cell_h, pad, label_scale, count_scale)
+}
+
+/// The gap between two tray cells, in HUD units.
+const TRAY_GAP: f32 = 1.2;
+
+/// What each tray cell is headed with: the key that readies it, and its kind.
+fn tray_labels(view: &UtilityView) -> Vec<String> {
+    view.slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| format!("{} {}", i + 6, abbreviate(&slot.kind)))
+        .collect()
+}
+
+/// How wide the whole tray is at its least — what the weapon panel under it
+/// widens itself to, so the stack up the right margin has one edge each side.
+fn tray_width(kit: Option<&TextKit>, view: &UtilityView, u: f32) -> f32 {
+    if view.slots.is_empty() {
+        return 0.0;
+    }
+    let (cell_w, ..) = tray_metrics_with(kit, &tray_labels(view), u);
+    let n = view.slots.len() as f32;
+    n * cell_w + (n - 1.0) * u * TRAY_GAP
 }
 
 fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
@@ -2735,15 +2790,17 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
     // Two rows per cell: the key that readies it and what it is, then how many
     // are left, larger — the count is the thing that gets read mid-firefight.
     // Sized from the text, never from a guessed constant — see `tray_metrics`.
-    let labels: Vec<String> = view
-        .slots
-        .iter()
-        .enumerate()
-        .map(|(i, slot)| format!("{} {}", i + 6, abbreviate(&slot.kind)))
-        .collect();
+    let labels = tray_labels(view);
     let (cell_w, cell_h, pad, label_scale, count_scale) = tray_metrics_with(p.kit, &labels, u);
-    let gap = u * 1.2;
-    let right = p.width - u * 6.0;
+    let gap = u * TRAY_GAP;
+    // Stretched to the weapon panel's width when the cells would otherwise
+    // fall short of it. Never shrunk: `tray_metrics` is the least a cell can be.
+    let block = u * (BOTTOM_BLOCK_W + HUD_PANEL_PAD * 2.0);
+    let n = view.slots.len() as f32;
+    let cell_w = cell_w.max((block - gap * (n - 1.0)) / n);
+    // Flush with the weapon panel's own right edge, which overhangs the
+    // content margin by its padding.
+    let right = p.width - u * HUD_SIDE + u * HUD_PANEL_PAD;
 
     // **Above the weapon block, not beside it.** Both are anchored to the same
     // right margin, and this continues that stack rather than starting a second
@@ -2751,7 +2808,7 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
     // `paint_weapon` lays itself out with, rather than from a second copy of the
     // arithmetic that has to be remembered whenever the first changes.
     let (_, _, _, _, name_y) = weapon_rows(hud, p.height, u);
-    let y = name_y - u * 2.4 - cell_h;
+    let y = name_y - u * TRAY_LIFT - cell_h;
     let total = view.slots.len() as f32 * cell_w + (view.slots.len() as f32 - 1.0) * gap;
     // Never off the left edge: on a very wide, very short window the tray is
     // wider than the margin leaves room for, and a row drawn at a negative x is
@@ -2768,11 +2825,25 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
         } else {
             WHITE
         };
-        p.rect(x, y, cell_w, cell_h, PANEL);
-        // A 2px top accent on the readied one rather than a glow all round: it
+        // The house panel, so the tray is cut from the same shape as the
+        // blocks it sits over. The readied one carries the accent edge — it
         // has to read as selected, not as neon.
+        p.panel(x, y, cell_w, cell_h, u * 0.9, if active { Some(AMBER) } else { None });
         if active {
-            p.rect(x, y, cell_w, u * 0.5, AMBER);
+            p.gradient_v(
+                x + u * 0.9,
+                y + 2.0,
+                cell_w - u * 1.8,
+                cell_h * 0.6,
+                [AMBER[0], AMBER[1], AMBER[2], 0.20],
+                [AMBER[0], AMBER[1], AMBER[2], 0.0],
+            );
+        }
+        // What kind it is, as a colour as well as three letters: a pip in the
+        // corner, in the colour that kind's effect is drawn in the world.
+        if !empty {
+            let pip = u * 1.3;
+            p.rect(x + cell_w - pad - pip, y + pad + (7.0 * label_scale - pip) * 0.5, pip, pip, kind_color(&slot.kind));
         }
         // The key is drawn with the name because the order is not ours to
         // change: slot 0 is `6`, matching `DEFAULT_CONTROLS` in `controls.ts`
@@ -2792,6 +2863,21 @@ fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
             &slot.count.max(0).to_string(),
         );
         x += cell_w + gap;
+    }
+}
+
+/// How far above the weapon name the tray's bottom edge sits: the weapon
+/// panel's top padding, and a gap.
+const TRAY_LIFT: f32 = 3.4;
+
+/// A grenade kind's colour, for the tray's pip.
+fn kind_color(kind: &str) -> [f32; 4] {
+    match kind {
+        "he" => [0.93, 0.36, 0.26, 0.95],
+        "flash" => [0.98, 0.96, 0.78, 0.95],
+        "smoke" => [0.66, 0.71, 0.77, 0.95],
+        "fire" | "molotov" => [0.98, 0.60, 0.20, 0.95],
+        _ => FAINT,
     }
 }
 
@@ -2816,28 +2902,88 @@ fn abbreviate(kind: &str) -> String {
 
 fn paint_movement(p: &mut Painter, view: &HudView, u: f32) {
     let scale = u * 0.75;
-    let y = p.height - MARGIN * u - 7.0 * scale;
-    let mut line = format!("{:.1} / {:.0} C/S", view.speed, view.move_speed.round());
-    if view.crouching {
-        line.push_str(" - CROUCHED");
-    }
-    if !view.on_ground {
-        line.push_str(" - AIRBORNE");
-    }
-    // The link, on the same line rather than in a corner of its own: it is read
-    // in the same glance as "why did that not land", and a second block would be
-    // one more thing between the crosshair and the edge of the screen.
-    if let Some(rtt) = view.rtt {
-        line.push_str(&format!(" - {} MS", rtt.round() as i32));
-    }
+    let tag = u * 0.62;
+    let pad = u * HUD_PANEL_PAD;
+    let left = u * HUD_SIDE;
+    let chip_h = u * MOVE_CHIP_H;
+    let chip_y = p.height - MARGIN * u - chip_h;
+    let text_y = chip_y + u * 1.6;
+
     // Over the run speed means a chained jump landed, which is the one thing in
     // this movement model you cannot feel without being told.
-    let color = if view.speed > view.move_speed + 0.5 {
-        GREEN
-    } else {
-        DIM
-    };
-    p.num(u * 6.0, y, scale, color, &line);
+    let over = view.speed > view.move_speed + 0.5;
+    let speed = format!("{:.1}", view.speed);
+    let cap = format!("/ {:.0} C/S", view.move_speed.round());
+    let mut tags: Vec<(&str, [f32; 4])> = Vec::new();
+    if view.crouching {
+        tags.push(("CROUCHED", theme::ACCENT));
+    }
+    if !view.on_ground {
+        tags.push(("AIRBORNE", AMBER));
+    }
+    // The link, on the same chip rather than in a corner of its own: it is read
+    // in the same glance as "why did that not land", and a second block would be
+    // one more thing between the crosshair and the edge of the screen.
+    let ping = view.rtt.map(|rtt| {
+        let ms = rtt.round() as i32;
+        let color = if ms >= 140 {
+            RED
+        } else if ms >= 80 {
+            AMBER
+        } else {
+            DIM
+        };
+        (format!("{ms} MS"), color)
+    });
+
+    // As wide as the health panel it sits under, so the corner is one column —
+    // and wider only if what is written in it would not otherwise fit.
+    let tag_y = text_y + 7.0 * scale - 7.0 * tag;
+    let speed_w = p.num_width(&speed, scale);
+    let cap_w = p.num_width(&cap, scale);
+    let tags_w: f32 = tags
+        .iter()
+        .map(|(t, _)| p.text_width(t, tag) + u * 2.4)
+        .sum();
+    let ping_w = ping
+        .as_ref()
+        .map_or(0.0, |(t, _)| p.num_width(t, scale) + u * 3.0);
+    let needed = speed_w + u * 1.4 + cap_w + tags_w + ping_w;
+    let inner = needed.max(u * BOTTOM_BLOCK_W);
+    p.panel(left - pad, chip_y, inner + pad * 2.0, chip_h, u * 1.0, None);
+
+    let mut x = left;
+    p.num(x, text_y, scale, if over { GREEN } else { WHITE }, &speed);
+    x += speed_w + u * 1.4;
+    p.num(x, text_y, scale, DIM, &cap);
+    x += cap_w;
+    for (text, color) in &tags {
+        x += u * 2.4;
+        p.text(x, tag_y, tag, *color, text);
+        x += p.text_width(text, tag);
+    }
+    if let Some((text, color)) = &ping {
+        p.num_right(left + inner, text_y, scale, *color, text);
+    }
+
+    // The speed, as a bar along the chip's foot. It runs to a quarter over the
+    // run cap, with a tick at the cap itself: a hop that lands pushes the bar
+    // past the tick and turns it green, which is the whole feedback loop.
+    if view.move_speed > 0.0 {
+        let bar_y = chip_y + chip_h - u * 2.1;
+        let bar_h = (u * 0.7).max(2.0);
+        let span = view.move_speed * 1.25;
+        let frac = (view.speed / span).clamp(0.0, 1.0);
+        p.rect(left, bar_y, inner, bar_h, BAR_TROUGH);
+        p.rect(
+            left,
+            bar_y,
+            inner * frac,
+            bar_h,
+            if over { GREEN } else { theme::with_alpha(theme::ACCENT, 0.8) },
+        );
+        p.rect(left + inner * 0.8, bar_y - u * 0.3, (u * 0.3).max(1.0), bar_h + u * 0.6, DIM);
+    }
 }
 
 /// The roster, held open.
@@ -2894,58 +3040,68 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
             (view.scores[1], view.scores[0])
         };
 
-        let hw = u * 138.0;
-        let hh = u * 13.5;
+        // One plate: our side, the clock, their side. Each side is its tag and
+        // its score and nothing else — the row of five pips that used to sit
+        // under each score counted nothing, and a HUD element that reports
+        // nothing is read as reporting something.
+        let hw = u * 178.0;
+        let hh = u * 17.0;
         let hx = (p.width - hw) * 0.5;
-        let hy = u * 2.0;
+        let hy = u * MARGIN;
+        let pw = u * 62.0;
+        let ph = u * 8.6;
+        let px = (p.width - pw) * 0.5;
+        let py = hy + u * 2.2;
+        let tag_scale = scale * 0.8;
+        let score_scale = u * 1.5;
+        let score_y = hy + (hh - 7.0 * score_scale) * 0.5;
+        let chip_w = u * 22.0;
+        let chip_h = 7.0 * tag_scale + u * 2.4;
+        let chip_y = hy + (hh - chip_h) * 0.5;
+        let tag_y = chip_y + u * 1.2;
 
-        // Header glass panel
-        p.panel(hx, hy, hw, hh, u * 2.0, Some([0.42, 0.52, 0.68, 0.55]));
+        p.panel(hx, hy, hw, hh, u * 2.0, Some(theme::ACCENT));
 
         // Left team (Our Side)
         let our_col = team_color(view.team);
-        p.rect(hx + u * 3.5, hy + u * 2.5, u * 12.0, u * 4.2, [our_col[0] * 0.35, our_col[1] * 0.35, our_col[2] * 0.35, 0.90]);
-        p.rect(hx + u * 3.5, hy + u * 2.5, u * 12.0, 1.5, our_col);
-        p.text(hx + u * 4.8, hy + u * 3.0, scale * 0.82, our_col, if view.team == 0 { "CLA" } else { "RVSF" });
+        let our_tag = if view.team == 0 { "CLA" } else { "RVSF" };
+        let cx = hx + u * 3.5;
+        p.rect(cx, chip_y, chip_w, chip_h, [our_col[0] * 0.35, our_col[1] * 0.35, our_col[2] * 0.35, 0.90]);
+        p.rect(cx, chip_y, (u * 0.6).max(2.0), chip_h, our_col);
+        p.text(cx + (chip_w - p.text_width(our_tag, tag_scale)) * 0.5, tag_y, tag_scale, our_col, our_tag);
         let mine_str = mine.to_string();
-        p.num(hx + u * 18.0, hy + u * 2.0, scale * 1.55, our_col, &mine_str);
-        for i in 0..5 {
-            p.rect(hx + u * 3.5 + i as f32 * u * 4.8, hy + u * 8.5, u * 3.8, u * 2.0, our_col);
-        }
+        p.num_right(px - u * 5.0, score_y, score_scale, our_col, &mine_str);
 
         // Right team (Their Side)
         let enemy_team = if view.team == 0 { 1 } else { 0 };
         let their_col = team_color(enemy_team);
-        p.rect(hx + hw - u * 15.5, hy + u * 2.5, u * 12.0, u * 4.2, [their_col[0] * 0.35, their_col[1] * 0.35, their_col[2] * 0.35, 0.90]);
-        p.rect(hx + hw - u * 15.5, hy + u * 2.5, u * 12.0, 1.5, their_col);
-        p.text(hx + hw - u * 14.2, hy + u * 3.0, scale * 0.82, their_col, if enemy_team == 0 { "CLA" } else { "RVSF" });
+        let their_tag = if enemy_team == 0 { "CLA" } else { "RVSF" };
+        let cx = hx + hw - u * 3.5 - chip_w;
+        p.rect(cx, chip_y, chip_w, chip_h, [their_col[0] * 0.35, their_col[1] * 0.35, their_col[2] * 0.35, 0.90]);
+        p.rect(cx + chip_w - (u * 0.6).max(2.0), chip_y, (u * 0.6).max(2.0), chip_h, their_col);
+        p.text(cx + (chip_w - p.text_width(their_tag, tag_scale)) * 0.5, tag_y, tag_scale, their_col, their_tag);
         let th_str = theirs.to_string();
-        p.num_right(hx + hw - u * 18.0, hy + u * 2.0, scale * 1.55, their_col, &th_str);
-        for i in 0..5 {
-            p.rect(hx + hw - u * 3.5 - (i + 1) as f32 * u * 4.8 + u * 1.0, hy + u * 8.5, u * 3.8, u * 2.0, their_col);
-        }
+        p.num(px + pw + u * 5.0, score_y, score_scale, their_col, &th_str);
 
         // Center Clock / Bomb Pill (only drawn if phase or bomb is present)
         if !state.phase.is_empty() {
-            let pw = u * 44.0;
-            let ph = u * 7.5;
-            let px = (p.width - pw) * 0.5;
-            let py = hy + u * 2.0;
+            let clock_scale = scale * 0.92;
+            let clock_y = py + (ph - 7.0 * clock_scale) * 0.5;
             p.rect(px, py, pw, ph, [0.03, 0.04, 0.07, 0.92]);
 
             if state.bomb.state == "planted" {
                 let pulse = if state.bomb.fuse_in < 5.0 { (state.bomb.fuse_in * 8.0).sin().abs() } else { 0.4 };
                 let bomb_col = [0.99, 0.30 + 0.35 * pulse, 0.22, 0.95];
-                p.rect(px, py, pw, 1.5, bomb_col);
+                p.rect(px, py, pw, 2.0, bomb_col);
                 let bomb_text = if !state.bomb.site.is_empty() {
                     format!("BOMB {:.1} · {}", state.bomb.fuse_in.max(0.0), state.bomb.site)
                 } else {
                     format!("BOMB {:.1}", state.bomb.fuse_in.max(0.0))
                 };
-                p.center_num(py + u * 1.5, scale * 0.82, bomb_col, &bomb_text);
+                p.center_num(clock_y, clock_scale, bomb_col, &bomb_text);
             } else if state.bomb.state == "defused" {
-                p.rect(px, py, pw, 1.5, [0.22, 0.74, 0.98, 0.95]);
-                p.center_text(py + u * 1.5, scale * 0.82, [0.22, 0.74, 0.98, 0.95], "BOMB DEFUSED");
+                p.rect(px, py, pw, 2.0, [0.22, 0.74, 0.98, 0.95]);
+                p.center_text(clock_y, clock_scale, [0.22, 0.74, 0.98, 0.95], "BOMB DEFUSED");
             } else {
                 let phase = state.phase.to_uppercase();
                 let secs = state.phase_in.max(0.0);
@@ -2959,13 +3115,13 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
                 } else {
                     [0.90, 0.92, 0.96, 0.90]
                 };
-                p.rect(px, py, pw, 1.2, clock_col);
-                p.center_num(py + u * 1.5, scale * 0.82, clock_col, &clock_text);
+                p.rect(px, py, pw, 2.0, clock_col);
+                p.center_num(clock_y, clock_scale, clock_col, &clock_text);
             }
         }
 
-        // Score label line
-        p.center_text(hy + hh - u * 3.0, scale * 0.65, DIM, &label.to_uppercase());
+        // Score label line, under the pill and inside the plate.
+        p.center_text(py + ph + u * 1.0, scale * 0.62, DIM, &label.to_uppercase());
         y = hy + hh + u * 2.5;
     } else if !state.phase.is_empty() {
         let phase = state.phase.to_uppercase();
@@ -3094,9 +3250,11 @@ fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
     let lines = open.map(|g| g.rows.len()).unwrap_or(groups.len());
 
     let scale = u * 0.85;
-    let line = 8.0 * scale;
+    // A row is the text and room to breathe: at `8 * scale` the body face's
+    // descenders touched the capitals of the row below.
+    let line = 7.0 * scale + u * 3.4;
     let width = (p.width * 0.34).max(u * 62.0);
-    let header = line * 2.2;
+    let header = line * 2.3;
     let height = header + line * (lines as f32 + 1.0) + u * 3.0;
     let x = (p.width - width) * 0.5;
     let y = (p.height - height) * 0.5;
@@ -3209,12 +3367,27 @@ fn paint_purse(p: &mut Painter, view: &HudView, u: f32, roll: &Cell<Option<Rolli
     rolled.set(mine.money as f32);
     roll.set(Some(rolled));
     let text = format!("${}", rolled.shown());
-    let floor = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - u * 1.8;
-    let health_top = floor - u * 1.2 - u * 0.6 - u * 2.6 - u * 1.6 - 7.0 * (u * 2.4) - u * 1.8;
-    let x = u * 6.0;
-    let y = health_top - 9.0 * scale - u * 1.5;
-    p.rect(x - u, y - u, p.num_width(&text, scale) + u * 2.6, 9.0 * scale, theme::panel(0.72));
-    p.rect(x - u, y - u, u * 0.5, 9.0 * scale, [0.42, 0.72, 0.98, 0.9]);
+    // **Beside the health panel, on its floor** — not above it. Above is where
+    // chat stacks (`chat_floor`), and the two used to be laid out from separate
+    // copies of the panel's height, so a buy round with chat open printed the
+    // balance through the last line said.
+    let rows = health_rows(p.height, u);
+    let pad = u * 1.6;
+    let h = 7.0 * scale + pad * 2.0;
+    let w = p.num_width(&text, scale) + pad * 2.0;
+    let x = u * HUD_SIDE - u * HUD_PANEL_PAD
+        + u * (BOTTOM_BLOCK_W + HUD_PANEL_PAD * 2.0)
+        + u * 1.6;
+    let top = rows.panel_bottom - h;
+    p.panel(
+        x,
+        top,
+        w,
+        h,
+        u * 1.0,
+        Some(if mine.can_buy { GREEN } else { FAINT }),
+    );
+    let (x, y) = (x + pad, top + pad);
     let colour = if mine.can_buy {
         [0.62, 0.88, 0.68, 0.95]
     } else {
@@ -3294,10 +3467,12 @@ fn objective_notice(fx: &Fx, self_id: &str) -> Option<(String, bool)> {
 
 fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32, u: f32) {
     let scale = u * 0.85;
-    let line = 7.0 * scale + u * 2.0;
+    // Tall enough that a name set in the body face — taller than the cap box
+    // the figures sit in — does not touch the row above it.
+    let line = 7.0 * scale + u * 3.6;
     let width = (p.width * 0.52).max(u * 90.0);
     let header = line * 2.0;
-    let height = header + line * (rows.len().max(1) as f32) + u * 4.0;
+    let height = header + line * (rows.len().max(1) as f32) + u * 3.0;
     let x = (p.width - width) * 0.5;
     let y = (p.height - height) * 0.35;
 
@@ -3353,7 +3528,7 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
         // cascade reads as rows arriving rather than as rows blinking on.
         let ease = 1.0 - (1.0 - t) * (1.0 - t);
         let slide = (1.0 - ease) * u * 4.0;
-        let ry = y + header + line * i as f32;
+        let ry = y + header + line * i as f32 + u * 1.0;
         let color = |mut c: [f32; 4]| {
             c[3] *= ease;
             c
@@ -3364,16 +3539,16 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32
         if row.you {
             p.rect(
                 x,
-                ry - u * 0.4,
+                ry - u * 1.4,
                 width,
                 line,
                 [0.42, 0.72, 0.98, 0.10 * ease],
             );
             // And an accent down the leading edge, so your row is findable at a
             // glance rather than by reading for the amber text.
-            p.rect(x, ry - u * 0.4, (u * 0.5).max(2.0), line, color(AMBER));
+            p.rect(x, ry - u * 1.4, (u * 0.5).max(2.0), line, color(AMBER));
         } else if i % 2 == 1 {
-            p.rect(x, ry - u * 0.4, width, line, [1.0, 1.0, 1.0, 0.030 * ease]);
+            p.rect(x, ry - u * 1.4, width, line, [1.0, 1.0, 1.0, 0.030 * ease]);
         }
 
         let text_color = color(if row.you {
@@ -4517,13 +4692,50 @@ impl<'a> Painter<'a> {
         self.fringe((x1 - px, y1 - py), (x0 - px, y0 - py), (-nx, -ny), color);
     }
 
-    /// A wash around the four edges of the screen.
+    /// A rect whose colour runs from `top` to `bottom`.
+    ///
+    /// The overlay's vertex colours are interpolated, so a gradient costs the
+    /// same six vertices a flat rect does.
+    pub fn gradient_v(&mut self, x: f32, y: f32, w: f32, h: f32, top: [f32; 4], bottom: [f32; 4]) {
+        if w <= 0.0 || h <= 0.0 || (top[3] <= 0.0 && bottom[3] <= 0.0) {
+            return;
+        }
+        let a = (self.ndc(x, y), top);
+        let b = (self.ndc(x + w, y), top);
+        let c = (self.ndc(x + w, y + h), bottom);
+        let d = (self.ndc(x, y + h), bottom);
+        for (position, color) in [a, b, c, a, c, d] {
+            self.out.push(OverlayVertex::solid(position, color));
+        }
+    }
+
+    /// A rect whose colour runs from `left` to `right`.
+    pub fn gradient_h(&mut self, x: f32, y: f32, w: f32, h: f32, left: [f32; 4], right: [f32; 4]) {
+        if w <= 0.0 || h <= 0.0 || (left[3] <= 0.0 && right[3] <= 0.0) {
+            return;
+        }
+        let a = (self.ndc(x, y), left);
+        let b = (self.ndc(x + w, y), right);
+        let c = (self.ndc(x + w, y + h), right);
+        let d = (self.ndc(x, y + h), left);
+        for (position, color) in [a, b, c, a, c, d] {
+            self.out.push(OverlayVertex::solid(position, color));
+        }
+    }
+
+    /// A wash around the four edges of the screen, strongest at the edge and
+    /// gone by `band` in.
+    ///
+    /// A gradient rather than four flat bands: the flat ones drew a picture
+    /// frame with a hard inner edge, which read as a UI element appearing
+    /// rather than as the edge of your vision going red.
     fn vignette(&mut self, color: [f32; 4], band: f32) {
         let (w, h) = (self.width, self.height);
-        self.rect(0.0, 0.0, w, band, color);
-        self.rect(0.0, h - band, w, band, color);
-        self.rect(0.0, 0.0, band, h, color);
-        self.rect(w - band, 0.0, band, h, color);
+        let clear = [color[0], color[1], color[2], 0.0];
+        self.gradient_v(0.0, 0.0, w, band, color, clear);
+        self.gradient_v(0.0, h - band, w, band, clear, color);
+        self.gradient_h(0.0, 0.0, band, h, color, clear);
+        self.gradient_h(w - band, 0.0, band, h, clear, color);
     }
 
     /// The crosshair, and the hitmarker around it.
@@ -6285,7 +6497,7 @@ mod tests {
             .map(|(i, s)| format!("{} {}", i + 6, abbreviate(&s.kind)))
             .collect();
         let (_, cell_h, ..) = tray_metrics(&labels, u);
-        let tray_bottom = name_y - u * 2.4 - cell_h + cell_h;
+        let tray_bottom = name_y - u * TRAY_LIFT - cell_h + cell_h;
         assert!(
             tray_bottom <= name_y,
             "the tray ends at {tray_bottom}, the weapon name starts at {name_y}",

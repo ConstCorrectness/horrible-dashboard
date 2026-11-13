@@ -508,6 +508,7 @@ fn throw_previews_match_the_server_and_the_browser_client() {
         throw_speed: 34.0,
         lob_scale: 0.42,
         throw_inherit: 0.6,
+        throw_inherit_up: 1.25,
         throw_forward: 1.3,
         throw_drop: 0.35,
         rest_speed: 1.2,

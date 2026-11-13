@@ -6,8 +6,9 @@
 //! ## Why this exists at all
 //!
 //! The server has *always* added the thrower's own velocity to a throw
-//! (`grenades.THROW_INHERIT`, 0.6 of it) — running forward sends a grenade
-//! further, jumping sends it higher. Nothing on screen said so, so the feature
+//! (`grenades.THROW_INHERIT`, 0.6 of it, and `THROW_INHERIT_UP`, 1.25 of a
+//! jump) — running forward sends a grenade further, jumping sends it much
+//! higher. Nothing on screen said so, so the feature
 //! was real and invisible: the only way to learn it was to notice that grenades
 //! sometimes went further than expected and guess why.
 //!
@@ -89,7 +90,8 @@ pub fn throw_origin(
 ///
 /// The thrower's own velocity is added at `throw_inherit` rather than in full:
 /// at 1.0 a player running backwards can drop a grenade that never leaves them,
-/// which reads as the throw having failed.
+/// which reads as the throw having failed. Rising is the exception: a
+/// jump-throw takes `inherit_up` of the jump, Counter-Strike's 1.25.
 pub fn throw_velocity(
     yaw: f32,
     pitch: f32,
@@ -102,7 +104,13 @@ pub fn throw_velocity(
     [
         yaw.cos() * cp * speed + inherit[0] * physics.throw_inherit,
         yaw.sin() * cp * speed + inherit[1] * physics.throw_inherit,
-        pitch.sin() * speed + inherit[2] * physics.throw_inherit,
+        pitch.sin() * speed
+            + inherit[2]
+                * if inherit[2] > 0.0 {
+                    physics.inherit_up()
+                } else {
+                    physics.throw_inherit
+                },
     ]
 }
 
@@ -307,6 +315,7 @@ mod tests {
             throw_speed: 34.0,
             lob_scale: 0.42,
             throw_inherit: 0.6,
+            throw_inherit_up: 1.25,
             throw_forward: 1.3,
             throw_drop: 0.35,
             rest_speed: 1.2,
@@ -344,6 +353,25 @@ mod tests {
             ..crate::api::MapInfo::default()
         };
         World::new(info, &planes).expect("test world")
+    }
+
+    #[test]
+    fn a_jump_throw_takes_more_of_the_jump_than_a_run_takes_of_the_run() {
+        // `THROW_INHERIT_UP`: rising is carried at 1.25, everything else at 0.6.
+        let p = physics();
+        let still = throw_velocity(0.0, 0.3, false, [0.0; 3], &p);
+        let jumped = throw_velocity(0.0, 0.3, false, [0.0, 0.0, 19.0], &p);
+        assert!((jumped[2] - still[2] - 19.0 * 1.25).abs() < 1e-4);
+        let falling = throw_velocity(0.0, 0.3, false, [0.0, 0.0, -20.0], &p);
+        assert!((falling[2] - still[2] + 20.0 * 0.6).abs() < 1e-4);
+        // A server that predates the field sends none, and the jump falls back
+        // to the shared figure rather than to nothing.
+        let old = ThrowPhysics {
+            throw_inherit_up: 0.0,
+            ..physics()
+        };
+        let old_jump = throw_velocity(0.0, 0.3, false, [0.0, 0.0, 19.0], &old);
+        assert!((old_jump[2] - still[2] - 19.0 * 0.6).abs() < 1e-4);
     }
 
     #[test]

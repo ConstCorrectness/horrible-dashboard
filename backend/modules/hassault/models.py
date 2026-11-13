@@ -363,6 +363,10 @@ class ThrowPhysicsOut(BaseModel):
     lobScale: float  # noqa: N815
     #: How much of the thrower's own velocity is added. The invisible one.
     throwInherit: float  # noqa: N815
+    #: The same for the thrower's *upward* speed — the jump-throw. Larger, so a
+    #: throw released on the way up is carried much further than one from the
+    #: ground. A client that predates it reads `throwInherit` for both.
+    throwInheritUp: float = 0.0  # noqa: N815
     #: How far in front of the eye, and below it, a grenade appears.
     throwForward: float  # noqa: N815
     throwDrop: float  # noqa: N815

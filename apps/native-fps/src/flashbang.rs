@@ -34,8 +34,8 @@ pub const FLASH_RING_MIN: f32 = 0.75;
 /// How strong the burned-in frame is at the start of the fade, under the white.
 pub const AFTERIMAGE_STRENGTH: f32 = 0.85;
 
-/// How white the screen is right now, 0..1. Held at `peak`, then a smoothstep
-/// down over the fade. Port of `grenades.flash_alpha`.
+/// How white the screen is right now, 0..1. Held at `peak`, then an ease-out
+/// down over the fade: still three quarters white half way through. Port of `grenades.flash_alpha`.
 pub fn flash_alpha(peak: f32, hold_left: f32, fade_left: f32, fade_total: f32) -> f32 {
     if peak <= 0.0 {
         return 0.0;
@@ -47,7 +47,7 @@ pub fn flash_alpha(peak: f32, hold_left: f32, fade_left: f32, fade_total: f32) -
         return 0.0;
     }
     let t = (fade_left / fade_total).clamp(0.0, 1.0);
-    (peak * t * t * (3.0 - 2.0 * t)).min(1.0)
+    (peak * t * (2.0 - t)).min(1.0)
 }
 
 /// Whether a flash rings, how loud and for how long: tied to the flash's own

@@ -1947,8 +1947,20 @@ impl Front {
         let right = width - MARGIN * k;
 
         // ---- the top bar ----------------------------------------------------
-        p.rect(0.0, 0.0, width, TOP * k, theme::panel(0.55));
+        p.gradient_v(0.0, 0.0, width, TOP * k, theme::panel(0.82), theme::panel(0.5));
         p.rect(0.0, TOP * k, width, 1.0, theme::FAINT);
+        // The accent runs out along the bar's foot from the wordmark's side
+        // and is gone by the middle: the bar has a start.
+        p.gradient_h(
+            0.0,
+            TOP * k - 1.0,
+            width * 0.5,
+            2.0,
+            theme::with_alpha(theme::ACCENT, 0.7),
+            theme::with_alpha(theme::ACCENT, 0.0),
+        );
+        // The mark: one leaning bar in the margin, the slab's own angle.
+        p.banner(left - 20.0 * k, 21.0 * k, 13.0 * k, 21.0 * k, 5.0 * k, theme::ACCENT, None);
         p.text(left, 22.0 * k, 2.6 * k, theme::TEXT, WORDMARK);
         for (target, rect) in hits {
             match target {
@@ -1961,16 +1973,35 @@ impl Front {
                     } else {
                         theme::TEXT_DIM
                     };
-                    p.text(rect.x + 14.0 * k, 26.0 * k, 1.7 * k, ink, tab.label());
                     if active {
+                        // Lit from its own underline: the tab you are on is a
+                        // column of light, not just a line under a word.
+                        p.gradient_v(
+                            rect.x + 4.0 * k,
+                            0.0,
+                            rect.w - 8.0 * k,
+                            TOP * k,
+                            theme::with_alpha(theme::ACCENT, 0.0),
+                            theme::with_alpha(theme::ACCENT, 0.20),
+                        );
                         p.rect(
-                            rect.x + 14.0 * k,
-                            TOP * k - 2.0,
-                            rect.w - 28.0 * k,
-                            2.0,
+                            rect.x + 4.0 * k,
+                            TOP * k - 3.0,
+                            rect.w - 8.0 * k,
+                            3.0,
                             theme::ACCENT,
                         );
+                    } else if self.hovered(rect) {
+                        p.gradient_v(
+                            rect.x + 4.0 * k,
+                            0.0,
+                            rect.w - 8.0 * k,
+                            TOP * k,
+                            [1.0, 1.0, 1.0, 0.0],
+                            [1.0, 1.0, 1.0, 0.06],
+                        );
                     }
+                    p.text(rect.x + 14.0 * k, 26.0 * k, 1.7 * k, ink, tab.label());
                 }
                 Target::Quit => {
                     let hot = self.hovered(rect);
@@ -2024,6 +2055,13 @@ impl Front {
             Tab::Dev => HINT_DEV,
             _ => HINT_PLAY,
         };
+        p.rect(
+            left,
+            height - (MARGIN + 22.0) * k,
+            (right - left - (GO_W + 24.0) * k).max(0.0),
+            1.0,
+            [1.0, 1.0, 1.0, 0.07],
+        );
         p.text(
             left,
             height - (MARGIN + 8.0) * k,
@@ -2031,7 +2069,6 @@ impl Front {
             theme::FAINT,
             hint,
         );
-        let _ = right;
     }
 
     /// Who you are and where you are playing, top right.
@@ -2063,9 +2100,20 @@ impl Front {
                 }
             }
             None => {
-                if hot {
-                    p.rect(rect.x, rect.y, rect.w, rect.h, [1.0, 1.0, 1.0, 0.04]);
-                }
+                p.rect(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    [1.0, 1.0, 1.0, if hot { 0.07 } else { 0.03 }],
+                );
+                p.rect(
+                    right - 2.0,
+                    rect.y,
+                    2.0,
+                    rect.h,
+                    theme::with_alpha(theme::AMBER, if hot { 0.95 } else { 0.55 }),
+                );
                 // Signed in, the name people see is the account's; the
                 // callsign is what a guest goes by.
                 let shown = self
@@ -2221,8 +2269,20 @@ impl Front {
                         theme::faded(if active { theme::TEXT } else { theme::TEXT_DIM }, a),
                         &title,
                     );
+                    // A green dot ahead of the line when somebody is on the
+                    // map right now: found by colour before it is read.
+                    let live = meta.contains("PLAYING");
+                    if live {
+                        p.rect(
+                            rect.x + 14.0 * k,
+                            rect.y + rect.h - 21.0 * k,
+                            5.0 * k,
+                            5.0 * k,
+                            theme::faded(theme::GREEN, a),
+                        );
+                    }
                     p.num(
-                        rect.x + 14.0 * k,
+                        rect.x + if live { 26.0 } else { 14.0 } * k,
                         rect.y + rect.h - 24.0 * k,
                         1.05 * k,
                         theme::faded(if active { theme::AMBER } else { theme::FAINT }, a * 1.5),
@@ -2567,8 +2627,20 @@ impl Front {
                         theme::faded(if active { theme::TEXT } else { theme::TEXT_DIM }, a),
                         &map_title(&entry.name),
                     );
+                    // A green dot ahead of the line when somebody is on the
+                    // map right now: found by colour before it is read.
+                    let live = meta.contains("PLAYING");
+                    if live {
+                        p.rect(
+                            rect.x + 14.0 * k,
+                            rect.y + rect.h - 21.0 * k,
+                            5.0 * k,
+                            5.0 * k,
+                            theme::faded(theme::GREEN, a),
+                        );
+                    }
                     p.num(
-                        rect.x + 14.0 * k,
+                        rect.x + if live { 26.0 } else { 14.0 } * k,
                         rect.y + rect.h - 24.0 * k,
                         1.05 * k,
                         theme::faded(if active { theme::AMBER } else { theme::FAINT }, a * 1.5),
@@ -2779,6 +2851,12 @@ fn go_button(p: &mut Painter, rect: &Hit, k: f32, hot: bool, ready: bool, label:
         } else {
             theme::with_alpha(theme::ACCENT, 0.86)
         };
+        if ready {
+            // A glow under it and out to the sides: the one lit thing here.
+            let glow = theme::with_alpha(theme::ACCENT, if hot { 0.30 } else { 0.18 });
+            let clear = theme::with_alpha(theme::ACCENT, 0.0);
+            p.gradient_v(rect.x, rect.y + rect.h, rect.w, 14.0 * k, glow, clear);
+        }
         p.rect(rect.x, rect.y, rect.w - cut, rect.h, fill);
         p.rect(rect.x + rect.w - cut, rect.y + cut, cut, rect.h - cut, fill);
         p.tri_aa(
@@ -2787,11 +2865,34 @@ fn go_button(p: &mut Painter, rect: &Hit, k: f32, hot: bool, ready: bool, label:
             (rect.x + rect.w - cut, rect.y + cut),
             fill,
         );
+        if ready {
+            p.gradient_v(
+                rect.x,
+                rect.y + cut,
+                rect.w,
+                rect.h * 0.45,
+                [1.0, 1.0, 1.0, 0.22],
+                [1.0, 1.0, 1.0, 0.0],
+            );
+        } else {
+            let edge = [1.0, 1.0, 1.0, 0.10];
+            p.rect(rect.x, rect.y, rect.w - cut, 1.0, edge);
+            p.rect(rect.x, rect.y + rect.h - 1.0, rect.w, 1.0, edge);
+            p.rect(rect.x, rect.y, 1.0, rect.h, edge);
+        }
         let ink = if ready {
             [0.03, 0.05, 0.09, 1.0]
         } else {
             theme::FAINT
         };
+        // A chevron on the trailing side: this one goes somewhere. It leans
+        // forward when the pointer is on it.
+        let (cx, cy) = (
+            rect.x + rect.w - 34.0 * k + if hot && ready { 4.0 * k } else { 0.0 },
+            rect.y + rect.h * 0.5,
+        );
+        p.line(cx - 6.0 * k, cy - 11.0 * k, cx + 5.0 * k, cy, 3.0 * k, ink);
+        p.line(cx + 5.0 * k, cy, cx - 6.0 * k, cy + 11.0 * k, 3.0 * k, ink);
         p.text(rect.x + 18.0 * k, rect.y + 13.0 * k, 2.4 * k, ink, label);
         p.num(
             rect.x + 18.0 * k,
@@ -3416,7 +3517,11 @@ fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool) {
     // — and the slab becomes a wash over it, so the lean still divides the
     // screen without hiding half the map.
     if !pictured {
-        p.rect(0.0, 0.0, width, height, [0.0075, 0.0105, 0.0155, 1.0]);
+        let base = [0.0075, 0.0105, 0.0155, 1.0];
+        p.rect(0.0, 0.0, width, height, base);
+        // Lit from the top: the field under the bar is a shade bluer than the
+        // foot, so the screen has a direction instead of being one flat fill.
+        p.gradient_v(0.0, 0.0, width, height * 0.62, [0.0190, 0.0290, 0.0500, 1.0], base);
     }
     let lean = height * 0.42;
     let x = width * 0.58;
@@ -3443,6 +3548,17 @@ fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool) {
         1.0,
         theme::with_alpha(theme::ACCENT, 0.16),
     );
+    // And darkened towards the foot, where the hints and the button sit: the
+    // button is the brightest thing on the screen, and it reads as such
+    // against a floor that falls away under it.
+    p.gradient_v(
+        0.0,
+        height * 0.66,
+        width,
+        height * 0.34,
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, if pictured { 0.5 } else { 0.38 }],
+    );
 }
 
 /// A resting block's fill: the accent's hue at almost no strength, so a card
@@ -3456,7 +3572,8 @@ fn heading(p: &mut Painter, x: f32, y: f32, k: f32, text: &str) {
     p.rect(x, y + 13.0 * k, 28.0 * k, 2.0, theme::ACCENT);
 }
 
-/// A selectable block: cut top-right corner, accent top edge when chosen.
+/// A selectable block: cut top-right corner, outlined, lit from the top, with
+/// an accent edge and a bar down its leading side when chosen.
 fn card(p: &mut Painter, r: &Hit, cut: f32, active: bool, hot: bool, a: f32) {
     // Slides in from the left a little as it fades up.
     let x = r.x - (1.0 - a) * 10.0;
@@ -3475,8 +3592,34 @@ fn card(p: &mut Painter, r: &Hit, cut: f32, active: bool, hot: bool, a: f32) {
         (x + r.w - cut, r.y + cut),
         fill,
     );
+    // A sheen over the top half: the block is a surface, not a tint.
+    let sheen = if active { 0.10 } else if hot { 0.07 } else { 0.035 };
+    let lit = [1.0, 1.0, 1.0, sheen * a];
+    p.rect(x, r.y, r.w - cut, cut, lit);
+    p.tri_aa(
+        (x + r.w - cut, r.y),
+        (x + r.w, r.y + cut),
+        (x + r.w - cut, r.y + cut),
+        lit,
+    );
+    p.gradient_v(x, r.y + cut, r.w, (r.h - cut) * 0.55, lit, [1.0, 1.0, 1.0, 0.0]);
+    // The outline, following the cut. One pixel: it defines the edge against
+    // a picture or the grid without becoming a frame.
+    let edge = if active {
+        theme::with_alpha(theme::ACCENT, 0.75 * a)
+    } else if hot {
+        [1.0, 1.0, 1.0, 0.22 * a]
+    } else {
+        [1.0, 1.0, 1.0, 0.085 * a]
+    };
+    p.rect(x, r.y, r.w - cut, 1.0, edge);
+    p.rect(x, r.y + r.h - 1.0, r.w, 1.0, edge);
+    p.rect(x, r.y, 1.0, r.h, edge);
+    p.rect(x + r.w - 1.0, r.y + cut, 1.0, r.h - cut, edge);
+    p.line(x + r.w - cut, r.y, x + r.w, r.y + cut, 1.0, edge);
     if active {
         p.rect(x, r.y, r.w - cut, 2.0, theme::faded(theme::ACCENT, a));
+        p.rect(x, r.y, 3.0, r.h, theme::faded(theme::ACCENT, a));
     }
 }
 
@@ -3489,8 +3632,20 @@ fn button(p: &mut Painter, r: &Hit, k: f32, label: &str, primary: bool, hot: boo
         (false, false) => [1.0, 1.0, 1.0, 0.06],
     };
     p.rect(r.x, r.y, r.w, r.h, fill);
+    p.gradient_v(
+        r.x,
+        r.y,
+        r.w,
+        r.h * 0.5,
+        [1.0, 1.0, 1.0, if primary { 0.16 } else { 0.05 }],
+        [1.0, 1.0, 1.0, 0.0],
+    );
     if !primary {
-        p.rect(r.x, r.y, r.w, 1.0, theme::FAINT);
+        let edge = [1.0, 1.0, 1.0, if hot { 0.28 } else { 0.13 }];
+        p.rect(r.x, r.y, r.w, 1.0, edge);
+        p.rect(r.x, r.y + r.h - 1.0, r.w, 1.0, edge);
+        p.rect(r.x, r.y, 1.0, r.h, edge);
+        p.rect(r.x + r.w - 1.0, r.y, 1.0, r.h, edge);
     }
     let scale = 1.4 * k;
     let w = p.text_width(label, scale);
