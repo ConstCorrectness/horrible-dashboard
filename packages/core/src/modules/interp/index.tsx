@@ -21,7 +21,8 @@ import { revealSection } from '../../layout/controller';
 import type { ModuleManifest, PanelDecl } from '../../registry';
 import { interpAgentTools } from './agent-tools';
 import { ASK_VIEW, askInterp } from './ask';
-import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
+import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection, type SuiteSection } from './ids';
+import { NEURON_KEYS, NEURON_VERBS, neuronAction } from './neurons/actions';
 import { SUITE_TOOLS } from './tools';
 
 const HomeSection = lazyPane(() => import('./HomeSection'), 'HomeSection');
@@ -34,6 +35,7 @@ const TracesBody = lazyPane(() => import('./bodies/activations'), 'TracesBody');
 const StepperBody = lazyPane(() => import('./bodies/activations'), 'StepperBody');
 const LensBody = lazyPane(() => import('./bodies/activations'), 'LensBody');
 const HeadsBody = lazyPane(() => import('./heads/HeadsSection'), 'HeadsBody');
+const NeuronsBody = lazyPane(() => import('./neurons/NeuronsSection'), 'NeuronsBody');
 const FeaturesBody = lazyPane(() => import('./features/FeaturesSection'), 'FeaturesBody');
 const SteerBody = lazyPane(() => import('./steer/SteerSection'), 'SteerBody');
 const AxisBody = lazyPane(() => import('./axis/AxisSection'), 'AxisBody');
@@ -58,6 +60,7 @@ const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['compon
   stepper: { title: 'Layer stepper', component: StepperBody },
   lens: { title: 'Logit lens', component: LensBody },
   heads: { title: 'Attention heads', component: HeadsBody },
+  neurons: { title: 'Neuron steering', component: NeuronsBody },
   features: { title: 'SAE features', component: FeaturesBody },
   steer: { title: 'Steering', component: SteerBody },
   axis: { title: 'Assistant axis', component: AxisBody },
@@ -153,5 +156,25 @@ export const interpSuiteModule: ModuleManifest = {
       title: 'Interpretability: Ask the agent about what is on screen',
       run: () => askInterp('interpretability suite'),
     },
+    {
+      id: 'interp.neurons.open',
+      title: 'Interpretability: Open Neurons (3D neuron steering)',
+      run: () => void revealSection(SUITE_SECTIONS.neurons, SUITE_VIEW),
+    },
+    // The scene's verbs: commands so the palette lists them and the keymap binds
+    // them; no-ops unless the Neurons section is mounted (`bindNeuronActions`).
+    ...NEURON_VERBS.map(([verb, title]) => ({
+      id: `interp.neurons.${verb}`,
+      title: `Neurons: ${title}`,
+      run: () => neuronAction(verb),
+    })),
   ],
+  // Section-scoped and `!textInput`-guarded, the stepper's precedent: arrows typed
+  // in the prompt must not move the selection, and keys pressed in another suite
+  // section must not drive this one kept mounted behind it.
+  keybindings: NEURON_KEYS.map(([key, verb]) => ({
+    key,
+    command: `interp.neurons.${verb}`,
+    when: `${whenSuiteSection(SUITE_SECTIONS.neurons)} && !textInput`,
+  })),
 };

@@ -22,6 +22,7 @@ export const SUITE_SECTIONS = {
   stepper: 'stepper',
   lens: 'lens',
   heads: 'heads',
+  neurons: 'neurons',
   features: 'features',
   steer: 'steer',
   axis: 'axis',

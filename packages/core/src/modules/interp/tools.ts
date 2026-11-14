@@ -100,6 +100,14 @@ export const SUITE_TOOLS: readonly SuiteTool[] = [
     when: 'Find induction, previous-token and sink heads; the probe records the prompt that reveals them.',
   },
   {
+    section: SUITE_SECTIONS.neurons,
+    label: 'Neurons',
+    glyph: 'neuron',
+    group: 'Activations',
+    question: 'What happens when one MLP neuron is turned up, down or off?',
+    when: 'The window’s GGUF model in 3D, every neuron of every layer: dose a few, compare the greedy reply with and without, light the stack by what fired at a token.',
+  },
+  {
     section: SUITE_SECTIONS.features,
     label: 'Features',
     glyph: 'feature',

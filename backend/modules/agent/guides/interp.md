@@ -13,6 +13,7 @@ One window, a rail of tools, all reading **the same model** and following **one 
 | Activations | `stepper`   | Step a trace node by node: attention maps, residual deltas, MoE routing                 |
 | Activations | `lens`      | Each layer's residual read as words (tabs `trace` `lenses` `reply` `guess` `compare`)   |
 | Activations | `heads`     | Every attention head of a trace, scored: induction, previous-token, duplicate, sink     |
+| Activations | `neurons`   | The window's GGUF in 3D, every MLP neuron: dose a few, compare replies, per-token heat   |
 | Features    | `features`  | SAE features of a trace: per token, labelled, with a reconstruction and a label check   |
 | Features    | `steer`     | Push a feature into the model; default and steered generations side by side             |
 | Features    | `axis`      | The Assistant Axis on a local GGUF: is this still the assistant talking; floor it       |

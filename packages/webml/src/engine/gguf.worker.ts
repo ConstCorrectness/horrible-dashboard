@@ -16,7 +16,14 @@ import { GgufSession, preflight } from '../gguf/session';
 import { blobSource, HttpSource, hfResolveUrl } from '../gguf/source';
 import type { ByteSource } from '../gguf/parse';
 import { downloadGguf, openGguf, parseGgufModelId, parseNodeGgufModelId } from '../gguf/store';
-import type { GenerateRequest, LoadRequest, WorkerEvent, WorkerRequest } from '../protocol';
+import type {
+  GenerateRequest,
+  LoadRequest,
+  NeuronRequest,
+  NeuronResult,
+  WorkerEvent,
+  WorkerRequest,
+} from '../protocol';
 
 const post = (event: WorkerEvent) => (self as unknown as Worker).postMessage(event);
 
@@ -58,6 +65,7 @@ async function load(req: LoadRequest): Promise<void> {
       quant: loaded.session.quant,
       contextLength: loaded.session.runtime.context,
       thinking: loaded.session.thinking,
+      shape: loaded.session.shape,
     });
     return;
   }
@@ -151,6 +159,7 @@ async function open(
     quant: session.quant,
     contextLength: session.runtime.context,
     thinking: session.thinking,
+    shape: session.shape,
   });
 }
 
@@ -177,6 +186,28 @@ async function generate(req: GenerateRequest): Promise<void> {
   post({ type: 'done', id: req.id, ...result });
 }
 
+async function neurons(req: NeuronRequest): Promise<void> {
+  if (!loaded) throw new Error('no model loaded');
+  interrupted = false;
+  const { session } = loaded;
+  let result: NeuronResult;
+  switch (req.op) {
+    case 'columns':
+      result = { op: 'columns', norms: await session.downColumnNorms(req.neurons) };
+      break;
+    case 'medians':
+      result = { op: 'medians', medians: await session.residualMedians(undefined, () => interrupted) };
+      break;
+    case 'capture': {
+      const c = await session.captureActivations(req);
+      result = { op: 'capture', ...c };
+      break;
+    }
+  }
+  const transfer = result.op === 'capture' ? [result.activations.buffer] : [];
+  (self as unknown as Worker).postMessage({ type: 'neurons', id: req.id, result }, transfer);
+}
+
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -195,6 +226,20 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       return;
     case 'interrupt':
       interrupted = true;
+      return;
+    case 'neurons':
+      if (generating) {
+        post({ type: 'error', id: req.id, message: 'the model is busy with another reply' });
+        return;
+      }
+      generating = req.id;
+      running = (loading ?? Promise.resolve())
+        .then(() => neurons(req))
+        .catch((err) => post({ type: 'error', id: req.id, message: describe(err) }))
+        .finally(() => {
+          generating = null;
+          running = null;
+        });
       return;
     case 'generate':
       if (generating) {

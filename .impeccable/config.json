@@ -296,6 +296,24 @@
         ],
         "createdAt": "2026-11-12T11:16:58.930Z",
         "reason": "user decision: CLAUDE.local.md section 2 asks for subtle faint grid overlays on agent/tactical panels; the grid is on the section cards, sourced from the user's own design brief"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/interp/neurons/neurons.css"
+        ],
+        "createdAt": "2026-11-14T08:17:38.169Z",
+        "reason": "Claude: .nrn-stage is the 3D neuron canvas (a measurement surface); CLAUDE.local.md asks for faint grid overlays"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/interp/neurons/neurons.css"
+        ],
+        "createdAt": "2026-11-14T08:17:38.264Z",
+        "reason": "Claude: .nrn-layer-label is an 18px spatial tag tick on the 3D stage, not a card; CLAUDE.local.md favours 2px technical accent rules"
       }
     ]
   }
