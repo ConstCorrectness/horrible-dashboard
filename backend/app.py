@@ -38,6 +38,12 @@ logging.basicConfig(
     handlers=[logging.FileHandler(_LOG_PATH), logging.StreamHandler()],
 )
 
+# Before the module imports below, which take seconds: a shell that dies while they
+# run must still take this process with it. See `backend/parent_watch.py`.
+from backend import parent_watch
+
+parent_watch.start()
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect

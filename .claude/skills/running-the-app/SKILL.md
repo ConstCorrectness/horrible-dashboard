@@ -56,7 +56,11 @@ pnpm dev:desktop    # from repo root: Vite + Electron (apps/desktop)
 
 - The shell supervises the backend itself (`apps/desktop/src/backend.ts`):
   it spawns uvicorn, or reuses one already running on :8000. No separate backend
-  start needed. Closing the window stops the backend and Vite.
+  start needed. Closing the window stops the backend and Vite; so do Ctrl+C and
+  closing the terminal. The backend also exits on its own if Electron dies
+  (`backend/parent_watch.py`), so a crash no longer leaves it holding :8000.
+- If :5173 is taken, the launcher stops before starting anything and names the
+  process holding it (usually a dev server from an earlier session).
 - Binds `0.0.0.0` by default (`scripts/dev-desktop.mjs` sets `HORRIBLE_DEV_HOST`),
   so a paired phone can reach it. Pass `--host 127.0.0.1` for local only.
 - F12 / Ctrl+Shift+I opens DevTools in development.
