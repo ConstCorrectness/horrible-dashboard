@@ -840,6 +840,47 @@ ONNX-only block.
   `hidden`, so the "Run it here" gate stayed on screen after loading and the message
   box showed before it.
 
+**Built (2026-11-14): neuron edits and activation capture** for the Interp Suite's
+Neurons tool, a WebML take on webml-community's Neuron Studio.
+
+- **Edit site:** the gated feed-forward's activation, after `glu.wgsl` and before
+  the down projection reads it. `neuron_edit.wgsl` sets
+  `act[i] = act[i] * scale + offset` on every row of the pass.
+  - All layers' edits live in one buffer of 16-byte records, `MAX_LAYER_EDITS` (64)
+    slots per layer.
+  - A layer with no edits skips its dispatch, as the lens's dispatches are skipped
+    while `lens` is off. An empty recipe therefore runs exactly the old lists.
+  - `GgufRuntime.setNeuronEdits` replaces the whole set.
+- **Cache:** `GgufSession` drops its KV prefix whenever the edit set changes
+  (`editsKey`). A steered reply to the same prompt as the baseline must not reuse the
+  baseline's unedited positions.
+- **Capture:** `neuron_capture.wgsl` copies one position's activation, after the
+  edits, into a layers × ffn buffer.
+  - Only the pass holding that position writes, so it can sit in every prefill
+    batch's list.
+  - `GgufSession.captureActivations` replays a conversation plus a reply up to the
+    position that predicted reply token `index`, then reads the buffer back. Greedy
+    replies are deterministic, so a replay under the same edits reproduces them.
+- **Down columns:** ‖W_down[:, n]‖₂ is the norm of `W_down · e_n`. That is the
+  existing decode matvec on a one-hot input, built per layer at load and kept out of
+  the decode list as the LM head is. Every weight type is read by its own kernel,
+  with no CPU dequantizer, and the result is cached per neuron.
+- **Residual medians:** `GgufSession.residualMedians` feeds a fixed neutral passage
+  a token at a time with the lens on. It takes each layer's median ‖x‖₂ (the lens
+  readout's `norm`) over positions after the first. An additive dose is
+  `dose × median_layer ÷ ‖W_down[:, n]‖`.
+- **Protocol:** `GenerateRequest.neuronEdits`, plus one `neurons` request with ops
+  `columns`, `medians` and `capture`.
+  - These run in turn with generations, and the capture's array is transferred.
+  - `ready` now carries the model's `shape` (layers, ffn, embd, arch), and the
+    client exposes it as `WebmlEngine.neurons(op)`.
+- **Checked** in `kernel-tests/neurons.test.ts` on SwiftShader:
+  - An empty recipe gives the llama.cpp reference reply, and the steered reply's
+    cache does not leak into the next unedited one.
+  - An ablation zeroes exactly the named neuron while earlier layers are untouched,
+    and an offset lands at +2.5.
+  - Prefilled and decoded captures agree.
+  - Down-column norms match the dequantized f32 and Q5_K weights.
 ## Risks
 
 | Risk | Mitigation |

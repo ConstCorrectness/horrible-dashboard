@@ -28,6 +28,8 @@ import lensInSrc from '../wgsl/lens_in.wgsl?raw';
 import lensTopkSrc from '../wgsl/lens_topk.wgsl?raw';
 import matmulSrc from '../wgsl/matmul.wgsl?raw';
 import matvecSrc from '../wgsl/matvec.wgsl?raw';
+import neuronCaptureSrc from '../wgsl/neuron_capture.wgsl?raw';
+import neuronEditSrc from '../wgsl/neuron_edit.wgsl?raw';
 import rmsnormSrc from '../wgsl/rmsnorm.wgsl?raw';
 import ropeSrc from '../wgsl/rope.wgsl?raw';
 import sampleSrc from '../wgsl/sample.wgsl?raw';
@@ -147,7 +149,12 @@ export const WG = {
   glu: 256,
   bias: 256,
   kvStore: 256,
+  neuronEdit: 64,
+  neuronCapture: 256,
 } as const;
+
+/** The most neuron edits one layer may hold: neuron_edit.wgsl's one thread per edit. */
+export const MAX_LAYER_EDITS = 64;
 
 /** Positions per decode-attention chunk (attention.wgsl's CH): one workgroup each. */
 export const ATTN_CHUNK = 128;
@@ -240,6 +247,8 @@ export class Kernels {
   sample = () => this.get('sample', () => sampleSrc);
   lensIn = () => this.get('lens_in', () => lensInSrc);
   lensTopk = () => this.get('lens_topk', () => lensTopkSrc);
+  neuronEdit = () => this.get('neuron_edit', () => neuronEditSrc);
+  neuronCapture = () => this.get('neuron_capture', () => neuronCaptureSrc);
 
   private get(key: string, source: () => string): GPUComputePipeline {
     let pipeline = this.cache.get(key);

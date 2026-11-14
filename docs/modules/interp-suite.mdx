@@ -28,6 +28,7 @@ so they are one pane now.
 | Activations | **Stepper** | the layer stepper |
 | Activations | **Lens** | the trace lens, **Compare lenses** (logit lens vs fitted Jacobian lenses — see below), and the [WebML](./webml.mdx) lens lab (Reply / Guess / Compare) as sub-tabs |
 | Activations | **Heads** | every attention head of a trace, scored — see below |
+| Activations | **Neurons** | every MLP neuron of the window's GGUF in 3D; dose a few, compare replies, light the stack by a token — see below |
 | Features | **Features** | SAE features of a trace, labelled and checked — see below |
 | Features | **Steer** | push a feature into the model; default and steered side by side — see below |
 | Features | **Axis** | the Assistant Axis built on a local GGUF: monitor drift, cap it — see below |
@@ -252,6 +253,60 @@ publishes them only for larger models than this machine runs: Qwen3-4B,
 Qwen3.5-0.8B and 2B, Gemma 4 31B, OLMo 32B. That path has not been tried on a
 real J++ file.
 
+## Neurons
+
+**Neurons** draws every MLP neuron of the window's WebML GGUF model in 3D. Each layer
+is a plate, the plates are stacked in depth, and you orbit the stack. It is inspired
+by webml-community's Neuron Studio and runs on our own engine, so it works with any
+architecture WebML runs (Llama, Qwen 2/3, Gemma 3, SmolLM3).
+
+- **The stack.** A layer of `ffn` neurons is a near-square grid filled row-major
+  (`neurons/grid.ts`; Qwen3-4B's 9728 neurons make a 99 × 99 grid).
+  - `neurons/scene.ts` draws one three.js `Points` per layer over a shared grid of
+    positions. Every neuron on every plate is drawn; nothing is subsampled.
+  - Every camera parameter (layer, zoom, pan, spread, yaw, pitch) eases to its target
+    on its own critically damped spring (`neurons/camera.ts`). Traversing to a layer
+    only moves the target.
+  - Clicks are resolved by intersecting the pointer's ray with a plate's plane
+    analytically (`pickCell`), never with a Raycaster over the points.
+  - Frames are drawn on demand. A hidden pane gets no `requestAnimationFrame`, so
+    each invalidation also arms a timer that draws the settled frame.
+  - All colours are theme tokens: `--ramp-pos` / `--ramp-neg` for polarity,
+    re-read when the theme changes.
+- **Steering.** A recipe holds up to 32 neurons (`neurons/recipe.ts`).
+  - Each neuron edits the gated activation right before `down_proj`, on every
+    token: `act = act × scale + offset`.
+  - _Multiply_ sets the scale directly, and 0 ablates.
+  - _Additive_ doses run from −3 to +3, in units of the layer's median residual
+    norm divided by that neuron's down-column norm. So dose 1 moves the residual
+    stream by about one typical residual norm at any depth.
+  - The medians are measured once per load over a neutral passage. The column norms
+    are read on the GPU as `W_down · e_n`. See
+    [the engine](../architecture/webml-gguf-engine.mdx) for the kernels.
+- **Compare.** Both replies decode greedily from the same prompt (thinking off), so
+  the recipe is the only difference. With nothing active, the steered reply is the
+  baseline itself.
+- **Heat.** Click any token of either reply to replay the conversation, under that
+  reply's own edits, up to the position that predicted it. Each layer's activations
+  are read back there.
+  - The stack lights by signed activation, normalized per layer.
+  - **Fired hardest** lists the top neurons, across all layers or only the selected
+    one; click a row to fly to that neuron.
+  - The replay re-tokenizes the reply's text. A reply that does not tokenize back
+    to the tokens it was generated as can shift a position by one.
+- **Recipes** persist per model file in the viewer's browser. **Export** writes
+  `<model>.neurons.json` (schema 1, naming the site and normalization), and
+  **Import** refuses a recipe made on another file or shape.
+- **Keys** (section-scoped, never in a text box):
+  - Arrows: adjacent neuron. Alt + arrows: orbit.
+  - Page Up / Page Down: layer. `=` / `-`: zoom.
+  - `I`: inspect. `R`: reset the view. `A`: add the selection. Mod+Z: undo.
+  - Each key is an `interp.neurons.*` command, reached through `neurons/actions.ts`.
+- **Sound.** Pentatonic hover, select, dose and layer tones on the mixer's
+  **Neurons** strip. Muting is per viewer.
+- **Not here:** Qwen3.5 (WebML has no Gated DeltaNet layers yet), so Neuron Studio's
+  Qwen3.5-4B sample recipes do not transfer. The llama.cpp tracer cannot edit an MLP
+  activation either, so this section is WebML only.
 ## Features
 
 What a sparse autoencoder reads in a trace. An SAE is a dictionary for one site of one

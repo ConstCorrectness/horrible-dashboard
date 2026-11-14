@@ -11,6 +11,8 @@ import type {
   Dtype,
   EngineKind,
   GenerateRequest,
+  NeuronRequest,
+  NeuronResult,
   StopReason,
   Usage,
   WorkerEvent,
@@ -46,6 +48,8 @@ export type EngineState =
       contextLength?: number;
       /** GGUF: the chat template takes `enable_thinking`. */
       thinking?: boolean;
+      /** GGUF: layers, feed-forward width, residual width and architecture. */
+      shape?: { layers: number; ffn: number; embd: number; arch: string };
     }
   | { kind: 'error'; message: string; model?: string };
 
@@ -67,6 +71,16 @@ export interface GenerateHandlers {
 }
 
 export type GenerateOptions = Omit<GenerateRequest, 'type' | 'id'>;
+
+/** A neuron-tool request without its envelope; distributes over the ops. */
+export type NeuronOptions = NeuronRequest extends infer R
+  ? R extends NeuronRequest
+    ? Omit<R, 'type' | 'id'>
+    : never
+  : never;
+
+/** The result of the op `O`. */
+export type NeuronResultOf<O extends NeuronOptions['op']> = Extract<NeuronResult, { op: O }>;
 
 interface Pending {
   handlers: GenerateHandlers;
@@ -119,6 +133,10 @@ export class WebmlEngine {
   private readonly listeners = new Set<() => void>();
   private loadWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
   private readonly pending = new Map<string, Pending>();
+  private readonly neuronPending = new Map<
+    string,
+    { resolve: (r: NeuronResult) => void; reject: (err: Error) => void }
+  >();
 
   constructor(
     private readonly createWorker: (kind: EngineKind) => Worker = workerFor,
@@ -134,7 +152,7 @@ export class WebmlEngine {
 
   /** A generation is running. */
   get busy(): boolean {
-    return this.pending.size > 0;
+    return this.pending.size > 0 || this.neuronPending.size > 0;
   }
 
   /**
@@ -190,6 +208,25 @@ export class WebmlEngine {
     });
   }
 
+  /**
+   * GGUF only: one of the neuron tools' reads (down-column norms, residual medians,
+   * an activation capture). Runs in turn with generations: refused while busy.
+   */
+  neurons<O extends NeuronOptions['op']>(
+    options: Extract<NeuronOptions, { op: O }>,
+  ): Promise<NeuronResultOf<O>> {
+    if (this.state.kind !== 'ready') return Promise.reject(new Error('no model loaded'));
+    if (this.state.engine !== 'gguf') {
+      return Promise.reject(new Error('neuron tools need a GGUF model'));
+    }
+    if (this.busy) return Promise.reject(new Error('the model is busy with another reply'));
+    const id = `n${++seq}`;
+    return new Promise<NeuronResultOf<O>>((resolve, reject) => {
+      this.neuronPending.set(id, { resolve: (r) => resolve(r as NeuronResultOf<O>), reject });
+      this.send({ type: 'neurons', id, ...options } as NeuronRequest);
+    });
+  }
+
   interrupt(): void {
     this.worker?.postMessage({ type: 'interrupt' } satisfies WorkerRequest);
   }
@@ -208,6 +245,8 @@ export class WebmlEngine {
     this.loadWaiter = null;
     for (const p of this.pending.values()) p.reject(new Error('engine terminated'));
     this.pending.clear();
+    for (const p of this.neuronPending.values()) p.reject(new Error('engine terminated'));
+    this.neuronPending.clear();
     this.set({ kind: 'idle' });
   }
 
@@ -231,6 +270,8 @@ export class WebmlEngine {
     this.loadWaiter = null;
     for (const p of this.pending.values()) p.reject(new Error(message));
     this.pending.clear();
+    for (const p of this.neuronPending.values()) p.reject(new Error(message));
+    this.neuronPending.clear();
     this.set({ kind: 'error', message });
   }
 
@@ -269,6 +310,7 @@ export class WebmlEngine {
           quant: event.quant,
           contextLength: event.contextLength,
           thinking: event.thinking,
+          shape: event.shape,
         });
         this.loadWaiter?.resolve();
         this.loadWaiter = null;
@@ -278,9 +320,11 @@ export class WebmlEngine {
         return;
       case 'error': {
         if (event.id) {
-          const p = this.pending.get(event.id);
+          const p = this.pending.get(event.id) ?? this.neuronPending.get(event.id);
           this.pending.delete(event.id);
+          this.neuronPending.delete(event.id);
           p?.reject(new Error(event.message));
+          this.emit();
           return;
         }
         const model = this.state.kind === 'loading' ? this.state.model : undefined;
@@ -295,6 +339,13 @@ export class WebmlEngine {
       case 'step':
         this.pending.get(event.id)?.handlers.onStep?.(event);
         return;
+      case 'neurons': {
+        const p = this.neuronPending.get(event.id);
+        this.neuronPending.delete(event.id);
+        p?.resolve(event.result);
+        this.emit();
+        return;
+      }
       case 'done': {
         const p = this.pending.get(event.id);
         this.pending.delete(event.id);

@@ -82,11 +82,60 @@ export interface GenerateRequest {
    * as the same tokens. Ignored by ONNX models.
    */
   forced?: string;
+  /**
+   * GGUF only: neuron edits on the feed-forward activation (after the gate, before
+   * the down projection), on every position of this reply. See `NeuronEditSpec`.
+   */
+  neuronEdits?: NeuronEditSpec[];
 }
+
+/** `act[index] = act[index] * scale + offset` at `layer`, on every position. */
+export interface NeuronEditSpec {
+  layer: number;
+  index: number;
+  scale: number;
+  offset: number;
+}
+
+/**
+ * GGUF only: the neuron tools' reads, run one at a time with generations.
+ * - `columns`: ‖W_down[:, n]‖₂ for each neuron.
+ * - `medians`: each layer's median residual-stream norm over a reference passage.
+ * - `capture`: each layer's activation at the position that predicted reply token
+ *   `index`, with the conversation and reply replayed under `neuronEdits`.
+ */
+export type NeuronRequest =
+  | { type: 'neurons'; id: string; op: 'columns'; neurons: { layer: number; index: number }[] }
+  | { type: 'neurons'; id: string; op: 'medians' }
+  | {
+      type: 'neurons';
+      id: string;
+      op: 'capture';
+      messages: ChatMessage[];
+      templateKwargs?: Record<string, unknown>;
+      reply: string;
+      index: number;
+      neuronEdits?: NeuronEditSpec[];
+    };
+
+export type NeuronResult =
+  | { op: 'columns'; norms: number[] }
+  | { op: 'medians'; medians: number[] }
+  | {
+      op: 'capture';
+      /** layers × ffn, row-major. */
+      activations: Float32Array;
+      layers: number;
+      ffn: number;
+      position: number;
+      input: string;
+      predicted: string;
+    };
 
 export type WorkerRequest =
   | LoadRequest
   | GenerateRequest
+  | NeuronRequest
   | { type: 'interrupt' }
   | { type: 'unload' };
 
@@ -132,6 +181,8 @@ export type WorkerEvent =
       contextLength?: number;
       /** GGUF: the chat template takes `enable_thinking`. */
       thinking?: boolean;
+      /** GGUF: the model's shape — layers, feed-forward width, residual width, arch. */
+      shape?: { layers: number; ffn: number; embd: number; arch: string };
     }
   | { type: 'error'; id?: string; message: string }
   | { type: 'delta'; id: string; text: string }
@@ -160,4 +211,5 @@ export type WorkerEvent =
       /** Decode speed: tokens after the first over the time after the first. */
       tokensPerSecond: number;
     }
+  | { type: 'neurons'; id: string; result: NeuronResult }
   | { type: 'unloaded' };

@@ -566,6 +566,16 @@ export function IconFeature(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Neurons: a plate of them, one picked. */
+export function IconNeuron(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 3.5h.01M8 3.5h.01M12.5 3.5h.01M3.5 8h.01M12.5 8h.01M3.5 12.5h.01M8 12.5h.01M12.5 12.5h.01" />
+      <circle cx="8" cy="8" r="1.75" />
+    </Glyph>
+  );
+}
+
 /** Steer: push a direction. */
 export function IconSteer(props: SVGProps<SVGSVGElement>) {
   return (
@@ -666,6 +676,7 @@ export const NAMED_GLYPHS: Readonly<
   lens: IconLens,
   heads: IconHeads,
   feature: IconFeature,
+  neuron: IconNeuron,
   steer: IconSteer,
   axis: IconAxis,
   graph: IconGraph,

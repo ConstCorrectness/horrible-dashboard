@@ -57,6 +57,7 @@ import {
   MATMUL_TILE,
   MAX_GQA_GROUP,
   MAX_HEAD_DIM,
+  MAX_LAYER_EDITS,
   uniformBuffer,
   WG,
 } from '../gpu/kernels';
@@ -133,7 +134,26 @@ interface Dispatch {
   workgroups: [number, number];
   /** Part of the logit lens: run only while `lens` is set. */
   lens?: boolean;
+  /** This layer's neuron edits: run only while the layer has some. */
+  editLayer?: number;
+  /** Activation capture: run only while `capture` is set. */
+  capture?: boolean;
 }
+
+/**
+ * One neuron edit on a layer's feed-forward activation, on every position:
+ * `act[index] = act[index] * scale + offset`, after the gate and before the down
+ * projection. Scale 1 with an offset steers; scale 0 with offset 0 ablates.
+ */
+export interface NeuronEdit {
+  layer: number;
+  index: number;
+  scale: number;
+  offset: number;
+}
+
+/** Bytes per record in the neuron-edit buffer: (idx, scale, offset, pad). */
+const EDIT_BYTES = 16;
 
 type Mode = 'decode' | 'prefill';
 
@@ -166,6 +186,27 @@ export class GgufRuntime {
    * the LM head's weights per token.
    */
   lens = false;
+
+  // Neuron edits: every layer's records in one buffer, MAX_LAYER_EDITS slots each.
+  private edits!: GPUBuffer;
+  private editParams: GPUBuffer[] = [];
+  private editCounts = new Uint32Array(0);
+  // Activation capture: one position's activation per layer, layers × ffn.
+  private captureOut!: GPUBuffer;
+  private captureTarget!: GPUBuffer;
+  private captureStaging!: GPUBuffer;
+  /**
+   * Copy each layer's feed-forward activation at `capture.position` on the passes
+   * queued while this is set (`setCapture`); `readCapture` returns them.
+   */
+  capture: { position: number } | null = null;
+  // A down-projection column: W_down · e_n, through the decode matvec.
+  private oneHot!: GPUBuffer;
+  private column!: GPUBuffer;
+  private columnStaging!: GPUBuffer;
+  private columnLists: Dispatch[][] = [];
+  private hotIndex = 0;
+  private readonly columnNorms = new Map<string, number>();
 
   private constructor(
     private readonly gpu: WebmlDevice,
@@ -376,7 +417,7 @@ export class GgufRuntime {
     this.stepData[1] = tokens.length;
     device.queue.writeBuffer(this.step, 0, this.stepData);
 
-    const list = [...this.lists[mode], ...this.lists.head].filter((d) => !d.lens || this.lens);
+    const list = [...this.lists[mode], ...this.lists.head].filter((d) => this.runs(d));
     const querySet = device.createQuerySet({ type: 'timestamp', count: list.length * 2 });
     const bytes = list.length * 2 * 8;
     const resolved = device.createBuffer({
@@ -432,6 +473,135 @@ export class GgufRuntime {
     }
   }
 
+  /** Whether a flagged dispatch belongs in the passes queued now. */
+  private runs(d: Dispatch): boolean {
+    if (d.lens && !this.lens) return false;
+    if (d.editLayer !== undefined && !this.editCounts[d.editLayer]) return false;
+    if (d.capture && !this.capture) return false;
+    return true;
+  }
+
+  /**
+   * Replace every neuron edit: they apply to the passes queued from now on. The KV
+   * cache keeps what earlier passes wrote under the old edits — a caller changing
+   * them must re-feed any positions it means to reuse.
+   */
+  setNeuronEdits(edits: readonly NeuronEdit[]): void {
+    const c = this.config;
+    const perLayer: NeuronEdit[][] = Array.from({ length: c.layers }, () => []);
+    for (const e of edits) {
+      if (!Number.isInteger(e.layer) || e.layer < 0 || e.layer >= c.layers) {
+        throw new Error(`layer ${e.layer} is outside the model's ${c.layers}`);
+      }
+      if (!Number.isInteger(e.index) || e.index < 0 || e.index >= c.ffn) {
+        throw new Error(`neuron ${e.index} is outside layer ${e.layer}'s ${c.ffn}`);
+      }
+      if (!Number.isFinite(e.scale) || !Number.isFinite(e.offset)) {
+        throw new Error(`neuron L${e.layer} N${e.index}: scale and offset must be finite`);
+      }
+      perLayer[e.layer].push(e);
+    }
+    const data = new ArrayBuffer(c.layers * MAX_LAYER_EDITS * EDIT_BYTES);
+    const u = new Uint32Array(data);
+    const f = new Float32Array(data);
+    perLayer.forEach((list, l) => {
+      if (list.length > MAX_LAYER_EDITS) {
+        throw new Error(`layer ${l} has ${list.length} edits; one layer takes ${MAX_LAYER_EDITS}`);
+      }
+      list.forEach((e, i) => {
+        const at = ((l * MAX_LAYER_EDITS + i) * EDIT_BYTES) / 4;
+        u[at] = e.index;
+        f[at + 1] = e.scale;
+        f[at + 2] = e.offset;
+      });
+    });
+    const { device } = this.gpu;
+    device.queue.writeBuffer(this.edits, 0, data);
+    perLayer.forEach((list, l) => {
+      this.editCounts[l] = list.length;
+      device.queue.writeBuffer(this.editParams[l], 8, Uint32Array.of(list.length));
+    });
+  }
+
+  /** How many neuron edits are in place, over all layers. */
+  get neuronEditCount(): number {
+    return this.editCounts.reduce((a, b) => a + b, 0);
+  }
+
+  /**
+   * Capture each layer's activation at `position` on the passes queued from now on
+   * (null: stop). Only a pass that holds the position writes the capture.
+   */
+  setCapture(position: number | null): void {
+    if (position !== null) {
+      if (!Number.isInteger(position) || position < 0 || position >= this.context) {
+        throw new Error(`position ${position} is outside the ${this.context}-token context`);
+      }
+      this.gpu.device.queue.writeBuffer(this.captureTarget, 0, Uint32Array.of(position));
+    }
+    this.capture = position === null ? null : { position };
+  }
+
+  /** Every layer's activation at the captured position: layers × ffn, row-major. */
+  async readCapture(): Promise<Float32Array> {
+    const { device } = this.gpu;
+    const bytes = this.config.layers * this.config.ffn * 4;
+    const encoder = device.createCommandEncoder({ label: 'capture readback' });
+    encoder.copyBufferToBuffer(this.captureOut, 0, this.captureStaging, 0, bytes);
+    device.queue.submit([encoder.finish()]);
+    await this.captureStaging.mapAsync(GPUMapMode.READ, 0, bytes);
+    const out = new Float32Array(this.captureStaging.getMappedRange(0, bytes).slice(0));
+    this.captureStaging.unmap();
+    return out;
+  }
+
+  /**
+   * ‖W_down[:, index]‖₂ at `layer`: the length of what one unit of that neuron's
+   * activation adds to the residual stream. Computed on the GPU as the down
+   * projection of a one-hot input — every weight type is read by the kernel that
+   * already reads it — and cached. It uses the step uniform: never call it while a
+   * generation is queued.
+   */
+  async downColumnNorm(layer: number, index: number): Promise<number> {
+    const c = this.config;
+    if (!Number.isInteger(layer) || layer < 0 || layer >= c.layers) {
+      throw new Error(`layer ${layer} is outside the model's ${c.layers}`);
+    }
+    if (!Number.isInteger(index) || index < 0 || index >= c.ffn) {
+      throw new Error(`neuron ${index} is outside layer ${layer}'s ${c.ffn}`);
+    }
+    const key = `${layer}:${index}`;
+    const cached = this.columnNorms.get(key);
+    if (cached !== undefined) return cached;
+
+    const { device } = this.gpu;
+    device.queue.writeBuffer(this.oneHot, this.hotIndex * 4, Float32Array.of(0));
+    device.queue.writeBuffer(this.oneHot, index * 4, Float32Array.of(1));
+    this.hotIndex = index;
+    this.stepData[0] = 0;
+    this.stepData[1] = 1;
+    device.queue.writeBuffer(this.step, 0, this.stepData);
+    const bytes = c.embd * 4;
+    const encoder = device.createCommandEncoder({ label: `down column ${key}` });
+    const pass = encoder.beginComputePass({ label: `down column ${key}` });
+    for (const d of this.columnLists[layer]) {
+      pass.setPipeline(d.pipeline);
+      pass.setBindGroup(0, d.group);
+      pass.dispatchWorkgroups(d.workgroups[0], d.workgroups[1]);
+    }
+    pass.end();
+    encoder.copyBufferToBuffer(this.column, 0, this.columnStaging, 0, bytes);
+    device.queue.submit([encoder.finish()]);
+    await this.columnStaging.mapAsync(GPUMapMode.READ, 0, bytes);
+    const v = new Float32Array(this.columnStaging.getMappedRange(0, bytes));
+    let ss = 0;
+    for (let i = 0; i < v.length; i++) ss += v[i] * v[i];
+    this.columnStaging.unmap();
+    const norm = Math.sqrt(ss);
+    this.columnNorms.set(key, norm);
+    return norm;
+  }
+
   private check(tokens: ArrayLike<number>, pos: number): void {
     if (!tokens.length) throw new Error('nothing to forward');
     const last = pos + tokens.length - 1;
@@ -459,7 +629,7 @@ export class GgufRuntime {
     const encoder = device.createCommandEncoder({ label });
     const pass = encoder.beginComputePass({ label });
     for (const d of logits ? [...this.lists[mode], ...this.lists.head] : this.lists[mode]) {
-      if (d.lens && !this.lens) continue;
+      if (!this.runs(d)) continue;
       pass.setPipeline(d.pipeline);
       pass.setBindGroup(0, d.group);
       pass.dispatchWorkgroups(d.workgroups[0], d.workgroups[1]);
@@ -622,6 +792,27 @@ export class GgufRuntime {
         ),
       );
     }
+    // Neuron edits, activation capture, and the one-hot pass for down columns.
+    this.edits = this.buffer(
+      'neuron edits',
+      c.layers * MAX_LAYER_EDITS * EDIT_BYTES,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    );
+    this.editCounts = new Uint32Array(c.layers);
+    this.captureOut = this.f32Buffer('capture', c.layers * c.ffn);
+    this.captureTarget = this.uniform('capture target', [0]);
+    this.captureStaging = this.buffer(
+      'capture staging',
+      c.layers * c.ffn * 4,
+      GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    );
+    this.oneHot = this.f32Buffer('one hot', c.ffn);
+    this.column = this.f32Buffer('down column', c.embd);
+    this.columnStaging = this.buffer(
+      'down column staging',
+      c.embd * 4,
+      GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    );
     {
       const pipeline = k.sample();
       this.sampler = {
@@ -962,6 +1153,15 @@ export class GgufRuntime {
         down: await matrix(`${p}ffn_down.weight`),
         postFfwNorm: c.postNorms ? await vector(`${p}post_ffw_norm.weight`) : null,
       };
+      const editParams = this.uniform(`${p}neuron_edit.params`, [c.ffn, l * MAX_LAYER_EDITS, 0]);
+      this.editParams.push(editParams);
+      const captureParams = this.uniform(`${p}neuron_capture.params`, [c.ffn, l]);
+      {
+        // The down column pass, kept out of the decode list as the LM head is.
+        const before = this.lists.decode.length;
+        project('decode', w.down, this.oneHot, this.column);
+        this.columnLists.push(this.lists.decode.splice(before));
+      }
       const window = layerWindow(c, l);
       // SmolLM3's NoPE layers: Q and K go to the cache unrotated.
       const roped = layerRoped(c, l);
@@ -1005,6 +1205,37 @@ export class GgufRuntime {
         elementwise(mode, k.glu(), [gate, up, act], c.ffn, `${p}${gelu ? 'geglu' : 'swiglu'}`, [
           gelu ? 1 : 0,
         ]);
+        {
+          const pipeline = k.neuronEdit();
+          list.push({
+            label: `${p}neuron_edit`,
+            pipeline,
+            group: bindGroup(device, pipeline, {
+              0: act,
+              1: this.edits,
+              2: editParams,
+              3: this.step,
+            }),
+            workgroups: [rows, 1],
+            editLayer: l,
+          });
+        }
+        {
+          const pipeline = k.neuronCapture();
+          list.push({
+            label: `${p}neuron_capture`,
+            pipeline,
+            group: bindGroup(device, pipeline, {
+              0: act,
+              1: this.captureOut,
+              2: captureParams,
+              3: this.captureTarget,
+              4: this.step,
+            }),
+            workgroups: dispatch1d(c.ffn, WG.neuronCapture, maxGroups),
+            capture: true,
+          });
+        }
         if (w.postFfwNorm) {
           project(mode, w.down, act, h);
           rmsnorm(list, rows, h, w.postFfwNorm, x, `${p}post_ffw_norm`, false, true);

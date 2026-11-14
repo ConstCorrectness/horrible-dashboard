@@ -10,7 +10,7 @@ import type { ChatMessage, LayerLens, StopReason, Usage } from '../protocol';
 import { checkSupport } from './arch';
 import { ggmlTypeName } from './ggml';
 import { layoutProblems, readGgufHeader, type ByteSource, type GgufHeader } from './parse';
-import { GgufRuntime, type LoadOptions } from './runtime';
+import { GgufRuntime, type LoadOptions, type NeuronEdit } from './runtime';
 import { distribution } from '../distribution';
 import { DEFAULT_SAMPLER } from './sample';
 import { ChatTemplate } from './template';
@@ -37,6 +37,55 @@ export interface SessionGenerate {
    * Two models given the same text are then compared position by position.
    */
   forced?: string;
+  /**
+   * Neuron edits on the feed-forward activations, for this reply's every pass
+   * (prompt included). Absent or empty: the unedited model. Changing them from one
+   * call to the next drops the KV cache, so no position computed under one set of
+   * edits is reused under another.
+   */
+  neuronEdits?: NeuronEdit[];
+}
+
+/** One position's feed-forward activations, from `captureActivations`. */
+export interface SessionCapture {
+  /** layers × ffn, row-major: each layer's activation, after any neuron edits. */
+  activations: Float32Array;
+  layers: number;
+  ffn: number;
+  /** The absolute position captured. */
+  position: number;
+  /** The token read at that position, and the one predicted from it (the reply's). */
+  input: string;
+  predicted: string;
+}
+
+/**
+ * A neutral passage the residual stream's typical size is measured on, once per
+ * load: plain descriptive prose, so no layer's median is pulled by an odd topic.
+ */
+export const REFERENCE_PASSAGE =
+  'The library on the corner opens at nine in the morning and closes at six. ' +
+  'Inside, long tables stand under tall windows, and the shelves run from the ' +
+  'floor almost to the ceiling. Students come in the afternoon to read and ' +
+  'write, while older visitors prefer the quiet hours before lunch. A small ' +
+  'garden behind the building has benches, a few trees and a fountain that ' +
+  'runs from spring until the first cold weeks of autumn.';
+
+/** The median of a non-empty list. */
+export function median(values: readonly number[]): number {
+  if (!values.length) throw new RangeError('median of no values');
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/** A stable key for a set of edits: the same edits in any order give the same key. */
+export function editsKey(edits: readonly NeuronEdit[] | undefined): string {
+  if (!edits?.length) return '';
+  return edits
+    .map((e) => `${e.layer}:${e.index}:${e.scale}:${e.offset}`)
+    .sort()
+    .join('|');
 }
 
 export interface SessionStep {
@@ -93,6 +142,8 @@ export class GgufSession {
    * turn instead of the whole system prompt and tool schemas again.
    */
   private cached: number[] = [];
+  /** `editsKey` of the edits the cached positions were computed under. */
+  private editKey = '';
 
   private constructor(
     readonly runtime: GgufRuntime,
@@ -134,12 +185,128 @@ export class GgufSession {
     this.runtime.destroy();
   }
 
+  /** The model's shape, for views that lay out its neurons. */
+  get shape(): { layers: number; ffn: number; embd: number; arch: string } {
+    const c = this.runtime.config;
+    return { layers: c.layers, ffn: c.ffn, embd: c.embd, arch: c.arch };
+  }
+
+  /** Put `edits` in place; a different set than the cache was built under drops it. */
+  private applyEdits(edits: readonly NeuronEdit[] | undefined): void {
+    const key = editsKey(edits);
+    if (key === this.editKey) return;
+    this.runtime.setNeuronEdits(edits ?? []);
+    this.editKey = key;
+    this.cached = [];
+  }
+
+  /**
+   * ‖W_down[:, n]‖₂ for each neuron: how far one unit of its activation moves the
+   * residual stream. What an additive dose is divided by.
+   */
+  async downColumnNorms(neurons: readonly { layer: number; index: number }[]): Promise<number[]> {
+    const out: number[] = [];
+    for (const n of neurons) out.push(await this.runtime.downColumnNorm(n.layer, n.index));
+    // The one-hot pass overwrote the step uniform; the cache itself is untouched.
+    return out;
+  }
+
+  /**
+   * Each layer's typical residual-stream size: the median ‖x‖₂ after the layer over
+   * the reference passage's positions after the first (the first token's residual
+   * is an outlier in most models). Measured on the unedited model, a token at a
+   * time, through the logit lens's norm readout.
+   */
+  async residualMedians(
+    passage: string = REFERENCE_PASSAGE,
+    interrupted: () => boolean = () => false,
+  ): Promise<number[]> {
+    this.applyEdits([]);
+    const ids = this.tokenizer.encode(passage);
+    if (ids.length < 3) throw new Error('the reference passage is too short to measure');
+    const n = Math.min(ids.length, this.runtime.context);
+    const perLayer: number[][] = Array.from({ length: this.runtime.config.layers }, () => []);
+    const greedy = { ...DEFAULT_SAMPLER, temperature: 0 };
+    this.cached = [];
+    this.runtime.lens = true;
+    try {
+      for (let i = 0; i < n; i++) {
+        if (interrupted()) throw new Error('interrupted');
+        this.runtime.queueStep(ids[i], i);
+        this.runtime.queueSample(greedy, 0, 1, 0);
+        const layers = await this.runtime.readLens(0);
+        if (i > 0) layers.forEach((l, j) => perLayer[j].push(l.norm));
+        this.cached.push(ids[i]);
+      }
+    } catch (err) {
+      this.cached = [];
+      throw err;
+    } finally {
+      this.runtime.lens = false;
+    }
+    return perLayer.map(median);
+  }
+
+  /**
+   * Every layer's feed-forward activation at one position of a conversation's
+   * reply: the position that predicted reply token `index` (index 0 is the
+   * prompt's last token). The reply is fed as given — a greedy reply replayed
+   * under the edits it was generated with reproduces its own activations — in
+   * prefill passes, so this costs about one prompt's prefill.
+   */
+  async captureActivations(req: {
+    messages: SessionGenerate['messages'];
+    templateKwargs?: Record<string, unknown>;
+    tools?: unknown[];
+    reply: string;
+    index: number;
+    neuronEdits?: NeuronEdit[];
+  }): Promise<SessionCapture> {
+    this.applyEdits(req.neuronEdits);
+    const prompt = this.template.encode(req.messages, { tools: req.tools, kwargs: req.templateKwargs });
+    const reply = this.tokenizer.encode(req.reply, { parseSpecial: true });
+    if (!Number.isInteger(req.index) || req.index < 0 || req.index > reply.length) {
+      throw new Error(`reply token ${req.index} is outside the reply's ${reply.length}`);
+    }
+    const seq = [...prompt, ...reply];
+    const position = prompt.length - 1 + req.index;
+    const feed = seq.slice(0, position + 1);
+    if (feed.length > this.runtime.context) {
+      throw new Error(`position ${position} is outside the ${this.runtime.context}-token context`);
+    }
+    let reused = 0;
+    const reusable = Math.min(this.cached.length, feed.length - 1);
+    while (reused < reusable && this.cached[reused] === feed[reused]) reused++;
+    this.cached.length = reused;
+    this.runtime.setCapture(position);
+    try {
+      await this.runtime.forward(feed.slice(reused), reused);
+      this.cached.push(...feed.slice(reused));
+      const activations = await this.runtime.readCapture();
+      const { layers, ffn } = this.runtime.config;
+      return {
+        activations,
+        layers,
+        ffn,
+        position,
+        input: this.tokenizer.decode([seq[position]], true),
+        predicted: position + 1 < seq.length ? this.tokenizer.decode([seq[position + 1]], true) : '',
+      };
+    } catch (err) {
+      this.cached = [];
+      throw err;
+    } finally {
+      this.runtime.setCapture(null);
+    }
+  }
+
   async generate(
     req: SessionGenerate,
     handlers: { onDelta?: (text: string) => void; onStep?: (step: SessionStep) => void },
     interrupted: () => boolean,
     random: () => number = Math.random,
   ): Promise<SessionResult> {
+    this.applyEdits(req.neuronEdits);
     this.runtime.lens = req.lens === true;
     try {
       return await this.run(req, handlers, interrupted, random);

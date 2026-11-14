@@ -40,6 +40,8 @@ export {
   type GenerateOptions,
   type GenerationResult,
   type StepEvent,
+  type NeuronOptions,
+  type NeuronResultOf,
 } from './client';
 export {
   ggufModelId,

@@ -1,0 +1,211 @@
+/* Interp Suite · Neurons. What inline styles cannot carry: the layout's container
+   queries, the scene's imperatively created layer labels, hover states of classed
+   controls, and the token chips' keyframe. Colours are theme tokens only:
+   --ramp-pos / --ramp-neg are a neuron's polarity (steering and activation alike). */
+
+.nrn {
+  container-type: inline-size;
+  --nrn-pos: var(--ramp-pos);
+  --nrn-neg: var(--ramp-neg);
+}
+
+.nrn-main {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr) 340px;
+  flex: 1;
+  min-height: 0;
+}
+
+@container (max-width: 1100px) {
+  .nrn-main {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-rows: minmax(320px, 1fr) auto;
+  }
+  .nrn-compare {
+    grid-column: 1 / -1;
+    max-height: 40vh;
+    border-left: none !important;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@container (max-width: 700px) {
+  .nrn-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nrn-recipe {
+    max-height: 30vh;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* The stage: the canvas, and the DOM it carries on top. */
+.nrn-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      ellipse at 50% 45%,
+      color-mix(in srgb, var(--bg-secondary) 70%, transparent),
+      transparent 75%
+    ),
+    linear-gradient(color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px) 0 0 /
+      32px 32px,
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px)
+      0 0 / 32px 32px,
+    var(--bg-primary);
+}
+
+.nrn-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+
+.nrn-canvas:active {
+  cursor: grabbing;
+}
+
+.nrn-canvas:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.nrn-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Created by scene.ts, one per layer. Classed: not a 30px control. */
+.nrn-layer-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 18px;
+  padding: 0 6px;
+  border: none;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg-primary) 75%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  cursor: pointer;
+  translate: 0 -100%;
+  white-space: nowrap;
+}
+
+.nrn-layer-label.focused {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.nrn-layer-label.hovered,
+.nrn-layer-label:hover {
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* Small classed buttons on the stage, the rows and the token chips. */
+.nrn-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.nrn-chip:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.nrn-chip[aria-pressed='true'] {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.nrn-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.nrn-row:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.nrn-row.focused {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.nrn-row.off {
+  opacity: 0.5;
+}
+
+/* A reply's tokens: each one a button that reads that position's activations. */
+.nrn-token {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  height: auto;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.nrn-token:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.nrn-token.picked {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.nrn-top:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.nrn-hint {
+  animation: nrn-fade 6s ease forwards;
+}
+
+@keyframes nrn-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nrn-hint {
+    animation: none;
+  }
+}
