@@ -96,8 +96,19 @@ async def _probe(
     if kind == "llamacpp":
         res = await client.get(f"{base}/props")
         res.raise_for_status()
-        settings = res.json().get("default_generation_settings") or {}
-        return _as_int(settings.get("n_ctx"))
+        return _n_ctx_from_props(res.json())
+
+    if kind == "unsloth":
+        # Unsloth serves llama-server's props under `/v1`, behind its API key.
+        # Headers come from the registered provider, not `info`: callers pass any
+        # object with a `kind`.
+        from backend.modules.agent.providers import auth_headers, provider_for
+
+        res = await client.get(
+            f"{base}/v1/props", headers=auth_headers(provider_for(kind))
+        )
+        res.raise_for_status()
+        return _n_ctx_from_props(res.json())
 
     if kind == "lmstudio":
         res = await client.get(f"{base}/api/v0/models/{model}")
@@ -117,6 +128,12 @@ async def _probe(
             if entry.get("id") == model:
                 return _as_int(entry.get("max_model_len"))
     return None
+
+
+def _n_ctx_from_props(body: Any) -> int | None:
+    """`n_ctx` from a llama-server-shaped `/props` body."""
+    settings = (body or {}).get("default_generation_settings") or {}
+    return _as_int(settings.get("n_ctx"))
 
 
 def _as_int(value: Any) -> int | None:

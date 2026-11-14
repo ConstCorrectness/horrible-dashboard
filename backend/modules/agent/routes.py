@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -22,6 +22,7 @@ from backend.modules.agent.models import (
     RosterResponse,
     VllmSpawnRequest,
 )
+from backend.modules.agent import unsloth_audio
 from backend.modules.agent.vllm import vllm_manager
 from backend.modules.telemetry.instrument import instrumented_client, tee_stream
 from backend import paths
@@ -98,6 +99,7 @@ async def _probe(
         can_spawn=info.can_spawn,
         install_url=info.install_url,
         hosted=info.hosted,
+        optional_api_key=info.optional_api_key,
         has_api_key=P.api_key_for(info) is not None,
         api_key_url=info.api_key_url,
         key_connector=info.key_connector,
@@ -227,11 +229,12 @@ class ProviderKeyRequest(BaseModel):
     key: str
 
 
-def _hosted_provider(kind: str) -> P.ProviderInfo:
+def _keyed_provider(kind: str) -> P.ProviderInfo:
     info = P.PROVIDERS.get(kind)
-    if info is None or not info.hosted:
+    # Hosted providers, plus the local servers that check a key (Unsloth).
+    if info is None or not (info.hosted or info.optional_api_key):
         raise HTTPException(
-            status_code=404, detail=f"{kind} is not a hosted provider with an API key"
+            status_code=404, detail=f"{kind} is not a provider with an API key"
         )
     if info.key_connector:
         # One home for the credential. NVIDIA's key reaches NIM inference *and* the
@@ -260,7 +263,7 @@ def put_provider_key(kind: str, req: ProviderKeyRequest) -> dict[str, bool]:
     """
     from backend.modules.database.secrets_store import delete_secret, upsert_secret
 
-    info = _hosted_provider(kind)
+    info = _keyed_provider(kind)
     value = req.key.strip()
     # An emptied field means "remove it", not "store an empty key" — an empty
     # secret would shadow the environment variable and report as configured.
@@ -281,7 +284,7 @@ def delete_provider_key(kind: str) -> dict[str, bool]:
     """
     from backend.modules.database.secrets_store import delete_secret
 
-    info = _hosted_provider(kind)
+    info = _keyed_provider(kind)
     delete_secret(info.kind)
     return {"has_api_key": P.api_key_for(info) is not None}
 
@@ -565,7 +568,17 @@ async def tts(
 
     Lazy-imported and 503s rather than 500s when the ``voice`` extra is missing:
     speech synthesis is optional (``uv sync --extra voice``), and every other
-    agent route works without it."""
+    agent route works without it.
+
+    A voice named ``unsloth:<id>`` is a voice cloned in Unsloth Desktop, spoken
+    there as WAV. It needs no ``voice`` extra and nothing leaves the machine.
+    ``pitch`` and ``volume`` are Edge-only and ignored for it."""
+    if unsloth_audio.is_unsloth_voice(voice):
+        try:
+            wav = await unsloth_audio.speak(text, voice, rate=rate)
+        except unsloth_audio.UnslothAudioError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        return Response(content=wav, media_type="audio/wav")
     try:
         from backend.modules.agent.edge_tts_service import (
             TTSSynthesisError,
@@ -588,15 +601,86 @@ async def tts(
 
 @router.get("/tts/voices")
 async def list_tts_voices() -> list[dict[str, Any]]:
-    """List available TTS neural voices."""
+    """List available TTS voices: voices cloned in Unsloth first (when it is
+    running), then Edge's neural voices."""
+    cloned: list[dict[str, Any]] = list(await unsloth_audio.tts_voice_options())
     try:
         from backend.modules.agent.edge_tts_service import edge_tts_service
 
-        return await edge_tts_service.list_voices()
+        return cloned + await edge_tts_service.list_voices()
     except ImportError:
         from backend.modules.agent.edge_tts_service import POPULAR_VOICES
 
-        return POPULAR_VOICES
+        return cloned + POPULAR_VOICES
+
+
+# --- Unsloth saved (cloned) voices --------------------------------------------
+# A proxy, not a copy: the voices live in Unsloth, and the browser reaches them
+# through here because the key does not leave the backend.
+
+
+def _unsloth_http(exc: "unsloth_audio.UnslothAudioError") -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@router.get("/voices/unsloth")
+async def list_unsloth_voices() -> dict[str, Any]:
+    """Saved voices, plus whether Unsloth answered. 200 either way: "not running"
+    is a state the settings page shows, not a failure."""
+    endpoint = unsloth_audio.endpoint()
+    try:
+        voices = await unsloth_audio.list_voices()
+    except unsloth_audio.UnslothAudioError as exc:
+        return {
+            "reachable": False,
+            "endpoint": endpoint,
+            "voices": [],
+            "error": exc.detail,
+        }
+    return {"reachable": True, "endpoint": endpoint, "voices": voices, "error": None}
+
+
+@router.post("/voices/unsloth", status_code=201)
+async def create_unsloth_voice(
+    file: UploadFile,
+    name: str = Form(...),
+    transcript: str | None = Form(None),
+    language: str | None = Form(None),
+) -> dict[str, Any]:
+    """Save a recording as a cloned voice. A transcript of what was said gives the
+    clone a better match."""
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Give the voice a name.")
+    try:
+        return await unsloth_audio.create_voice(
+            await file.read(),
+            filename=file.filename or "voice",
+            content_type=file.content_type,
+            name=name,
+            transcript=transcript,
+            language=language,
+        )
+    except unsloth_audio.UnslothAudioError as exc:
+        raise _unsloth_http(exc) from exc
+
+
+@router.delete("/voices/unsloth/{voice_id}")
+async def delete_unsloth_voice(voice_id: str) -> dict[str, bool]:
+    try:
+        await unsloth_audio.delete_voice(voice_id)
+    except unsloth_audio.UnslothAudioError as exc:
+        raise _unsloth_http(exc) from exc
+    return {"removed": True}
+
+
+@router.get("/voices/unsloth/{voice_id}/audio")
+async def unsloth_voice_audio(voice_id: str) -> Response:
+    """The voice's reference clip, so the settings page can play it back."""
+    try:
+        data, media_type = await unsloth_audio.voice_audio(voice_id)
+    except unsloth_audio.UnslothAudioError as exc:
+        raise _unsloth_http(exc) from exc
+    return Response(content=data, media_type=media_type)
 
 
 @router.post("/stt")

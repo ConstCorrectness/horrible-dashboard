@@ -678,3 +678,115 @@ def test_a_provider_error_body_reaches_the_message() -> None:
     message = asyncio.run(run())
     assert "agent.ask_peer" in message
     assert "400" in message
+
+
+def _no_stored_secret(monkeypatch) -> None:
+    """Keep these tests off the real `secrets.db`: only the env var supplies a key."""
+    from backend.modules.database import secrets_store
+
+    monkeypatch.setattr(secrets_store, "get_secret_or_none", lambda _name: None)
+
+
+def test_unsloth_sends_its_key_on_loopback(monkeypatch) -> None:
+    """Unsloth Desktop checks a Bearer key even on 127.0.0.1, so it is the one local
+    provider whose key travels. The probe still runs without one (not `hosted`), and
+    no other local server picks up the header."""
+    _no_stored_secret(monkeypatch)
+    unsloth = P.PROVIDERS["unsloth"]
+    assert not unsloth.hosted and unsloth.optional_api_key
+    assert P.auth_headers(unsloth) == {}
+
+    monkeypatch.setenv("UNSLOTH_API_KEY", "sk-unsloth-test")
+    assert P.auth_headers(unsloth) == {"Authorization": "Bearer sk-unsloth-test"}
+    # The guard change must not hand a key to the keyless local servers.
+    for kind in ("lmstudio", "llamacpp", "vllm", "ollama"):
+        assert P.api_key_for(P.PROVIDERS[kind]) is None
+        assert P.auth_headers(P.PROVIDERS[kind]) == {}
+
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200, json={"data": [{"id": "unsloth/gemma", "loaded": True}]}
+        )
+
+    async def go() -> list[str]:
+        async with _client(handler) as c:
+            return await P.list_models(c, unsloth, "http://127.0.0.1:8888")
+
+    assert asyncio.run(go()) == ["unsloth/gemma"]
+    assert seen == ["Bearer sk-unsloth-test"]
+
+
+def test_unsloth_without_a_key_is_probed_not_refused(monkeypatch) -> None:
+    """A keyless Unsloth is a supported setup, so a missing key must not raise
+    `MissingApiKey` before the request the way it does for a hosted provider."""
+    _no_stored_secret(monkeypatch)
+    monkeypatch.delenv("UNSLOTH_API_KEY", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    async def go() -> list[str]:
+        async with _client(handler) as c:
+            return await P.list_models(
+                c, P.PROVIDERS["unsloth"], "http://127.0.0.1:8888"
+            )
+
+    assert asyncio.run(go()) == ["m"]
+
+
+def test_unsloth_thinking_off_is_a_top_level_field(monkeypatch) -> None:
+    """Unsloth reads `enable_thinking` from the request body, not
+    `chat_template_kwargs` (llama-server) or `reasoning_effort` (LM Studio)."""
+    _no_stored_secret(monkeypatch)
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        )
+
+    async def go() -> P.ChatResult:
+        async with _client(handler) as c:
+            return await P.chat(
+                c,
+                P.PROVIDERS["unsloth"],
+                "http://127.0.0.1:8888",
+                "m",
+                [],
+                [],
+                think=False,
+            )
+
+    assert asyncio.run(go()).content == "ok"
+    assert bodies[0]["enable_thinking"] is False
+    assert "chat_template_kwargs" not in bodies[0]
+    assert "reasoning_effort" not in bodies[0]
+
+
+def test_unsloth_listing_gets_a_longer_read_but_the_same_connect(monkeypatch) -> None:
+    """Unsloth's cold listing takes ~1.6s, past the status probe's 2s read budget
+    under load, so the provider flapped. Only the read may grow: a closed port must
+    still fail at the caller's short connect timeout."""
+    _no_stored_secret(monkeypatch)
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    async def go(kind: str) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=httpx.Timeout(2, connect=0.75),
+        ) as c:
+            await P.list_models(c, P.PROVIDERS[kind], "http://127.0.0.1:8888")
+
+    asyncio.run(go("unsloth"))
+    asyncio.run(go("lmstudio"))
+    assert seen[0]["read"] == 8.0 and seen[0]["connect"] == 0.75
+    assert seen[1]["read"] == 2 and seen[1]["connect"] == 0.75

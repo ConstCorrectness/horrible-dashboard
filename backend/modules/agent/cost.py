@@ -36,7 +36,7 @@ PRICING_PATH = Path(__file__).with_name("pricing.json")
 #: `nim` is deliberately absent: it is the same OpenAI dialect whether it is a local
 #: container or NVIDIA's hosted API, and we cannot tell which from here. Calling a
 #: metered API free is a worse error than admitting we do not know.
-LOCAL_KINDS = frozenset({"ollama", "lmstudio", "llamacpp", "vllm", "peer"})
+LOCAL_KINDS = frozenset({"ollama", "lmstudio", "llamacpp", "vllm", "peer", "unsloth"})
 
 
 @lru_cache(maxsize=1)

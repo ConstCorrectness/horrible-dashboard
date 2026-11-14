@@ -130,7 +130,7 @@ Everything in horrible-dashboard is a **module**: it declares its panes, command
 
 ### 🧠 The Agent & Transparency
 
-- **Multi-Provider Orchestrator** — A unified tool-calling engine that drives the UI itself (workspaces, window layouts, file editing, shell commands). Works out of the box with Ollama, supervised `llama-server` instances, vLLM, LM Studio, or cloud providers (NIM, OpenRouter, Anthropic, OpenAI).
+- **Multi-Provider Orchestrator** — A unified tool-calling engine that drives the UI itself (workspaces, window layouts, file editing, shell commands). Works out of the box with Ollama, supervised `llama-server` instances, vLLM, LM Studio, Unsloth Desktop, or cloud providers (NIM, OpenRouter, Anthropic, OpenAI).
 - **Permission Engine** — Claude Code–style permission gate requiring explicit user approval for destructive side effects (filesystem writes, shell commands, network egress).
 - **Interpretability & Model Explorer** — Inspect the exact context handed to the model: token-by-token prompt breakdown, tool schema overhead, and truncation alerts. Explore raw GGUF tensor trees and model shapes directly.
 - **Agentpedia** — Step through past turns frame-by-frame: view what the model saw, the raw wire payload, tool calls executed, and exact token costs.

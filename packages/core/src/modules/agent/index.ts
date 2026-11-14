@@ -1,6 +1,7 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { ChatWidget } from './ChatWidget';
 import { ApiKeysSettings } from './ApiKeysSettings';
+import { VoicesSettings } from './VoicesSettings';
 import { OrchestratorSettings } from './OrchestratorSettings';
 import { PermissionsSettings } from './PermissionsSettings';
 import { resetSetting, setSetting, type SettingValue } from '../../settings';
@@ -167,6 +168,14 @@ export const agentModule: ModuleManifest = {
       default: 24000,
     },
     {
+      key: 'agent.unslothTtsModel',
+      title: 'Unsloth speech model',
+      description:
+        'Model Unsloth Desktop speaks cloned voices with, as its id in Unsloth (for example a downloaded TTS model). Empty uses whatever speech model Unsloth has loaded.',
+      type: 'string',
+      default: '',
+    },
+    {
       // Free text rather than a structured editor: the shape is a small JSON object
       // and a bad value is ignored with a warning rather than breaking a turn. Not a
       // secret, so a setting is the right home — see the connector rule in CLAUDE.md.
@@ -188,6 +197,8 @@ export const agentModule: ModuleManifest = {
     // hands the whole settings bag to the browser and to every plugin. See
     // ApiKeysSettings.
     { id: 'agent.apiKeys', title: 'Model provider API keys', component: ApiKeysSettings },
+    // Cloned voices live in Unsloth; this records, saves and plays them. See VoicesSettings.
+    { id: 'agent.voices', title: 'Cloned voices', component: VoicesSettings },
     { id: 'agent.permissions', title: 'Agent permissions', component: PermissionsSettings },
   ],
 };
