@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { BackendSupervisor } from './backend.js';
+import { CrashPolicy, crashPageHtml, describeCrash } from './crashPolicy.js';
 import { configureAppSession, startBrowserNetwork } from './sessions.js';
 import { registerShortcuts, unregisterAllShortcuts } from './shortcuts.js';
 import { checkForUpdate, installUpdate } from './updater.js';
@@ -220,14 +221,36 @@ function createWindow(): void {
     });
   }
   // A renderer crash otherwise leaves a dead, frameless window with no way out.
-  // Reload — but not in a loop: a page that crashes again within ten seconds stays
-  // down rather than pinning a core.
-  let lastCrash = 0;
+  // Reload with a growing delay; a page that keeps crashing gets an error page that
+  // says so, rather than a reload loop pinning a core or a silent blank window.
+  // Every crash is logged with its reason: the old handler recorded nothing, so a
+  // crash and a freeze looked the same.
+  const crashes = new CrashPolicy();
   wc.on('render-process-gone', (_e, details) => {
     if (details.reason === 'clean-exit') return;
-    const now = Date.now();
-    if (now - lastCrash > 10_000) wc.reload();
-    lastCrash = now;
+    console.error(`[desktop] ${describeCrash(details)}`);
+    if (window.isDestroyed()) return;
+    const decision = crashes.onCrash(Date.now());
+    if (decision.action === 'give-up') {
+      console.error('[desktop] the UI crashed repeatedly; showing the crash page');
+      void window.loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(crashPageHtml(details, pageUrl))}`,
+      );
+      return;
+    }
+    setTimeout(() => {
+      if (!window.isDestroyed()) void loadPage(window);
+    }, decision.delayMs);
+  });
+  // A hang is the other half of "it froze": log both ends so a long one is on record.
+  let hungAt = 0;
+  window.on('unresponsive', () => {
+    hungAt = Date.now();
+    console.warn('[desktop] the UI stopped responding');
+  });
+  window.on('responsive', () => {
+    if (hungAt) console.warn(`[desktop] the UI responded again after ${Date.now() - hungAt} ms`);
+    hungAt = 0;
   });
 
   void loadPage(window);

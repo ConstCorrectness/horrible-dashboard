@@ -268,6 +268,14 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
   so dev and packaged builds exercise the same path. If the backend never comes
   up, boot proceeds pluginless; the boot splash records the failed step and the
   taskbar's tray shows the backend as offline.
+- **Desktop renderer crashes** (`apps/desktop/src/crashPolicy.ts`). When the UI's
+  process dies, the shell logs `renderer process gone: reason=… exitCode=…` and
+  reloads the page — at once, then after 2 s, then 5 s. Four crashes inside a minute
+  and it stops reloading and shows a crash page with the reason and a reload link,
+  rather than leaving a blank frameless window (the old handler reloaded once and
+  then left the window dead, with nothing logged). A hang is logged too, when the
+  window becomes unresponsive and when it recovers. A reload rebuilds every pane, so
+  an unexplained "the desktop reset itself" is worth checking against these lines.
 
 A packaged desktop build has no repo checkout; it runs the bundled runtime instead
 (see [releases](releases.mdx#the-bundled-backend-runtime)). A per-session auth token between shell and backend is

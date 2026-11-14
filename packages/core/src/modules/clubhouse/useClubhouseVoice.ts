@@ -11,6 +11,7 @@ import { earsActions, type ObservedContextState } from './earsWatchdog';
 import { MAX_FLOATERS, parseRoomReaction } from './reactions';
 import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
 import { splitForSpeech } from './speechChunks';
+import { displayVolumes, sameVolumes } from './volumes';
 import {
   clubhouseSession,
   leaveClubhouseRoom,
@@ -179,7 +180,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   // State lives on the session, not in `useState`: it has to survive the same
   // unmounts the connection does, or a remount renders an empty room on top of a
   // live call — no participants, no chat backlog, mute state reset.
-  const state = useSyncExternalStore(session.subscribe.bind(session), session.getState);
+  // A stable subscribe: a fresh `bind` every render made React unsubscribe and
+  // resubscribe to the session on every render of the room pane.
+  const subscribe = useCallback((listener: () => void) => session.subscribe(listener), [session]);
+  const state = useSyncExternalStore(subscribe, session.getState);
   const {
     joined,
     activeChannel,
@@ -649,7 +653,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
           if (avgVolume > SPEECH_LEVEL) {
             // Track loudest speaker UID across live volumes
-            const vols = session.getState().speakingVolumes || {};
+            const vols = session.rawVolumes;
             let highestVol = 0;
             let loudestUid: number | null = null;
             for (const [uidStr, vol] of Object.entries(vols)) {
@@ -814,23 +818,35 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       );
       session.patch({ isMuted: true });
 
-      // e2. Start Agora volume indicator — fires every 200ms with per-user volumes
+      // e2. Start Agora volume indicator — fires every 200ms with per-user volumes.
+      //
+      // Raw levels go on the session for the VAD loop to pull (it attributes speech
+      // to the loudest uid, which wants the real numbers). Only what the stage can
+      // show goes through state: every `patch` re-renders the whole room pane, and
+      // publishing raw levels did that five times a second whether or not anything
+      // on screen changed.
       client.enableAudioVolumeIndicator();
       client.on('volume-indicator', (volumes) => {
-        const map: Record<number, number> = {};
+        const raw: Record<number, number> = {};
         for (const { uid, level } of volumes) {
-          map[uid as number] = level;
+          raw[uid as number] = level;
         }
-        session.set('speakingVolumes', map);
+        session.rawVolumes = raw;
+        const shown = displayVolumes(raw);
+        if (!sameVolumes(shown, session.getState().speakingVolumes)) {
+          session.set('speakingVolumes', shown);
+        }
       });
-      // Clear stale volumes every 600ms in case no volume event fires
+      // Clear stale volumes every 600ms in case no volume event fires. Only when
+      // something actually expired: a fresh object every tick was a re-render
+      // every tick of a room where nobody was talking.
       session.volumeInterval = setInterval(() => {
         session.update('speakingVolumes', (prev) => {
           const now: Record<number, number> = {};
           for (const [uid, vol] of Object.entries(prev)) {
             if (vol > 5) now[Number(uid)] = vol;
           }
-          return now;
+          return sameVolumes(now, prev) ? prev : now;
         });
       }, 600);
 
@@ -1037,6 +1053,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.set('comments', []);
       session.set('activeReactions', []);
       session.patch({ speakerInvite: null });
+      session.rawVolumes = {};
       session.set('speakingVolumes', {});
 
       if (initialUsers) {

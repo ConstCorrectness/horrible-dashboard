@@ -1102,6 +1102,11 @@ Three pieces keep it from coming back:
   "text chat only"), so "I understand your point, Piper" survives.
 - **Remembered acknowledgements are skipped** when history is replayed, so a room
   already poisoned by them recovers without `/agent forget`.
+- **A `notice` is for the operator, never the room.** A failed turn returns
+  `notice` ("Couldn't reach the model server: …", "The model took too long — the room
+  has moved on."), and the pane shows it as a toast only. With **post to chat** on it
+  used to be posted to the room too, which put the agent's own error into a public
+  room under the user's name.
 
 Riding the turn is also the more correct place on the merits. The room brief changes
 every turn — who is on stage, who has a hand up, who is talking right now — and
