@@ -14,7 +14,7 @@
  *    in-flight rect is local state; dispatching per frame would bump `revision` a
  *    hundred times per drag and drive the autosave debounce into a write loop.
  */
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   clampRect,
   closePaneGuarded,
@@ -72,6 +72,7 @@ export const DesktopWindow = memo(function DesktopWindow({
   presented,
   mergeTarget,
   animateEntry,
+  surface,
   bounds,
   onDragMove,
   onDragEnd,
@@ -84,6 +85,8 @@ export const DesktopWindow = memo(function DesktopWindow({
   mergeTarget: boolean;
   /** Opened just now (not restored with its desktop): play the entrance. */
   animateEntry: boolean;
+  /** The layer's measured size, or null before it has one. */
+  surface: { w: number; h: number } | null;
   bounds: () => DOMRect | null;
   onDragMove: (windowId: string, client: { x: number; y: number }) => DragState | null;
   onDragEnd: () => void;
@@ -101,7 +104,16 @@ export const DesktopWindow = memo(function DesktopWindow({
   // Merged windows can hold more tabs than the titlebar is wide.
   const tabWheelRef = useHorizontalWheel<HTMLDivElement>();
 
-  const rect = live ?? win.rect;
+  // Where the window is drawn, as opposed to where the store says the user left
+  // it. A surface that shrank does not rewrite `win.rect` (store.ts,
+  // `projectViewport`) — the window is clamped into view here instead, so widening
+  // the surface again puts it back exactly, with nothing to drift.
+  const { w: surfaceW, h: surfaceH } = surface ?? { w: 0, h: 0 };
+  const drawn = useMemo(
+    () => (surfaceW > 0 ? clampRect(win.rect, { w: surfaceW, h: surfaceH }) : win.rect),
+    [win.rect, surfaceW, surfaceH],
+  );
+  const rect = live ?? drawn;
   const active = win.area.tabs[win.area.activeTab];
   const decl = active ? resolveView(active.viewId) : null;
   const startGesture = useCallback(
@@ -115,7 +127,8 @@ export const DesktopWindow = memo(function DesktopWindow({
       const b = bounds();
       if (!b) return;
       const start = { x: e.clientX, y: e.clientY };
-      const from = { ...win.rect };
+      // The drawn rect, not the stored one: a drag starts from what is on screen.
+      const from = { ...drawn };
       const surface = { w: b.width, h: b.height };
       liveRef.current = null;
       zoneRef.current = null;
@@ -228,7 +241,7 @@ export const DesktopWindow = memo(function DesktopWindow({
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onUp);
     },
-    [win.id, win.rect, active, bounds, onDragMove, onDragEnd],
+    [win.id, drawn, active, bounds, onDragMove, onDragEnd],
   );
 
   const minimized = win.mode === 'minimized';

@@ -100,7 +100,8 @@ describe('placement recorder', () => {
         viewport: { w: VIEW.w - i * 40, h: VIEW.h - i * 20 },
       });
     }
-    expect(frame().windows[0].rect.w).not.toBe(800);
+    // Nor does it move the window: the rect stays the one the user chose.
+    expect(frame().windows[0].rect).toEqual({ x: 100, y: 100, w: 800, h: 450 });
     // Any later dispatch sees rects that differ from the stored placement but
     // not from the last snapshot — still not a placement.
     layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: id });

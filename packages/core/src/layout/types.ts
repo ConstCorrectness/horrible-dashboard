@@ -134,7 +134,9 @@ export type SnapZone =
  * rects were last measured on. Fractions survive a resize but cannot express a minimum
  * size and reflow a window's contents on every drag of the app edge; pixels plus a
  * remembered viewport let a layout be rescaled proportionally when it is opened at a
- * different size, while staying pixel-stable during ordinary use.
+ * different size, while staying pixel-stable during ordinary use. Resizing the
+ * surface afterwards does not rewrite a free window's rect: it stays where the user
+ * put it, and the window layer clamps it into view when it draws.
  */
 export interface WindowState {
   /** Unique per workspace, `w<n>` (n from `FrameState.paneSeq`). */
@@ -244,6 +246,13 @@ export interface LayoutStoreState {
   hydrated: boolean;
   /** Bumped by every user mutation, NOT by loads — the autosave dirty check. */
   revision: number;
+  /**
+   * True once the window layer has reported the real surface size. Until then a
+   * loaded frame's `windowViewport` is the size it was *saved* on, and the first
+   * measurement rescales the layout onto the live surface; after it, a change of
+   * size is the user's own surface resizing and moves no free window.
+   */
+  surfaceMeasured: boolean;
 }
 
 /**

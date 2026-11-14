@@ -109,6 +109,24 @@ export function WindowLayer() {
 
   const bounds = useCallback(() => ref.current?.getBoundingClientRect() ?? null, []);
 
+  // The layer must never be scrolled. Windows may hang off its bottom and right
+  // edges, and the browser will scroll any box it can to reveal a focused element
+  // — which slid every window up at once and put titlebars above the surface,
+  // where nothing could reach them (the store still had each window in view, so no
+  // clamp ever fired). `overflow: clip` in desktop.css is what prevents it; this is
+  // the guard for an engine or a rule that lets one through anyway.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const pin = () => {
+      if (el.scrollTop !== 0) el.scrollTop = 0;
+      if (el.scrollLeft !== 0) el.scrollLeft = 0;
+    };
+    pin();
+    el.addEventListener('scroll', pin);
+    return () => el.removeEventListener('scroll', pin);
+  }, []);
+
   // Read through a ref, not the render's `frame`: `onDragMove` is memoized and
   // would otherwise close over the window list as it was when the drag started.
   const frameRef = useRef(frame);
@@ -217,6 +235,7 @@ export function WindowLayer() {
           focused={frame.focusedWindowId === win.id}
           mergeTarget={drag?.mergeTargetId === win.id}
           animateEntry={!arrivedWith.has(win.id)}
+          surface={frame.windowViewport}
           bounds={bounds}
           onDragMove={onDragMove}
           onDragEnd={onDragEnd}

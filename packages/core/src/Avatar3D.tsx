@@ -1,9 +1,8 @@
 import { useEffect, useRef } from 'react';
-// Type-only imports — erased at build time, so three stays lazy-loaded below.
-import type { AnimationAction, AnimationMixer } from 'three';
 
-/** Maps a mood name to the animation clip (a .glb in apps/web/public) that expresses it. */
-export type AvatarMoodMap = Record<string, string>;
+import { acquireAvatar, avatarKey, releaseAvatar, type AvatarMoodMap } from './avatar-scene';
+
+export type { AvatarMoodMap } from './avatar-scene';
 
 /**
  * The avatar's emotional moods → animation clips. To add a mood, drop a .glb in
@@ -20,8 +19,12 @@ export const DEFAULT_AVATAR_MOOD = 'happy';
 /**
  * The dashboard friend: a rigged glTF avatar that plays one of several mood
  * animations (retargeted onto its skeleton) and cross-fades when the mood
- * changes. Corrects the Mixamo Y-up to glTF Z-up orientation. three and the
- * loader are dynamically imported so non-home views never pay for them.
+ * changes.
+ *
+ * This component only places a canvas. The scene behind it lives in
+ * `avatar-scene.ts` and outlives the component: unmounting parks it, and the next
+ * mount adopts it, so reopening a pane that shows the avatar costs nothing. three
+ * is dynamically imported there, so views without an avatar never pay for it.
  */
 export function Avatar3D({
   size = 180,
@@ -31,7 +34,6 @@ export function Avatar3D({
 }: {
   size?: number;
   modelUrl?: string;
-  /** Memoize this if you pass a literal, or the scene rebuilds each render. */
   moods?: AvatarMoodMap;
   mood?: string;
 }) {
@@ -45,233 +47,35 @@ export function Avatar3D({
     applyMood.current(mood);
   }, [mood]);
 
+  // Compared by content, so a `moods` literal passed inline does not rebuild the
+  // scene on every render.
+  const moodsRef = useRef(moods);
+  moodsRef.current = moods;
+  const key = avatarKey({ size, modelUrl, moods, fallbackMood: DEFAULT_AVATAR_MOOD });
+
   useEffect(() => {
     const el = mount.current;
     if (!el) return;
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-
-    Promise.all([import('three'), import('three/examples/jsm/loaders/GLTFLoader.js')]).then(
-      ([THREE, { GLTFLoader }]) => {
-        if (disposed) return;
-
-        const scene = new THREE.Scene();
-
-        // Camera framed for the upper body
-        const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
-        camera.position.z = 4.2;
-        camera.position.y = 1.6;
-
-        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-        renderer.setSize(size, size);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-        el.appendChild(renderer.domElement);
-
-        const friend = new THREE.Group();
-        scene.add(friend);
-
-        // Animation state, populated once assets load.
-        let mixer: AnimationMixer | undefined;
-        const actions: Record<string, AnimationAction> = {};
-        let active: AnimationAction | undefined;
-
-        const loadMoodAction = async (moodName: string) => {
-          if (actions[moodName] || !mixer) return actions[moodName];
-          const url = moods[moodName];
-          if (!url) return undefined;
-          try {
-            const animGltf = await loader.loadAsync(url);
-            if (disposed || !mixer) return undefined;
-            const clip = animGltf.animations[0];
-            if (clip) {
-              const action = mixer.clipAction(clip);
-              actions[moodName] = action;
-              return action;
-            }
-          } catch (e) {
-            console.error(`Failed to load mood ${moodName}:`, e);
-          }
-          return undefined;
-        };
-
-        const setMood = (next: string) => {
-          const targetMood = moods[next] ? next : DEFAULT_AVATAR_MOOD;
-          const playAction = (action?: AnimationAction) => {
-            if (!action || action === active) return;
-            action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveWeight(1).play();
-            if (active) active.crossFadeTo(action, 0.4, false);
-            active = action;
-          };
-
-          if (actions[targetMood]) {
-            playAction(actions[targetMood]);
-          } else {
-            void loadMoodAction(targetMood).then(playAction);
-          }
-        };
-
-        const loader = new GLTFLoader();
-        const initialMood = desiredMood.current || DEFAULT_AVATAR_MOOD;
-        const initialMoodUrl = moods[initialMood] ?? moods[DEFAULT_AVATAR_MOOD];
-
-        // Load only the avatar mesh and the initial mood's animation clip upfront.
-        // Other mood clips load on-demand when requested.
-        Promise.all([
-          loader.loadAsync(modelUrl),
-          initialMoodUrl ? loader.loadAsync(initialMoodUrl) : Promise.resolve(null),
-        ])
-          .then(([avatarGltf, initialAnimGltf]) => {
-            if (disposed) return;
-
-            const model = avatarGltf.scene;
-            model.scale.set(2.5, 2.5, 2.5);
-            // Counter the Mixamo orientation so the character stands upright.
-            model.rotation.x = Math.PI / 2;
-
-            // Center horizontally, drop to frame the upper body.
-            const box = new THREE.Box3().setFromObject(model);
-            const center = box.getCenter(new THREE.Vector3());
-            model.position.x = -center.x;
-            model.position.z = -center.z;
-            model.position.y = -1.5;
-            friend.add(model);
-
-            mixer = new THREE.AnimationMixer(model);
-            if (initialAnimGltf && initialAnimGltf.animations[0]) {
-              actions[initialMood] = mixer.clipAction(initialAnimGltf.animations[0]);
-            }
-
-            applyMood.current = setMood;
-            setMood(desiredMood.current); // honor the latest requested mood
-          })
-          .catch((error) => {
-            console.error('Error loading 3D assets:', error);
-          });
-
-        // Dashy — the dashboard mascot: a cute orb that orbits the avatar and
-        // faces the viewer. Its glow doubles as the agent status light (green = ready).
-        const dashy = new THREE.Group();
-        dashy.add(
-          new THREE.Mesh(
-            new THREE.SphereGeometry(0.16, 24, 24),
-            new THREE.MeshStandardMaterial({
-              color: 0x2ed573,
-              emissive: 0x2ed573,
-              emissiveIntensity: 0.6,
-            }),
-          ),
-        );
-        const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1e1e2f });
-        for (const ex of [-0.06, 0.06]) {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 16), eyeMat);
-          eye.position.set(ex, 0.03, 0.14);
-          dashy.add(eye);
-          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 12), pupilMat);
-          pupil.position.set(ex, 0.03, 0.18);
-          dashy.add(pupil);
-        }
-        scene.add(dashy);
-
-        // Lighting
-        scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-        const key = new THREE.DirectionalLight(0xffffff, 1.5);
-        key.position.set(2, 3, 4);
-        scene.add(key);
-        const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-        fill.position.set(-2, 1, -2);
-        scene.add(fill);
-
-        // Pointer tracking
-        const pointer = { x: 0, y: 0 };
-        const onPointer = (e: PointerEvent) => {
-          pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-          pointer.y = (e.clientY / window.innerHeight) * 2 - 1;
-        };
-        window.addEventListener('pointermove', onPointer, { passive: true });
-
-        let frame = 0;
-        let isVisible = true;
-        let isDocVisible = !document.hidden;
-        const clock = new THREE.Clock();
-
-        const tick = () => {
-          frame = 0;
-          if (!isVisible || !isDocVisible) return;
-          const delta = clock.getDelta();
-          const t = clock.getElapsedTime();
-          mixer?.update(delta);
-
-          // Subtle floating + cursor tracking
-          friend.position.y = Math.sin(t * 1.5) * 0.05;
-          friend.rotation.y += (pointer.x * 0.5 - friend.rotation.y) * 0.05;
-          friend.rotation.x += (-pointer.y * 0.3 - friend.rotation.x) * 0.05;
-
-          // Dashy orbits the head and keeps its face toward the viewer
-          dashy.position.set(
-            Math.cos(t * 0.8) * 0.8,
-            1.7 + Math.sin(t * 1.2) * 0.1,
-            Math.sin(t * 0.8) * 0.8,
-          );
-          dashy.lookAt(camera.position);
-
-          renderer.render(scene, camera);
-          frame = requestAnimationFrame(tick);
-        };
-
-        const startLoop = () => {
-          if (!frame && isVisible && isDocVisible) {
-            clock.start();
-            frame = requestAnimationFrame(tick);
-          }
-        };
-
-        const stopLoop = () => {
-          if (frame) {
-            cancelAnimationFrame(frame);
-            frame = 0;
-            clock.stop();
-          }
-        };
-
-        const onVisibilityChange = () => {
-          isDocVisible = !document.hidden;
-          if (isDocVisible && isVisible) startLoop();
-          else stopLoop();
-        };
-        document.addEventListener('visibilitychange', onVisibilityChange);
-
-        const observer = new IntersectionObserver(
-          (entries) => {
-            const entry = entries[0];
-            isVisible = entry ? entry.isIntersecting : true;
-            if (isVisible && isDocVisible) startLoop();
-            else stopLoop();
-          },
-          { threshold: 0.05 },
-        );
-        observer.observe(el);
-
-        startLoop();
-
-        cleanup = () => {
-          stopLoop();
-          observer.disconnect();
-          document.removeEventListener('visibilitychange', onVisibilityChange);
-          applyMood.current = () => {};
-          window.removeEventListener('pointermove', onPointer);
-          renderer.dispose();
-          renderer.domElement.remove();
-        };
+    const opts = { size, modelUrl, moods: moodsRef.current, fallbackMood: DEFAULT_AVATAR_MOOD };
+    let mounted = true;
+    const avatar = acquireAvatar(opts);
+    avatar.then(
+      (instance) => {
+        if (!mounted) return;
+        el.appendChild(instance.canvas);
+        applyMood.current = instance.setMood;
+        instance.setMood(desiredMood.current);
+        instance.start();
       },
+      (error) => console.error('Error starting the avatar:', error),
     );
-
     return () => {
-      disposed = true;
-      cleanup?.();
+      mounted = false;
+      applyMood.current = () => {};
+      releaseAvatar(opts, avatar);
     };
-  }, [size, modelUrl, moods]);
+    // `key` stands for size, modelUrl and the content of `moods`.
+  }, [key]);
 
   return <div ref={mount} className="avatar3d" style={{ width: size, height: size }} aria-hidden />;
 }

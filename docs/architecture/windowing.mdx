@@ -80,10 +80,18 @@ flowchart TD
   surface size the rects were last measured on. Fractions cannot express a minimum
   size, and would reflow a window's contents on every drag of the app's edge. On
   load, if the surface turns out to be a different size than when the layout was
-  saved, every rect is rescaled proportionally through `SET_WINDOW_VIEWPORT` — which
-  deliberately **does not bump `revision`**: it is a projection of the same layout
-  onto a different surface, not a user edit, and marking it dirty would make every
-  browser resize drive the 600 ms autosave debounce into a continuous write loop.
+  saved, every rect is rescaled proportionally — **once**, at the load or at the
+  first measurement after it (`projectViewport` in `store.ts`; the store's
+  `surfaceMeasured` flag tells the two apart). After that a change of surface is the
+  user's own: the app edge dragged, the page zoomed. `SET_WINDOW_VIEWPORT` then
+  re-derives snapped and maximized windows from their zone and **leaves every free
+  window's rect alone**. Rescaling them on each resize is lossy (the rounding
+  compounds), and it made the whole desktop shift whenever the surface changed by a
+  few pixels. The stored rect stays the one the user chose; `DesktopWindow` clamps
+  it into view when it draws, so shrinking the app and widening it again puts each
+  window back exactly. Neither case **bumps `revision`**: it is a projection of the
+  same layout, not a user edit, and marking it dirty would make every browser
+  resize drive the 600 ms autosave debounce into a continuous write loop.
 
   `mode` is `normal | minimized | maximized`, and `snap` records the zone a window
   occupies. `snap` is **stored rather than re-derived** from the rect, because a

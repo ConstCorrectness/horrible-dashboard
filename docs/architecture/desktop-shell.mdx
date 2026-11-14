@@ -723,9 +723,9 @@ Windows move the way a native window manager's do: short, decisive, decelerating
 - **Restored windows do not animate in.** The windows a desktop arrives with at
   startup appear at once. Only windows opened after that
   play an entrance.
-- **Resizing the app does not animate.** The layer rescales every window's rect on
-  every frame of a resize, so geometry changes within 300ms of one are applied as
-  they come.
+- **Resizing the app does not animate.** Snapped and maximized windows are
+  re-derived on every frame of a resize, and free windows are re-clamped as they
+  draw, so geometry changes within 300ms of one are applied as they come.
 - **The pane fade is opacity only.** A transform on `.frame-pane-host`, even
   mid-animation, would make it the containing block of every `position: fixed` menu
   inside the pane. (The window body's `contain: strict` already does that at the

@@ -493,6 +493,10 @@
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   position: relative;
+  /* Two lines, always. A crowded taskbar used to squeeze this until the date
+     wrapped to a third line, which was taller than the bar. */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .os-taskbar-clock:hover,

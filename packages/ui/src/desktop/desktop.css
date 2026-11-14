@@ -31,11 +31,16 @@
   /* The layer itself must not eat clicks meant for the backdrop or the frame
      underneath; only the windows in it are interactive. */
   pointer-events: none;
-  overflow: hidden;
+  /* `clip`, never `hidden`. Both hide what hangs off the edge, but a `hidden` box
+     is still a scroll container: the browser scrolls it to reveal a focused
+     element, and a window hanging off the bottom has plenty of those. That
+     scrolled the whole layer — every window jumped up and the titlebars at the
+     top went out of reach. A `clip` box cannot be scrolled by anything. */
+  overflow: clip;
 }
 
 /* A presented window escapes this layer's box, so the layer must stop clipping
-   it. `overflow: hidden` is what keeps an ordinary dragged window from scrolling
+   it. `overflow: clip` is what keeps an ordinary dragged window from scrolling
    the shell, and it is restored the moment presentation ends. */
 .os-window-layer.is-presenting {
   overflow: visible;

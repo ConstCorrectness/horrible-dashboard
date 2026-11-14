@@ -42,6 +42,12 @@ body {
 .shell {
   display: flex;
   height: 100vh;
+  /* The shell is exactly the viewport and nothing in it may make the *page*
+     scrollable. A taskbar label that wrapped overflowed it by 2px, the document
+     grew a scrollbar, the desktop lost 10px of width and every window was laid out
+     again. `clip` (not `hidden`) so the shell does not become a scroll container
+     itself, and fixed-position overlays are unaffected. */
+  overflow: clip;
 }
 
 /* Icon rail (always visible, both views) */

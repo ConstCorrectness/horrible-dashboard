@@ -73,7 +73,13 @@ chat pane can use it too). It is a
   plus one line in the map. Orbiting the avatar is **Dashy**, the dashboard
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
   as the agent status light. three is dynamically imported so a desktop not
-  showing the `splash` backdrop never loads it.
+  showing the `splash` backdrop never loads it. The scene itself lives in
+  `packages/core/src/avatar-scene.ts`, apart from the component, because building
+  it is expensive (a 4.7 MB model, fifteen textures, seven shader programs — over a
+  second of main-thread work, which froze every window): assets are parsed once
+  per session, textures are shrunk to 512px off the main thread before upload,
+  shaders compile through `compileAsync`, and an unmounted avatar's scene is
+  **parked** for five minutes and adopted by the next mount instead of rebuilt.
 
 Every pane opens in a **window**; a window can hold several panes as tabs, and
 region strips run down a pane's own sides. See [windowing.mdx](windowing.mdx) for the
@@ -88,6 +94,15 @@ is bounded by `.shell-content`, which keeps a window titlebar from sliding under
 native titlebar and its drag region — and the taskbar sits outside
 `.shell-content`, so a maximized window cannot cover it. See
 [desktop-shell.mdx](desktop-shell.mdx).
+
+Neither the layer nor the shell may ever scroll, and both say so with
+`overflow: clip` rather than `hidden`. A `hidden` box hides its scrollbar but is
+still a scroll container: the browser scrolls it to reveal a focused element, and a
+window hanging off the bottom of the layer has plenty of those. That scrolled every
+window up at once and left titlebars above the surface, out of reach, while the
+store still had each window in view. Likewise a taskbar label that wrapped overflowed
+the shell by 2px, the *page* grew a scrollbar, and the desktop lost 10px of width.
+A `clip` box cannot be scrolled by anything.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,

@@ -360,9 +360,7 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return {
         ...frame,
         windows: raiseToFront(
-          frame.windows.map((w) =>
-            w === win ? next : filled && w.id === filled.id ? filled : w,
-          ),
+          frame.windows.map((w) => (w === win ? next : filled && w.id === filled.id ? filled : w)),
           // A window being un-minimized comes to the front; one being minimized
           // must not, or it would raise itself on the way out.
           action.mode === 'minimized' ? '' : win.id,
@@ -396,37 +394,10 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       };
     }
 
-    case 'SET_WINDOW_VIEWPORT': {
-      const { viewport } = action;
-      if (viewport.w <= 0 || viewport.h <= 0) return frame;
-      const from = frame.windowViewport;
-      if (from && from.w === viewport.w && from.h === viewport.h) return frame;
-      if (!from) return { ...frame, windowViewport: viewport };
-      return {
-        ...frame,
-        windowViewport: viewport,
-        windows: frame.windows.map((w) => {
-          // A snapped or maximized window re-derives its rect from the zone rather
-          // than being scaled: half of the new surface is exactly half, where a
-          // scaled rect would be off by the rounding of the old one.
-          // A minimized window's zone lives in `minimizedFrom`: its own `mode` is
-          // 'minimized', so reading only `mode` would rescale a maximized-then-
-          // minimized window and it would come back smaller than the surface.
-          const zone: SnapZone | null =
-            w.mode === 'minimized' && w.minimizedFrom
-              ? (w.minimizedFrom.snap ?? (w.minimizedFrom.mode === 'maximized' ? 'max' : null))
-              : (w.snap ?? (w.mode === 'maximized' ? 'max' : null));
-          const rect = zone
-            ? rectForZone(zone, viewport)
-            : clampRect(rescaleRect(w.rect, from, viewport), viewport);
-          return {
-            ...w,
-            rect,
-            restoreRect: w.restoreRect ? rescaleRect(w.restoreRect, from, viewport) : undefined,
-          };
-        }),
-      };
-    }
+    case 'SET_WINDOW_VIEWPORT':
+      // `reduce` answers this one itself, because which projection applies depends
+      // on store state the frame does not carry. Reached only by a direct caller.
+      return projectViewport(frame, action.viewport, 'resize');
 
     case 'SET_BACKDROP': {
       const { backdrop } = action;
@@ -439,6 +410,63 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return { ...frame, backdrop };
     }
   }
+}
+
+/**
+ * Project the frame onto a surface of a different size.
+ *
+ * Two different events arrive as "the surface is now this big", and they want
+ * opposite things:
+ *
+ * - **`load`** — the layout was saved on another surface (a bigger monitor, or a
+ *   migrated v1 blob on a 1×1 basis) and is being shown here for the first time.
+ *   Every rect is rescaled proportionally, once.
+ * - **`resize`** — the surface the user is looking at changed: the app edge was
+ *   dragged, the page zoomed, a scrollbar came and went. Free windows are **not
+ *   touched**. Scaling them here is what made the desktop jump: the rounding is
+ *   lossy, so every resize left each window a pixel or ten from where it had
+ *   been, and a 10px scrollbar flicker resized every window on screen. The stored
+ *   rect stays the one the user chose; the window layer clamps it into view when
+ *   it draws (`clampRect` in `Window.tsx`), which is lossless — widen the surface
+ *   again and the window is exactly where it was left.
+ *
+ * Snapped and maximized windows re-derive from their zone in both cases: half of
+ * the new surface is exactly half, which no stored rect can express.
+ */
+function projectViewport(
+  frame: FrameState,
+  viewport: { w: number; h: number },
+  kind: 'load' | 'resize',
+): FrameState {
+  if (viewport.w <= 0 || viewport.h <= 0) return frame;
+  const from = frame.windowViewport;
+  if (from && from.w === viewport.w && from.h === viewport.h) return frame;
+  if (!from) return { ...frame, windowViewport: viewport };
+  return {
+    ...frame,
+    windowViewport: viewport,
+    windows: frame.windows.map((w) => {
+      // A minimized window's zone lives in `minimizedFrom`: its own `mode` is
+      // 'minimized', so reading only `mode` would treat a maximized-then-
+      // minimized window as free and it would come back smaller than the surface.
+      const zone: SnapZone | null =
+        w.mode === 'minimized' && w.minimizedFrom
+          ? (w.minimizedFrom.snap ?? (w.minimizedFrom.mode === 'maximized' ? 'max' : null))
+          : (w.snap ?? (w.mode === 'maximized' ? 'max' : null));
+      if (zone) {
+        const rect = rectForZone(zone, viewport);
+        const restoreRect =
+          kind === 'load' && w.restoreRect ? rescaleRect(w.restoreRect, from, viewport) : null;
+        return restoreRect ? { ...w, rect, restoreRect } : { ...w, rect };
+      }
+      if (kind === 'resize') return w;
+      return {
+        ...w,
+        rect: clampRect(rescaleRect(w.rect, from, viewport), viewport),
+        restoreRect: w.restoreRect ? rescaleRect(w.restoreRect, from, viewport) : undefined,
+      };
+    }),
+  };
 }
 
 function sameRect(a: WindowRect, b: WindowRect): boolean {
@@ -471,20 +499,34 @@ function sanitizeFocus(frame: FrameState): FrameState {
 
 function reduce(state: LayoutStoreState, action: LayoutAction): LayoutStoreState {
   if (action.type === 'LOAD_WORKSPACE') {
+    // The layer measures before the first workspace arrives, and does not measure
+    // again for a load (its element has not resized). So a layout saved on another
+    // surface is projected onto the live one here; left for "the next resize", it
+    // sat on the saved size until the user happened to resize the app.
+    const live = state.surfaceMeasured ? state.frame.windowViewport : null;
+    const frame = live ? projectViewport(action.frame, live, 'load') : action.frame;
     return {
       workspaceId: action.workspaceId,
-      frame: sanitizeFocus(action.frame),
+      frame: sanitizeFocus(frame),
       hydrated: true,
       revision: state.revision, // loads are not user edits — autosave stays clean
+      surfaceMeasured: state.surfaceMeasured,
     };
+  }
+  if (action.type === 'SET_WINDOW_VIEWPORT') {
+    const { viewport } = action;
+    if (viewport.w <= 0 || viewport.h <= 0) return state;
+    // The first measurement after a load is the load's projection; every one
+    // after it is the user's own surface changing. See `projectViewport`.
+    const frame = projectViewport(state.frame, viewport, state.surfaceMeasured ? 'resize' : 'load');
+    if (frame === state.frame && state.surfaceMeasured) return state;
+    // A projection of the same layout, not a user edit. Bumping `revision` for it
+    // would make every browser resize dirty the workspace, and the 600ms autosave
+    // debounce would turn a slow drag of the app edge into a stream of PUTs.
+    return { ...state, frame, surfaceMeasured: true };
   }
   const frame = sanitizeFocus(reduceFrame(state.frame, action));
   if (frame === state.frame) return state;
-  // A viewport change is a *projection* of the same layout onto a differently
-  // sized surface, not a user edit. Bumping `revision` for it would make every
-  // browser resize dirty the workspace, and the 600ms autosave debounce would
-  // turn a slow window-drag of the app edge into a continuous stream of PUTs.
-  if (action.type === 'SET_WINDOW_VIEWPORT') return { ...state, frame };
   return { ...state, frame, revision: state.revision + 1 };
 }
 
@@ -493,6 +535,7 @@ const initialState: LayoutStoreState = {
   frame: createEmptyFrame(),
   hydrated: false,
   revision: 0,
+  surfaceMeasured: false,
 };
 
 let state = initialState;
