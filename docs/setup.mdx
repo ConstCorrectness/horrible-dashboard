@@ -183,11 +183,23 @@ Every script in the repo-root `package.json`:
   backend exits by itself when the shell that spawned it is gone, however it went
   (`backend/parent_watch.py`). A process left over from before that still has to be
   stopped once — the launcher prints its pid.
-- **Backend stuck in a restart loop.** Almost always the reload watcher seeing its own
-  log writes. Use the standard commands above (`--reload-dir backend --reload-exclude
-  "logs/*"`, already set in `scripts/dev.mjs`/`dev-backend.ps1`) rather than a bare
-  `uvicorn --reload` with no scoping — that watches the whole repo root, including
-  `logs/backend.log`.
+- **Backend restarts with nothing edited ("♻️ backend\…\__init__.py changed").**
+  `pnpm dev` does not use `uvicorn --reload`; `scripts/dev.mjs` watches `backend/`
+  itself. On Windows, Node's `fs.watch` reports a bare last-access-time update as a
+  change, and NTFS keeps those on by default, so any process that read a backend file
+  used to restart the backend (about 17 s of "Failed to fetch"). The watcher now
+  restarts only when a file's modification time or size actually changed. To check
+  it, set only the access time — `(Get-Item <file>).LastAccessTime = Get-Date` — and
+  no restart should follow. A hand-run `uvicorn --reload` still needs `--reload-dir
+  backend --reload-exclude "logs/*"`, or it watches `logs/backend.log` and restarts on
+  its own log writes.
+- **Backend crashed mid-session.** If it had been serving, `pnpm dev` restarts it (2 s,
+  then longer); only three quick crashes in a row leave it down until the next file
+  change, and Vite stays up either way. A backend that never came up still stops the
+  stack. Every line of `logs/backend.log` names its process (`[pid]`), and a native
+  crash writes `Fatal Python error` or `Windows fatal exception` with every thread's
+  stack into the same file. The log is rolled to `backend.log.1` at startup once it
+  passes 50 MB.
 - **The dashboard blanks out and comes back while you use it (dev only), with
   `new dependencies optimized: … reloading` in the terminal.** Vite reloads the whole
   page whenever it pre-bundles a dependency it did not find at startup. That only

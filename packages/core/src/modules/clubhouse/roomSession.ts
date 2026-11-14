@@ -25,7 +25,7 @@ import AgoraRTC, { type IAgoraRTCClient, type ILocalAudioTrack } from 'agora-rtc
 import type PubNub from 'pubnub';
 
 import type { StripHandle } from '../audio/types';
-import { leaveClubhouseChannel, sendChannelMessage } from './api';
+import { leaveClubhouseChannel, sendChannelMessage, type Channel } from './api';
 import { ChatSender } from './chatSender';
 import type { PcmCapture, UtteranceBuffer } from './liveCapture';
 import { publishClubhousePresence, setClubhouseLeaver } from './presence';
@@ -180,6 +180,12 @@ export class ClubhouseRoomSession {
    */
   earsLevel = 0;
   earsTracks = 0;
+  /**
+   * Agora's per-uid levels exactly as reported, every 200 ms. Pulled by the VAD
+   * loop to attribute speech to the loudest uid; state carries only the bucketed
+   * `speakingVolumes` the stage renders (see `volumes.ts`).
+   */
+  rawVolumes: Record<number, number> = {};
 
   /**
    * Every chat post this room makes, from the agent and from the person typing —
@@ -213,6 +219,17 @@ export class ClubhouseRoomSession {
   } | null = null;
 
   myProfile: { name: string; photoUrl: string | null; userId: number | null } | null = null;
+
+  /**
+   * The room's full details as last polled (`getClubhouseChannelDetails`): every
+   * speaker and the whole audience.
+   *
+   * On the session because a remount otherwise starts from nothing, and the first
+   * thing to arrive was the room list's entry for this room — a *preview* of a
+   * handful of names with no audience. The stage dropped from eight speakers to
+   * five and the audience vanished until the next poll, ten seconds later.
+   */
+  roomDetails: Channel | null = null;
 
   /**
    * The current mount's callbacks, reassigned on every render.
@@ -269,7 +286,12 @@ export class ClubhouseRoomSession {
 
   /** Update one field from its previous value — the `setX(prev => …)` form. */
   update<K extends keyof RoomState>(key: K, fn: (prev: RoomState[K]) => RoomState[K]): void {
-    this.patch({ [key]: fn(this.state[key]) } as Partial<RoomState>);
+    const prev = this.state[key];
+    const next = fn(prev);
+    // An updater that hands back what it was given changed nothing; notifying
+    // anyway re-renders every mount of the room for no visible difference.
+    if (Object.is(next, prev)) return;
+    this.patch({ [key]: next } as Partial<RoomState>);
   }
 
   updateLiveUser(userId: number, patch: Partial<Omit<LiveUserState, 'userId'>>): void {
@@ -373,6 +395,8 @@ export class ClubhouseRoomSession {
       // call) therefore left the pane showing a room with every control dead and
       // nothing to say why.
       this.state = EMPTY_ROOM_STATE;
+      this.roomDetails = null;
+      this.rawVolumes = {};
       this.notify();
     }
   }

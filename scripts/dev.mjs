@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, rmSync, watch, writeFileSync } from 'fs';
+import { existsSync, readdirSync, rmSync, statSync, watch, writeFileSync } from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -136,6 +136,61 @@ function killTree(child) {
 const STOP_GRACE_MS = 12000;
 // Editors save in bursts (write, rename, touch); one restart per burst.
 const RESTART_DEBOUNCE_MS = 300;
+// A server that exits *after* it was serving has crashed: a save with a syntax or
+// import error fails at import, before the port is ever bound. So a crash is
+// restarted, with a growing delay, and only a run of quick crashes — each within
+// CRASH_STREAK_MS of coming up — is left down until the next file change, so a
+// server that dies on every start cannot loop forever.
+const CRASH_STREAK_MS = 30000;
+const MAX_CRASH_STREAK = 3;
+const CRASH_RESTART_DELAY_MS = 2000;
+
+// What a source file looks like now: its modification time and size, or null when
+// it does not exist. Two signatures that match mean nothing was written.
+function sourceSignature(file) {
+  try {
+    const st = statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+}
+
+// Knows what every watched source file looked like, so a watch event can be checked
+// against it before it costs a restart.
+//
+// `fs.watch` on Windows reports *any* metadata change as `change`, including a bare
+// last-access-time update — and NTFS keeps last-access updates on by default
+// ("System Managed"). So an indexer, a virus scan, another process importing the
+// backend, or an editor merely opening a file restarted the backend with nothing
+// edited. Measured 2026-11-14: `utimes(atime only)` fires `change`; read and stat
+// do not, but the access time they leave behind is flushed to disk later and fires
+// then.
+function createSourceIndex(dirs, accept) {
+  const known = new Map();
+  for (const dir of dirs) {
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { recursive: true });
+    } catch {
+      continue;
+    }
+    for (const rel of entries) {
+      if (!accept(rel)) continue;
+      const file = path.join(dir, rel);
+      known.set(file, sourceSignature(file));
+    }
+  }
+  return {
+    /** True when the file was really written, created or deleted since last seen. */
+    changed(file) {
+      const now = sourceSignature(file);
+      const before = known.has(file) ? known.get(file) : null;
+      known.set(file, now);
+      return now !== before;
+    },
+  };
+}
 
 // Run one Python server and restart it when its source changes.
 //
@@ -148,14 +203,40 @@ const RESTART_DEBOUNCE_MS = 300;
 function superviseServer({ name, app, port, watchDirs, ignore = [], env, onFirstExit }) {
   let child = null;
   let restarting = false;
-  let starts = 0;
+  // When the current process started accepting connections, or null if it has not.
+  // "Never came up" is decided by this, not by how many times it was started: the
+  // old `starts === 1` test read a crash hours into the first process as a failed
+  // start and tore the whole stack down — Vite included — over one dead backend.
+  let readyAt = null;
+  let everReady = false;
+  // Crashes in a row that came soon after the server came up.
+  let crashStreak = 0;
+
+  // Polls the port until the given process is serving, or has gone.
+  const watchReadiness = (proc) => {
+    const clientHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+    const probe = () => {
+      if (child !== proc) return;
+      const socket = net.connect({ port: Number(port), host: clientHost });
+      socket.on('connect', () => {
+        socket.end();
+        if (child !== proc) return;
+        readyAt = Date.now();
+        everReady = true;
+      });
+      socket.on('error', () => {
+        socket.destroy();
+        setTimeout(probe, 250);
+      });
+    };
+    probe();
+  };
 
   // Creating this file is the request to stop. One per supervised server, and
   // per run of this script, so two checkouts running at once cannot stop each other.
   const stopFile = path.join(os.tmpdir(), `horrible-dev-stop-${process.pid}-${port}`);
 
   const start = () => {
-    starts += 1;
     rmSync(stopFile, { force: true });
     const proc = spawn(
       'uv',
@@ -182,22 +263,48 @@ function superviseServer({ name, app, port, watchDirs, ignore = [], env, onFirst
     proc.on('exit', (code) => {
       if (child !== proc) return;
       child = null;
+      const served = readyAt !== null;
+      const servedFor = served ? Date.now() - readyAt : 0;
+      readyAt = null;
       rmSync(stopFile, { force: true });
       if (cleanedUp) return;
       if (restarting) {
         restarting = false;
+        crashStreak = 0;
         start();
-      } else if (starts === 1) {
+      } else if (!everReady) {
         // Never came up at all: a bad port, a broken environment.
         onFirstExit(code);
+      } else if (served) {
+        // It was serving and then died — a native crash, an out-of-memory kill.
+        crashStreak = servedFor < CRASH_STREAK_MS ? crashStreak + 1 : 1;
+        const where =
+          "A native crash leaves 'Fatal Python error' or 'Windows fatal exception' in " +
+          'logs/backend.log.';
+        if (crashStreak > MAX_CRASH_STREAK) {
+          console.warn(
+            `⚠️  ${name} crashed ${crashStreak} times in a row soon after starting. ` +
+              `Waiting for a file change to restart it. ${where}`,
+          );
+          return;
+        }
+        const delay = CRASH_RESTART_DELAY_MS * crashStreak;
+        console.warn(
+          `⚠️  ${name} exited (code ${code}) after ${Math.round(servedFor / 1000)}s of serving. ` +
+            `Restarting it in ${delay / 1000}s. ${where}`,
+        );
+        setTimeout(() => {
+          if (!cleanedUp && child === null) start();
+        }, delay);
       } else {
-        // Came up before and has now fallen over, almost always on a syntax or
-        // import error in the file just saved. Stay up and wait for the fix
-        // rather than taking the rest of the stack down over a typo.
+        // Came up before and fell over before serving again, almost always on a
+        // syntax or import error in the file just saved. Stay up and wait for the
+        // fix rather than looping on it or taking the stack down over a typo.
         console.warn(`⚠️  ${name} exited (code ${code}). Waiting for a file change to restart it.`);
       }
     });
     child = proc;
+    watchReadiness(proc);
   };
 
   const restart = (file) => {
@@ -218,15 +325,24 @@ function superviseServer({ name, app, port, watchDirs, ignore = [], env, onFirst
     stopping.once('exit', () => clearTimeout(giveUp));
   };
 
+  const isSource = (rel) => {
+    if (!rel.endsWith('.py')) return false;
+    const parts = rel.split(path.sep);
+    return !parts.includes('__pycache__') && !ignore.includes(parts[0]);
+  };
+  const sources = createSourceIndex(watchDirs, isSource);
+
   let debounce = null;
   for (const dir of watchDirs) {
     try {
       watch(dir, { recursive: true }, (_event, filename) => {
-        if (!filename || !filename.endsWith('.py')) return;
-        const parts = filename.split(path.sep);
-        if (parts.includes('__pycache__') || ignore.includes(parts[0])) return;
+        if (!filename || !isSource(filename)) return;
+        const file = path.join(dir, filename);
+        // Checked at once, not when the debounce fires: by then a later event for
+        // another file may have replaced this one, and this one's write be missed.
+        if (!sources.changed(file)) return;
         clearTimeout(debounce);
-        debounce = setTimeout(() => restart(path.join(dir, filename)), RESTART_DEBOUNCE_MS);
+        debounce = setTimeout(() => restart(file), RESTART_DEBOUNCE_MS);
       });
     } catch (err) {
       console.warn(`⚠️  Not watching ${dir} for changes (${err.message}); restart ${name} by hand.`);
@@ -238,9 +354,9 @@ function superviseServer({ name, app, port, watchDirs, ignore = [], env, onFirst
     get child() {
       return child;
     },
-    /** True once the first process has exited without ever being restarted. */
+    /** True once a process has exited without the server ever having come up. */
     get failedToStart() {
-      return child === null && starts === 1;
+      return child === null && !everReady;
     },
   };
 }

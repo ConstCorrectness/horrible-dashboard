@@ -32,11 +32,45 @@ _LOG_DIR = paths.log_dir()
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_PATH = _LOG_DIR / "backend.log"
 
+#: Past this size the log is set aside at startup and a fresh one begun. Rotated
+#: only then, never mid-run: several processes append to the same file (a dev
+#: backend, a desktop one, a standalone module), and on Windows a rename fails
+#: while any of them holds it open.
+_LOG_ROTATE_BYTES = 50 * 1024 * 1024
+
+
+def _rotate_log_at_startup(path: Path) -> None:
+    try:
+        if path.stat().st_size < _LOG_ROTATE_BYTES:
+            return
+        path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        # Missing, or held open by another process — keep appending; the next
+        # start that finds it free rotates it.
+        pass
+
+
+_rotate_log_at_startup(_LOG_PATH)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    # The pid, because more than one backend writes this file and a line that
+    # cannot be traced to its process cannot say which of them restarted or died.
+    format="%(asctime)s [%(levelname)s] [%(process)d] %(name)s: %(message)s",
     handlers=[logging.FileHandler(_LOG_PATH), logging.StreamHandler()],
 )
+
+# A native crash (llama.cpp, onnxruntime, a driver) kills the process without a
+# log line, so a backend that vanished looked exactly like one that was stopped.
+# faulthandler writes the Python stack of every thread into the log at the moment
+# of the crash. Its own handle, kept open for the life of the process.
+try:
+    import faulthandler
+
+    _CRASH_LOG = open(_LOG_PATH, "a", encoding="utf-8")  # noqa: SIM115 - process lifetime
+    faulthandler.enable(file=_CRASH_LOG, all_threads=True)
+except OSError:
+    pass
 
 # Before the module imports below, which take seconds: a shell that dies while they
 # run must still take this process with it. See `backend/parent_watch.py`.

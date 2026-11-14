@@ -123,6 +123,17 @@ fallback path; run it separately:
 via `network.lobbyUrl`. See
 [the lobby system](../architecture/network-protocol.mdx#the-lobby-system).
 
+**One relay connection per data directory.** Every backend that shares a data
+directory is the same node (one identity), and the relay broker keeps a single socket
+per node id, closing the older one when the same id registers again. So when two
+backends ran at once — a dev backend and the desktop one, or a standalone module — they
+knocked each other off the relay every few seconds (measured: 38 re-registrations in
+six minutes). `build_transports()` now takes the relay under the bus claim
+`network.relay` (`<data>/bus/claim-network.relay.json`, created `O_EXCL`; a dead
+holder's claim is reclaimed). The second process logs `relay: dashboard (pid N)
+already holds this node's relay connection` and runs without the relay; it does not
+take over if the holder stops, so restart it if it needs the relay.
+
 ## Collaborative shared panes
 
 A `CollabRoom` (`collab.py`), keyed by an opaque `paneKey`, holds authoritative

@@ -61,6 +61,7 @@ import {
   type AgentRailState,
   type HeardLine,
 } from './AgentSidebar';
+import { clubhouseSession } from './roomSession';
 import { useClubhouseVoice } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
@@ -127,7 +128,16 @@ export function RoomsPanel() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeRoomInfo, setActiveRoomInfo] = useState<Channel | null>(null);
+  // Seeded from the session and written through to it, so a remount opens on the
+  // full room it last polled rather than on the room list's preview of it (see
+  // `ClubhouseRoomSession.roomDetails`).
+  const [activeRoomInfo, setActiveRoomInfoState] = useState<Channel | null>(
+    () => clubhouseSession().roomDetails,
+  );
+  const setActiveRoomInfo = (info: Channel | null) => {
+    clubhouseSession().roomDetails = info;
+    setActiveRoomInfoState(info);
+  };
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
   // Editing your own display name from your profile card; null while not editing.
@@ -1171,20 +1181,12 @@ export function RoomsPanel() {
           setIsAgentThinking(false);
           agentAbortControllerRef.current = null;
           setAgentReason(result.reason);
-          if (result.notice) {
-            toastsStore.add('info', 'Agent', result.notice);
-            if (agentConfigRef.current.postToChat) {
-              const textToSend = agentConfigRef.current.robotEmojiPrefix
-                ? `🤖 ${result.notice}`
-                : result.notice;
-              agentSentTextsRef.current.add(textToSend.trim());
-              agentSentTextsRef.current.add(result.notice.trim());
-              // Not awaited: the sender spaces and retries these, and a rate-limit
-              // wait must not hold up the spoken reply. `dedupe` skips a line the
-              // room has already been told.
-              void sendComment(textToSend, { dedupe: true }).catch(() => {});
-            }
-          }
+          // A notice is a diagnostic for whoever runs the agent ("the model server
+          // is unreachable", "the model took too long"), so it is shown here and
+          // never posted. With `postToChat` on it used to go to the room as well,
+          // which put "Couldn't reach the model server: All connection attempts
+          // failed" into a public room under the user's own name.
+          if (result.notice) toastsStore.add('info', 'Agent', result.notice);
           if (result.spoke && result.reply) {
             setIsAgentSpeaking(true);
             if (agentConfigRef.current.postToChat) {
@@ -1611,7 +1613,14 @@ export function RoomsPanel() {
 
   // Render the Dedicated Room View when joined
   if (joined && activeChannel) {
-    const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
+    // The polled details first. `channels` is the room list, and a room list entry
+    // carries a preview of a few names and no audience; it used to win here, so
+    // whenever the list loaded after the details (every remount) the stage shrank
+    // and the audience disappeared until the next poll.
+    const currentRoom =
+      (activeRoomInfo?.channel === activeChannel ? activeRoomInfo : null) ??
+      channels.find((ch) => ch.channel === activeChannel) ??
+      activeRoomInfo;
     const isCurrentUserSpeaker =
       activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
     const moderators = currentRoom?.users.filter((u) => u.is_moderator && u.user_id) ?? [];

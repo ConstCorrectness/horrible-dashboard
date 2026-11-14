@@ -75,7 +75,18 @@ def build_transports() -> list[Transport]:
         transports.append(DirectWsTransport())
     relay = relay_url()
     if relay:
-        transports.append(RelayTransport(relay))
+        if holder := _claim_relay():
+            # Same data dir, so same node identity: a second registration would
+            # make the broker close the first (it keeps one socket per node id),
+            # and the two would knock each other off every few seconds. Measured
+            # 2026-11-14: 38 re-registrations in 6 minutes with two backends up.
+            logger.info(
+                "relay: %s already holds this node's relay connection; "
+                "not registering a second one",
+                holder,
+            )
+        else:
+            transports.append(RelayTransport(relay))
     if get_value("network.enableLanDiscovery", False):
         transports.append(LanDiscovery())
     if get_value("network.enableWebRtc", False):
@@ -89,6 +100,34 @@ def build_transports() -> list[Transport]:
                 "run `uv sync --extra webrtc` to enable the WebRTC transport"
             )
     return transports
+
+
+#: The bus claim that makes one process per data directory the relay's client.
+RELAY_CLAIM = "network.relay"
+
+
+def _claim_relay() -> str | None:
+    """Take this node's relay connection. None on success, else who holds it.
+
+    Several backends can share one data directory — a dev backend, the desktop
+    shell's, a standalone module — and every one of them is the same node.
+    """
+    from backend.kernel import bus
+
+    try:
+        return bus.claim(RELAY_CLAIM)
+    except OSError:
+        # An unwritable data dir must not cost the node its relay.
+        return None
+
+
+def _release_relay() -> None:
+    from backend.kernel import bus
+
+    try:
+        bus.release(RELAY_CLAIM)
+    except OSError:
+        pass
 
 
 async def start_network() -> None:
@@ -262,3 +301,6 @@ async def stop_network() -> None:
     await lobby_client.disconnect()
     await peer_monitor.stop()
     await peer_hub.stop()
+    # After the relay transport has closed its socket, so the next holder's
+    # registration cannot race this one's.
+    _release_relay()
