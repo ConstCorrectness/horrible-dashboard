@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost, apiPut, streamNdjson } from '../../api';
+import { apiUrl } from '../../origin';
 
 /** One auto-detected provider: a local model server (Ollama, LM Studio, vLLM,
  * llama.cpp) or a hosted API (OpenAI, Anthropic, Gemini, OpenRouter). */
@@ -14,6 +15,9 @@ export interface DetectedProvider {
   install_url: string;
   /** A hosted API reached with a key rather than a server on this machine. */
   hosted: boolean;
+  /** A server on this machine that accepts a key (Unsloth). It gets a key field
+   * like the hosted providers, but readiness is still its port answering. */
+  optional_api_key: boolean;
   /** Whether a key is stored, or exported in the backend's environment. Never the
    * key itself — it is write-only and the browser is never sent one. */
   has_api_key: boolean;
@@ -249,4 +253,69 @@ export interface ToolGroup {
  */
 export function listToolGroups(): Promise<{ groups: ToolGroup[]; connected: boolean }> {
   return apiGet<{ groups: ToolGroup[]; connected: boolean }>('/agent/tool-groups');
+}
+
+// --- Unsloth saved (cloned) voices -------------------------------------------
+
+/** A voice saved in Unsloth Desktop. Speak it with TTS voice `unsloth:<id>`. */
+export interface UnslothVoice {
+  id: string;
+  name: string;
+  transcript: string | null;
+  language: string | null;
+  duration_s: number | null;
+  created_at: string | null;
+}
+
+export interface UnslothVoicesStatus {
+  /** Unsloth answered. False with an `error` is "not running" or "refused the key". */
+  reachable: boolean;
+  endpoint: string;
+  voices: UnslothVoice[];
+  error: string | null;
+}
+
+export function getUnslothVoices(): Promise<UnslothVoicesStatus> {
+  return apiGet<UnslothVoicesStatus>('/agent/voices/unsloth');
+}
+
+/** Save a recording as a cloned voice. Any audio container works: Unsloth decodes it. */
+export async function createUnslothVoice(
+  audio: Blob,
+  fields: { name: string; transcript?: string; language?: string; filename?: string },
+): Promise<UnslothVoice> {
+  const form = new FormData();
+  form.append('file', audio, fields.filename ?? 'voice.webm');
+  form.append('name', fields.name);
+  if (fields.transcript) form.append('transcript', fields.transcript);
+  if (fields.language) form.append('language', fields.language);
+  const res = await fetch(apiUrl('/api/agent/voices/unsloth'), { method: 'POST', body: form });
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = `saving the voice failed: ${res.status}`;
+    try {
+      const body = JSON.parse(text) as { detail?: unknown };
+      if (typeof body.detail === 'string') detail = body.detail;
+    } catch {
+      // non-JSON error body: keep the status message
+    }
+    throw new Error(detail);
+  }
+  return JSON.parse(text) as UnslothVoice;
+}
+
+export function deleteUnslothVoice(id: string): Promise<{ removed: boolean }> {
+  return apiDelete<{ removed: boolean }>(`/agent/voices/unsloth/${encodeURIComponent(id)}`);
+}
+
+/** URL of a voice's reference clip, for an `<audio>` element. */
+export function unslothVoiceAudioUrl(id: string): string {
+  return apiUrl(`/api/agent/voices/unsloth/${encodeURIComponent(id)}/audio`);
+}
+
+/** URL that speaks `text` in a TTS voice (Edge name or `unsloth:<id>`). */
+export function ttsUrl(text: string, voice: string): string {
+  return apiUrl(
+    `/api/agent/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(voice)}`,
+  );
 }

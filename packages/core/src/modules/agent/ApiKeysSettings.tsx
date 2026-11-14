@@ -24,7 +24,8 @@ export function ApiKeysSettings() {
 
   const refresh = useCallback(() => {
     void getAgentStatus()
-      .then((s) => setProviders((s.providers ?? []).filter((p) => p.hosted)))
+      // Hosted providers, plus local servers that check a key (Unsloth Desktop).
+      .then((s) => setProviders((s.providers ?? []).filter((p) => p.hosted || p.optional_api_key)))
       .catch((e: unknown) => setError(String(e)));
   }, []);
 
@@ -36,10 +37,10 @@ export function ApiKeysSettings() {
   return (
     <div className="api-keys-settings">
       <p className="setting-desc">
-        Keys for hosted model providers. Each is stored encrypted on this machine and{' '}
-        <b>never sent to the browser</b> — the field below writes, it does not read, so a saved key
-        shows as saved rather than as its own value. A provider with a key appears in the provider
-        and model dropdowns above.
+        Keys for hosted model providers, and for local servers that ask for one. Each is stored
+        encrypted on this machine and <b>never sent to the browser</b> — the field below writes, it
+        does not read, so a saved key shows as saved rather than as its own value. A provider with a
+        key appears in the provider and model dropdowns above.
       </p>
       {providers.map((p) =>
         p.key_connector ? (
@@ -139,9 +140,19 @@ function KeyRow({ provider, onChanged }: { provider: DetectedProvider; onChanged
               {provider.models.length > 0 && `${provider.models.length} models offered. `}
               Enter a new one to replace it.{' '}
             </>
+          ) : provider.optional_api_key ? (
+            // Local and keyless-capable: a missing key is only a problem if the
+            // server answers 401, which shows up as not reachable.
+            <>
+              No key.{' '}
+              {provider.reachable
+                ? 'It answers without one. '
+                : 'Not reachable: either it is not running or it wants a key. '}
+            </>
           ) : (
             <>No key — this provider is not selectable yet. </>
           )}
+          {provider.optional_api_key && provider.tier_note && <>{provider.tier_note} </>}
           {provider.api_key_url && (
             <a href={provider.api_key_url} target="_blank" rel="noreferrer">
               Get a key

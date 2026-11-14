@@ -825,7 +825,8 @@ is its turn, and speaks. The speech pipeline is two routes on the agent module:
   `pitch` and `volume` are all passed through to the synthesizer, so the agent's
   loudness is tuned alongside its speed and pitch rather than left to the mixer.
   A synthesis failure is a **502** whose `detail` carries the cause, never an
-  empty 200.
+  empty 200. A voice named `unsloth:<id>` is a **cloned voice** spoken by Unsloth
+  Desktop instead, as WAV. See [Cloned voices (Unsloth)](#cloned-voices-unsloth).
 
 Everything between those two — whether to answer, what the agent knows, what it
 remembers — is the **voice session**, and it lives on the server.
@@ -1373,6 +1374,50 @@ return `b""`, so the route answered an empty `200 audio/mpeg` and the browser's
 shows it. When it comes back, check for a newer edge-tts before anything else.
 :::
 
+### Cloned voices (Unsloth)
+
+Unsloth Desktop (the `unsloth` provider, see
+[agent chat](./agent-chat.mdx#providers--http-endpoints)) can speak in a **saved
+voice**: a clip uploaded once and turned into a voice. That is local voice cloning,
+and nothing leaves the machine. `backend/modules/agent/unsloth_audio.py` is the
+client, and it borrows the chat provider's endpoint and key.
+
+- **The seam is the voice name.** A saved voice is listed by `GET /api/agent/tts/voices`
+  as `unsloth:<id>` (first, labelled "cloned, Unsloth"), and `/api/agent/tts` sends
+  any `unsloth:` voice to Unsloth's `POST /v1/audio/speech`. So this pane needed no
+  change: it only ever passes a voice name. `rate` maps to Unsloth's `speed`;
+  `pitch` and `volume` are Edge-only. It needs no `voice` extra.
+- **Recording and saving** happen in Settings → **Cloned voices**
+  (`VoicesSettings.tsx`): record from the mic or pick a file, type what was said (it
+  improves the clone), confirm the voice is yours or its owner agreed, save. The
+  backend proxies `/api/agent/voices/unsloth` (list, create, delete, and
+  `/{id}/audio` to play the original clip), because the Unsloth key never reaches the browser.
+- **Which speech model** is `agent.unslothTtsModel`. Empty uses whatever speech
+  model Unsloth has loaded.
+- **Unsloth off** is a state, not an error: the voice list just omits cloned
+  voices, and speaking one answers **503** ("is Unsloth Desktop running?"). A refused
+  key answers **502** naming where to save it.
+
+Measured 2026-11-14 on this machine, DotTTS (`audio-cpp/audio.cpp-gguf/DotTTS-Edit-GGUF`,
+a voice-cloning TTS) with a 3s reference clip:
+
+| | Edge | Unsloth DotTTS |
+| --- | --- | --- |
+| first sentence (~4s of audio) | ~0.48 s | **~3.2 s** |
+| render speed | n/a (network) | ~0.8× real time (faster than playback) |
+| output | MP3 | WAV, 48 kHz |
+
+- **No model swapping.** Unsloth kept DotTTS and a chat model (LFM3-1.7B) loaded
+  side by side. Interleaving chat and speech, chat stayed ~0.2 s and speech ~2.7–3.1 s.
+  The XTTS failure above (one model evicting the other) did not happen here, though a
+  bigger chat model on a smaller GPU could still run out of VRAM.
+- **The cost is time to first word.** Because DotTTS renders faster than playback, the
+  one-ahead chunk prefetch hides every sentence after the first. The first still waits
+  ~3 s, against Edge's ~0.5 s. That is dead air in a live room, so Edge stays the default
+  and a cloned voice is a choice: private and your own voice, but a slower first reply.
+- **Unsloth needs a speech model named or loaded.** With none, it answers "No model
+  loaded." and the route turns that into a pointer to `agent.unslothTtsModel`.
+
 ### Installing it
 
 Both services are **optional** and lazy-imported — Whisper pulls in torch (~1–2
@@ -1437,7 +1482,7 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
 - **Profile Updates:**
   - `POST /me/bio`, `/me/name`, `/me/username`: Update bio, display name, and handle.
 - **TTS Voice & Pitch Customization:**
-  - `GET /api/agent/tts/voices`: Catalog of Microsoft Edge neural voices.
+  - `GET /api/agent/tts/voices`: Voices cloned in Unsloth (`unsloth:<id>`), then Microsoft Edge neural voices.
   - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...&volume=...`: Customizable voice, speed multiplier, pitch and volume tuning.
 - **Real-Time Speaker Attribution:**
   - Correlates Agora RTC audio volume indicator metrics with active room participant rosters during VAD speech windows, passing speaker name and user ID directly to the agent's turn loop.

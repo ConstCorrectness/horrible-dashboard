@@ -3194,6 +3194,24 @@ body {
   opacity: 1;
 }
 
+/* Cloned voices settings section: rows arrive staggered (delay set inline, capped). */
+.voices-settings .voice-row {
+  animation: voice-row-in 220ms ease-out both;
+}
+
+@keyframes voice-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voices-settings .voice-row {
+    animation: none;
+  }
+}
+
 /* Integration tiles: the row above the ask bar — what the agent can reach. Built on
    the .provider-option vocabulary (hairline border, 6px radius) so it reads as native
    to the page rather than a bolted-on strip. */

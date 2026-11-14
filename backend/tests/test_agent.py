@@ -60,6 +60,7 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
         "lmstudio",
         "llamacpp",
         "vllm",
+        "unsloth",
         # `nim` is listed without a key, like any other hosted provider. It used to
         # be filtered out until the NVIDIA connector held one, which meant nothing
         # in the agent settings ever said this node can talk to NVIDIA at all.
@@ -331,6 +332,28 @@ def test_provider_key_rejects_local_provider(client: TestClient) -> None:
     ever reads."""
     res = client.put("/api/agent/providers/ollama/key", json={"key": "x"})
     assert res.status_code == 404
+
+
+def test_unsloth_key_is_writable_and_flagged(client: TestClient) -> None:
+    """Unsloth is local but checks a key, so the key route accepts it and `/status`
+    says so over HTTP, where a field left off `response_model` would vanish."""
+    providers = {
+        p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]
+    }
+    assert providers["unsloth"]["optional_api_key"] is True
+    assert providers["unsloth"]["hosted"] is False
+    assert providers["lmstudio"]["optional_api_key"] is False
+
+    res = client.put("/api/agent/providers/unsloth/key", json={"key": "sk-unsloth-x"})
+    assert res.json() == {"has_api_key": True}
+    assert "sk-unsloth-x" not in client.get("/api/agent/status").text
+    assert client.delete("/api/agent/providers/unsloth/key").json() == {
+        "has_api_key": False
+    }
+    assert (
+        client.put("/api/agent/providers/lmstudio/key", json={"key": "x"}).status_code
+        == 404
+    )
 
 
 def test_blank_key_removes_rather_than_stores(client: TestClient) -> None:

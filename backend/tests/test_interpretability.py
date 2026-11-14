@@ -807,6 +807,13 @@ def test_history_filters_pass_through(client: TestClient, estimating):
             4096,
         ),
         (
+            "unsloth",
+            "openai",
+            "/v1/props",
+            {"default_generation_settings": {"n_ctx": 8192}},
+            8192,
+        ),
+        (
             "lmstudio",
             "openai",
             "/api/v0/models/m",

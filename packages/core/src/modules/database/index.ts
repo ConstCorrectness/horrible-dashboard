@@ -54,6 +54,7 @@ export const databaseModule: ModuleManifest = {
         'lmstudio',
         'llamacpp',
         'vllm',
+        'unsloth',
       ],
       default: 'agent',
     },

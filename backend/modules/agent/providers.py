@@ -46,6 +46,7 @@ def warm_litellm() -> None:
     """Run litellm's import now. Blocking — call it from a worker thread."""
     litellm.acompletion  # noqa: B018 - the attribute access is the import
 
+
 # Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
 DeltaSink = Callable[[str, str], Awaitable[None]]
 
@@ -133,6 +134,22 @@ class ProviderInfo:
     #: argument, so this cannot simply be sent to every openai-shape endpoint.
     embed_input_type: bool = False
 
+    # --- local servers that take a key -----------------------------------------
+    #: A server on this machine that checks a Bearer key, and still runs without one
+    #: when it is set to. Unsloth Desktop is the first: its `/v1` routes require
+    #: `sk-unsloth-…` even on loopback, unless the user turned on its keyless mode. This is
+    #: deliberately not `hosted`. That flag makes readiness mean "do we hold a key"
+    #: and skips the probe, but here the port is the truth: the probe still runs keyless,
+    #: and a 401 is what tells the user a key is needed.
+    optional_api_key: bool = False
+    #: Read timeout (seconds) for this server's model listing, when the shared
+    #: status-probe budget (2s read) is too short for it. Connect stays short, so a
+    #: server that is not running still fails fast. Unsloth rebuilds its listing
+    #: after a short cache: ~1.6s cold, ~0.08s warm, measured 2026-11-14. Under the
+    #: concurrent status probe it crossed 2s every few polls, so the provider flapped
+    #: between reachable and not.
+    list_read_timeout: float | None = None
+
 
 PROVIDERS: dict[str, ProviderInfo] = {
     "ollama": ProviderInfo(
@@ -152,6 +169,28 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="https://lmstudio.ai",
         can_pull=False,
         can_spawn=False,
+    ),
+    "unsloth": ProviderInfo(
+        kind="unsloth",
+        label="Unsloth",
+        # Unsloth Desktop's server speaks the OpenAI API (plus llama-server's
+        # `/v1/props`), so it inherits the openai dialect's streaming, tool-call
+        # assembly and `tool_choice="required"` retry, as llama.cpp does.
+        dialect="openai",
+        # 127.0.0.1, not localhost: on Windows `localhost` tries IPv6 first and a
+        # refused attempt costs ~250ms on every status poll.
+        default_endpoint="http://127.0.0.1:8888",
+        install_url="https://unsloth.ai",
+        # No HTTP route loads a model. You pick it in Unsloth's own window.
+        can_pull=False,
+        can_spawn=False,
+        env_var="UNSLOTH_API_KEY",
+        optional_api_key=True,
+        list_read_timeout=8.0,
+        tier_note=(
+            "Load the model in Unsloth's window. The key comes from Unsloth → Settings → "
+            "API, and is only needed if Unsloth is not set to keyless."
+        ),
     ),
     "llamacpp": ProviderInfo(
         kind="llamacpp",
@@ -340,7 +379,7 @@ def api_key_for(info: ProviderInfo) -> str | None:
     without checking it here a key that *works* would still be reported as missing —
     and the user would be told to fix something that isn't broken.
     """
-    if not info.hosted:
+    if not (info.hosted or info.optional_api_key):
         return None
     if info.key_connector:
         from backend.modules.connectors import store as connector_store
@@ -367,8 +406,10 @@ def auth_headers(info: ProviderInfo) -> dict[str, str]:
     them. NVIDIA NIM is the first openai-dialect provider that is *hosted*, and its
     key lives in the `nvidia` connector rather than a setting, because it is a
     credential and `GET /api/settings` hands the whole settings bag to the browser.
+    Unsloth is the local exception (`optional_api_key`): a loopback server that
+    checks a key.
     """
-    if not info.hosted or info.dialect != "openai":
+    if not (info.hosted or info.optional_api_key) or info.dialect != "openai":
         return {}
     key = api_key_for(info)
     return {"Authorization": f"Bearer {key}"} if key else {}
@@ -1091,7 +1132,16 @@ async def list_models(
         res.raise_for_status()
         return [m["name"] for m in res.json().get("models", [])]
     if is_loopback_endpoint(endpoint):
-        res = await client.get(f"{endpoint}/v1/models", headers=auth_headers(info))
+        extra: dict[str, Any] = {}
+        if info.list_read_timeout:
+            # Keep the caller's short connect: only the read gets longer.
+            # (`getattr`: callers and tests pass client stand-ins without one.)
+            base = getattr(client, "timeout", None)
+            connect = base.connect if isinstance(base, httpx.Timeout) else 0.75
+            extra["timeout"] = httpx.Timeout(info.list_read_timeout, connect=connect)
+        res = await client.get(
+            f"{endpoint}/v1/models", headers=auth_headers(info), **extra
+        )
         res.raise_for_status()
         return [m["id"] for m in res.json().get("data", [])]
 
@@ -1400,6 +1450,10 @@ async def _chat_dispatch(
             elif info.kind in {"llamacpp", "peer", "vllm"}:
                 # llama-server and vLLM pass these through to the Jinja template.
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
+            elif info.kind == "unsloth":
+                # Unsloth reads a top-level field and forwards it to the template
+                # (studio/backend/routes/inference.py, `enable_thinking`).
+                payload["enable_thinking"] = False
         _note_payload(payload)
         res = await client.post(
             f"{endpoint}/v1/chat/completions",

@@ -38,6 +38,9 @@ class DetectedProvider(BaseModel):
     #: A hosted API reached with a key rather than a server on this machine. The UI
     #: branches on this to offer a key field instead of an "install it" link.
     hosted: bool = False
+    #: A server on this machine that accepts a key (Unsloth). The API-keys settings
+    #: section lists it next to the hosted ones, but it is still probed by port.
+    optional_api_key: bool = False
     #: Whether a key is stored (or exported in the environment) for this provider.
     #: Never the key itself — this response goes to the browser.
     has_api_key: bool = False

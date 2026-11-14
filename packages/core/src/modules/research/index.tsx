@@ -251,7 +251,7 @@ export const researchModule: ModuleManifest = {
       description:
         'Model provider for deep-research runs. Empty uses the agent’s configured provider (local by default). Cloud providers (openai/anthropic/gemini) need their API key connected — keys live in the encrypted secrets store, never in settings.',
       type: 'enum',
-      enumValues: ['', 'ollama', 'lmstudio', 'vllm', 'openai', 'anthropic', 'gemini'],
+      enumValues: ['', 'ollama', 'lmstudio', 'vllm', 'unsloth', 'openai', 'anthropic', 'gemini'],
       default: '',
     },
     {

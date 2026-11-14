@@ -813,6 +813,7 @@ is the source of truth; it collapses every one of them onto one of three **diale
 | LM Studio     | `openai`  | `http://localhost:1234`  | no   | no    | —   |
 | llama.cpp     | `openai`  | `http://127.0.0.1:8080`  | no   | yes   | —   |
 | vLLM          | `openai`  | `http://localhost:8001`  | no   | yes   | —   |
+| Unsloth       | `openai`  | `http://127.0.0.1:8888`  | no   | no    | opt |
 | OpenAI        | `litellm` | —                        | no   | no    | yes |
 | Anthropic     | `litellm` | —                        | no   | no    | yes |
 | Google Gemini | `litellm` | —                        | no   | no    | yes |
@@ -838,6 +839,18 @@ online/offline switch, `hosted` is. "OpenAI-compatible" refers to LM Studio's,
 llama.cpp's and vLLM's wire format; it does not mean any request leaves the machine.
 Everything on the `ollama` and `openai` dialects runs offline against a localhost
 server; only the `litellm` dialect calls out.
+
+`unsloth` is **Unsloth Desktop**'s local server. It is another `openai`-dialect entry,
+and the one local server that checks a key: its `/v1` routes want
+`Authorization: Bearer sk-unsloth-…` even on loopback, unless the user turned on its
+keyless mode. That is what `ProviderInfo.optional_api_key` means. `api_key_for` and
+`auth_headers` send a key when one is saved (`secrets.db` under `unsloth`, then
+`UNSLOTH_API_KEY`), and the key routes accept it, so it gets a field in Settings →
+API keys. It is deliberately **not** `hosted`: the probe still runs without a key and
+a 401 shows as unreachable, rather than "no key" being taken to mean unusable. Models
+are loaded in Unsloth's own window (it has no load route). Thinking is turned off
+with a top-level `enable_thinking: false`, and the context window comes from its
+llama-server-style `/v1/props`. The key itself is created in Unsloth → Settings → API.
 
 ### Hosted providers and their API keys
 

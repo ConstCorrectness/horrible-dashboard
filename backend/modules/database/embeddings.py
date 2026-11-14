@@ -81,8 +81,9 @@ class _Embedder:
 
     def headers(self) -> dict[str, str]:
         """The provider's key, read per request rather than cached, so a rotated key
-        takes effect without waiting out `_MODEL_CACHE_TTL_S`. Empty for every local
-        server: `api_key_for` answers None for anything not hosted."""
+        takes effect without waiting out `_MODEL_CACHE_TTL_S`. Empty for the local
+        servers that take no key: `api_key_for` answers None unless the provider is
+        hosted or `optional_api_key` (Unsloth)."""
         key = P.api_key_for(self.info)
         return {"Authorization": f"Bearer {key}"} if key else {}
 
