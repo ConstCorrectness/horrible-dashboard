@@ -7591,6 +7591,15 @@ Three details carry the whole cross-platform claim and the whole latency claim:
   and up to a frame of lag). Plus `desired_maximum_frame_latency: 1`, because
   every queued frame is a frame of input latency.
 
+Two rules about the surface that only Linux enforced. A **`Suboptimal`** frame is
+drawn and presented, and the surface reconfigured *after*: configuring while the
+acquired frame is still held is a wgpu validation error, and Vulkan on Wayland
+reports `Suboptimal` as a matter of course (the compositor sizes the window after
+the surface exists), so the v0.5.0 Linux client aborted on its first frame, menu
+and match alike. Windows almost never reports it, which is how it shipped. And
+**an empty buffer is never bound** — wgpu panics on a zero-sized vertex slice, and
+a blank draft in the designer (`--new`) has no world triangles, on every platform.
+
 There are **no textures**, because the module ships none — surfaces carry the
 mesher's per-texture-id colours, enough that two perpendicular walls of the same
 texture id do not merge into one shape when you stand in a corner. There *are*
