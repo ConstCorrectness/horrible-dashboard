@@ -584,6 +584,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // brightness, which stopped being possible the moment the sun became a
     // property of the map — see `viewmodel::MATERIAL_UNLIT`.
     if (in.material < -0.5) {
+        // The fan fades to black at its rim, and this pass is opaque: drawn
+        // whole, the fade is a dark ball around the flash. Only the bright
+        // middle is kept.
+        if (max(albedo.r, max(albedo.g, albedo.b)) < 0.5) {
+            discard;
+        }
         return vec4<f32>(expose(albedo), 1.0);
     }
 

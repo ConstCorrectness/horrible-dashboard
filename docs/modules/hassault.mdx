@@ -3626,6 +3626,21 @@ Separately, your own tracer starts `0.6` cubes down range so it leaves the barre
 rather than your face, and a pellet that stopped closer than that gets no tracer
 at all — only its impact.
 
+**The ball over your hands (November).** The same report came back in a new
+shape: a lit tan disc over the support hand on every shot. It was never a
+tracer or an impact — it is your own **muzzle flash**, drawn in the wrong place.
+`PropFit::muzzle` was stored with the fit's offset already added and then drawn
+through `placement()`, which adds it again, so the flash sat one offset back
+from the barrel: toward the camera, over the hands, and several times the size
+for being that close. The muzzle is now kept in the prop's own space, and
+`the_flash_sits_on_the_props_own_muzzle` pins it against `prop_model()`.
+The flash is also drawn at half the browser's size with only its bright middle
+kept (`FLASH_DRAW_SCALE`, and a `discard` in the shader's unlit branch): the fan
+fades to black at its rim, and in an opaque pass that fade is a dark ball. Worth
+knowing when the next "bullet on the viewport" arrives: the view model's flare
+(`viewmodel.rs`) and the world's shot effects (`effects.rs`) are separate
+systems, and a fix to one says nothing about the other.
+
 #### The crosshair was drawing the wrong cone
 
 `HudView.spread` fed the reticle's gap from the weapon's `spread` /
