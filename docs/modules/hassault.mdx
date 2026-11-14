@@ -3626,6 +3626,21 @@ Separately, your own tracer starts `0.6` cubes down range so it leaves the barre
 rather than your face, and a pellet that stopped closer than that gets no tracer
 at all — only its impact.
 
+**The ball over your hands (November).** The same report came back in a new
+shape: a lit tan disc over the support hand on every shot. It was never a
+tracer or an impact — it is your own **muzzle flash**, drawn in the wrong place.
+`PropFit::muzzle` was stored with the fit's offset already added and then drawn
+through `placement()`, which adds it again, so the flash sat one offset back
+from the barrel: toward the camera, over the hands, and several times the size
+for being that close. The muzzle is now kept in the prop's own space, and
+`the_flash_sits_on_the_props_own_muzzle` pins it against `prop_model()`.
+The flash is also drawn at half the browser's size with only its bright middle
+kept (`FLASH_DRAW_SCALE`, and a `discard` in the shader's unlit branch): the fan
+fades to black at its rim, and in an opaque pass that fade is a dark ball. Worth
+knowing when the next "bullet on the viewport" arrives: the view model's flare
+(`viewmodel.rs`) and the world's shot effects (`effects.rs`) are separate
+systems, and a fix to one says nothing about the other.
+
 #### The crosshair was drawing the wrong cone
 
 `HudView.spread` fed the reticle's gap from the weapon's `spread` /
@@ -7590,6 +7605,15 @@ Three details carry the whole cross-platform claim and the whole latency claim:
   `Mailbox` (tear-free, still no blocking) → `Fifo` (vsync, always supported,
   and up to a frame of lag). Plus `desired_maximum_frame_latency: 1`, because
   every queued frame is a frame of input latency.
+
+Two rules about the surface that only Linux enforced. A **`Suboptimal`** frame is
+drawn and presented, and the surface reconfigured *after*: configuring while the
+acquired frame is still held is a wgpu validation error, and Vulkan on Wayland
+reports `Suboptimal` as a matter of course (the compositor sizes the window after
+the surface exists), so the v0.5.0 Linux client aborted on its first frame, menu
+and match alike. Windows almost never reports it, which is how it shipped. And
+**an empty buffer is never bound** — wgpu panics on a zero-sized vertex slice, and
+a blank draft in the designer (`--new`) has no world triangles, on every platform.
 
 There are **no textures**, because the module ships none — surfaces carry the
 mesher's per-texture-id colours, enough that two perpendicular walls of the same

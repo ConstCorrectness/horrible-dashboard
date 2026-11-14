@@ -69,7 +69,12 @@ This starts the Vite dev server and the Electron shell (`apps/desktop`) together
 shell loads the dev server (hot reload works as in the browser) and **supervises the
 backend itself** (`apps/desktop/src/backend.ts`): it spawns uvicorn, or reuses one
 already running on :8000 — no separate backend start needed. Closing the window stops
-the backend and Vite. F12 or Ctrl+Shift+I opens DevTools in development.
+the backend and Vite, and so do Ctrl+C and closing the terminal. F12 or Ctrl+Shift+I
+opens DevTools in development.
+
+If :5173 is already taken, the launcher stops before starting anything and names the
+process holding it (on Linux and macOS) — nearly always a dev server left over from an
+earlier session.
 
 Unlike `pnpm dev`, the desktop layout **defaults to `0.0.0.0`** — the equivalent of
 `dev:lan` for the browser layout. The desktop node is the one you pair a phone with and
@@ -170,6 +175,14 @@ Every script in the repo-root `package.json`:
   stale worker no longer cascades into "port in use" on the next run. A *manually*
   started `uv run uvicorn --reload` can still orphan a worker — kill the whole process
   tree if a stale one holds the port.
+- **`pnpm dev:desktop` says "Port 5173 is already in use", or an old backend still
+  answers on :8000 (Linux).** Earlier launchers stopped Electron by signalling its
+  whole process group; Chromium then aborted ("GPU process isn't usable. Goodbye.")
+  before it could stop the backend, and a closed terminal left Vite running. The
+  launcher now signals Electron's main process alone and handles SIGHUP, and the
+  backend exits by itself when the shell that spawned it is gone, however it went
+  (`backend/parent_watch.py`). A process left over from before that still has to be
+  stopped once — the launcher prints its pid.
 - **Backend stuck in a restart loop.** Almost always the reload watcher seeing its own
   log writes. Use the standard commands above (`--reload-dir backend --reload-exclude
   "logs/*"`, already set in `scripts/dev.mjs`/`dev-backend.ps1`) rather than a bare

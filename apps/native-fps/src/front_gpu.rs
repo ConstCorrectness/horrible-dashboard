@@ -145,12 +145,10 @@ impl FrontGpu {
         if let Some(upload) = atlas {
             self.overlay.upload_atlas(&self.queue, upload);
         }
-        let frame = match self.surface.get_current_texture() {
-            Cst::Success(frame) => frame,
-            Cst::Suboptimal(frame) => {
-                self.surface.configure(&self.device, &self.config);
-                frame
-            }
+        let (frame, suboptimal) = match self.surface.get_current_texture() {
+            Cst::Success(frame) => (frame, false),
+            // Reconfigured once presented, never while held — see `Renderer::render`.
+            Cst::Suboptimal(frame) => (frame, true),
             Cst::Outdated | Cst::Lost => {
                 self.surface.configure(&self.device, &self.config);
                 return Ok(false);
@@ -191,6 +189,9 @@ impl FrontGpu {
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
+        if suboptimal {
+            self.surface.configure(&self.device, &self.config);
+        }
         Ok(true)
     }
 }

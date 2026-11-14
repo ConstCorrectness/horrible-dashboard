@@ -1411,14 +1411,15 @@ impl Renderer {
         use wgpu::CurrentSurfaceTexture as Cst;
         let acquired = self.surface.get_current_texture();
         laps.lap(Phase::Acquire);
-        let frame = match acquired {
-            Cst::Success(frame) => frame,
+        let (frame, suboptimal) = match acquired {
+            Cst::Success(frame) => (frame, false),
             // Acquired, but the surface has moved on. Draw it anyway — a
-            // slightly stale frame beats a dropped one — and reconfigure after.
-            Cst::Suboptimal(frame) => {
-                self.reconfigure();
-                frame
-            }
+            // slightly stale frame beats a dropped one — and reconfigure after
+            // it is presented: configuring while the frame is still held is a
+            // validation error, and a panic. Vulkan on Wayland reports this
+            // routinely (the compositor sizes the window after the surface was
+            // made), so on Linux it was the first frame.
+            Cst::Suboptimal(frame) => (frame, true),
             Cst::Outdated | Cst::Lost => {
                 self.reconfigure();
                 return Ok(false);
@@ -1529,7 +1530,13 @@ impl Renderer {
             pass.set_bind_group(1, detail_bg, &[]);
             pass.set_bind_group(2, &self.shadow.bind_group, &[]);
             pass.set_bind_group(3, &self.pbr.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.world_buffer.slice(..));
+            // A blank draft in the designer has no triangles, and wgpu panics on
+            // binding an empty buffer ("buffer slice can not be empty") — the
+            // first frame of `--new` used to be its last. No cells to draw then
+            // either, so the loop below is a no-op.
+            if self.world_verts > 0 {
+                pass.set_vertex_buffer(0, self.world_buffer.slice(..));
+            }
             // Instance-rate: each draw's first instance picks its light mask,
             // and it stays bound for the bodies after, which draw as instance 0.
             pass.set_vertex_buffer(1, self.world_mask_buffer.slice(..));
@@ -1692,6 +1699,9 @@ impl Renderer {
         laps.lap(Phase::Submit);
         // Presented through the queue in wgpu 30, not off the texture.
         self.queue.present(frame);
+        if suboptimal {
+            self.reconfigure();
+        }
         laps.lap(Phase::Present);
         self.last_cost = cost;
         self.last_phases = laps.times;

@@ -1,6 +1,8 @@
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { createRequire } from 'module';
+import { createServer } from 'net';
+import { setTimeout } from 'timers';
 import { dirname, join } from 'path';
 
 // Load .env if it exists so we inherit any local credentials/config, exactly as
@@ -55,6 +57,44 @@ if (existsSync('pyproject.toml')) {
   } catch (e) {
     console.warn('⚠️ Could not run uv sync:', e);
   }
+}
+
+// The dev server's port, checked before anything starts. Vite would say "Port 5173 is
+// already in use" and stop — after the shell had already been launched at a server
+// that was never coming — and the holder is nearly always a dev server from an
+// earlier session whose terminal is gone, which that message gives no way to find.
+const devPort = Number(process.env.PORT) || 5173; // as apps/web/vite.config.ts reads it
+
+function portFree(port, bindHost) {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, bindHost, () => probe.close(() => resolve(true)));
+  });
+}
+
+/** "pid 1234: node …/vite.js (up 07:39:45)", or null where it cannot be told. */
+function portHolder(port) {
+  if (process.platform === 'win32') return null;
+  const found = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    encoding: 'utf8',
+  });
+  const pid = found.stdout?.split('\n')[0]?.trim();
+  if (!pid) return null;
+  const ps = spawnSync('ps', ['-o', 'etime=,args=', '-p', pid], { encoding: 'utf8' });
+  const [etime, ...args] = (ps.stdout ?? '').trim().split(/\s+/);
+  return args.length ? `pid ${pid}: ${args.join(' ').slice(0, 120)} (up ${etime})` : `pid ${pid}`;
+}
+
+if (!(await portFree(devPort, host))) {
+  const holder = portHolder(devPort);
+  console.error(`❌ Port ${devPort} is already in use${holder ? ` — ${holder}` : ''}.`);
+  console.error(
+    holder
+      ? '   Usually a dev server left over from an earlier session; stop it and run this again.'
+      : '   Stop whatever is serving it (often an earlier dev server) and run this again.',
+  );
+  process.exit(1);
 }
 
 console.log(
@@ -124,22 +164,38 @@ if (shellArgs.length) {
   );
 }
 
-const shell = spawn('pnpm', ['--filter', '@horrible/desktop', 'dev', ...shellArgs], {
-  stdio: 'inherit',
-  shell: useShell,
-  env,
-  detached,
-});
+// The Electron binary itself, not `pnpm … dev` → `electron/cli.js` → Electron: stopping
+// the shell has to reach its **main process alone** (see `stopAll`), and through two
+// wrappers this script only knows the outermost pid.
+const desktopDir = join(process.cwd(), 'apps', 'desktop');
+const electronBinary = createRequire(join(desktopDir, 'package.json'))('electron');
 
+let shell = null;
 let exiting = false;
+
+function alive(child) {
+  return child && child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+}
+
 function stopAll(code) {
   if (exiting) return;
   exiting = true;
   for (const child of [vite, shell]) {
-    if (child.exitCode !== null || child.pid === undefined) continue;
+    if (!alive(child)) continue;
     if (process.platform === 'win32') {
       // Through a shell, `kill` would only end cmd.exe and orphan Vite/Electron.
       spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else if (child === shell) {
+      // Electron's main process only, never its group. SIGTERM there is a quit:
+      // `will-quit` stops the backend, then the zygote and GPU process leave with it.
+      // Signalled as a group they die in the same instant, Chromium aborts relaunching
+      // the GPU process ("GPU process isn't usable. Goodbye."), and the backend is
+      // orphaned on :8000 — which is what this used to do.
+      try {
+        process.kill(child.pid, 'SIGTERM');
+      } catch {
+        // Already gone.
+      }
     } else {
       try {
         process.kill(-child.pid, 'SIGTERM');
@@ -150,17 +206,50 @@ function stopAll(code) {
   }
   // Give the shell its quit: it stops the backend on the way out, and leaving first
   // can pull the display out from under it (xvfb-run, a closing terminal session),
-  // which crashes it before it gets there and orphans uvicorn on its port.
-  if (shell.exitCode === null && shell.signalCode === null) {
+  // which crashes it before it gets there and orphans uvicorn on its port. Past the
+  // deadline, its whole group goes.
+  if (alive(shell)) {
     shell.once('exit', () => process.exit(code));
-    setTimeout(() => process.exit(code), 8_000).unref();
+    setTimeout(() => {
+      if (process.platform !== 'win32') {
+        try {
+          process.kill(-shell.pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+      process.exit(code);
+    }, 10_000).unref();
   } else {
     process.exit(code);
   }
 }
 
-// Closing the window ends the session; so does Vite dying under it.
-shell.on('exit', (code, signal) => stopAll(signal ? 1 : (code ?? 0)));
 vite.on('exit', (code, signal) => stopAll(signal ? 1 : (code ?? 1)));
 process.on('SIGINT', () => stopAll(130));
 process.on('SIGTERM', () => stopAll(143));
+// A closed terminal. Without this the launcher dies on the spot, and Vite and
+// Electron — process groups of their own — run on headless, holding :5173.
+process.on('SIGHUP', () => stopAll(129));
+
+// Compile the shell (what its `dev` script does before `electron .`), then start it.
+const build = spawn('pnpm', ['--filter', '@horrible/desktop', 'build'], {
+  stdio: 'inherit',
+  shell: useShell,
+  env,
+});
+build.on('exit', (code) => {
+  if (exiting) return;
+  if (code !== 0) {
+    stopAll(code ?? 1);
+    return;
+  }
+  shell = spawn(electronBinary, ['.', ...shellArgs], {
+    cwd: desktopDir,
+    stdio: 'inherit',
+    env,
+    detached,
+  });
+  // Closing the window ends the session.
+  shell.on('exit', (exitCode, signal) => stopAll(signal ? 1 : (exitCode ?? 0)));
+});

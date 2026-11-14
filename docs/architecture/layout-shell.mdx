@@ -259,7 +259,11 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
   `.venv` python when present, else `uv run` — with MinGW dirs stripped from the
   child PATH (the `no OPENSSL_Applink` crash). It restarts the process with
   backoff if it dies (3 fast failures → `failed` with the stderr tail) and stops
-  it before the app exits. The frontend polls the `backend_status` command at boot
+  it before the app exits. If the shell dies without getting there (a crash, a
+  SIGKILL), the backend still goes: its stdin is a pipe the shell holds and never
+  writes to, and `backend/parent_watch.py` shuts it down on that pipe's EOF
+  (opted into with `HORRIBLE_EXIT_WITH_PARENT=1`, which it consumes so its own
+  children do not inherit it). The frontend polls the `backend_status` command at boot
   and uses **absolute** http/ws URLs from then on — no Vite proxy in the loop,
   so dev and packaged builds exercise the same path. If the backend never comes
   up, boot proceeds pluginless; the boot splash records the failed step and the

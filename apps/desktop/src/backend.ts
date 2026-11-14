@@ -520,11 +520,19 @@ export class BackendSupervisor {
     // ELECTRON_RUN_AS_NODE and friends must not leak into a Python child that might
     // itself launch an Electron/Chromium binary.
     delete env.ELECTRON_RUN_AS_NODE;
+    // How the backend learns the shell is gone when `will-quit` never ran (a crash, a
+    // SIGKILL) — the child leads its own process group, so nothing else would stop it.
+    // POSIX: stdin is a pipe this process never writes to, and its EOF is the signal.
+    // Windows: the backend waits on this PID's process handle instead. Never a stdin
+    // pipe there: a thread blocked reading one makes every subprocess the backend
+    // starts hang, so it never finished booting. See `backend/parent_watch.py`.
+    env.HORRIBLE_EXIT_WITH_PARENT = '1';
+    env.HORRIBLE_PARENT_PID = String(process.pid);
 
     const child = spawn(command, args, {
       cwd: runtime.root,
       env,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: [isWindows ? 'ignore' : 'pipe', 'ignore', 'pipe'],
       // No console window flashing up beside a GUI app (CREATE_NO_WINDOW).
       windowsHide: true,
       // Its own process group on POSIX, so `uv run`'s child dies with it.
@@ -532,6 +540,9 @@ export class BackendSupervisor {
     });
     this.child = child;
     this.childExited = false;
+    // EPIPE once the child has exited; an unhandled stream error would take the shell
+    // down with it.
+    child.stdin?.on('error', () => {});
     child.stderr?.on('data', (chunk: Buffer) => this.stderrTail.push(chunk));
     child.once('error', (err) => {
       this.stderrTail.push(`${String(err)}\n`);

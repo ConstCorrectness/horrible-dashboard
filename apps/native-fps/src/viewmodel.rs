@@ -149,6 +149,13 @@ const ACCENT: [f32; 3] = [0.5412, 0.5725, 0.6118];
 /// `FLASH_HALO` (`0xffb257`). Pinned by `browser_parity.rs` — a flash that is
 /// warm in one client and white in the other reads as deliberate from either one
 /// alone, which is exactly why it needs a test.
+/// How much of the browser's flash size this client draws.
+///
+/// The sizes in `flash_shape` are `flash.ts`'s, for a soft additive sprite. Here
+/// the flash is an opaque disc in the view-model pass, which reads far heavier
+/// at the same radius — "a ball on the muzzle" — so it is drawn at half, and the
+/// shader keeps only its bright middle (see `shader.wgsl`, the unlit branch).
+const FLASH_DRAW_SCALE: f32 = 0.5;
 const FLASH_CORE: [f32; 3] = [1.0, 0.9412, 0.7843];
 const FLASH_HALO: [f32; 3] = [1.0, 0.6980, 0.3412];
 
@@ -1341,9 +1348,12 @@ impl WeaponViewModel {
         } else {
             (box_min + box_max) * 0.5 - (min + max) * 0.5
         };
-        // Front-centre of the fitted prop. The converter points every barrel
-        // down -Z, so the front is the minimum z.
-        let centre = (min + max) * 0.5 + offset;
+        // Front-centre of the prop, **in the prop's own space**: the flare is
+        // drawn through `placement()`, which is what adds the offset. Storing it
+        // with the offset already in put the flash one offset back from the
+        // barrel — over the support hand, and large for being that close. The
+        // converter points every barrel down -Z, so the front is the minimum z.
+        let centre = (min + max) * 0.5;
         // And turned in the hand, which only a knife is: see `knife_hold`.
         let hold = if self.weapon == "knife" {
             let h = arms::knife_hold();
@@ -1354,7 +1364,7 @@ impl WeaponViewModel {
         let fit = PropFit {
             offset,
             hold,
-            muzzle: Vec3::new(centre.x, centre.y, min.z + offset.z),
+            muzzle: Vec3::new(centre.x, centre.y, min.z),
         };
         self.prop = Some(fit);
         Some(fit)
@@ -1472,7 +1482,7 @@ impl WeaponViewModel {
                 // through `model` is already in camera space and its length *is*
                 // the distance — no inverse, no world-space round trip.
                 let distance = flash.transform_point3(Vec3::ZERO).length().max(0.05);
-                let core = clamp_flash_scale(core, distance, self.fov);
+                let core = clamp_flash_scale(core, distance, self.fov) * FLASH_DRAW_SCALE;
                 let halo = clamp_flash_scale(halo_scale(&self.weapon, core), distance, self.fov);
 
                 // **The bloom is a second fan, not a post-process.** There is no
@@ -3128,6 +3138,34 @@ mod tests {
                 "the flash has depth again: {lo} to {hi}"
             );
         }
+    }
+
+    #[test]
+    fn the_flash_sits_on_the_props_own_muzzle() {
+        // "The bullet on the viewport": a lit disc over the support hand on
+        // every shot. `PropFit::muzzle` was stored with the fit's offset already
+        // added, and then drawn through `placement()`, which adds it again — so
+        // the flash sat one offset back from the barrel, toward the camera,
+        // where it is both in the wrong place and several times the size.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        // A rifle-shaped prop whose centre is nowhere near the box model's.
+        let (min, max) = (Vec3::new(-0.05, -0.20, -1.60), Vec3::new(0.05, 0.12, 0.10));
+        vm.fit_prop(min, max).expect("the prop fits");
+        settle(&mut vm);
+        let quiet = drawn(&mut vm).len();
+        vm.fire();
+        vm.update(0.001, &frame(true));
+        let (_, core) = flare_halves(&mut vm, quiet);
+        // A fan's first vertex is its centre.
+        let centre = Vec3::from(core[0].position);
+        let front = Vec3::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, min.z - 0.06);
+        let want = vm.prop_model().unwrap().transform_point3(front);
+        assert!(
+            centre.distance(want) < 1e-3,
+            "the flash is {} from the prop's muzzle",
+            centre.distance(want)
+        );
     }
 
     #[test]
