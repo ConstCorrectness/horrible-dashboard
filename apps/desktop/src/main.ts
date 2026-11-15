@@ -188,6 +188,20 @@ function createWindow(): void {
     },
   });
   mainWindow = window;
+  if (process.platform === 'win32' && !packaged) {
+    // The taskbar draws a button from the shortcut carrying its AppUserModelID, else
+    // from the executable — never from the window icon. Installed, the installer's
+    // shortcut has our icon; in dev no shortcut carries APP_ID and the executable is
+    // electron.exe, so the button showed Electron's logo. Per-window relaunch details
+    // supply the icon (Windows ignores the icon unless the command and name are set).
+    window.setAppDetails({
+      appId: APP_ID,
+      appIconPath: path.join(__dirname, '..', 'build', 'icon.ico'),
+      appIconIndex: 0,
+      relaunchCommand: `"${process.execPath}" "${app.getAppPath()}"`,
+      relaunchDisplayName: 'horrible-dashboard',
+    });
+  }
   views = new BrowserViews(window, (channel, payload) => {
     if (!window.isDestroyed()) window.webContents.send(channel, payload);
   });
