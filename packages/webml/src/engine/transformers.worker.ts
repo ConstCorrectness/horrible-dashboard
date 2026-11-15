@@ -271,7 +271,13 @@ async function generate(req: GenerateRequest): Promise<void> {
 }
 
 function describe(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    // ORT's own text ("Can't create a session. ERROR_CODE: 6 … std::bad_alloc") names
+    // neither the cause nor a way out.
+    return /bad_alloc/.test(err.message)
+      ? `ONNX Runtime ran out of memory (its WebAssembly heap tops out at 4 GB, and a model needs about twice its file size while it loads). Pick smaller weights or a smaller model. [${err.message}]`
+      : err.message;
+  }
   // ORT surfaces some WebGPU failures as bare numbers (a pointer into wasm memory).
   if (typeof err === 'number') return `ONNX Runtime error (code ${err}) — often out of GPU memory`;
   return String(err);

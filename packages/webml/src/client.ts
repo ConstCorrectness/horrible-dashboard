@@ -159,6 +159,12 @@ export class WebmlEngine {
    * Load a model (resolves when it is warmed up). Loading the loaded model is a
    * no-op. A model for the other engine replaces the worker: terminating it is the
    * only way to give its GPU memory back.
+   *
+   * Every ONNX load gets a fresh worker too. ONNX Runtime Web runs in a 32-bit wasm
+   * heap that grows and never shrinks: disposing a model hands its blocks back to
+   * the allocator, fragmented, and a load that failed half-way hands back less. The
+   * next model's weights then need one contiguous block the heap can no longer grow
+   * to fit, and session creation dies with `std::bad_alloc` until the worker goes.
    */
   load(
     model: string,
@@ -171,7 +177,8 @@ export class WebmlEngine {
       return Promise.resolve();
     }
     const kind = engineFor(model);
-    if (this.worker && kind !== this.kind) {
+    // An ONNX worker only exists once a load has been sent to it, so it is never clean.
+    if (this.worker && (kind !== this.kind || kind === 'onnx')) {
       this.worker.terminate();
       this.worker = null;
       for (const p of this.pending.values())

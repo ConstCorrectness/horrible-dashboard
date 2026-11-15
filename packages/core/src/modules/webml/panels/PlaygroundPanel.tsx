@@ -7,13 +7,15 @@
  * transformers.js, and GGUF files from the Hub, run by our own WGSL engine
  * (docs/architecture/webml-gguf-engine.mdx).
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   CATALOG,
   catalogEntry,
   deleteCachedModel,
   formatBytes,
+  GGUF_SUGGESTIONS,
+  ggufModelId,
   isGgufModelId,
   loadTotals,
   pickDtype,
@@ -26,8 +28,10 @@ import { useSetting } from '../../../settings';
 import { useCachedModels, useEngineState, useGpuReport, webmlEngine } from '../engine';
 import {
   playground,
+  playgroundSource,
   splitThinking,
   usePlayground,
+  usePlaygroundSource,
   type PlaygroundMessage,
 } from '../playground-state';
 import { refreshWebmlManifest } from '../relay';
@@ -51,9 +55,27 @@ export function PlaygroundPanel() {
   const thinkingOn = useSetting<boolean>('webml.thinking') ?? false;
   const lensOn = useSetting<boolean>('webml.lens') ?? false;
 
+  const sourceRequest = usePlaygroundSource();
   const [choice, setChoice] = useState(() =>
-    catalogEntry(defaultModel) ? defaultModel : isGgufModelId(defaultModel) ? GGUF : CUSTOM,
+    playgroundSource.get()
+      ? GGUF
+      : catalogEntry(defaultModel)
+        ? defaultModel
+        : isGgufModelId(defaultModel)
+          ? GGUF
+          : CUSTOM,
   );
+  // Another surface (the Neurons section) asked for a GGUF: show that picker, once.
+  useEffect(() => {
+    if (!sourceRequest) return;
+    setChoice(GGUF);
+    setDtypeChoice('');
+    playgroundSource.consume();
+  }, [sourceRequest]);
+  // The picker starts on a file that loads, not an empty repo field.
+  const ggufInitial = isGgufModelId(defaultModel)
+    ? defaultModel
+    : ggufModelId(GGUF_SUGGESTIONS[1].repo, GGUF_SUGGESTIONS[1].file);
   const [custom, setCustom] = useState(() =>
     catalogEntry(defaultModel) || isGgufModelId(defaultModel) ? '' : defaultModel,
   );
@@ -78,7 +100,9 @@ export function PlaygroundPanel() {
   const ready = state.kind === 'ready';
   const busy = streaming !== -1;
   // A GGUF loads once its header says it can run here (or it is already on disk).
-  const canLoad = isGguf ? gpuReady && (isCached || gguf.inspection?.ok === true) : true;
+  // An ONNX model waits for the GPU probe: loading while it is still unknown would
+  // pick the CPU (wasm) backend and the larger non-f16 weights on a machine with a GPU.
+  const canLoad = isGguf ? gpuReady && (isCached || gguf.inspection?.ok === true) : gpu !== null;
   // Reasoning switch: the catalog says, or a loaded GGUF's template does.
   const thinkingModel =
     entry?.thinking ?? (ready && state.model === modelId && state.thinking === true);
@@ -242,7 +266,7 @@ export function PlaygroundPanel() {
                 <option value={GGUF}>GGUF file from the Hub…</option>
               </select>
             </div>
-            {isGguf && <GgufPicker initial={defaultModel} onChange={setGguf} />}
+            {isGguf && <GgufPicker initial={ggufInitial} onChange={setGguf} />}
             {choice === CUSTOM && (
               <div className="webml-row">
                 <input

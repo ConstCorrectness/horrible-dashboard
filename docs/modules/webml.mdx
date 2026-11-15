@@ -187,6 +187,23 @@ tokens) returns logits for every position: 4k × a 152k vocabulary = 2.4 GB, pas
 Runtime Web's 32-bit heap (`std::bad_alloc`). The worker therefore feeds prompts over
 256 tokens into the KV cache in 256-token chunks, then generates from the warm cache.
 
+**A fresh worker per ONNX load.** The same heap grows to 4 GB and never shrinks:
+disposing a model returns its blocks to the allocator, fragmented, and a load that
+failed half-way returns less. `WebmlEngine.load` therefore terminates the ONNX worker
+before every ONNX load, so the next model's session is created in an empty heap
+instead of failing with `Can't create a session … std::bad_alloc`. GGUF loads keep
+their worker. A `bad_alloc` that still happens (weights too large for the heap) is
+reported as an out-of-memory message that suggests smaller weights.
+
+**Load waits for the GPU probe.** The playground's Load is disabled for an ONNX model
+until the probe has answered; loading earlier would pick the `wasm` device and the
+larger non-f16 weights on a machine that has a GPU.
+
+**Opened from Neurons.** The Interpretability suite's Neurons section only shows GGUF
+models, so its "Open the WebML playground" button asks the playground for its GGUF
+picker (`playgroundSource` in `playground-state.ts`, consumed once). The picker starts
+on a suggested file (Qwen3 0.6B Q4_K_M) unless the default model is already a GGUF.
+
 **Measured (2026-10-07, Intel Gen12 iGPU):** SmolLM2-360M chat at ~27 tok/s,
 TTFT ~0.7 s; an agent round with Qwen3-0.6B (≈4k-token prompt, re-sent every round)
 takes ~50 s, almost all prefill. The relay round-trips correctly — Qwen3-0.6B emits a

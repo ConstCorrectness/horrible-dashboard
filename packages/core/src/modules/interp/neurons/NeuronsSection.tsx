@@ -17,6 +17,7 @@ import { useGraphicsQuality } from '../../../graphics';
 import { RollingCounter, entranceProps } from '../../../viz';
 import { useEngineState } from '../../webml/engine';
 import { showToken } from '../../webml/lens-lab/model';
+import { playgroundSource } from '../../webml/playground-state';
 import { S } from '../styles';
 import { bindNeuronActions } from './actions';
 import { cellOf } from './grid';
@@ -141,7 +142,14 @@ function Empty({ engineKind }: { engineKind: string }) {
         without it — all on this GPU. Llama, Qwen 2/3, Gemma 3 and SmolLM3 files run.
       </p>
       <div>
-        <button type="button" onClick={() => void openPane('webml.playground')}>
+        <button
+          type="button"
+          onClick={() => {
+            // This section only shows GGUF models: land on that picker, not the ONNX catalog.
+            if (engineKind !== 'loading') playgroundSource.requestGguf();
+            void openPane('webml.playground');
+          }}
+        >
           {engineKind === 'loading' ? 'Watch it load' : 'Open the WebML playground'}
         </button>
       </div>
