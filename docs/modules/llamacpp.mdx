@@ -1326,7 +1326,10 @@ evaluates, so a mark is exactly where Continue would stop.
 
 `stepper/StageView.tsx` picks the view that answers the question you stepped there
 to ask. Every read goes through the stride-aware routes; a `summary` record has no
-values and says so.
+values and says so. Reads are cached for the session (`stepper/load-cache.ts`, last
+200), because a recorded trace never changes: stepping back to a node already seen
+paints it at once instead of "Reading…". A failed read shows its last error at once
+and is still retried, since an error may be transient.
 
 - **Attention** (`kq_soft_max`, `kq`) — a strip of heads (the fill is each head's
   weight on position 0, the attention sink), then the selected head's query × key
