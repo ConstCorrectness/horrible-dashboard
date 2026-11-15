@@ -891,9 +891,24 @@ cannot do this. The fetch is cached for 10 minutes and carries its own 10s timeo
 (the probe client's 2s budget is sized for a loopback port, not for a few hundred KB
 from across the internet), and a failed fetch falls back to `static_models` rather
 than raising: the key decides usability, and an empty dropdown for a working provider
-is the worse failure. The other three hosted providers have no public catalog, so
-they list `static_models` — a starting point for the dropdown, never a claim to be
-the provider's full range. Every model field in the UI stays free text.
+is the worse failure.
+
+**Google Gemini's model list is fetched live too**, from AI Studio
+(`generativelanguage.googleapis.com/v1beta/models`) by `_gemini_listing`. Unlike
+OpenRouter's catalog it needs the key, which goes in the `x-goog-api-key` header and
+never in the query string, where proxy and access logs would keep it. Only models whose
+`supportedGenerationMethods` include `generateContent` are kept, which drops embedders,
+`aqa` and the Live-only models. A name filter then drops models that answer in speech,
+images or music (TTS, Nano Banana, Lyria), because the listing has no output-modality
+field and any of them would fail a chat turn. The list is cached for 10 minutes like
+the OpenRouter catalog. A **rejected key** (400/401/403) raises, so Gemini reads as
+unreachable rather than showing a dropdown that cannot make a call. Any other failure
+falls back to `static_models` (the `-latest` aliases plus 2.5 Pro/Flash) without
+caching it.
+
+OpenAI and Anthropic have no listing we fetch, so they show `static_models`: a
+starting point for the dropdown, not the provider's full range. Every model field in
+the UI stays free text.
 
 **Free models are listed without a key.** The catalog is public, and onboarding is the
 moment someone has no key yet and wants to know what they could run for nothing, so
