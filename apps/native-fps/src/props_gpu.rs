@@ -85,6 +85,11 @@ pub struct PropGpu {
     vertices: wgpu::Buffer,
     draws: Vec<Draw>,
     materials: Vec<wgpu::BindGroup>,
+    /// Each material's uniform and what the model asked for, so a skin's tint
+    /// is the model's own factor times the tint rather than a replacement.
+    uniforms: Vec<(wgpu::Buffer, MaterialUniform)>,
+    /// The tint written into `uniforms` last; white is the model as authored.
+    tint: [f32; 3],
     /// The model's bounds, parts and markers, kept so a swap back can be
     /// re-fitted to the boxes without the parsed `Prop` — which is exactly what
     /// the cache exists to avoid rebuilding.
@@ -223,6 +228,27 @@ impl Props {
         Some(info)
     }
 
+    /// Wear a skin's tint (`viewmodel::prop_tint`) on an uploaded prop: every
+    /// material's base colour becomes the model's own times `tint`. White puts
+    /// it back as authored. Written only when it changes, so this is safe to
+    /// call every frame.
+    pub fn tint(&mut self, queue: &wgpu::Queue, weapon: &str, tint: [f32; 3]) {
+        let Some(prop) = self.uploaded.get_mut(weapon) else {
+            return;
+        };
+        if prop.tint == tint {
+            return;
+        }
+        prop.tint = tint;
+        for (buffer, authored) in &prop.uniforms {
+            let mut uniform = *authored;
+            for (c, t) in uniform.base_color.iter_mut().zip(tint) {
+                *c *= t;
+            }
+            queue.write_buffer(buffer, 0, bytemuck::bytes_of(&uniform));
+        }
+    }
+
     /// Stop drawing a prop. The boxes take over; **nothing is unloaded**, so
     /// coming back to this weapon costs a lookup.
     pub fn clear(&mut self) {
@@ -248,11 +274,12 @@ impl Props {
             &TextureImage::single_pixel(255, 255, 255, 255),
         );
 
-        let materials = prop
+        let (materials, uniforms) = prop
             .materials
             .iter()
             .map(|material| self.material_group(device, material, &views, &fallback))
-            .collect();
+            .map(|(group, buffer, uniform)| (group, (buffer, uniform)))
+            .unzip();
 
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("prop-vertices"),
@@ -280,6 +307,8 @@ impl Props {
                 vertices,
                 draws,
                 materials,
+                uniforms,
+                tint: [1.0; 3],
                 info: PropInfo {
                     bounds: prop.bounds(),
                     parts: prop.parts.clone(),
@@ -307,7 +336,7 @@ impl Props {
         let fallback = upload_texture(device, queue, &TextureImage::single_pixel(255, 255, 255, 255));
         let groups = materials
             .iter()
-            .map(|material| self.material_group(device, material, &views, &fallback))
+            .map(|material| self.material_group(device, material, &views, &fallback).0)
             .collect();
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hands-vertices"),
@@ -437,20 +466,22 @@ impl Props {
         material: &MaterialDef,
         views: &[wgpu::TextureView],
         fallback: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
+    ) -> (wgpu::BindGroup, wgpu::Buffer, MaterialUniform) {
+        let authored = MaterialUniform {
+            base_color: material.base_color_factor.to_array(),
+            params: [material.alpha_cutoff, 0.0, 0.0, 0.0],
+        };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("prop-material"),
-            contents: bytemuck::cast_slice(&[MaterialUniform {
-                base_color: material.base_color_factor.to_array(),
-                params: [material.alpha_cutoff, 0.0, 0.0, 0.0],
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM,
+            contents: bytemuck::cast_slice(&[authored]),
+            // Rewritten by `tint`.
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let view = material
             .base_color_texture
             .and_then(|i| views.get(i))
             .unwrap_or(fallback);
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("prop-material-group"),
             layout: &self.material_layout,
             entries: &[
@@ -467,7 +498,8 @@ impl Props {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        })
+        });
+        (group, uniform, authored)
     }
 
     /// Rebuild the pipeline for a new sample count or surface format.

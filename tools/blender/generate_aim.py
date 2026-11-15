@@ -15,7 +15,8 @@ cubes / 3 leaves every rail, spawn and item where it was.
   the walls at each post.
 - Overhead baffles and high-bay lights; acoustic panels on the long walls.
 
-Run headless on Blender 4.1, then bake and fit like any modelled map:
+Run headless on Blender (5.3 checked; 4.1 works), then bake and fit like any
+modelled map:
 
     blender --background --factory-startup --python tools/blender/generate_aim.py
 """

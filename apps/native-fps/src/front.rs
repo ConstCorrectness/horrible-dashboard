@@ -46,6 +46,7 @@ use crate::api::WeaponSpec;
 use crate::hud::{measure, Hit, OverlayVertex, Painter};
 use crate::menu::LoadoutTable;
 use crate::radar::Run;
+use crate::showcase::Subject;
 use crate::text_kit::{Face, TextKit};
 use crate::ui_theme as theme;
 
@@ -53,6 +54,8 @@ mod account;
 pub use account::{
     wear_label, AccountView, CaseView, ItemView, ListingView, SignIn, WalletView, PROVIDERS,
 };
+mod replays;
+pub use replays::{length_label, ReplayView};
 
 /// The room size the server seats, for a room whose listing did not say.
 const DEFAULT_SEATS: u32 = 10;
@@ -85,17 +88,20 @@ pub enum Tab {
     Inventory,
     /// The wallet, cases and the market.
     Store,
+    /// Recorded matches, to watch or export (`front/replays.rs`).
+    Replays,
     /// The tools for whoever is building the game rather than playing it.
     Dev,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Play,
         Tab::Loadout,
         Tab::Inventory,
         Tab::Store,
+        Tab::Replays,
         Tab::Dev,
         Tab::Settings,
     ];
@@ -106,6 +112,7 @@ impl Tab {
             Tab::Loadout => "LOADOUT",
             Tab::Inventory => "INVENTORY",
             Tab::Store => "STORE",
+            Tab::Replays => "REPLAYS",
             Tab::Dev => "DEV TOOLS",
             Tab::Settings => "SETTINGS",
         }
@@ -444,6 +451,20 @@ pub enum Intent {
     OpenSettings,
     /// Fetch the boot tables again, after they failed.
     Retry,
+    /// Read the demos folder again (`Front::replays`).
+    ListReplays,
+    /// Load this recording's map with no server and play it back.
+    WatchReplay {
+        path: String,
+        map: String,
+    },
+    /// The same, stepped at a fixed rate into an MP4 beside it.
+    ExportReplay {
+        path: String,
+        map: String,
+    },
+    /// Show the demos folder in the file manager.
+    RevealReplays,
     Quit,
 }
 
@@ -491,6 +512,10 @@ pub enum Target {
     Case(usize),
     /// A market listing: click to select.
     Listing(usize),
+    /// A recording: click to select.
+    Replay(usize),
+    ReplayExport,
+    ReplayFolder,
 }
 
 /// The screen while rooms are being asked for.
@@ -566,6 +591,16 @@ pub struct Front {
     pub listings: Vec<ListingView>,
     /// The market's cursor.
     pub listing: usize,
+    /// The recordings in the demos folder, newest first; `None` while they are
+    /// being read.
+    pub replays: Option<Vec<ReplayView>>,
+    /// The REPLAYS tab's cursor.
+    pub replay: usize,
+    /// Why EXPORT MP4 cannot run here — no `ffmpeg` found — or `None` when it can.
+    pub export_blocked: Option<String>,
+    /// The inventory skin on the stage: the last one the pointer was over,
+    /// kept after it leaves so the pointer can go to the model to turn it.
+    pub focus: usize,
     /// The server view's selected room, looked into. Stale the moment the
     /// selection changes, so it is only shown while its id still matches.
     pub roster: Option<RoomDetail>,
@@ -586,6 +621,28 @@ pub struct Front {
     since: f32,
     /// When the loadout detail last changed subject.
     detail_since: f32,
+    /// The tab before this one, which the tab bar's light slides away from.
+    tab_from: Tab,
+    /// A map is being drawn live behind the menu (`backdrop.rs`), so the home
+    /// screens leave out their still picture of it. Set by the shell.
+    pub live: bool,
+    /// Whether the last layout shortened the identity's status line, so the
+    /// painter draws the line the block was sized for. A `Cell` because the
+    /// layout is worked out on `&self`.
+    identity_compact: std::cell::Cell<bool>,
+    /// Whether the model for `stage`'s subject has loaded and is being drawn.
+    /// Until it has, the detail keeps its silhouette. Set by whoever owns the
+    /// GPU, each frame; the front end itself never draws a model.
+    pub staged: bool,
+}
+
+/// What the 3D stage shows this frame, and where.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Staging {
+    pub rect: Hit,
+    pub subject: Subject,
+    /// The weapon's finish, as `viewmodel::prop_tint` gives it; white is stock.
+    pub tint: [f32; 3],
 }
 
 /// The room to join for a search, if any is worth joining.
@@ -651,6 +708,7 @@ impl Front {
         Front {
             screen: Screen::Boot,
             tab: Tab::Play,
+            tab_from: Tab::Play,
             kind: PlayKind::Quick,
             server: server.to_string(),
             callsign: callsign.to_string(),
@@ -693,6 +751,13 @@ impl Front {
             clock: 0.0,
             since: 0.0,
             detail_since: 0.0,
+            staged: false,
+            live: false,
+            identity_compact: std::cell::Cell::new(false),
+            focus: 0,
+            replays: None,
+            replay: 0,
+            export_blocked: None,
         }
     }
 
@@ -711,6 +776,7 @@ impl Front {
 
     pub fn set_tab(&mut self, tab: Tab) {
         if self.tab != tab {
+            self.tab_from = self.tab;
             self.tab = tab;
             self.since = self.clock;
             self.detail_since = self.clock;
@@ -833,10 +899,16 @@ impl Front {
     }
 
     /// The map whose picture is behind the menu, if there is one of it.
-    fn backdrop_map(&self) -> Option<&str> {
+    /// The map behind the menu: a picture of it, or, live, the map itself.
+    pub fn backdrop_map(&self) -> Option<&str> {
         let has = |name: &&str| self.art.iter().any(|a| a == name);
         if self.screen == Screen::Loading {
             return Some(self.loading.map.as_str()).filter(has);
+        }
+        if self.tab == Tab::Replays {
+            if let Some(map) = self.replay_map().filter(has) {
+                return Some(map);
+            }
         }
         let cursor = self
             .maps
@@ -863,13 +935,74 @@ impl Front {
             .or_else(|| self.art.first().map(String::as_str))
     }
 
+    /// Where the loadout's picture goes: the top right of the detail panel, or
+    /// most of its right side for an operator, who is taller than wide.
+    fn loadout_art(&self, width: f32, height: f32) -> Hit {
+        let k = unit(height);
+        let top = self.content_top(k);
+        let x = (MARGIN + COLUMN + 32.0) * k;
+        let w = width - MARGIN * k - x;
+        let h = height - top - (MARGIN + 34.0) * k;
+        let pad = 28.0 * k;
+        let art_w = (w * 0.42).min(400.0 * k);
+        let art_h = if self.slot == 2 {
+            // Down to the rule over the kit row.
+            (h - pad * 1.6 - 78.0 * k - 30.0 * k - pad).max(110.0 * k)
+        } else {
+            (art_w * 0.56).max(110.0 * k)
+        };
+        Hit {
+            x: x + w - pad - art_w,
+            y: top + pad,
+            w: art_w,
+            h: art_h,
+        }
+    }
+
+    /// What the 3D stage should be showing this frame, and where: the weapon
+    /// or operator the loadout is on, the skin the inventory is pointing at,
+    /// or the one selected in the market. `None` on every other screen.
+    pub fn stage(&self, width: f32, height: f32) -> Option<Staging> {
+        if self.screen != Screen::Home {
+            return None;
+        }
+        match self.tab {
+            Tab::Loadout => self.loadout_stage(width, height),
+            Tab::Inventory | Tab::Store => self.account_stage(width, height),
+            _ => None,
+        }
+    }
+
+    fn loadout_stage(&self, width: f32, height: f32) -> Option<Staging> {
+        if self.loadout.weapons.is_empty() {
+            return None;
+        }
+        let subject = if self.slot == 2 {
+            self.loadout.agent(self.side)?;
+            // `side` counts T first (`SIDE_LABELS`); the stage counts CT first.
+            Subject::Operator(1 - self.side)
+        } else {
+            let spec = self.picked_spec(self.slot)?;
+            Subject::Weapon(crate::showcase::prop_for(&spec.model, &spec.id).to_string())
+        };
+        Some(Staging {
+            rect: self.loadout_art(width, height),
+            subject,
+            // The loadout shows the weapon a slot holds, not a skin of it.
+            tint: [1.0; 3],
+        })
+    }
+
     /// The pictures to draw under this frame: the backdrop, then a tile each.
     pub fn images(&self, kit: Option<&TextKit>, width: f32, height: f32) -> Vec<ArtQuad> {
         let mut out = Vec::new();
         if self.art.is_empty() || self.screen == Screen::Boot {
             return out;
         }
-        if let Some(map) = self.backdrop_map() {
+        // Live, the map itself is behind the menu — except while a match
+        // loads, whose map is the subject and need not be the one flying.
+        let still = !self.live || self.screen == Screen::Loading;
+        if let Some(map) = self.backdrop_map().filter(|_| still) {
             // Dark, so everything drawn over it still reads; a little
             // brighter while loading, where it is the subject.
             // Linear light, on an sRGB surface: 0.065 reads as about a third
@@ -1024,6 +1157,10 @@ impl Front {
                 if matches!(tab, Tab::Inventory | Tab::Store) && self.account.is_some() {
                     return Some(Intent::AccountRefresh);
                 }
+                // And the replays are whatever is in the folder now.
+                if tab == Tab::Replays {
+                    return Some(Intent::ListReplays);
+                }
             }
             Target::Provider(_)
             | Target::SignInCancel
@@ -1033,6 +1170,9 @@ impl Front {
             | Target::BuyKey
             | Target::Case(_)
             | Target::Listing(_) => return self.account_activate(target),
+            Target::Replay(_) | Target::ReplayExport | Target::ReplayFolder => {
+                return self.replay_activate(target)
+            }
             Target::Kind(kind) => {
                 if self.kind != kind {
                     self.kind = kind;
@@ -1246,6 +1386,9 @@ impl Front {
         if matches!(self.tab, Tab::Inventory | Tab::Store) {
             return self.account_go();
         }
+        if self.tab == Tab::Replays {
+            return self.replay_go();
+        }
         self.notice = None;
         match self.kind {
             PlayKind::Quick => match &self.lobby {
@@ -1364,18 +1507,21 @@ impl Front {
             KeyCode::Digit2 => self.activate(Target::Tab(Tab::Loadout)),
             KeyCode::Digit3 => self.activate(Target::Tab(Tab::Inventory)),
             KeyCode::Digit4 => self.activate(Target::Tab(Tab::Store)),
-            KeyCode::Digit5 => self.activate(Target::Tab(Tab::Dev)),
-            KeyCode::Digit6 => self.activate(Target::Tab(Tab::Settings)),
+            KeyCode::Digit5 => self.activate(Target::Tab(Tab::Replays)),
+            KeyCode::Digit6 => self.activate(Target::Tab(Tab::Dev)),
+            KeyCode::Digit7 => self.activate(Target::Tab(Tab::Settings)),
             KeyCode::Tab => {
                 let next = match self.tab {
                     Tab::Play => Tab::Loadout,
                     Tab::Loadout => Tab::Inventory,
                     Tab::Inventory => Tab::Store,
-                    Tab::Store => Tab::Dev,
+                    Tab::Store => Tab::Replays,
+                    Tab::Replays => Tab::Dev,
                     _ => Tab::Play,
                 };
                 self.activate(Target::Tab(next))
             }
+            _ if self.tab == Tab::Replays => self.replay_key(code),
             _ if self.tab == Tab::Dev => {
                 let at = DevTool::ALL
                     .iter()
@@ -1519,9 +1665,39 @@ impl Front {
         let right = width - MARGIN * k;
 
         // The top bar: tabs after the wordmark, identity on the right.
+        let quit_w = measure(kit, Face::Display, "QUIT", 1.5 * k) + 24.0 * k;
         let mut x = MARGIN * k + measure(kit, Face::Display, WORDMARK, 2.6 * k) + 44.0 * k;
+        // The identity is as wide as what it says. When the whole status line
+        // and seven tabs at their natural size will not both fit, the status
+        // drops its room count before any tab is made smaller.
+        let natural: f32 = Tab::ALL
+            .iter()
+            .map(|t| measure(kit, Face::Display, t.label(), 1.7 * k) + 28.0 * k)
+            .sum();
+        let full_w = self.identity_width(kit, k, false);
+        let compact = x + natural + TAB_GAP * k > right - quit_w - 16.0 * k - full_w;
+        self.identity_compact.set(compact);
+        let identity_w = if compact {
+            self.identity_width(kit, k, true)
+        } else {
+            full_w
+        };
+        let identity_x = right - quit_w - 16.0 * k - identity_w;
+        // Each tab is its label and a margin either side — narrowed when seven
+        // of them would run into the identity, as they do on anything squarer
+        // than 16:9, and at 4:3 the labels a little smaller too. The painter
+        // centres the label and reads its size back off the tab's width
+        // (`TAB_PAD_MIN`), so the two cannot disagree.
+        let n = Tab::ALL.len() as f32;
+        let labels: f32 = Tab::ALL
+            .iter()
+            .map(|t| measure(kit, Face::Display, t.label(), 1.7 * k))
+            .sum();
+        let room = identity_x - TAB_GAP * k - x;
+        let shrink = ((room - TAB_PAD_MIN * k * n) / labels).clamp(0.5, 1.0);
+        let pad = ((room - labels * shrink) / n).clamp(TAB_PAD_MIN * k, 28.0 * k);
         for tab in Tab::ALL {
-            let w = measure(kit, Face::Display, tab.label(), 1.7 * k) + 28.0 * k;
+            let w = measure(kit, Face::Display, tab.label(), 1.7 * k) * shrink + pad;
             out.push((
                 Target::Tab(tab),
                 Hit {
@@ -1533,7 +1709,6 @@ impl Front {
             ));
             x += w;
         }
-        let quit_w = measure(kit, Face::Display, "QUIT", 1.5 * k) + 24.0 * k;
         out.push((
             Target::Quit,
             Hit {
@@ -1546,11 +1721,9 @@ impl Front {
         out.push((
             Target::Callsign,
             Hit {
-                // Narrow: six tabs reach further right than four did, and
-                // the name and status are right-aligned inside it anyway.
-                x: right - quit_w - 216.0 * k,
+                x: identity_x,
                 y: 10.0 * k,
-                w: 200.0 * k,
+                w: identity_w,
                 h: 44.0 * k,
             },
         ));
@@ -1572,6 +1745,7 @@ impl Front {
             Tab::Loadout => self.loadout_hits(width, k, top, out),
             Tab::Dev => self.dev_hits(width, height, k, top, out),
             Tab::Inventory | Tab::Store => self.account_hits(width, height, k, top, out),
+            Tab::Replays => self.replay_hits(width, height, k, top, out),
         }
     }
 
@@ -1892,7 +2066,14 @@ impl Front {
         let hits = self.hits(kit, width, height);
         let mut p = Painter::with_text(out, width, height, kit);
         let k = unit(height);
-        backdrop(&mut p, width, height, k, self.backdrop_map().is_some());
+        backdrop(
+            &mut p,
+            width,
+            height,
+            k,
+            self.live || self.backdrop_map().is_some(),
+            self.clock,
+        );
         match self.screen {
             Screen::Boot => self.paint_boot(&mut p, &hits, width, height, k),
             Screen::Home => self.paint_home(&mut p, &hits, width, height, k),
@@ -1902,6 +2083,23 @@ impl Front {
             }
             Screen::Loading => self.paint_loading(&mut p, width, height, k),
         }
+    }
+
+    /// Where the tab bar's light is, as its left edge and width: on the
+    /// current tab, or on its way there from the last one.
+    fn tab_light(&self, hits: &[(Target, Hit)], k: f32) -> Option<(f32, f32)> {
+        let tab_rect = |tab: Tab| {
+            hits.iter()
+                .find(|(t, _)| *t == Target::Tab(tab))
+                .map(|(_, r)| *r)
+        };
+        let to = tab_rect(self.tab)?;
+        let from = tab_rect(self.tab_from).unwrap_or(to);
+        let t = smooth((self.clock - self.since) / TAB_SLIDE);
+        Some((
+            from.x + (to.x - from.x) * t + 4.0 * k,
+            from.w + (to.w - from.w) * t - 8.0 * k,
+        ))
     }
 
     fn hovered(&self, rect: &Hit) -> bool {
@@ -1947,7 +2145,14 @@ impl Front {
         let right = width - MARGIN * k;
 
         // ---- the top bar ----------------------------------------------------
-        p.gradient_v(0.0, 0.0, width, TOP * k, theme::panel(0.82), theme::panel(0.5));
+        p.gradient_v(
+            0.0,
+            0.0,
+            width,
+            TOP * k,
+            theme::panel(0.82),
+            theme::panel(0.5),
+        );
         p.rect(0.0, TOP * k, width, 1.0, theme::FAINT);
         // The accent runs out along the bar's foot from the wordmark's side
         // and is gone by the middle: the bar has a start.
@@ -1960,8 +2165,30 @@ impl Front {
             theme::with_alpha(theme::ACCENT, 0.0),
         );
         // The mark: one leaning bar in the margin, the slab's own angle.
-        p.banner(left - 20.0 * k, 21.0 * k, 13.0 * k, 21.0 * k, 5.0 * k, theme::ACCENT, None);
+        p.banner(
+            left - 20.0 * k,
+            21.0 * k,
+            13.0 * k,
+            21.0 * k,
+            5.0 * k,
+            theme::ACCENT,
+            None,
+        );
         p.text(left, 22.0 * k, 2.6 * k, theme::TEXT, WORDMARK);
+        // The tab you are on is lit from its own underline: a column of light,
+        // not just a line under a word. On a change it slides across from the
+        // tab before rather than jumping, so the eye is taken to where it went.
+        if let Some((x, w)) = self.tab_light(hits, k) {
+            p.gradient_v(
+                x,
+                0.0,
+                w,
+                TOP * k,
+                theme::with_alpha(theme::ACCENT, 0.0),
+                theme::with_alpha(theme::ACCENT, 0.20),
+            );
+            p.rect(x, TOP * k - 3.0, w, 3.0, theme::ACCENT);
+        }
         for (target, rect) in hits {
             match target {
                 Target::Tab(tab) => {
@@ -1973,25 +2200,7 @@ impl Front {
                     } else {
                         theme::TEXT_DIM
                     };
-                    if active {
-                        // Lit from its own underline: the tab you are on is a
-                        // column of light, not just a line under a word.
-                        p.gradient_v(
-                            rect.x + 4.0 * k,
-                            0.0,
-                            rect.w - 8.0 * k,
-                            TOP * k,
-                            theme::with_alpha(theme::ACCENT, 0.0),
-                            theme::with_alpha(theme::ACCENT, 0.20),
-                        );
-                        p.rect(
-                            rect.x + 4.0 * k,
-                            TOP * k - 3.0,
-                            rect.w - 8.0 * k,
-                            3.0,
-                            theme::ACCENT,
-                        );
-                    } else if self.hovered(rect) {
+                    if !active && self.hovered(rect) {
                         p.gradient_v(
                             rect.x + 4.0 * k,
                             0.0,
@@ -2001,7 +2210,16 @@ impl Front {
                             [1.0, 1.0, 1.0, 0.06],
                         );
                     }
-                    p.text(rect.x + 14.0 * k, 26.0 * k, 1.7 * k, ink, tab.label());
+                    let full = p.text_width(tab.label(), 1.7 * k);
+                    let scale = 1.7 * k * ((rect.w - TAB_PAD_MIN * k) / full).min(1.0);
+                    let label_w = p.text_width(tab.label(), scale);
+                    p.text(
+                        rect.x + (rect.w - label_w) * 0.5,
+                        26.0 * k + (1.7 * k - scale) * 4.0,
+                        scale,
+                        ink,
+                        tab.label(),
+                    );
                 }
                 Target::Quit => {
                     let hot = self.hovered(rect);
@@ -2047,6 +2265,7 @@ impl Front {
             Tab::Loadout => self.paint_loadout(p, hits, width, height, k, top),
             Tab::Dev => self.paint_dev(p, hits, k, top),
             Tab::Inventory | Tab::Store => self.paint_account(p, hits, width, k, top),
+            Tab::Replays => self.paint_replays(p, hits, width, k, top),
         }
 
         // ---- the foot -------------------------------------------------------
@@ -2072,6 +2291,45 @@ impl Front {
     }
 
     /// Who you are and where you are playing, top right.
+    /// The identity block's two lines: the name people see, and the status
+    /// under it. `compact` leaves the room count out, for a window too narrow
+    /// to give seven tabs and the whole line their space.
+    fn identity_lines(&self, compact: bool) -> (&str, String) {
+        // Signed in, the name people see is the account's; the callsign is
+        // what a guest goes by.
+        let shown = self
+            .account
+            .as_ref()
+            .map_or(self.callsign.as_str(), |a| a.name.as_str());
+        let who = if self.account.is_some() {
+            "SIGNED IN"
+        } else {
+            "GUEST"
+        };
+        let (rooms, players) = self.population();
+        let status = if compact {
+            format!("{who}  /  {players} PLAYING")
+        } else {
+            format!(
+                "{who}  /  {} {}  /  {players} PLAYING",
+                rooms,
+                if rooms == 1 { "ROOM" } else { "ROOMS" },
+            )
+        };
+        (shown, status)
+    }
+
+    /// How wide the identity block is for these lines: wide enough for both,
+    /// the status's link dot included, and never narrower than the callsign
+    /// editor's prompt.
+    fn identity_width(&self, kit: Option<&TextKit>, k: f32, compact: bool) -> f32 {
+        let (name, status) = self.identity_lines(compact);
+        let name_w = measure(kit, Face::Body, name, 1.7 * k);
+        let status_w = measure(kit, Face::Mono, &status, 1.05 * k) + IDENTITY_DOT * k;
+        let prompt_w = measure(kit, Face::Display, "CALLSIGN - ENTER SAVES", 1.0 * k);
+        name_w.max(status_w).max(prompt_w) + IDENTITY_PAD * 2.0 * k
+    }
+
     fn paint_identity(&self, p: &mut Painter, rect: &Hit, k: f32) {
         let right = rect.x + rect.w;
         let hot = self.hovered(rect);
@@ -2114,37 +2372,22 @@ impl Front {
                     rect.h,
                     theme::with_alpha(theme::AMBER, if hot { 0.95 } else { 0.55 }),
                 );
-                // Signed in, the name people see is the account's; the
-                // callsign is what a guest goes by.
-                let shown = self
-                    .account
-                    .as_ref()
-                    .map_or(self.callsign.as_str(), |a| a.name.as_str());
+                // The block was sized for these lines (`identity_width`); the
+                // compact status is the one that left the tabs room.
+                let compact = self.identity_compact.get();
+                let (shown, status) = self.identity_lines(compact);
                 let w = p.name_width(shown, 1.7 * k);
                 p.name(
-                    right - w - 8.0 * k,
+                    right - w - IDENTITY_PAD * k,
                     rect.y + 6.0 * k,
                     1.7 * k,
                     theme::AMBER,
                     shown,
                 );
-                let (rooms, players) = self.population();
-                // Short: six tabs leave this corner less room than four did,
-                // and the server's address is on the boot screen.
-                let status = format!(
-                    "{}  /  {} {}  /  {} PLAYING",
-                    if self.account.is_some() {
-                        "SIGNED IN"
-                    } else {
-                        "GUEST"
-                    },
-                    rooms,
-                    if rooms == 1 { "ROOM" } else { "ROOMS" },
-                    players
-                );
+                // Short: the server's address is on the boot screen.
                 let sw = p.num_width(&status, 1.05 * k);
                 p.num(
-                    right - sw - 8.0 * k,
+                    right - sw - IDENTITY_PAD * k,
                     rect.y + 28.0 * k,
                     1.05 * k,
                     theme::TEXT_DIM,
@@ -2152,7 +2395,7 @@ impl Front {
                 );
                 // The link is up: this line only exists once boot reached it.
                 p.rect(
-                    right - sw - 20.0 * k,
+                    right - sw - IDENTITY_PAD * k - IDENTITY_DOT * k,
                     rect.y + 30.0 * k,
                     5.0 * k,
                     5.0 * k,
@@ -2935,22 +3178,29 @@ impl Front {
             match target {
                 Target::Side(side) => {
                     let active = *side == self.side;
+                    // Each side in its own colour, chosen or not: the tab is
+                    // also the key to what the panel beside it is tinted.
+                    let hue = side_hue(*side);
                     p.rect(
                         rect.x,
                         rect.y,
                         rect.w,
                         rect.h,
                         if active {
-                            theme::with_alpha(theme::ACCENT, 0.22)
+                            theme::with_alpha(hue, 0.24)
                         } else if hot {
-                            CARD_HOT
+                            theme::with_alpha(hue, 0.10)
                         } else {
                             CARD
                         },
                     );
-                    if active {
-                        p.rect(rect.x, rect.y, rect.w, 2.0, theme::ACCENT);
-                    }
+                    p.rect(
+                        rect.x,
+                        rect.y,
+                        rect.w,
+                        2.0,
+                        theme::with_alpha(hue, if active { 0.95 } else { 0.3 }),
+                    );
                     let label = SIDE_LABELS[*side];
                     let w = p.text_width(label, 1.5 * k);
                     p.text(
@@ -3011,7 +3261,18 @@ impl Front {
             fill,
         );
         p.grid(x, top, w - cut, h, 24.0 * k, theme::GRID);
-        p.rect(x, top, w - cut, 2.0, theme::ACCENT);
+        // The panel wears the side it is editing: its top edge, and a wash
+        // that falls away from the name toward the picture.
+        let hue = side_hue(self.side);
+        p.rect(x, top, w - cut, 2.0, hue);
+        p.gradient_h(
+            x,
+            top + 2.0,
+            w * 0.55,
+            104.0 * k,
+            theme::with_alpha(hue, 0.07),
+            theme::with_alpha(hue, 0.0),
+        );
 
         let pad = 28.0 * k;
         let grow = smooth((self.clock - self.detail_since) / 0.28);
@@ -3031,16 +3292,52 @@ impl Front {
         );
 
         // The picture has the top right to itself; everything that has to be
-        // read sits to its left or below it, never under it.
-        let art_w = (w * 0.42).min(400.0 * k);
-        let art_h = art_w * 0.4;
-        let art_x = x + w - pad - art_w;
-        let art_y = top + pad;
+        // read sits to its left or below it, never under it. Once the model
+        // has loaded it is drawn there in three dimensions, over this pass
+        // (`showcase_gpu.rs`), and the silhouette is only what holds the place.
+        let art = self.loadout_art(width, height);
+        let (art_x, art_y, art_w, art_h) = (art.x, art.y, art.w, art.h);
         let ink = theme::with_alpha(theme::ACCENT, 0.45 + 0.4 * grow);
-        let body_y = art_y + art_h.max(110.0 * k) + 26.0 * k;
+        let body_y = art_y + (art_w * 0.56).max(110.0 * k) + 26.0 * k;
+        if self.staged {
+            // What the model stands in: light coming up from under it in the
+            // side's colour, breathing slowly, and a line for it to rest on.
+            // Drawn here, under the stage, which is placed by its own alpha.
+            let pulse = 0.85 + 0.15 * (self.clock * 1.3).sin();
+            let glow_h = art_h * 0.55;
+            p.gradient_v(
+                art_x,
+                art_y + art_h - glow_h,
+                art_w,
+                glow_h,
+                theme::with_alpha(hue, 0.0),
+                theme::with_alpha(hue, 0.09 * pulse * grow),
+            );
+            p.rect(
+                art_x + art_w * (1.0 - grow) * 0.5,
+                art_y + art_h - 1.0,
+                art_w * grow,
+                2.0,
+                theme::with_alpha(hue, 0.7),
+            );
+            let hint = if self.slot == 2 {
+                "DRAG TURNS  /  WHEEL ZOOMS  /  R RESETS"
+            } else {
+                "DRAG TURNS  /  WHEEL ZOOMS  /  F INSPECTS  /  R RESETS"
+            };
+            p.num_right(
+                art_x + art_w,
+                art_y + art_h + 4.0 * k,
+                0.95 * k,
+                theme::FAINT,
+                hint,
+            );
+        }
 
         if self.slot == 2 {
-            operator_art(p, art_x + art_w * 0.5, art_y, art_h.max(110.0 * k), ink);
+            if !self.staged {
+                operator_art(p, art_x + art_w * 0.5, art_y, art_h.min(220.0 * k), ink);
+            }
             self.paint_operator(p, x + pad, top + pad + 70.0 * k, k);
         } else if let Some(spec) = self.picked_spec(self.slot) {
             let class = if spec.model.is_empty() {
@@ -3048,7 +3345,17 @@ impl Front {
             } else {
                 &spec.model
             };
-            weapon_art(p, art_x, art_y, art_w, art_h, weapon_class(class), ink);
+            if !self.staged {
+                weapon_art(
+                    p,
+                    art_x,
+                    art_y,
+                    art_w,
+                    art_w * 0.4,
+                    weapon_class(class),
+                    ink,
+                );
+            }
 
             // Tags: how it fires, and who may carry it.
             let mut tx = x + pad;
@@ -3079,19 +3386,31 @@ impl Front {
             let value_w = 120.0 * k;
             let bar_x = x + pad + label_w;
             let bar_w = w - pad * 2.0 - label_w - value_w;
-            for (i, stat) in self.stats(spec).iter().enumerate() {
-                let y = body_y + i as f32 * 30.0 * k;
+            let stats = self.stats(spec);
+            // Closed up when the window is short, so the last row never runs
+            // into the rule over the kit: the picture above is a fixed share
+            // of the panel's width, not of its height.
+            let room = top + h - pad * 0.6 - (78.0 + 14.0 + 12.0) * k - body_y;
+            let step = (room / stats.len().max(1) as f32).min(30.0 * k);
+            for (i, stat) in stats.iter().enumerate() {
+                let y = body_y + i as f32 * step;
                 p.text(x + pad, y + 2.0 * k, 1.25 * k, theme::TEXT_DIM, stat.label);
                 p.rect(bar_x, y + 4.0 * k, bar_w, 8.0 * k, [1.0, 1.0, 1.0, 0.07]);
                 // The bar and its figure grow together, so the number on screen
                 // is always the length of the bar beside it.
-                p.rect(
+                // A hue a row, dim at the root and full at the tip, so the
+                // length is read from where the colour is brightest.
+                let tint = theme::STAT_HUES[i % theme::STAT_HUES.len()];
+                let filled = bar_w * (stat.share * grow).clamp(0.0, 1.0);
+                p.gradient_h(
                     bar_x,
                     y + 4.0 * k,
-                    bar_w * (stat.share * grow).clamp(0.0, 1.0),
+                    filled,
                     8.0 * k,
-                    theme::ACCENT,
+                    theme::shade(tint, 0.45),
+                    tint,
                 );
+                p.rect(bar_x + filled - 2.0, y + 2.0 * k, 2.0, 12.0 * k, tint);
                 p.num_right(
                     x + w - pad,
                     y,
@@ -3175,7 +3494,11 @@ impl Front {
             y + 64.0 * k,
             1.2 * k,
             theme::FAINT,
-            "THE MODEL ITSELF IS DRAWN IN THE MATCH",
+            if self.staged {
+                "AS THE OTHER SIDE WILL SEE YOU"
+            } else {
+                "THE MODEL ITSELF IS DRAWN IN THE MATCH"
+            },
         );
     }
 
@@ -3468,6 +3791,17 @@ const HINT_DEV: &str =
     "ENTER STARTS   /   UP DOWN TOOL   /   LEFT RIGHT MAP   /   [ ] DRILL   /   TAB PLAY";
 const HINT_LOADOUT: &str = "ARROWS CHOOSE AND CHANGE   /   SPACE SWAPS SIDE   /   TAB PLAY";
 const MARGIN: f32 = 40.0;
+/// The least margin a tab's label gets, either side together, before the
+/// label itself is drawn smaller.
+const TAB_PAD_MIN: f32 = 22.0;
+/// The clear space between the last tab and the identity block.
+const TAB_GAP: f32 = 24.0;
+/// The identity block's inner margin either side, and the status's link dot
+/// with the gap after it.
+const IDENTITY_PAD: f32 = 10.0;
+const IDENTITY_DOT: f32 = 12.0;
+/// Seconds the tab bar's light takes to slide to a new tab.
+const TAB_SLIDE: f32 = 0.22;
 /// The top bar's height.
 const TOP: f32 = 64.0;
 /// The left column's width.
@@ -3509,7 +3843,7 @@ fn search_panel(width: f32, height: f32, k: f32) -> Hit {
 ///
 /// Dark, with the faint grid the rest of the UI carries and one slab cut
 /// across the right: a field that is neither a flat fill nor a gradient.
-fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool) {
+fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool, clock: f32) {
     // Linear values, like every colour here: the surface is sRGB, so these
     // read as a near-black blue rather than the mid grey their numbers suggest.
     //
@@ -3521,7 +3855,34 @@ fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool) {
         p.rect(0.0, 0.0, width, height, base);
         // Lit from the top: the field under the bar is a shade bluer than the
         // foot, so the screen has a direction instead of being one flat fill.
-        p.gradient_v(0.0, 0.0, width, height * 0.62, [0.0190, 0.0290, 0.0500, 1.0], base);
+        p.gradient_v(
+            0.0,
+            0.0,
+            width,
+            height * 0.62,
+            [0.0190, 0.0290, 0.0500, 1.0],
+            base,
+        );
+    }
+    // Two slow washes of colour crossing behind everything, a minute to the
+    // lap: the house blue from the left and a warm one from the right, each a
+    // band that fades to nothing at both its edges. Enough that the screen is
+    // never the same frame twice; too slow and too faint to pull the eye off a
+    // button.
+    let drift = clock * std::f32::consts::TAU / 60.0;
+    let band = width * 0.42;
+    for (phase, tint, strength) in [
+        (drift, theme::ACCENT, 0.050),
+        (drift * 0.7 + 2.4, theme::SIDE_T, 0.032),
+    ] {
+        let centre = width * (0.5 + 0.45 * phase.sin());
+        // Clipped to the window: a band is wider than the margin it drifts to,
+        // and nothing here is drawn off the edge for the GPU to throw away.
+        let at =
+            |x: f32| theme::with_alpha(tint, strength * (1.0 - (x - centre).abs() / band).max(0.0));
+        let (from, to) = ((centre - band).max(0.0), (centre + band).min(width));
+        p.gradient_h(from, 0.0, centre - from, height, at(from), at(centre));
+        p.gradient_h(centre, 0.0, to - centre, height, at(centre), at(to));
     }
     let lean = height * 0.42;
     let x = width * 0.58;
@@ -3561,6 +3922,15 @@ fn backdrop(p: &mut Painter, width: f32, height: f32, k: f32, pictured: bool) {
     );
 }
 
+/// The colour a side is shown in. `side` counts T first, as `SIDE_LABELS` does.
+fn side_hue(side: usize) -> [f32; 4] {
+    if side == 0 {
+        theme::SIDE_T
+    } else {
+        theme::SIDE_CT
+    }
+}
+
 /// A resting block's fill: the accent's hue at almost no strength, so a card
 /// reads as a lift in the surface rather than a grey box laid on it.
 const CARD: [f32; 4] = [0.45, 0.58, 0.85, 0.045];
@@ -3593,7 +3963,13 @@ fn card(p: &mut Painter, r: &Hit, cut: f32, active: bool, hot: bool, a: f32) {
         fill,
     );
     // A sheen over the top half: the block is a surface, not a tint.
-    let sheen = if active { 0.10 } else if hot { 0.07 } else { 0.035 };
+    let sheen = if active {
+        0.10
+    } else if hot {
+        0.07
+    } else {
+        0.035
+    };
     let lit = [1.0, 1.0, 1.0, sheen * a];
     p.rect(x, r.y, r.w - cut, cut, lit);
     p.tri_aa(
@@ -3602,7 +3978,14 @@ fn card(p: &mut Painter, r: &Hit, cut: f32, active: bool, hot: bool, a: f32) {
         (x + r.w - cut, r.y + cut),
         lit,
     );
-    p.gradient_v(x, r.y + cut, r.w, (r.h - cut) * 0.55, lit, [1.0, 1.0, 1.0, 0.0]);
+    p.gradient_v(
+        x,
+        r.y + cut,
+        r.w,
+        (r.h - cut) * 0.55,
+        lit,
+        [1.0, 1.0, 1.0, 0.0],
+    );
     // The outline, following the cut. One pixel: it defines the edge against
     // a picture or the grid without becoming a frame.
     let edge = if active {
@@ -3977,6 +4360,115 @@ mod tests {
         f.show(Screen::Home);
         f.clock = 10.0;
         f
+    }
+
+    /// A window, for the tests that lay a screen out.
+    const W: f32 = 1600.0;
+    const H: f32 = 900.0;
+
+    #[test]
+    fn the_stage_shows_whatever_the_loadout_is_on() {
+        let mut f = front();
+        assert_eq!(f.stage(W, H), None, "only the loadout has a stage");
+
+        f.set_tab(Tab::Loadout);
+        f.slot = 0;
+        let staged = f.stage(W, H).expect("a stage on the loadout");
+        let rect = staged.rect;
+        assert_eq!(staged.subject, Subject::Weapon("assault".into()));
+        assert_eq!(staged.tint, [1.0; 3], "the loadout shows the stock weapon");
+        assert!(rect.x + rect.w <= W && rect.y + rect.h <= H);
+
+        f.slot = 1;
+        assert_eq!(
+            f.stage(W, H).map(|s| s.subject),
+            Some(Subject::Weapon("pistol".into()))
+        );
+
+        // `side` counts T first; the stage's operators count CT first.
+        f.slot = 2;
+        f.side = 0;
+        let staged = f.stage(W, H).expect("an operator");
+        assert_eq!(staged.subject, Subject::Operator(1));
+        assert!(
+            staged.rect.h > rect.h,
+            "an operator is given the height it stands"
+        );
+        f.side = 1;
+        assert_eq!(f.stage(W, H).map(|s| s.subject), Some(Subject::Operator(0)));
+
+        f.show(Screen::Searching);
+        assert_eq!(f.stage(W, H), None);
+    }
+
+    #[test]
+    fn seven_tabs_fit_before_the_identity_on_squarer_screens() {
+        let f = front();
+        for (w, h) in [
+            (1280.0, 720.0),
+            (1920.0, 1200.0),
+            (1680.0, 1050.0),
+            (1600.0, 1000.0),
+            (1920.0, 1080.0),
+            (1024.0, 768.0),
+        ] {
+            let hits = f.hits(None, w, h);
+            let last_tab = hits
+                .iter()
+                .filter(|(t, _)| matches!(t, Target::Tab(_)))
+                .map(|(_, r)| r.x + r.w)
+                .fold(0.0, f32::max);
+            let identity = hits.iter().find(|(t, _)| *t == Target::Callsign).unwrap().1;
+            let k = unit(h);
+            assert!(
+                last_tab + TAB_GAP * k <= identity.x + 0.01,
+                "{w}x{h}: tabs end at {last_tab}, identity at {}",
+                identity.x
+            );
+            // And everything the block says is inside it.
+            let compact = f.identity_compact.get();
+            assert!(identity.w >= f.identity_width(None, k, compact) - 0.01);
+        }
+    }
+
+    #[test]
+    fn the_tab_light_slides_to_a_new_tab_and_settles_on_it() {
+        let mut f = front();
+        let k = unit(H);
+        let hits = f.hits(None, W, H);
+        let at = |tab: Tab| {
+            let r = hits.iter().find(|(t, _)| *t == Target::Tab(tab)).unwrap().1;
+            r.x + 4.0 * k
+        };
+        assert_eq!(f.tab_light(&hits, k).map(|l| l.0), Some(at(Tab::Play)));
+
+        f.set_tab(Tab::Store);
+        let (start, _) = f.tab_light(&hits, k).unwrap();
+        assert_eq!(start, at(Tab::Play), "it leaves from where it was");
+        f.clock += TAB_SLIDE * 0.5;
+        let (middle, _) = f.tab_light(&hits, k).unwrap();
+        assert!(
+            middle > at(Tab::Loadout) && middle < at(Tab::Store),
+            "{middle}"
+        );
+        f.clock += TAB_SLIDE;
+        assert_eq!(f.tab_light(&hits, k).map(|l| l.0), Some(at(Tab::Store)));
+    }
+
+    #[test]
+    fn the_silhouette_holds_the_place_until_the_model_arrives() {
+        // The same panel, before and after: with the model drawn over it the
+        // painter leaves the rectangles out and says how to handle it instead.
+        let mut f = front();
+        f.set_tab(Tab::Loadout);
+        let count = |f: &Front| {
+            let mut out = Vec::new();
+            f.paint(None, W, H, &mut out);
+            out.len()
+        };
+        let before = count(&f);
+        f.staged = true;
+        assert_ne!(count(&f), before);
     }
 
     fn click(f: &mut Front, target: Target) -> Option<Intent> {

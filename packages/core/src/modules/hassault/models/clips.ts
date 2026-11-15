@@ -93,56 +93,39 @@ export interface OperatorState {
   crouch: number;
   /** Ground speed in cubes/second. */
   speed: number;
-  /** Velocity along the way the player is facing, -1 (backwards) to 1. */
-  forward: number;
-  /** Velocity across the way the player is facing, -1 (left) to 1. */
-  strafe: number;
-  /** Wounded enough that the limp reads as information, not decoration. */
-  hurt: boolean;
 }
 
 /**
  * Below this, a player is standing still rather than walking slowly.
  *
  * Interpolated remote positions jitter by a fraction of a cube even at rest, and
- * without a floor that jitter drives the walk cycle — an idle enemy shuffling on
+ * without a floor that jitter drives the stride — an idle enemy shuffling on
  * the spot, which reads as movement and is worse than no animation.
  */
 export const IDLE_SPEED = 0.6;
 
-/** Above this, the run cycle rather than the walk cycle. */
-export const RUN_SPEED = 9;
-
 /**
- * The locomotion clip for a state — the full-body base layer.
+ * The base clip for a state — what the whole body plays under the solved legs.
  *
- * Death is checked first and jump second because both override direction
- * entirely: a player killed mid-strafe is dying, not strafing.
+ * It used to pick a walk, a strafe or a retreat by direction. Those clips are
+ * still in the GLB and no longer chosen: their feet cover a fifth of the ground
+ * the body does and their rifles point across the chest, so a moving player's
+ * legs are solved (`locomotion.ts`) and its torso holds the aiming pose, turned
+ * onto the look direction by the animator. What is left to choose is posture.
+ *
+ * Death is checked first and jump second because both override everything: a
+ * player killed mid-strafe is dying, not strafing.
  */
 export function selectLocomotion(state: OperatorState): OperatorClip {
   if (!state.alive) return 'death_from_the_front';
   if (!state.ground) return 'running_jump';
 
-  const crouched = state.crouch > 0.5;
-  const moving = state.speed > IDLE_SPEED;
-
-  if (crouched) {
-    // There is no crouched idle in the set, so the crouch-walk cycle stands in;
-    // held at weight it still reads as a braced low posture rather than a walk.
-    return moving ? 'crouch_walking' : 'rifle_crouch_walk_to_kneel';
+  if (state.crouch > 0.5) {
+    // There is no crouched idle in the set, so the kneel stands in; moving, the
+    // crouch-walk supplies the low torso and the legs are solved under it.
+    return state.speed > IDLE_SPEED ? 'crouch_walking' : 'rifle_crouch_walk_to_kneel';
   }
-
-  if (!moving) return 'rifle_aiming_idle';
-
-  // Direction is decided by whichever axis dominates, not by blending: two
-  // walk cycles at half weight each land both feet in the wrong place, whereas
-  // one cycle played whole keeps its foot contacts.
-  if (Math.abs(state.strafe) > Math.abs(state.forward)) {
-    return state.strafe > 0 ? 'right_strafe_walking' : 'strafing';
-  }
-  if (state.forward < 0) return 'walking_backwards';
-  if (state.hurt && state.speed > RUN_SPEED) return 'injured_run';
-  return state.speed > RUN_SPEED ? 'rifle_walk' : 'standard_walk';
+  return 'rifle_aiming_idle';
 }
 
 /** The death animation for how a player was killed. */

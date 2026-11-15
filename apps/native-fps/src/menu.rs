@@ -48,6 +48,8 @@ pub enum Page {
     Store,
     /// The cheapest market listings (`hassault_trading.py`, through the node).
     Market,
+    /// Recording this match, and whether every match is recorded (`demo.rs`).
+    Replays,
 }
 
 /// The key pages, grouped as the pane's Controls screen groups them
@@ -156,6 +158,11 @@ pub enum Action {
     CrosshairPaste,
     /// Put the current code on the clipboard. The app owns it, like paste.
     CrosshairCopy,
+    /// Start or stop recording this match. The app owns it: the recorder and
+    /// the file it writes are the match's.
+    Record,
+    /// Record every match from the moment it is joined.
+    AutoRecord,
     /// Windowed, borderless or exclusive — one row, three states.
     Fullscreen,
     RenderScale,
@@ -438,6 +445,9 @@ pub struct Menu {
     /// with no node. Only changes what the footer says — which used to be
     /// "SAVED ON THE NODE" to a player who has none.
     pub local: bool,
+    /// Seconds this match has been recording for, `None` when it is not. Set
+    /// by the app each frame.
+    pub recording: Option<f32>,
 }
 
 impl Menu {
@@ -509,6 +519,7 @@ impl Menu {
                 row("RADAR", String::from(">"), Action::Open(Page::Radar)),
                 row("VIDEO", String::from(">"), Action::Open(Page::Video)),
                 row("CONTROLS", String::from(">"), Action::Open(Page::Controls)),
+                row("REPLAYS", String::from(">"), Action::Open(Page::Replays)),
             ],
             Page::Root => vec![
                 row("RESUME", String::new(), Action::Resume),
@@ -520,6 +531,14 @@ impl Menu {
                 row("RADAR", String::from(">"), Action::Open(Page::Radar)),
                 row("VIDEO", String::from(">"), Action::Open(Page::Video)),
                 row("CONTROLS", String::from(">"), Action::Open(Page::Controls)),
+                row(
+                    "REPLAYS",
+                    match self.recording {
+                        Some(_) => "REC >".to_string(),
+                        None => ">".to_string(),
+                    },
+                    Action::Open(Page::Replays),
+                ),
             ]
             .into_iter()
             .chain(
@@ -545,6 +564,25 @@ impl Menu {
                 ),
             ])
             .collect(),
+            Page::Replays => {
+                let mut rows = vec![row("BACK", String::new(), Action::Back)];
+                if !self.front {
+                    rows.push(row(
+                        "RECORD THIS MATCH",
+                        match self.recording {
+                            Some(s) => format!("REC {}:{:02}", s as u32 / 60, s as u32 % 60),
+                            None => "OFF".to_string(),
+                        },
+                        Action::Record,
+                    ));
+                }
+                rows.push(row(
+                    "RECORD EVERY MATCH",
+                    on_off(settings.auto_record),
+                    Action::AutoRecord,
+                ));
+                rows
+            }
             Page::Market => {
                 let mut rows = Vec::new();
                 match &self.store.listings {
@@ -886,6 +924,7 @@ impl Menu {
             Page::Loadout => "EACH SIDE CARRIES ITS OWN - APPLIES AT YOUR NEXT SPAWN",
             Page::Store => "CREDITS ARE EARNED IN SERVER MATCHES - KEYS OPEN CASES",
             Page::Market => "A SALE PAYS THE SELLER THE PRICE LESS A BURNT 10% FEE",
+            Page::Replays => "SAVED TO THE REPLAYS TAB - WATCH OR EXPORT THEM FROM THE MAIN MENU",
         }
     }
 
@@ -903,6 +942,7 @@ impl Menu {
             Page::Loadout => "LOADOUT",
             Page::Store => "STORE",
             Page::Market => "MARKET",
+            Page::Replays => "REPLAYS",
         }
     }
 
@@ -1191,6 +1231,8 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::BuyKey | Action::OpenCase(_) | Action::BuyListing(_) => vec![],
         // The app owns the clipboard.
         Action::CrosshairPaste | Action::CrosshairCopy => vec![],
+        // The app owns the recorder.
+        Action::Record => vec![],
         Action::CrosshairPreset => {
             let presets = crate::crosshair::PRESETS;
             let code = crate::crosshair::encode(settings.crosshair);
@@ -1324,6 +1366,10 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::GrenadeArc => {
             settings.grenade_arc = !settings.grenade_arc;
             vec![KEY_GRENADE_ARC]
+        }
+        Action::AutoRecord => {
+            settings.auto_record = !settings.auto_record;
+            vec![crate::settings::KEY_AUTO_RECORD]
         }
         Action::RadarScale => {
             let (lo, hi) = radar::SCALE_RANGE;

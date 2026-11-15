@@ -3238,6 +3238,16 @@ pub fn scale_fallback(mut w: World3D) -> World3D {
 }
 
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
+/// Whether a map is drawn from its modelled GLB rather than from its cube
+/// grid. The served `format` says so; these five predate it.
+pub fn is_modelled(info: &MapInfo) -> bool {
+    info.format.as_deref() == Some("gltf")
+        || matches!(
+            info.name.as_str(),
+            "hd_facility" | "hd_junkflea" | "hd_bank" | "hd_assault" | "hd_aim"
+        )
+}
+
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
         "hd_nuke" => {

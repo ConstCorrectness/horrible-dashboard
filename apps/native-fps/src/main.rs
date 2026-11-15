@@ -185,6 +185,11 @@ struct Args {
     destination: bool,
     /// `--menu` / `--no-menu`, when one was passed.
     menu_flag: Option<bool>,
+    /// `--replay=<file.hademo>`: watch it, on its own map, with no server.
+    /// The file and the demo it holds, read once at the start.
+    replay: Option<(String, hassault_native::demo::DemoData)>,
+    /// `--export`: with `--replay`, play it into an MP4 beside it and exit.
+    export: bool,
     /// Open into the front end (`shell.rs`) instead of a match: standalone
     /// with nowhere to go, which is what a double-click is.
     menu: bool,
@@ -228,6 +233,8 @@ impl Default for Args {
             bench: None,
             destination: false,
             menu_flag: None,
+            replay: None,
+            export: false,
             menu: false,
         }
     }
@@ -339,6 +346,28 @@ fn parse_from(argv: impl Iterator<Item = String>) -> Args {
         } else if arg == "--check" {
             args.check_only = true;
             args.destination = true;
+        } else if let Some(path) = arg.strip_prefix("--replay=") {
+            args.destination = true;
+            // Read here, so a file that will not play fails in a millisecond
+            // rather than after its map has been fetched and meshed.
+            let read = std::fs::read_to_string(path)
+                .map_err(|e| format!("could not read {path} ({e})"))
+                .and_then(|text| {
+                    hassault_native::demo::parse_demo(&text).map_err(|e| e.to_string())
+                });
+            match read {
+                Ok(demo) => {
+                    args.map = demo.header.map.clone();
+                    args.mode = Mode::Train;
+                    args.replay = Some((path.to_string(), demo));
+                }
+                Err(why) => {
+                    eprintln!("hassault: {why}");
+                    std::process::exit(2);
+                }
+            }
+        } else if arg == "--export" {
+            args.export = true;
         } else if arg == "--menu" {
             args.menu_flag = Some(true);
         } else if arg == "--no-menu" {
@@ -380,7 +409,9 @@ fn parse_from(argv: impl Iterator<Item = String>) -> Args {
                    --bench=<map>       fly the map's benchmark path offline, print\n\
                    \x20                   `BENCH {{json}}` and exit (vsync and cap off;\n\
                    \x20                   pick the tier with --set=hassault.video.quality=)\n\
-                   --list-adapters     print the GPUs as JSON and exit\n"
+                   --list-adapters     print the GPUs as JSON and exit\n\
+                   --replay=<file>     watch a .hademo recording on its own map\n\
+                   --export            with --replay: write it to an MP4 beside it, then exit\n"
             );
             std::process::exit(0);
         }
@@ -914,6 +945,18 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(sp) = args.spawn {
             app.spawn_at_index(sp);
         }
+        if let Some((path, demo)) = &args.replay {
+            let video = args
+                .export
+                .then(|| hassault_native::export::video_path(std::path::Path::new(path)));
+            if let Some(video) = &video {
+                if hassault_native::export::find_ffmpeg().is_none() {
+                    return Err("--export needs ffmpeg on the PATH".into());
+                }
+                eprintln!("hassault: exporting {path} to {}", video.display());
+            }
+            app.start_replay(demo.clone(), video);
+        }
         if let Some(map) = args.bench.as_deref() {
             let path = hassault_native::bench::path_for(map).unwrap_or_default();
             let tier = settings_tier.to_lowercase();
@@ -994,6 +1037,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     );
     app.controls = controls;
     app.set_own_room(args.mode == Mode::Host && args.host.is_empty());
+    if settings.auto_record {
+        app.start_recording();
+    }
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a

@@ -612,6 +612,14 @@ pub struct Listing {
 }
 
 impl Listing {
+    /// The skin for sale, when it is one whose design came with it. A key or
+    /// a case is `None`, as is a skin the server could not resolve.
+    pub fn skin(&self) -> Option<SkinInstance> {
+        serde_json::from_value::<SkinInstance>(self.item.clone())
+            .ok()
+            .filter(|item| item.definition.is_some())
+    }
+
     /// A name for the row: the skin's, else the case or key id.
     pub fn name(&self) -> String {
         self.item
@@ -842,9 +850,9 @@ impl HitboxSpec {
 
 /// One skin definition, as `skins.py` serves it.
 ///
-/// Trimmed to what a weapon made of boxes can express: two colours and a layout.
-/// The economy also carries a rarity, a collection, a pattern seed and a name,
-/// and none of those change what the gun in your hands looks like.
+/// Trimmed to what a weapon can express — two colours and a layout — plus the
+/// rarity, which changes nothing about the gun but is how the inventory and the
+/// store colour it. The collection and pattern seed are not read.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SkinDefinition {
     #[serde(default)]
@@ -852,6 +860,13 @@ pub struct SkinDefinition {
     /// The display name, for the store's "opened" note.
     #[serde(default)]
     pub name: String,
+    /// `consumer` … `special`, `skins.py`'s `Rarity`.
+    #[serde(default)]
+    pub rarity: String,
+    /// `#rrggbb`, the server's colour for `rarity`. Read rather than tabled
+    /// here, so the grades keep one owner.
+    #[serde(rename = "rarityColor", default)]
+    pub rarity_color: String,
     #[serde(rename = "weaponId", default)]
     pub weapon_id: String,
     #[serde(rename = "baseColor", default)]

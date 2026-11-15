@@ -1,10 +1,18 @@
 //! Render both Counter-Terrorist (SWAT) and Terrorist (Phoenix/Yaku Ignite)
 //! operators side-by-side with weapons and tactical combat knives to a PNG.
+//!
+//! With a second argument of `moving`, the line-up is instead driven through
+//! the client's own `Squad` — a run, a strafe, a retreat, a crouch-walk and a
+//! player standing looking up — and drawn mid-stride from the side, which is
+//! the picture that shows whether feet land under bodies and rifles point
+//! where their owners are looking.
+//!
+//!     cargo run --example dual_operator_preview -- moving.png moving
 
 use std::f32::consts::PI;
 
 use glam::{Mat4, Vec4};
-use hassault_native::animator::{model_matrix, ActorPose};
+use hassault_native::animator::{model_matrix, ActorPose, Squad};
 use hassault_native::camera::Camera;
 use hassault_native::character::{Mask, Operator, Pose};
 use hassault_native::characters_gpu::Characters;
@@ -73,12 +81,84 @@ const LINEUP: [ShowcaseEntry; 4] = [
     },
 ];
 
-fn main() {
-    let path = std::env::args().nth(1).unwrap_or("dual_operators.png".into());
-    pollster::block_on(run(&path));
+/// One player in the moving line-up: where they end up, and how they got there.
+struct Mover {
+    team: i32,
+    weapon: i32,
+    /// Where they stand when the picture is taken.
+    y: f32,
+    yaw: f32,
+    pitch: f32,
+    crouch: f32,
+    /// Speed along and across the look direction, cubes a second.
+    forward: f32,
+    strafe: f32,
 }
 
-async fn run(path: &str) {
+const MOVERS: [Mover; 5] = [
+    // A full run, in profile.
+    Mover { team: 0, weapon: 2, y: -6.0, yaw: PI / 2.0, pitch: 0.0, crouch: 0.0, forward: 18.0, strafe: 0.0 },
+    // Strafing while facing the camera, aiming a little up.
+    Mover { team: 1, weapon: 2, y: -3.0, yaw: PI, pitch: 0.3, crouch: 0.0, forward: 0.0, strafe: 9.0 },
+    // Backing away, aiming down.
+    Mover { team: 0, weapon: 4, y: 0.0, yaw: PI / 2.0, pitch: -0.5, crouch: 0.0, forward: -9.0, strafe: 0.0 },
+    // Crouch-walking, in profile.
+    Mover { team: 1, weapon: 1, y: 3.0, yaw: PI / 2.0, pitch: 0.0, crouch: 1.0, forward: 6.0, strafe: 0.0 },
+    // Standing still, looking well up.
+    Mover { team: 0, weapon: 2, y: 6.0, yaw: PI + 0.5, pitch: 0.8, crouch: 0.0, forward: 0.0, strafe: 0.0 },
+];
+
+/// Walk the movers into place through the client's own animator.
+fn moving_poses() -> Vec<ActorPose> {
+    const FRAMES: usize = 73;
+    const DT: f32 = 1.0 / 60.0;
+    let mut squad = Squad::load().expect("operators");
+    let velocity = |m: &Mover| {
+        (
+            m.forward * m.yaw.cos() - m.strafe * m.yaw.sin(),
+            m.forward * m.yaw.sin() + m.strafe * m.yaw.cos(),
+        )
+    };
+    let mut rows: Vec<PlayerRow> = MOVERS
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let (vx, vy) = velocity(m);
+            let back = FRAMES as f32 * DT;
+            PlayerRow {
+                id: format!("mover-{i}"),
+                team: m.team,
+                x: -vx * back,
+                y: m.y - vy * back,
+                yaw: m.yaw,
+                pitch: m.pitch,
+                crouch: m.crouch,
+                weapon: m.weapon,
+                alive: true,
+                ground: true,
+                hp: 100.0,
+                ..Default::default()
+            }
+        })
+        .collect();
+    for _ in 0..FRAMES {
+        for (row, m) in rows.iter_mut().zip(&MOVERS) {
+            let (vx, vy) = velocity(m);
+            row.x += vx * DT;
+            row.y += vy * DT;
+        }
+        squad.update(DT, &rows, "");
+    }
+    squad.poses().to_vec()
+}
+
+fn main() {
+    let path = std::env::args().nth(1).unwrap_or("dual_operators.png".into());
+    let moving = std::env::args().nth(2).as_deref() == Some("moving");
+    pollster::block_on(run(&path, moving));
+}
+
+async fn run(path: &str, moving: bool) {
     let op_ct = Operator::load().expect("the CT operator GLB should parse");
     let op_t = Operator::load_t().expect("the Terrorist operator GLB should parse");
     println!(
@@ -202,7 +282,21 @@ async fn run(path: &str) {
     let mut t_poses = Vec::new();
     let mut all_held_poses = Vec::new();
 
-    for entry in &LINEUP {
+    if moving {
+        for pose in moving_poses() {
+            all_held_poses.push(ActorPose {
+                bones: Vec::new(),
+                ..pose.clone()
+            });
+            if pose.team == 0 {
+                ct_poses.push(pose);
+            } else {
+                t_poses.push(pose);
+            }
+        }
+    }
+
+    for entry in LINEUP.iter().filter(|_| !moving) {
         let is_ct = entry.team == 0;
         let op = if is_ct { &op_ct } else { &op_t };
         let clip = op.clip(entry.clip_name).expect("clip missing");

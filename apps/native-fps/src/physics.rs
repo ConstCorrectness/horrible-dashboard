@@ -34,7 +34,7 @@
 use crate::world::{Ladder, World, PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS};
 
 /// Cubes per second at a walk. Tuned to feel like AC rather than derived from it.
-pub const MOVE_SPEED: f32 = 22.0;
+pub const MOVE_SPEED: f32 = 18.0;
 pub const GRAVITY: f32 = 55.0;
 pub const JUMP_SPEED: f32 = 19.0;
 
@@ -68,6 +68,9 @@ pub const CROUCH_TRANSITION: f32 = 0.15;
 /// expressed as `50/friction`. Ground settles in ~0.12 s, air in ~0.6 s.
 pub const GROUND_RESPONSE: f32 = 50.0 / 6.0;
 pub const AIR_RESPONSE: f32 = 50.0 / 30.0;
+/// The floor under ground response, so a stop arrives instead of drifting.
+/// `GROUND_STOP_SPEED` in `physics.py`, which has the reasoning.
+pub const GROUND_STOP_SPEED: f32 = 3.0;
 
 /// Gravity ramps with time in air (AC's `dropf`), capped so a long drop is a fall
 /// rather than a teleport.
@@ -484,6 +487,7 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
     // the wish direction and the whole vertical branch.
     let mut ladder = ladder_at(world, player);
     let mut climb = 0.0;
+    let mut stepping_off = false;
     if let Some(l) = ladder {
         climb = climb_rate(player, &l, input);
         if climb > 0.0 && player.z >= l.top - LADDER_TOP_RELEASE {
@@ -494,6 +498,8 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
             // flips sign, and the input that was climbing up starts climbing
             // down, riding the player back to the bottom.
             ladder = None;
+            // The top rung is footing: step off it with the ground's grip.
+            stepping_off = true;
         }
     }
 
@@ -535,15 +541,26 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
         } else {
             GROUND_RESPONSE
         }
+    } else if stepping_off {
+        GROUND_RESPONSE
     } else {
         AIR_RESPONSE
     };
     if input.knife {
         response *= input.knife_boost;
     }
-    let blend = 1.0 - (-response * dt).exp();
-    player.vel_x += (wx * speed_cap - player.vel_x) * blend;
-    player.vel_y += (wy * speed_cap - player.vel_y) * blend;
+    let gap_x = player.vel_x - wx * speed_cap;
+    let gap_y = player.vel_y - wy * speed_cap;
+    let gap = gap_x.hypot(gap_y);
+    let stop = if player.on_ground && !under && ladder.is_none() {
+        GROUND_STOP_SPEED
+    } else {
+        0.0
+    };
+    let left = ((gap + stop) * (-response * dt).exp() - stop).max(0.0);
+    let keep = if gap > 1e-9 { left / gap } else { 0.0 };
+    player.vel_x = wx * speed_cap + gap_x * keep;
+    player.vel_y = wy * speed_cap + gap_y * keep;
 
     // -- jump, and the chained-jump boost -------------------------------------
     //

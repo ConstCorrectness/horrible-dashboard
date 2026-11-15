@@ -111,7 +111,9 @@ CROUCH_TRANSITION = 0.15
 # Movement constants. Tuned to feel like AC rather than derived from it, but they
 # are part of the wire contract now: a client predicting with different numbers
 # mispredicts every frame.
-MOVE_SPEED = 22.0
+# 18 is Counter-Strike's run per body height (3.47 heights a second); it was 22,
+# a sprint no stride could keep up with (`models/locomotion.ts`).
+MOVE_SPEED = 18.0
 GRAVITY = 55.0
 JUMP_SPEED = 19.0
 STEP_HEIGHT = 1.6
@@ -120,6 +122,17 @@ STEP_HEIGHT = 1.6
 # on the floor and 30 in the air, as `50/friction` — see the module docstring.
 GROUND_RESPONSE = 50.0 / 6.0
 AIR_RESPONSE = 50.0 / 30.0
+
+#: The floor under ground response, in cubes/s: Source's `sv_stopspeed`.
+#:
+#: The exponential blend alone never arrives. Its last few cubes a second take as
+#: long as its first fifteen, so a released key left the body drifting for half a
+#: second, which is what ice is. On the floor the gap to the wish velocity closes
+#: as though it were this much larger, and stops at zero:
+#: `gap(dt) = max(0, (gap + STOP) * exp(-k*dt) - STOP)`. That is the exact
+#: solution of `gap' = -k*(gap + STOP)`, so it is as frame-rate independent as
+#: the blend it replaces. Not in the air, in water or on a ladder.
+GROUND_STOP_SPEED = 3.0
 
 # Gravity ramp. `g * (1 + time_in_air/GRAVITY_RAMP)`, capped: AC's ramp is
 # unbounded and reaches 4.5x within a second, which turns any long drop into a
@@ -659,6 +672,7 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     # changes its speed cap, its wish direction and its whole vertical branch.
     ladder = ladder_at(world, player)
     climb = 0.0
+    stepping_off = False
     if ladder is not None:
         climb = _climb_rate(player, ladder, move)
         if climb > 0 and player.z >= ladder.top - LADDER_TOP_RELEASE:
@@ -673,6 +687,10 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
             # ride the ladder back to the bottom. Detaching is also simply what
             # happened: the climb is over.
             ladder = None
+            # The top rung is footing. Stepping off it on air control alone
+            # reached the ledge only at the old run speed, and by a few
+            # centimetres; with the ground's grip it does not depend on either.
+            stepping_off = True
 
     scale = 1.0
     if wet:
@@ -703,7 +721,9 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     if under:
         response = WATER_RESPONSE
     else:
-        response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
+        response = (
+            GROUND_RESPONSE if player.on_ground or stepping_off else AIR_RESPONSE
+        )
         # Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
         # apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
         if (
@@ -714,9 +734,14 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
             response = GROUND_RESPONSE * 3.2
     if move.knife:
         response *= move.knife_boost
-    blend = 1.0 - math.exp(-response * dt)
-    player.vel_x += (wx * speed_cap - player.vel_x) * blend
-    player.vel_y += (wy * speed_cap - player.vel_y) * blend
+    gap_x = player.vel_x - wx * speed_cap
+    gap_y = player.vel_y - wy * speed_cap
+    gap = math.hypot(gap_x, gap_y)
+    stop = GROUND_STOP_SPEED if player.on_ground and not under and ladder is None else 0.0
+    left = max(0.0, (gap + stop) * math.exp(-response * dt) - stop)
+    keep = left / gap if gap > 1e-9 else 0.0
+    player.vel_x = wx * speed_cap + gap_x * keep
+    player.vel_y = wy * speed_cap + gap_y * keep
 
     # -- jump, and the chained-jump boost ----------------------------------
     #

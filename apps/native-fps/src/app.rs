@@ -284,6 +284,18 @@ pub struct App {
     last_present: Option<Instant>,
     /// `--bench=<map>`: the camera path being flown. See `bench.rs`.
     bench: Option<BenchRun>,
+    /// This match, as a `.hademo`, while it is being recorded (`demo.rs`).
+    /// Fed once per `1 / TICK_RATE` from `record_frame`, kills from the
+    /// snapshot's effects, and saved when it is stopped or the match ends.
+    recorder: hassault_native::demo::DemoRecorder,
+    /// A recording being watched instead of a match (`replay.rs`): the map is
+    /// loaded with no server, nothing is simulated, and the bodies and the
+    /// camera come from the demo.
+    replay: Option<hassault_native::replay::Replay>,
+    /// That replay being written to a video (`export.rs`).
+    export: Option<ExportRun>,
+    /// What to tell the front end on the way back to it.
+    note: Option<(String, bool)>,
     /// The **throwing** half, which this client had none of: `nades` below drew
     /// everybody else's grenades while nothing here could produce one. What is
     /// readied, what is left, and the edge that puts `throw` on a command — see
@@ -591,12 +603,7 @@ impl App {
         // `Camera::default()` would sit unapplied until the player opened the
         // menu and nudged the row.
         let base_fov = settings.video.fov;
-        let is_gltf = world.info.format.as_deref() == Some("gltf")
-            || map_name == "hd_facility"
-            || map_name == "hd_junkflea"
-            || map_name == "hd_bank"
-            || map_name == "hd_assault"
-            || map_name == "hd_aim";
+        let is_gltf = world3d::is_modelled(&world.info);
         // A modelled map is drawn from its mesh and collided against the cube
         // grid it bakes, in Train exactly as in a match: the server steps every
         // body against that grid, so practice on anything else teaches moves
@@ -677,6 +684,10 @@ impl App {
             laps: hassault_native::profile::Laps::new(),
             last_present: None,
             bench: None,
+            recorder: Default::default(),
+            replay: None,
+            export: None,
+            note: None,
             reveal: Reveal::default(),
             utility: GrenadeController::new(tacticals),
             elapsed: 0.0,
@@ -1020,6 +1031,325 @@ impl App {
         };
     }
 
+    /// Watch `demo` instead of playing: the map is already loaded with no
+    /// server. With `video`, play it into that file and come back.
+    pub fn start_replay(&mut self, demo: hassault_native::demo::DemoData, video: Option<std::path::PathBuf>) {
+        self.replay = Some(hassault_native::replay::Replay::new(demo));
+        self.export = video.map(|video| ExportRun {
+            video,
+            encoder: None,
+            frame: 0,
+            capturing: false,
+            stop: None,
+        });
+    }
+
+    /// What the front end should say once this is over, taken once.
+    pub fn take_note(&mut self) -> Option<(String, bool)> {
+        self.note.take()
+    }
+
+    /// The bodies with no server: a replay's, or the range's dummies.
+    fn offline_rows(&self) -> Vec<PlayerRow> {
+        match &self.replay {
+            Some(replay) => replay.rows(&self.weapons, !self.freecam_active),
+            None => self.range.rows(),
+        }
+    }
+
+    /// One frame of a replay: its clock, then the camera — the freecam's,
+    /// or the followed body's eyes — and that body's hands and health, so
+    /// the view model and the HUD are theirs.
+    fn step_replay(&mut self, dt: f32) {
+        use hassault_native::export::FPS;
+        let Some(replay) = self.replay.as_mut() else {
+            return;
+        };
+        match &self.export {
+            Some(run) => replay.player.seek(run.frame as f64 * 1000.0 / FPS as f64),
+            None => replay.player.update(dt),
+        }
+        if self.freecam_active {
+            self.update_freecam(dt);
+            self.camera.x = self.freecam_pos[0];
+            self.camera.y = self.freecam_pos[1];
+            self.camera.z = self.freecam_pos[2];
+            self.scoped = 0;
+            return;
+        }
+        let Some(replay) = self.replay.as_ref() else {
+            return;
+        };
+        if let Some(([x, y, z], yaw, pitch)) = replay.eye() {
+            (self.camera.x, self.camera.y, self.camera.z) = (x, y, z);
+            self.camera.yaw = yaw;
+            self.camera.pitch = pitch;
+        }
+        if let Some(body) = replay.followed() {
+            let row = hassault_native::demo::row_from_snapshot(&body, &self.weapons);
+            if let Some(you) = self.you.as_mut() {
+                you.hp = row.hp;
+                you.alive = row.alive;
+                you.weapon = row.weapon;
+            }
+            self.scoped = body.scoped.unwrap_or(0);
+        }
+    }
+
+    /// A replay's keys, ahead of the game's. Escape during an export stops
+    /// it; nothing else does anything then.
+    fn replay_key(&mut self, code: KeyCode) -> bool {
+        if self.replay.is_none() || self.menu.open || self.console.open {
+            return false;
+        }
+        if let Some(run) = self.export.as_mut() {
+            if code == KeyCode::Escape {
+                run.stop = Some("EXPORT CANCELLED - NOTHING SAVED".into());
+            }
+            return true;
+        }
+        let freecam = self.freecam_active;
+        self.replay
+            .as_mut()
+            .is_some_and(|r| r.key(code, freecam) == hassault_native::replay::Handled::Yes)
+    }
+
+    /// After a frame was drawn during an export: hand it to the encoder,
+    /// and stop at the end of the demo or on the first thing that went wrong.
+    fn export_frame(&mut self, event_loop: &ActiveEventLoop) {
+        use hassault_native::export::{find_ffmpeg, Exporter, Layout, FPS};
+        let duration = self.replay.as_ref().map_or(0.0, |r| r.player.duration_ms());
+        let Some(run) = self.export.as_mut() else {
+            return;
+        };
+        if let Some(why) = run.stop.take() {
+            return self.end_export(Err(why), event_loop);
+        }
+        let Some(frame) = self.renderer.as_mut().and_then(|r| r.take_capture()) else {
+            // Minimised or occluded: no frame was drawn, so none is owed and
+            // the replay's clock has not moved.
+            return;
+        };
+        if run.encoder.is_none() {
+            let Some(ffmpeg) = find_ffmpeg() else {
+                return self.end_export(Err("NO FFMPEG ON THE PATH - NOTHING EXPORTED".into()), event_loop);
+            };
+            let layout = if frame.bgra { Layout::Bgra } else { Layout::Rgba };
+            match Exporter::start(&ffmpeg, frame.width, frame.height, layout, run.video.clone()) {
+                Ok(encoder) => run.encoder = Some(encoder),
+                Err(e) => {
+                    return self.end_export(Err(format!("COULD NOT START FFMPEG - {e}")), event_loop)
+                }
+            }
+        }
+        let Some(encoder) = run.encoder.as_mut() else {
+            return;
+        };
+        if (frame.width, frame.height) != (encoder.width, encoder.height) {
+            return self.end_export(
+                Err("THE WINDOW CHANGED SIZE - EXPORT STOPPED".into()),
+                event_loop,
+            );
+        }
+        if let Err(e) = encoder.push(&frame.pixels) {
+            return self.end_export(Err(format!("FFMPEG STOPPED - {e}")), event_loop);
+        }
+        run.frame += 1;
+        let done_ms = run.frame as f64 * 1000.0 / FPS as f64;
+        if let Some(window) = &self.window {
+            let pct = (done_ms / duration.max(1.0) * 100.0).min(100.0);
+            window.set_title(&format!("HorribleAssault - exporting replay {pct:.0}%"));
+        }
+        if done_ms > duration {
+            self.end_export(Ok(()), event_loop);
+        }
+    }
+
+    /// Close the encoder, keep the file or throw it away, and go back.
+    fn end_export(&mut self, result: Result<(), String>, event_loop: &ActiveEventLoop) {
+        let Some(run) = self.export.take() else {
+            return;
+        };
+        self.note = Some(match (result, run.encoder) {
+            (Ok(()), Some(encoder)) => match encoder.finish() {
+                Ok(path) => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    (format!("EXPORTED {name} - BESIDE THE DEMO"), false)
+                }
+                Err(e) => (e.to_string().to_uppercase(), true),
+            },
+            (Ok(()), None) => ("NOTHING WAS DRAWN - NOTHING EXPORTED".into(), true),
+            (Err(why), encoder) => {
+                if let Some(encoder) = encoder {
+                    encoder.abort();
+                }
+                (why, true)
+            }
+        });
+        if let Some((note, _)) = &self.note {
+            // For a launch with no front end, where this is the only report.
+            eprintln!("hassault: {}", note.to_lowercase());
+        }
+        self.finish(event_loop, Ended::Left);
+    }
+
+    /// Start recording this match. The file is written when it stops.
+    pub fn start_recording(&mut self) {
+        if self.recorder.is_recording() || self.editing() || self.replay.is_some() {
+            return;
+        }
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        self.recorder.start(
+            &self.world.info.name,
+            Default::default(),
+            None,
+            Self::clock_ms(),
+            wall,
+        );
+        self.console
+            .push("recording this match - REPLAYS in the menu stops it", console::Tone::Note);
+    }
+
+    /// Stop recording and save the demo. `wait` writes it before returning —
+    /// the match is ending — and otherwise a thread does, so a long recording
+    /// does not stall the frame it was stopped on.
+    fn stop_recording(&mut self, wait: bool) {
+        use hassault_native::demo;
+        let Some(mut data) = self.recorder.stop(Self::clock_ms()) else {
+            return;
+        };
+        if data.frames.is_empty() {
+            self.console
+                .push("stopped before a frame was recorded - nothing saved", console::Tone::Note);
+            return;
+        }
+        // Who was who, from the frames themselves: everyone who appeared, not
+        // only whoever is still in the room at the end.
+        for frame in &data.frames {
+            for p in &frame.players {
+                data.header.player_names.insert(p.id.clone(), p.name.clone());
+            }
+        }
+        data.header.pov = Some(self.own_demo_id());
+        let Some(dir) = demo::demos_dir() else {
+            self.console
+                .push("no folder to save demos in on this system", console::Tone::Error);
+            return;
+        };
+        let write = move || demo::save(&dir, &data);
+        if wait {
+            match write() {
+                Ok(path) => eprintln!("hassault: saved the replay to {}", path.display()),
+                Err(e) => eprintln!("hassault: could not save the replay ({e})"),
+            }
+        } else {
+            self.console.push("saving the replay", console::Tone::Note);
+            std::thread::spawn(move || match write() {
+                Ok(path) => eprintln!("hassault: saved the replay to {}", path.display()),
+                Err(e) => eprintln!("hassault: could not save the replay ({e})"),
+            });
+        }
+    }
+
+    /// Our own id in a demo: the wire's in a match, `you` on the range, where
+    /// there is no server to have given us one. `demo.ts` uses the same word.
+    fn own_demo_id(&self) -> String {
+        if self.self_id.is_empty() {
+            "you".to_string()
+        } else {
+            self.self_id.clone()
+        }
+    }
+
+    /// One frame of the recording, when one is owed: our own view, from the
+    /// prediction this frame is drawn with, and every body as it is drawn.
+    fn record_frame(&mut self) {
+        use hassault_native::demo::{snapshot_from_row, DemoPlayerSnapshot};
+        let now = Self::clock_ms();
+        self.menu.recording = self
+            .recorder
+            .is_recording()
+            .then(|| (self.recorder.elapsed(now) / 1000.0) as f32);
+        if !self.joined || !self.recorder.due(now) {
+            return;
+        }
+        let id = self.own_demo_id();
+        let p = &self.prediction.state;
+        let (yaw, pitch) = self.view_angles();
+        let you = self.you.as_ref();
+        let me = self.players.iter().find(|r| r.id == self.self_id);
+        let own = DemoPlayerSnapshot {
+            name: me.map_or_else(|| "Player".to_string(), |r| r.name.clone()),
+            team: me.map_or(0, |r| r.team),
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            yaw,
+            pitch,
+            weapon: you.map_or(0, |y| y.weapon),
+            weapon_id: self.held().map(|w| w.id.clone()),
+            scoped: Some(self.scoped),
+            zoom: Some(self.magnification()),
+            hp: you.map_or(100.0, |y| y.hp),
+            crouch: Some(p.crouch),
+            alive: Some(you.is_none_or(|y| y.alive)),
+            id,
+            ..Default::default()
+        };
+        let dummies;
+        let rows: &[PlayerRow] = if self.socket.is_none() {
+            dummies = self.offline_rows();
+            &dummies
+        } else {
+            &self.drawn
+        };
+        let players = std::iter::once(own)
+            .chain(
+                rows.iter()
+                    .filter(|r| r.id != self.self_id)
+                    .map(|r| snapshot_from_row(r, &self.weapons)),
+            )
+            .collect();
+        self.recorder.record_frame(now, players);
+    }
+
+    /// A kill in this snapshot, filed for the next frame and bookmarked.
+    fn record_kill(&mut self, fx: &Fx) {
+        let Fx::Kill {
+            victim,
+            victim_name,
+            killer,
+            killer_name,
+            weapon,
+            head,
+            nutshot,
+            ..
+        } = fx
+        else {
+            return;
+        };
+        let some = |s: &String| (!s.is_empty()).then(|| s.clone());
+        self.recorder.record_event(
+            Self::clock_ms(),
+            hassault_native::demo::DemoEvent {
+                kind: "kill".into(),
+                killer_id: some(killer),
+                victim_id: some(victim),
+                killer: some(killer_name),
+                victim: some(victim_name),
+                weapon: some(weapon),
+                head: Some(*head),
+                nutshot: Some(*nutshot),
+                ..Default::default()
+            },
+        );
+    }
+
     fn clock_ms() -> f64 {
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
@@ -1081,7 +1411,7 @@ impl App {
         {
             let dummies;
             let rows: &[PlayerRow] = if self.socket.is_none() {
-                dummies = self.range.rows();
+                dummies = self.offline_rows();
                 &dummies
             } else {
                 &self.drawn
@@ -1168,7 +1498,11 @@ impl App {
         } else {
             display_weapon.as_str()
         };
+        let tint = hassault_native::viewmodel::prop_tint(equipped_skin, prop_name);
         self.sync_prop(prop_name);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.tint_prop(prop_name, tint);
+        }
         // **The predicted arc.** Drawn from the *locally predicted* velocity,
         // not from the last snapshot's: the whole reason it exists is to make
         // `THROW_INHERIT` visible — running and jumping feed the throw — and a
@@ -1225,7 +1559,8 @@ impl App {
             reloading: !holding_nade && self.you.as_ref().is_some_and(|y| y.reloading),
             yaw: self.camera.yaw.to_radians(),
             pitch: self.camera.pitch.to_radians(),
-            visible: self.joined && alive,
+            // Not from a replay's freecam: nobody's hands are where it flies.
+            visible: self.joined && alive && !(self.replay.is_some() && self.freecam_active),
             move_speed: MOVE_SPEED,
             // `camera.fov`, not `base_fov`: line 610 divides it by the scope's
             // magnification every frame, and the flash cap has to see the FOV
@@ -1361,6 +1696,10 @@ impl App {
 
     /// The match is over. Hosted, say so and keep the window; alone, exit.
     fn finish(&mut self, event_loop: &ActiveEventLoop, why: Ended) {
+        // Saved here, on the one path every way out takes, and waited for:
+        // a client with no front end exits right after, and a write left on a
+        // thread would die with the process.
+        self.stop_recording(true);
         if self.hosted {
             self.ended = Some(why);
         } else {
@@ -1512,7 +1851,7 @@ impl App {
         }
         let dummies;
         let rows: &[PlayerRow] = if self.socket.is_none() {
-            dummies = self.range.rows();
+            dummies = self.offline_rows();
             &dummies
         } else {
             &self.drawn
@@ -2335,6 +2674,7 @@ impl App {
                     let mut unforeseen = self.own_shots.snapshot(s.ack, mine);
                     for fx in &s.fx {
                         self.hud.on_fx(fx, &self.self_id);
+                        self.record_kill(fx);
                         // The muzzle flash, from the server's own account of the
                         // shot rather than from the fire key: this client has no
                         // trigger controller, so the key flashes on shots the
@@ -3257,6 +3597,9 @@ impl App {
         if down && self.viewer_key(code) {
             return;
         }
+        if down && self.replay_key(code) {
+            return;
+        }
         match code {
             // F3 steps the *fallback*, and clears any override so the key the
             // player is pressing is the thing they see. Stepping a private field
@@ -4037,6 +4380,13 @@ impl App {
                 self.menu.close();
                 self.set_grab(true);
             }
+            Action::Record => {
+                if self.recorder.is_recording() {
+                    self.stop_recording(false);
+                } else {
+                    self.start_recording();
+                }
+            }
             Action::Open(page) => {
                 self.menu.page = page;
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
@@ -4778,7 +5128,7 @@ impl ApplicationHandler for App {
                 // whole mode look broken.
                 let dummies;
                 let rows: &[PlayerRow] = if self.socket.is_none() {
-                    dummies = self.range.rows();
+                    dummies = self.offline_rows();
                     &dummies
                 } else {
                     // `drawn`, never `players`: the roster is where the server
@@ -5126,7 +5476,22 @@ impl ApplicationHandler for App {
                     text: Some(&self.text_kit),
                 };
                 self.hud.noise_rings = self.cvars.boolean("draw.noise_rings").unwrap_or(true);
-                self.hud.build(&view, &mut overlay);
+                // A replay's clean view, and every exported frame, are the
+                // picture alone.
+                let clean =
+                    self.export.is_some() || self.replay.as_ref().is_some_and(|r| r.clean);
+                if !clean {
+                    self.hud.build(&view, &mut overlay);
+                    if let Some(replay) = &self.replay {
+                        replay.paint(
+                            &mut overlay,
+                            view.width as f32,
+                            view.height as f32,
+                            Some(&self.text_kit),
+                            self.freecam_active,
+                        );
+                    }
+                }
                 // After the HUD, so the scrim covers it: the menu is *over* the
                 // game, and a crosshair drawn on top of a settings panel reads as
                 // the panel being transparent rather than the game being behind
@@ -5199,6 +5564,15 @@ impl ApplicationHandler for App {
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already
                 // handled inside; there is nothing to report and nothing to stop.
+                if let Some(run) = self.export.as_mut() {
+                    if !run.capturing {
+                        run.capturing = renderer.enable_capture();
+                        if !run.capturing {
+                            run.stop = Some("THIS GPU CANNOT READ ITS FRAMES BACK - NOTHING EXPORTED".into());
+                        }
+                    }
+                    renderer.capture_next();
+                }
                 let presented = match renderer.render(&drawn_camera) {
                     // Only a frame that actually presented counts. Occluded and
                     // minimised frames return early, and counting them would make
@@ -5235,6 +5609,9 @@ impl ApplicationHandler for App {
                             event_loop.exit();
                         }
                     }
+                }
+                if self.export.is_some() {
+                    self.export_frame(event_loop);
                 }
                 // No `request_redraw` here: `about_to_wait` asks for the next
                 // frame on every pass of the loop (`ControlFlow::Poll`), and
@@ -5295,6 +5672,13 @@ impl ApplicationHandler for App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
+        // An export animates on the video's clock, not the wall's: every
+        // frame is `1 / FPS` of replay however long it took to draw and copy.
+        let dt = if self.export.is_some() {
+            1.0 / hassault_native::export::FPS as f32
+        } else {
+            dt
+        };
         // Resampled every frame, before the input: the shot this frame may fire
         // is aimed at what is on screen, so what is on screen has to be decided
         // first. See `interp.rs`.
@@ -5305,6 +5689,8 @@ impl ApplicationHandler for App {
             // simulation.
             self.drain_edits();
             self.fly_and_pick(dt);
+        } else if self.replay.is_some() {
+            self.step_replay(dt);
         } else {
             self.send_input(dt);
             self.place_eye();
@@ -5326,6 +5712,7 @@ impl ApplicationHandler for App {
         // After the input, so the weapon sways to the angles this frame is about
         // to be drawn with rather than to the previous one's.
         self.animate(dt.clamp(0.0, MAX_DT));
+        self.record_frame();
 
         // The flashbang, between snapshots: the white, the world muffled under
         // it, and the afterimage — taken from the frame about to be drawn when a
@@ -5551,6 +5938,20 @@ fn refetch(
 /// the prop's two colours. `real` is each row's team and *wire* weapon index,
 /// because the poses were built from visual rows and a skin belongs to the gun,
 /// not to the model it borrows.
+/// An export under way: a replay stepped `1 / FPS` per captured frame into
+/// `ffmpeg`.
+struct ExportRun {
+    video: std::path::PathBuf,
+    /// Started on the first frame read back, which is when its size is known.
+    encoder: Option<hassault_native::export::Exporter>,
+    /// Frames written; the replay's clock is this over `FPS`, never the wall's.
+    frame: u64,
+    /// The surface has been made copyable.
+    capturing: bool,
+    /// Why it has to stop, set from wherever that was found out.
+    stop: Option<String>,
+}
+
 fn dress_squad(
     squad: &mut Squad,
     looks: &HashMap<String, Cosmetics>,

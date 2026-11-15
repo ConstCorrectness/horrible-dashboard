@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run python .claude/hooks/format_lint.py"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run python .claude/hooks/format_lint.py"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run python .claude/hooks/docs_check.py"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run python .claude/hooks/docs_check.py"
           }
         ]
       }

@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v4",
+  "version": 5,
+  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v5",
   "assets": {
     "hassault-arms": {
       "filename": "hassault-arms.glb",
@@ -53,16 +53,16 @@
     "hassault-operator": {
       "filename": "hassault-operator.glb",
       "destination": "apps/web/public/hassault-operator.glb",
-      "sha256": "f12e283639787d1b3ab2a66cd36eefeedfe8ead338d5b09b025527ff32b8ab19",
-      "size": 7925192,
+      "sha256": "9bbae8451ba69fa28ad9717b50e300b51972dd1396ecb604acf04f5fb9b4bacb",
+      "size": 8009796,
       "category": "operator",
       "description": "Base operator character model with 23 Mixamo animations"
     },
     "hassault-operator-t": {
       "filename": "hassault-operator-t.glb",
       "destination": "apps/web/public/hassault-operator-t.glb",
-      "sha256": "cf610f900a14d998862455b4edff8ed6a8c7493224eb49d4ac044cd498d2e441",
-      "size": 3616040,
+      "sha256": "59a1e38143eb73a577bea9aab51568394a1b855c77fefa23b5020e5e2842ba55",
+      "size": 3891856,
       "category": "operator",
       "description": "T-side operator character model for dual-team rig dispatch"
     },

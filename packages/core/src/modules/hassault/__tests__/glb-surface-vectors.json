@@ -958,6 +958,10 @@
       "kind": "burlap"
     },
     {
+      "name": "mat_dust2_canopy_teal",
+      "kind": "burlap"
+    },
+    {
       "name": "mat_dust2_desert_sand",
       "kind": "dunesand"
     },
@@ -1004,6 +1008,10 @@
     {
       "name": "mat_dust2_wood_crate",
       "kind": "souk_crate"
+    },
+    {
+      "name": "mat_dust2_wood_shutter_blue",
+      "kind": "wood"
     },
     {
       "name": "mat_fountain_water",

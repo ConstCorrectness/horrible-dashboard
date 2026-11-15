@@ -234,18 +234,23 @@ describe('hAssault operator animator', () => {
     model.dispose();
   });
 
-  it('leans the spine toward where a player is aiming', () => {
+  it('raises the head toward where a player is aiming', () => {
     // No Mixamo clip knows the pitch — they all look at the horizon — so an
-    // enemy firing down from a balcony would appear to aim straight ahead.
+    // enemy firing down from a balcony would appear to aim straight ahead. How
+    // exactly it lands is measured on the shipped rigs in `locomotion.test.ts`.
     const model = new CharacterModel(THREE, makeAsset(), 0, 'Looker');
     const animator = new CharacterAnimator(THREE, model, makeAsset());
+    const facing = () =>
+      new THREE.Vector3(0, 0, 1).applyQuaternion(
+        model.bones.get('Head')!.getWorldQuaternion(new THREE.Quaternion()),
+      ).y;
 
     animator.update(0.016, row({ pitch: 0 }));
-    const level = model.bones.get('Head')!.rotation.x;
+    const level = facing();
     animator.update(0.016, row({ pitch: 0.8 }));
-    const raised = model.bones.get('Head')!.rotation.x;
 
-    expect(raised).toBeLessThan(level);
+    // Half of 0.8 rad: this rig is flat, so the neck does not carry the head.
+    expect(facing()).toBeGreaterThan(level + 0.3);
     animator.dispose();
     model.dispose();
   });
