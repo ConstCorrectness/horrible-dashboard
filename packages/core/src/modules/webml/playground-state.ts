@@ -67,6 +67,37 @@ export const playground = {
   },
 };
 
+/**
+ * Which kind of model another surface asked the playground to offer. The Neurons
+ * section needs a GGUF, and sending the user to a picker preset to the ONNX catalog
+ * lets them load a model that section can never show.
+ */
+let sourceRequest: { kind: 'gguf'; seq: number } | null = null;
+const sourceListeners = new Set<() => void>();
+
+export const playgroundSource = {
+  get: () => sourceRequest,
+  subscribe(listener: () => void): () => void {
+    sourceListeners.add(listener);
+    return () => sourceListeners.delete(listener);
+  },
+  /** Ask the playground (open now, or opened next) to show its GGUF picker. */
+  requestGguf(): void {
+    sourceRequest = { kind: 'gguf', seq: (sourceRequest?.seq ?? 0) + 1 };
+    for (const l of sourceListeners) l();
+  },
+  /** The playground has acted on the request: a later remount keeps the user's own choice. */
+  consume(): void {
+    if (!sourceRequest) return;
+    sourceRequest = null;
+    for (const l of sourceListeners) l();
+  },
+};
+
+export function usePlaygroundSource(): { kind: 'gguf'; seq: number } | null {
+  return useSyncExternalStore(playgroundSource.subscribe, playgroundSource.get);
+}
+
 export function usePlayground(): Snapshot {
   return useSyncExternalStore(playground.subscribe, playground.get);
 }

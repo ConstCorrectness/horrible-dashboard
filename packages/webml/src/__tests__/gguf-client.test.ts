@@ -83,7 +83,29 @@ describe('WebmlEngine routing', () => {
     expect(workers[1].sent[0]).toMatchObject({ type: 'load', model: GGUF });
   });
 
-  it('keeps one worker across models of the same engine', () => {
+  it('gives every ONNX load a fresh worker, so a spent wasm heap cannot fail the next', async () => {
+    const { workers, engine } = setup();
+    const first = engine.load('org/onnx-a', 'q4f16');
+    workers[0].emit({ type: 'error', message: "Can't create a session. std::bad_alloc" });
+    await expect(first).rejects.toThrow(/bad_alloc/);
+
+    const second = engine.load('org/onnx-b', 'q4f16');
+    expect(workers.map((w) => [w.kind, w.terminated])).toEqual([
+      ['onnx', true],
+      ['onnx', false],
+    ]);
+    workers[1].emit({
+      type: 'ready',
+      model: 'org/onnx-b',
+      dtype: 'q4f16',
+      device: 'webgpu',
+      loadMs: 1,
+    });
+    await second;
+    expect(engine.getState()).toMatchObject({ kind: 'ready', model: 'org/onnx-b' });
+  });
+
+  it('keeps one worker across GGUF models', () => {
     const { workers, engine } = setup();
     const first = engine.load(GGUF, 'q4');
     void engine.load('gguf:org/repo/other-Q4_0.gguf', 'q4');
