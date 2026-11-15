@@ -5838,8 +5838,8 @@
     {"x": 108, "y": 24, "z": 0, "yaw": 90, "team": 1},
     {"x": 144, "y": 24, "z": 0, "yaw": 90, "team": 1}
   ],
-  "collisionSource": "18773467a787330e",
-  "collisionBaked": "18773467a787330e",
+  "collisionSource": "d102404714c8a3cd",
+  "collisionBaked": "d102404714c8a3cd",
   "lineups": [
     {
       "id": "a_vault_corridor_smoke",

@@ -933,23 +933,17 @@ def build_architectural_detail(col, mats):
         ((12.0, 48.0, 3.68), (6.8, 2.2, 0.16)),
         ((3.65, 48.0, 0.45), (0.65, 5.6, 0.85)),
     ]
-    screen_boxes = [
-        # Meeting room wall-mounted AV displays
-        ((26.22, 43.5, 1.95), (0.04, 2.2, 1.15)),
-        ((36.78, 22.0, 1.95), (0.04, 2.2, 1.15)),
-    ]
-    tray_boxes.extend(
-        [
-            ((26.15, 43.5, 1.95), (0.06, 2.36, 1.28)),
-            ((36.85, 22.0, 1.95), (0.06, 2.36, 1.28)),
-        ]
-    )
+    # The meeting rooms' wall-mounted AV displays are gone: both hung on walls
+    # the defuse rebuild took away, and floated at eye height where bodies now
+    # stand (`probe_eye_inside`).
 
     # 1. Suspended acoustic felt baffles above the open-plan cubicle farm
     for rx in (42.0, 49.0, 56.0):
         for py in (16.0, 24.0, 34.0, 42.0, 50.0):
             for off_y in (-0.9, 0.0, 0.9):
-                baffle_boxes.append(((rx, py + off_y, 3.62), (4.2, 0.08, 0.42)))
+                # Underside at 3.6 m: a standing eye on the tallest thing in
+                # the farm reaches 3.5, and lower than that it was inside one.
+                baffle_boxes.append(((rx, py + off_y, 3.76), (4.2, 0.08, 0.32)))
         duct_boxes.append(((rx, 33.0, 3.78), (0.55, 42.0, 0.28)))
 
     # 2. Overhead data cable trays & CRAC chilled-water ducts in Server Vault (Site B)
@@ -969,7 +963,6 @@ def build_architectural_detail(col, mats):
     add_boxes(col, "Office_HVAC_Ducts_NonCol", duct_boxes, mats["stainless"])
     add_boxes(col, "Office_Cable_Trays_NonCol", tray_boxes, mats["black_metal"])
     add_boxes(col, "Office_Boardroom_Wood_NonCol", mahogany_boxes, mats["mahogany"])
-    add_boxes(col, "Office_Meeting_Screens_NonCol", screen_boxes, mats["screen_display"])
 
     # 4. Exterior curtain-wall spandrel beams & surrounding skyscraper skyline
     horizon_specs = [

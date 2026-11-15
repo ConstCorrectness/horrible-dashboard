@@ -1035,6 +1035,7 @@ def build_architectural_detail(col, mats):
         length=2.8,
         mats=console_mats,
         boxes_fn=add_boxes,
+        solid=True,
     )
 
     # 4. Containment Hall Clerestory Windows, Exterior Buttresses & Rooftop Chillers

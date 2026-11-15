@@ -136,7 +136,8 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.5, transmiss
 
     if alpha < 1.0 or transmission > 0.0:
         mat.blend_method = "BLEND"
-        mat.shadow_method = "CLIP"
+        if hasattr(mat, "shadow_method"):  # gone from 4.2: EEVEE shadows every surface
+            mat.shadow_method = "CLIP"
 
     return mat
 

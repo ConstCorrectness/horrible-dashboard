@@ -810,10 +810,8 @@ def build_architectural_detail(col, mats):
 
     # --- 4. Site B Church Ruins Nave Trusses, Rose Window & Campanile Trim ---
     church_stone = [
-        # Church gable wall & buttresses behind Ruins_Church_Arch
+        # Church gable wall behind Ruins_Church_Arch
         ((14.0, 61.1, 6.2), (8.4, 0.9, 3.2)),
-        ((9.6, 61.0, 3.8), (0.9, 1.4, 7.6)),
-        ((18.4, 61.0, 3.8), (0.9, 1.4, 7.6)),
         # Carved rose window frame in upper church gable
         ((14.0, 60.55, 6.4), (2.2, 0.18, 2.2)),
         # Campanile limestone stringcourses
@@ -821,11 +819,24 @@ def build_architectural_detail(col, mats):
         ((10.0, 58.0, 8.05), (4.55, 4.55, 0.22)),
         # Site A Porch loggia entablature & Graveyard chapel monument
         ((48.0, 58.0, 4.65), (4.8, 1.8, 0.45)),
-        ((61.5, 57.5, 2.2), (3.2, 2.8, 4.4)),
-        ((61.5, 57.5, 4.58), (3.5, 3.1, 0.28)),
         ((54.0, 56.0, 3.12), (1.05, 8.2, 0.20)),
         ((58.0, 60.0, 3.12), (8.2, 1.05, 0.20)),
     ]
+    # Gable buttresses and the graveyard chapel monument stand on the ground, so
+    # they are solid; bodies walked through both. The buttresses end short of the
+    # y = 60.45 layout cut, which had stretched them across the gap it opens.
+    add_boxes(
+        col,
+        "Church_Buttresses",
+        [((9.6, 61.1, 3.8), (0.9, 1.2, 7.6)), ((18.4, 61.1, 3.8), (0.9, 1.2, 7.6))],
+        mats["limestone_carved"],
+    )
+    add_boxes(
+        col,
+        "Graveyard_Chapel_Monument",
+        [((61.5, 57.5, 2.2), (3.2, 2.8, 4.4)), ((61.5, 57.5, 4.58), (3.5, 3.1, 0.28))],
+        mats["limestone_carved"],
+    )
     church_wood = []
     for ny in (57.2, 59.0, 60.6):
         church_wood.append(((14.0, ny, 5.4), (7.6, 0.20, 0.24)))

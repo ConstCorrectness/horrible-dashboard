@@ -415,7 +415,8 @@ a generator. With `HASSAULT_MAP_OUT` set to a scratch directory a generator
 writes there instead of the repo, so a change can be diffed first.
 
 The generators are deterministic: unchanged, they reproduce their own GLB byte
-for byte, run after run. Moving from 4.1 to 5.3 took two changes to keep that:
+for byte, run after run. Moving from 4.1 to 5.3 took four changes to keep that,
+and to keep every map what it was:
 
 - **The exporter's vertex-colour switch was renamed.** 4.1's `export_colors=True`
   is `export_vertex_color="MATERIAL"` from 4.2 (`maplib._vertex_color_options`,
@@ -425,11 +426,71 @@ for byte, run after run. Moving from 4.1 to 5.3 took two changes to keep that:
   came out with the same triangles in a different sequence each time, and the
   AO bake, which follows face order, with them. `maplib.order_faces` sorts every
   mesh's faces by their centre before export.
+- **Transparency is read from somewhere else.** 4.1 exported `BLEND` exactly
+  when a material's `blend_method` was `BLEND`; from 4.2 the exporter looks only
+  at the shader's Alpha input. The generators' glass and water ask to blend and
+  leave Alpha at 1 (transmission does the see-through), so on 5.3 they came out
+  solid, and Bank's smoked glass, Alpha 0.55 but never asked to blend, came out
+  see-through. `maplib._alpha_as_authored` writes 4.1's rule back into the file
+  after export.
+- **`Material.shadow_method` is gone** (EEVEE shadows every surface since 4.2).
+  Assault, Facility and Junkflea set it, and failed on the first line that did;
+  they now only set it where it exists.
+
+`bake_bounce.py` asks Cycles for the GPU, which stops with "out of GPU memory"
+rather than falling back when something else is using the card;
+`HASSAULT_BOUNCE_DEVICE=CPU` bakes on the processor instead.
 
 Checked on Dust II: 5.3's GLB has the same 560 nodes, the same materials and the
 same vertices as 4.1's; a few faces split along the other diagonal (9 triangles
 of a palm trunk, 6 of 6,890 on the jars); AO within 0.02 on 95% of vertices; and
-`bake_collision.py` bakes the identical 1,227 brushes from it.
+`bake_collision.py` bakes the identical 1,227 brushes from it. Then on the
+other nine: each rebuilt on 5.3 has the same nodes, materials (transparency
+included), vertex and index counts as what shipped, and bakes the identical
+brushes (Aim 32, Assault 606, Bank 925, Facility 412, Inferno 752, Junkflea 371,
+Mirage 719, Nuke 849, Office 796).
+
+Two props were moved in that rebuild because `probe_eye_inside.py` found an eye
+inside them. Facility's East-lab duct ran through a standable spot under it;
+`add_ceiling_mep(..., duct_side=-1.0)` puts it on the other side of the span.
+Office's meeting-room screens hung on walls the defuse rebuild removed, so the
+screens and their trays are gone, and the baffles are raised to 3.76 m.
+
+Mirage, Inferno and Nuke reported an eye inside a `NonCol` mesh too, on the GLBs that
+shipped before the rebuild as well. Welding each mesh's seams and probing it box
+by box found five pieces on the first two, and the fixes cost Mirage 41
+reachable cells and Inferno 115:
+
+- **Mirage, Window room back wall** (`Mid_Nest_Stone`): it stands on the room's
+  floor, so a body walked into it. Now solid (`Mid_Nest_Back_Wall`).
+- **Mirage, market awning** (`SiteB_Arch_Wood`): at 2.55 m, a standing eye on the
+  service counter was inside it. Raised to 3.0 m.
+- **Mirage, palace column plinths** (`Palace_ArchDetail_Stone`): a standing eye
+  below the raised floor's edge is at plinth height. Now solid
+  (`Palace_Column_Plinths`).
+- **Inferno, church buttresses** (`Church_Graveyard_Stone`): they straddled the
+  y = 60.45 layout cut, which stretched them 4 m across the floor it opens. Now
+  short of the cut and solid (`Church_Buttresses`).
+- **Inferno, graveyard chapel monument**: 3.2 by 2.8 by 4.4 m, and bodies walked
+  through it. Now solid (`Graveyard_Chapel_Monument`).
+
+Both maps were rebaked (Mirage 721 brushes, Inferno 766) with their shipped
+placements, and their bot graphs rebuilt (`hassault_nav_build.py`).
+
+Nuke's B-pit console was non-colliding desk and all, so a body walked into it
+and an eye ended up inside the monitors (`SiteB_Pit_Console_Bezels_NonCol`, 24
+positions). `add_control_station(..., solid=True)` makes its desk collide
+(852 brushes); Facility's consoles keep the default. Every map now reads 0.
+
+**Rotation footage.** `tools/hassault_rotation_demo.py <map> <out.hademo>` writes
+a recording of one player running the map's rotation — site A to site B over the
+server's own grid (`hassault_route_times.dijkstra`), or T spawn to CT spawn on a
+map without sites — at `MOVE_SPEED`, looking a little way down the path with the
+turn eased. The route ends on the site's floor, not on its cover, stops ten cubes
+short to look at it, and is pushed off the walls it would otherwise scrape
+(`keep_off_walls`). `hassault-native --replay=<file> --export` then writes it as
+a 60 fps MP4. On a laptop whose discrete GPU is busy, `--adapter="<integrated
+GPU>"` exports on the other one: a ten-second rotation takes about fourteen.
 
 **Resizing a map: cut it, do not scale it.** A generator's coordinates are metres, and
 every detail hangs off a wall by a few centimetres (a rug, a frieze, a sconce, a
@@ -1777,7 +1838,8 @@ a body fits.
 
    It tests every position `physics.can_stand` accepts, at the resting eye
    heights, against every visible mesh the bake does not collide with. All nine
-   maps read 0 after the 2026-10-04 pass.
+   maps read 0 after the 2026-10-04 pass; see the Blender 5.3 rebuild for
+   the ones that report now.
 
 That pass cost each map a little open floor, because the newly solid props now
 take up space:

@@ -572,9 +572,12 @@ def build_architectural_detail(col, mats):
     palace_stone = []
     palace_wood = []
     palace_mosaic = []
+    # Column plinths are solid: standing below the raised floor's edge, an eye
+    # is at plinth height and was inside them.
+    palace_plinths = []
     for col_y in (20.0, 24.0, 28.0, 32.0):
         # Stepped column plinths & carved capitals
-        palace_stone.append(((48.0, col_y, 2.95), (1.18, 1.18, 0.28)))
+        palace_plinths.append(((48.0, col_y, 2.95), (1.18, 1.18, 0.28)))
         palace_stone.append(((48.0, col_y, 5.48), (1.14, 1.14, 0.24)))
         palace_stone.append(((48.0, col_y, 5.68), (1.36, 1.36, 0.16)))
     # Colonnade architrave beam, mosaic frieze, and crenellated rooftop parapet
@@ -598,6 +601,7 @@ def build_architectural_detail(col, mats):
         palace_stone.append(((55.0, cy, 8.45), (2.6, 2.6, 0.90)))
         palace_stone.append(((55.0, cy, 9.15), (1.4, 1.4, 0.48)))
 
+    add_boxes(col, "Palace_Column_Plinths", palace_plinths, mats["sandstone_light"])
     add_boxes(col, "Palace_ArchDetail_Stone_NonCol", palace_stone, mats["sandstone_light"])
     add_boxes(col, "Palace_ArchDetail_Wood_NonCol", palace_wood, mats["cedar_wood"])
     add_boxes(col, "Palace_ArchDetail_Mosaic_NonCol", palace_mosaic, mats["mosaic_tile_blue"])
@@ -632,9 +636,10 @@ def build_architectural_detail(col, mats):
 
     # --- 2. Sniper's Nest (Window Room) Pergola, Embrasure & Catwalk Brackets ---
     nest_wood = []
+    # Back wall enclosing the Sniper's Nest room. Solid: it stands on the room's
+    # floor, and a body walked into it.
+    add_box(col, "Mid_Nest_Back_Wall", (39.0, 53.8, 3.7), (9.8, 0.5, 2.6), mats["sandstone_ochre"])
     nest_stone = [
-        # Back wall enclosing the Sniper's Nest room
-        ((39.0, 53.8, 3.7), (9.8, 0.5, 2.6)),
         # Carved sandstone pilasters framing the central sniper embrasure
         ((37.5, 45.52, 3.6), (0.36, 0.16, 2.3)),
         ((40.5, 45.52, 3.6), (0.36, 0.16, 2.3)),
@@ -713,8 +718,9 @@ def build_architectural_detail(col, mats):
     ]
     for ry in range(19, 32, 2):
         apts_wood.append(((18.0, float(ry), 5.48), (11.6, 0.22, 0.22)))
-    # Market counter overhead timber awning frame & produce shelves
-    apts_wood.append(((30.2, 54.0, 2.55), (4.0, 1.4, 0.14)))
+    # Market counter overhead timber awning frame & produce shelves. The awning
+    # clears a standing eye on the counter.
+    apts_wood.append(((30.2, 54.0, 3.0), (4.0, 1.4, 0.14)))
     apts_wood.append(((31.8, 57.0, 1.65), (0.6, 6.8, 0.10)))
     apts_wood.append(((31.8, 57.0, 2.35), (0.6, 6.8, 0.10)))
     add_boxes(col, "SiteB_Arch_Stone_NonCol", apts_stone, mats["sandstone_ochre"])

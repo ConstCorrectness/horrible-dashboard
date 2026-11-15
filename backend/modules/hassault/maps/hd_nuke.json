@@ -1503,7 +1503,7 @@
     },
     {
       "op": "room",
-      "rect": [35, 101, 1, 59],
+      "rect": [35, 101, 1, 41],
       "floor": -13,
       "ceil": 15
     },
@@ -1521,7 +1521,7 @@
     },
     {
       "op": "room",
-      "rect": [36, 102, 1, 58],
+      "rect": [36, 102, 1, 40],
       "floor": -13,
       "ceil": 15
     },
@@ -1563,7 +1563,7 @@
     },
     {
       "op": "room",
-      "rect": [37, 103, 4, 57],
+      "rect": [37, 103, 4, 39],
       "floor": -13,
       "ceil": 15
     },
@@ -2871,6 +2871,18 @@
     },
     {
       "op": "room",
+      "rect": [35, 142, 4, 9],
+      "floor": -11,
+      "ceil": 15
+    },
+    {
+      "op": "room",
+      "rect": [39, 142, 2, 18],
+      "floor": -13,
+      "ceil": 15
+    },
+    {
+      "op": "room",
       "rect": [58, 142, 1, 4],
       "floor": 16,
       "ceil": 44
@@ -3246,6 +3258,12 @@
       "rect": [142, 150, 6, 10],
       "floor": 0,
       "ceil": 24
+    },
+    {
+      "op": "room",
+      "rect": [35, 151, 4, 9],
+      "floor": -13,
+      "ceil": 15
     },
     {
       "op": "room",
@@ -5409,8 +5427,8 @@
     ]
   },
   "collision": "baked",
-  "collisionSource": "0da2d8454831901b",
-  "collisionBaked": "0da2d8454831901b",
+  "collisionSource": "f64b92817124bbc6",
+  "collisionBaked": "f64b92817124bbc6",
   "lineups": [
     {
       "id": "a_site_a_crates_smoke",
