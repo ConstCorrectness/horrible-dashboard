@@ -89,6 +89,35 @@ function Empty() {
   const st = useFeatures();
   if (st.loading) return <p style={A.emptyText}>Encoding…</p>;
   const anyFits = st.traces.some((t) => t.fits.length > 0);
+  // A trace IS picked but nothing reads it: saying "Pick a trace." here read as the
+  // section failing to load, when the picker had simply landed on an unfitted model.
+  const picked = st.traceId ? st.traces.find((t) => t.traceId === st.traceId) : undefined;
+  const fitting = st.traces.find((t) => t.fits.length > 0);
+  if (st.traceId && !st.artifactId && !st.error) {
+    return (
+      <div style={A.emptyText}>
+        No installed SAE reads {picked?.modelName ?? 'this trace'}
+        {picked?.modelName ? ' traces' : ''}: an SAE is trained on one model at one layer.{' '}
+        {fitting ? (
+          <button
+            type="button"
+            className="btn-mini"
+            onClick={() => void openTrace(fitting.traceId)}
+          >
+            Open {fitting.modelName ?? fitting.traceId}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn-mini"
+            onClick={() => void revealSection(SUITE_SECTIONS.library, SUITE_VIEW)}
+          >
+            Library
+          </button>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={A.emptyText}>
       {anyFits ? (

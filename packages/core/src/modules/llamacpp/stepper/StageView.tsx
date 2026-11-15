@@ -33,22 +33,42 @@ import {
   type ResidualDelta,
   type TraceToken,
 } from '../api';
+import {
+  cachedLoad,
+  forgetFailure,
+  lastFailure,
+  rememberFailure,
+  rememberLoad,
+} from './load-cache';
 import type { Step } from './program';
 
 type Load<T> = { data: T | null; error: string };
 
 function useLoad<T>(key: string, load: () => Promise<T>): Load<T> {
-  const [state, setState] = useState<Load<T>>({ data: null, error: '' });
+  const [state, setState] = useState<Load<T> & { key: string }>(() => ({
+    key,
+    data: cachedLoad<T>(key) ?? null,
+    error: lastFailure(key) ?? '',
+  }));
+  // A key change is answered in render from the cache, so a node already read
+  // never paints a "Reading…" frame in between.
+  if (state.key !== key) {
+    setState({ key, data: cachedLoad<T>(key) ?? null, error: lastFailure(key) ?? '' });
+  }
   useEffect(() => {
+    if (cachedLoad<T>(key) !== undefined) return;
     let alive = true;
-    setState({ data: null, error: '' });
     load()
-      .then((data) => alive && setState({ data, error: '' }))
-      .catch(
-        (err: unknown) =>
-          alive &&
-          setState({ data: null, error: err instanceof Error ? err.message : String(err) }),
-      );
+      .then((data) => {
+        rememberLoad(key, data);
+        forgetFailure(key);
+        if (alive) setState({ key, data, error: '' });
+      })
+      .catch((err: unknown) => {
+        const error = err instanceof Error ? err.message : String(err);
+        rememberFailure(key, error);
+        if (alive) setState({ key, data: null, error });
+      });
     return () => {
       alive = false;
     };
