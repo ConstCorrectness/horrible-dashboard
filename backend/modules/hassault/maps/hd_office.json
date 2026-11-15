@@ -5376,8 +5376,8 @@
     {"x": 132, "y": 115, "yaw": 180, "team": 1},
     {"x": 132, "y": 123, "yaw": 180, "team": 1}
   ],
-  "collisionSource": "a0735d3162121b70",
-  "collisionBaked": "a0735d3162121b70",
+  "collisionSource": "8ebcebb6acc9769c",
+  "collisionBaked": "8ebcebb6acc9769c",
   "lineups": [
     {
       "id": "a_site_a_table_south_flash",

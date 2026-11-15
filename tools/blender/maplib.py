@@ -1364,9 +1364,13 @@ def add_ceiling_mep(
     axis: str = "x",
     spacing: float = 4.0,
     boxes_fn=add_boxes,
+    duct_side: float = 1.0,
 ):
     """Populate a ceiling (`bounds = (x0, y0, x1, y1)`) with steel I-beam trusses,
     HVAC ductwork, dual conduit pipes, and linear luminaire housings (`_NonCol`).
+
+    `duct_side` (+1 or -1) is which side of the room the trunk duct runs along:
+    the side with no raised floor under it, so no standing eye is inside it.
     """
     x0, y0, x1, y1 = bounds
     cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
@@ -1408,7 +1412,7 @@ def add_ceiling_mep(
             glow_boxes.append(((lx, ly, z_ceil - 0.44), glow_size))
 
     # Main HVAC trunk duct offset to one side of the room
-    duct_off = span_len * 0.26
+    duct_off = span_len * 0.26 * duct_side
     dx = cx + (0.0 if along_x else duct_off)
     dy = cy + (duct_off if along_x else 0.0)
     duct_size = (run_len - 0.6, 0.65, 0.42) if along_x else (0.65, run_len - 0.6, 0.42)
@@ -1517,8 +1521,13 @@ def add_control_station(
     length: float,
     mats: dict,
     boxes_fn=add_boxes,
+    solid: bool = False,
 ):
-    """Build a multi-monitor command/telemetry console (`_NonCol`) with zero coplanar overlap."""
+    """Build a multi-monitor command/telemetry console (`_NonCol`) with zero coplanar overlap.
+
+    `solid` makes the desk collide, for a console bodies can reach: with the desk
+    open they walk into it, and an eye ends up inside the monitors on top.
+    """
     cx, cy, z0 = center
     axis_x = abs(yaw_deg % 180) < 45 or abs(yaw_deg % 180) > 135
     sx, sy = (length, 0.9) if axis_x else (0.9, length)
@@ -1548,7 +1557,8 @@ def add_control_station(
         screen_boxes.append(((sx_p, sy_p, z0 + 1.15), s_size))
 
     if "cabinet" in mats:
-        boxes_fn(collection, f"{prefix}_Desk_NonCol", cabinet_boxes, mats["cabinet"])
+        desk = f"{prefix}_Desk" if solid else f"{prefix}_Desk_NonCol"
+        boxes_fn(collection, desk, cabinet_boxes, mats["cabinet"])
     if bezel_boxes and "bezel" in mats:
         boxes_fn(collection, f"{prefix}_Bezels_NonCol", bezel_boxes, mats["bezel"])
     if screen_boxes and "screen" in mats:
@@ -2157,6 +2167,54 @@ def bake_vertex_ao(factor: float) -> None:
     print(f"ao: baked {n} vertices, mean {total / max(n, 1):.3f}, darkest {lo:.3f}")
 
 
+def _alpha_as_authored(path: str) -> None:
+    """Each material's glTF `alphaMode` as its generator asked for it.
+
+    Blender 4.1's exporter wrote `BLEND` exactly when a material's
+    `blend_method` was `BLEND`, and the generators were written against that:
+    their glass and water say "blend" and leave the shader's Alpha at 1, with
+    transmission doing the see-through. From 4.2 the exporter reads only the
+    Alpha input — below 1 is `BLEND`, otherwise opaque — so that glass came out
+    solid, and Bank's smoked glass, whose Alpha is 0.55 but which never asked
+    to blend, came out see-through. This writes 4.1's rule back into the file:
+    `BLEND` where the material's `blend_method` is `BLEND`, opaque elsewhere.
+    The base colour's alpha is left as the exporter wrote it, as 4.1 did.
+    """
+    import json
+    import struct
+
+    intent = {
+        m.name: getattr(m, "blend_method", "OPAQUE") == "BLEND"
+        for m in bpy.data.materials
+    }
+    with open(path, "rb") as f:
+        data = f.read()
+    json_len = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20 : 20 + json_len])
+    changed = False
+    for material in doc.get("materials", []):
+        blend = intent.get(material.get("name"))
+        if blend is None:
+            continue
+        has = material.get("alphaMode") == "BLEND"
+        if blend and not has:
+            material["alphaMode"] = "BLEND"
+            changed = True
+        elif not blend and material.get("alphaMode") in ("BLEND", "MASK"):
+            material.pop("alphaMode")
+            material.pop("alphaCutoff", None)
+            changed = True
+    if not changed:
+        return
+    blob = data[20 + json_len :]
+    text = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    text += b" " * ((4 - len(text) % 4) % 4)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(text) + len(blob)))
+        f.write(struct.pack("<II", len(text), 0x4E4F534A) + text)
+        f.write(blob)
+
+
 def _bytes_for_colors(path: str) -> None:
     """Rewrite every float COLOR_0 in a GLB as normalised unsigned bytes.
 
@@ -2257,6 +2315,7 @@ def _export_glb(path: str) -> None:
         export_cameras=False,
         **_vertex_color_options(),
     )
+    _alpha_as_authored(path)
     _bytes_for_colors(path)
 
 

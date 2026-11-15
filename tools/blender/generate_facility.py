@@ -71,7 +71,8 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.5, emission_
 
     if alpha < 1.0:
         mat.blend_method = "BLEND"
-        mat.shadow_method = "CLIP"
+        if hasattr(mat, "shadow_method"):  # gone from 4.2: EEVEE shadows every surface
+            mat.shadow_method = "CLIP"
 
     return mat
 
@@ -625,6 +626,9 @@ def build_architectural_detail(collection, mats):
         mats=mep_mats,
         axis="y",
         spacing=6.5,
+        # Over the west half: on the east the duct's 5.1 m underside was a
+        # standing eye's height above the raised floor there (`probe_eye_inside`).
+        duct_side=-1.0,
     )
 
     # 3. Mezzanine Reactor Telemetry Command Consoles on South & North Catwalks (z = 6.0m)

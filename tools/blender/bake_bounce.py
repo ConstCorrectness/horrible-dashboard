@@ -130,6 +130,11 @@ def hex_linear(value: int) -> list[float]:
 def _enable_gpu(scene) -> str:
     import bpy
 
+    # `HASSAULT_BOUNCE_DEVICE=CPU` keeps the bake off a GPU something else is
+    # using: Cycles stops with "out of GPU memory" rather than falling back.
+    if os.environ.get("HASSAULT_BOUNCE_DEVICE", "").upper() == "CPU":
+        scene.cycles.device = "CPU"
+        return "CPU"
     prefs = bpy.context.preferences.addons["cycles"].preferences
     for kind in ("OPTIX", "CUDA", "HIP", "ONEAPI"):
         try:
