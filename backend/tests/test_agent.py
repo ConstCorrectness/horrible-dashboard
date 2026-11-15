@@ -475,6 +475,111 @@ async def test_catalog_free_models_come_from_pricing() -> None:
     P._CATALOG_CACHE.clear()
 
 
+def _gemini_response(
+    url: str, status: int = 200, json: dict | None = None
+) -> httpx.Response:
+    return httpx.Response(status, json=json or {}, request=httpx.Request("GET", url))
+
+
+@pytest.mark.anyio
+async def test_gemini_lists_ai_studio_models_with_the_key(monkeypatch) -> None:
+    """The dropdown used to be three hardcoded ids (one retired); it now comes from
+    AI Studio. The key travels as a header, never in the URL, and only text-out
+    `generateContent` models make the list."""
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    monkeypatch.setattr(P, "api_key_for", lambda info: "g-key")
+    seen: list[tuple[str, dict, dict]] = []
+
+    class _Studio:
+        async def get(self, url, params=None, headers=None, **kwargs):
+            seen.append((url, dict(params or {}), dict(headers or {})))
+            first = "pageToken" not in (params or {})
+            models = (
+                [
+                    {
+                        "name": "models/gemini-3.5-flash",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-2.5-flash-preview-tts",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-3-pro-image-preview",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/nano-banana-pro-preview",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/lyria-3.5",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-embedding-2",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                    {
+                        "name": "models/gemini-3.8-live",
+                        "supportedGenerationMethods": ["bidiGenerateContent"],
+                    },
+                ]
+                if first
+                else [
+                    {
+                        "name": "models/gemma-4-31b-it",
+                        "supportedGenerationMethods": ["generateContent"],
+                    }
+                ]
+            )
+            body = {"models": models, **({"nextPageToken": "p2"} if first else {})}
+            return _gemini_response(url, json=body)
+
+    P._CATALOG_CACHE.clear()
+    info = P.PROVIDERS["gemini"]
+    assert await P.list_models(_Studio(), info, "") == [
+        "gemini-3.5-flash",
+        "gemma-4-31b-it",
+    ]
+    assert all(h == {"x-goog-api-key": "g-key"} for _, _, h in seen)
+    assert all("key" not in params and "g-key" not in url for url, params, _ in seen)
+    # Cached: a second status poll does not go back to Google.
+    await P.list_models(_Studio(), info, "")
+    assert len(seen) == 2
+    P._CATALOG_CACHE.clear()
+
+
+@pytest.mark.anyio
+async def test_gemini_rejected_key_is_unreachable_but_outage_falls_back(
+    monkeypatch,
+) -> None:
+    """A key Google refuses must not show a working dropdown; a network or server
+    failure must not make a working key look broken."""
+    monkeypatch.setattr(P, "api_key_for", lambda info: "g-key")
+    info = P.PROVIDERS["gemini"]
+
+    class _Status:
+        def __init__(self, code: int) -> None:
+            self.code = code
+
+        async def get(self, url, **kwargs):
+            return _gemini_response(
+                url, self.code, {"error": {"status": "INVALID_ARGUMENT"}}
+            )
+
+    class _Down:
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectError("no network")
+
+    P._CATALOG_CACHE.clear()
+    with pytest.raises(httpx.HTTPStatusError):
+        await P.list_models(_Status(400), info, "")
+    assert await P.list_models(_Status(503), info, "") == list(info.static_models)
+    assert await P.list_models(_Down(), info, "") == list(info.static_models)
+    assert not P._CATALOG_CACHE, "a fallback must not be cached as the real list"
+
+
 def test_status_lists_free_models_before_a_key(client: TestClient, monkeypatch) -> None:
     """Onboarding shows what is free before a key exists, so the field must reach
     the HTTP response — a `response_model` drops a field it does not declare."""

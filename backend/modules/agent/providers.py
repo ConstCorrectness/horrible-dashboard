@@ -81,8 +81,9 @@ class ProviderInfo:
     #: (or to nothing) with no error we could attribute.
     model_prefix: str = ""
     #: Public catalog listing the provider's models, used to fill the model
-    #: dropdown. OpenRouter serves one without authentication; the others do not,
-    #: so they fall back to `static_models`.
+    #: dropdown. OpenRouter serves one without authentication. Gemini's listing needs
+    #: the key and has its own shape, so it is fetched by `_gemini_listing` instead;
+    #: OpenAI and Anthropic fall back to `static_models`.
     catalog_url: str = ""
     #: The connector that holds this provider's key, when the credential belongs to
     #: one rather than to `secrets.db` under the provider kind. NVIDIA's key is one
@@ -310,7 +311,15 @@ PROVIDERS: dict[str, ProviderInfo] = {
         # Google AI Studio ids collide with Vertex's, so litellm routes on this
         # prefix; without it `gemini-2.5-pro` is not a model litellm can place.
         model_prefix="gemini/",
-        static_models=("gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro"),
+        # Only the fallback: the real list comes from AI Studio with the key (see
+        # `_gemini_listing`). The `-latest` aliases follow Google's releases, so this
+        # stays usable after a retirement — `gemini-1.5-pro` used to sit here, dead.
+        static_models=(
+            "gemini-pro-latest",
+            "gemini-flash-latest",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+        ),
     ),
     "openrouter": ProviderInfo(
         kind="openrouter",
@@ -1103,6 +1112,79 @@ async def free_models(client: httpx.AsyncClient, info: ProviderInfo) -> list[str
     return list((await _catalog_listing(client, info)).free)
 
 
+#: Google AI Studio's model listing. Unlike OpenRouter's catalog it needs the key,
+#: and it is not OpenAI-shaped: `{"models": [{"name": "models/gemini-…",
+#: "supportedGenerationMethods": [...]}], "nextPageToken": …}`.
+GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+#: AI Studio models that answer `generateContent` but not with text: speech, images,
+#: music. Picked for a chat turn, each one fails the turn (or returns a blob the
+#: transcript cannot show), so they are left out of the list instead of sorted last.
+#: A name, not a flag, because the listing carries no output modality.
+_GEMINI_NON_TEXT = re.compile(r"(?:^|-)(?:tts|image|lyria|nano-banana)(?:-|$)|^lyria")
+
+
+async def _gemini_listing(client: httpx.AsyncClient, info: ProviderInfo) -> list[str]:
+    """Every AI Studio model this key can chat with, in Google's order.
+
+    The key goes in the `x-goog-api-key` header, never `?key=` — a query string ends
+    up in proxy and access logs. Kept to models whose methods include
+    `generateContent`, which drops embedders, `aqa` and the Live-only (`bidi…`)
+    models, then to text-out ones (see `_GEMINI_NON_TEXT`). Ids are returned without
+    `models/` and without the `gemini/` routing prefix; `qualify_model` adds that.
+
+    A **rejected key** (400/401/403 — Google answers `400 API_KEY_INVALID`) raises, so
+    the provider reads as unreachable: falling back would show a working dropdown
+    for a key that cannot make a single call. Anything else (offline, 429, 5xx)
+    falls back to `static_models`, uncached, as the OpenRouter catalog does.
+    """
+    cached = _CATALOG_CACHE.get(info.kind)
+    if cached and time.monotonic() - cached[0] < _CATALOG_TTL:
+        return list(cached[1].models)
+    headers = {"x-goog-api-key": api_key_for(info) or ""}
+    found: list[str] = []
+    token = ""
+    try:
+        # A key sees ~60 models today and `pageSize` caps at 1000, so this is one
+        # page; the bound only stops a misbehaving token from looping forever.
+        for _ in range(5):
+            params = {"pageSize": "1000", **({"pageToken": token} if token else {})}
+            res = await client.get(
+                GEMINI_MODELS_URL,
+                params=params,
+                headers=headers,
+                timeout=REMOTE_TIMEOUT,
+            )
+            res.raise_for_status()
+            body = res.json()
+            for m in body.get("models") or []:
+                if not isinstance(m, dict):
+                    continue
+                name = str(m.get("name") or "").removeprefix("models/")
+                methods = m.get("supportedGenerationMethods") or []
+                if (
+                    name
+                    and "generateContent" in methods
+                    and not _GEMINI_NON_TEXT.search(name)
+                ):
+                    found.append(name)
+            token = str(body.get("nextPageToken") or "")
+            if not token:
+                break
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 401, 403):
+            raise
+        return list(info.static_models)
+    except (httpx.HTTPError, ValueError):
+        return list(info.static_models)
+    models = tuple(dict.fromkeys(found))
+    _CATALOG_CACHE[info.kind] = (
+        time.monotonic(),
+        CatalogListing(models=models, free=()),
+    )
+    return list(models)
+
+
 async def list_models(
     client: httpx.AsyncClient, info: ProviderInfo, endpoint: str
 ) -> list[str]:
@@ -1123,6 +1205,8 @@ async def list_models(
         return browser_provider.available_models()
 
     if info.dialect == "litellm":
+        if info.kind == "gemini":
+            return await _gemini_listing(client, info)
         if info.catalog_url:
             return await _catalog_models(client, info)
         return list(info.static_models)
