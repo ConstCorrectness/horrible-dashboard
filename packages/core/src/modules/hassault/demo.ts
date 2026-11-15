@@ -266,20 +266,31 @@ export function parseDemo(text: string): DemoData {
         'recording was fixed are all empty; record a new one.',
     );
   }
+  // Every id, not only the bodies': an event's killer read as the number 7
+  // never matches the body whose id is now "7", so following a frag's killer
+  // from its bookmark would follow nobody.
+  const id = (v: string | number | undefined) => (v !== undefined ? String(v) : undefined);
   const frames = data.frames.map((f) => ({
     ...f,
     players: (f.players ?? []).map((p) => ({ ...p, id: String(p.id) })),
-    events: f.events ?? [],
+    events: (f.events ?? []).map((e) => ({
+      ...e,
+      ...(e.killerId !== undefined && { killerId: id(e.killerId) }),
+      ...(e.victimId !== undefined && { victimId: id(e.victimId) }),
+    })),
   }));
   const last = frames[frames.length - 1];
   return {
     header: {
       ...data.header,
-      pov: data.header.pov !== undefined ? String(data.header.pov) : undefined,
+      pov: id(data.header.pov),
       durationMs: Math.max(data.header.durationMs || 0, last.timestamp),
     },
     frames,
-    bookmarks: Array.isArray(data.bookmarks) ? data.bookmarks : [],
+    bookmarks: (Array.isArray(data.bookmarks) ? data.bookmarks : []).map((b) => ({
+      ...b,
+      ...(b.targetPlayerId !== undefined && { targetPlayerId: id(b.targetPlayerId) }),
+    })),
   };
 }
 
@@ -533,8 +544,15 @@ export class DemoRecorder {
 
   public recordFrame(players: DemoPlayerSnapshot[]): void {
     if (!this.active) return;
-    this.lastFrameAt = performance.now();
-    const now = this.lastFrameAt - this.startTime;
+    const at = performance.now();
+    // On a grid of the tick, not from whenever this frame happened to be drawn:
+    // restarting the interval at every frame keeps 28 frames a second at 250 fps,
+    // each one 36 ms after the last. A recorder more than a tick behind (a
+    // hitch) starts the grid again rather than bursting to catch up. The native
+    // recorder (`demo.rs`) keeps the same grid.
+    const interval = 1000 / (this.header?.tickRate ?? 30);
+    this.lastFrameAt = at - this.lastFrameAt < 2 * interval ? this.lastFrameAt + interval : at;
+    const now = at - this.startTime;
     this.frames.push({
       tick: this.currentTick++,
       timestamp: now,

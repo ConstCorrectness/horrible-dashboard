@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The first-person arms: a sleeved forearm and a gloved hand with real fingers.
 
-    "C:/Program Files/Blender Foundation/Blender 4.1/blender.exe" --background \
+    blender --background \
         --factory-startup --python tools/blender/generate_arms.py -- [--out PATH] [--render PNG]
 
 Writes `apps/web/public/hassault-hands.glb`, which both clients load: the browser

@@ -151,6 +151,7 @@ mod tests {
             base_color: base.into(),
             accent_color: "#ffffff".into(),
             pattern_type: "solid".into(),
+            ..Default::default()
         }
     }
 

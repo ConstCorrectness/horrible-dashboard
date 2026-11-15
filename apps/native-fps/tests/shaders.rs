@@ -72,6 +72,11 @@ fn the_prop_shader_parses_and_validates() {
 /// The post chain: bloom and the composite into the window. No lighting —
 /// it runs on the finished, tone-mapped scene.
 #[test]
+fn the_stage_blit_validates() {
+    validate("showcase.wgsl", include_str!("../src/showcase.wgsl"));
+}
+
+#[test]
 fn the_post_shader_parses_validates_and_names_its_passes() {
     let source = include_str!("../src/post.wgsl");
     validate("post.wgsl", source);

@@ -321,6 +321,13 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Whether this surface can be copied out of, which a replay's export
+    /// needs (`enable_capture`). Not every backend offers it.
+    can_capture: bool,
+    /// Copy the next presented frame back to the CPU.
+    capture_wanted: bool,
+    /// The last frame copied back, until taken.
+    captured: Option<CapturedFrame>,
     pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -494,7 +501,64 @@ impl SceneTargets {
     }
 }
 
+/// What `Renderer::render_with` lends a caller drawing into its frame.
+pub struct ExtraPass<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The window's frame, with everything this renderer draws already on it.
+    pub view: &'a wgpu::TextureView,
+    pub size: (u32, u32),
+}
+
+/// One presented frame, read back: what a replay export hands the encoder.
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    /// Blue first, as most swapchains are; otherwise red first.
+    pub bgra: bool,
+    /// Tightly packed rows, `width * height * 4` bytes, sRGB-encoded as shown.
+    pub pixels: Vec<u8>,
+}
+
 impl Renderer {
+    /// The device and queue, for passes built to draw into `render_with`.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// The window's pixel format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// Make every frame copyable, for an export. Reconfigures the surface,
+    /// so it is asked for once, when an export starts, rather than paying for
+    /// a copyable swapchain in every match. `false` when the surface cannot.
+    pub fn enable_capture(&mut self) -> bool {
+        if !self.can_capture {
+            return false;
+        }
+        if !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+            self.config.usage |= wgpu::TextureUsages::COPY_SRC;
+            self.reconfigure();
+        }
+        true
+    }
+
+    /// Read the next presented frame back; `take_capture` then has it.
+    pub fn capture_next(&mut self) {
+        self.capture_wanted = self.config.usage.contains(wgpu::TextureUsages::COPY_SRC);
+    }
+
+    pub fn take_capture(&mut self) -> Option<CapturedFrame> {
+        self.captured.take()
+    }
+
     /// Stand the device up and upload the world.
     ///
     /// Async because `wgpu`'s adapter and device requests are; the caller blocks
@@ -572,6 +636,7 @@ impl Renderer {
             &[format, SCENE_FORMAT, DEPTH_FORMAT],
         ));
 
+        let can_capture = caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -872,6 +937,9 @@ impl Renderer {
             device,
             queue,
             config,
+            can_capture,
+            capture_wanted: false,
+            captured: None,
             pipeline,
             camera_buffer,
             camera_bind_group,
@@ -1176,6 +1244,11 @@ impl Renderer {
         self.props.select(weapon)
     }
 
+    /// Tint an uploaded prop with a skin (`viewmodel::prop_tint`).
+    pub fn tint_prop(&mut self, weapon: &str, tint: [f32; 3]) {
+        self.props.tint(&self.queue, weapon, tint);
+    }
+
     /// Go back to the box model.
     pub fn clear_prop(&mut self) {
         self.props.clear();
@@ -1275,6 +1348,18 @@ impl Renderer {
     /// rather than as an error type, which is the more honest shape: "the frame
     /// did not happen" is not the same event as "the GPU is gone".
     pub fn render(&mut self, camera: &Camera) -> Result<bool, String> {
+        self.render_with(camera, &mut |_| {})
+    }
+
+    /// `render`, then `extra` drawing into the same finished frame — after the
+    /// post chain and the HUD, before it is presented. The main menu draws
+    /// over a live map this way (`front_gpu.rs`): its own passes, on this
+    /// device, into this frame, with no second surface on the window.
+    pub fn render_with(
+        &mut self,
+        camera: &Camera,
+        extra: &mut dyn FnMut(ExtraPass<'_>),
+    ) -> Result<bool, String> {
         use crate::profile::{Laps, Phase};
         let mut laps = Laps::new();
         self.take_rebuilt_textures();
@@ -1687,9 +1772,50 @@ impl Renderer {
             self.overlay.draw(&mut pass);
         }
 
+        extra(ExtraPass {
+            device: &self.device,
+            queue: &self.queue,
+            encoder: &mut encoder,
+            view: &view,
+            size: (self.config.width, self.config.height),
+        });
         if let Some(timer) = self.gpu_timer.as_mut() {
             timer.end(&mut encoder);
         }
+        // The finished picture, HUD and all, copied out before it is shown.
+        let readback = std::mem::take(&mut self.capture_wanted).then(|| {
+            let (width, height) = (frame.texture.width(), frame.texture.height());
+            let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+                * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("capture"),
+                size: padded as u64 * height as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &frame.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            (buffer, width, height, padded)
+        });
         let commands = encoder.finish();
         laps.lap(Phase::Encode);
         self.queue.submit(Some(commands));
@@ -1699,6 +1825,9 @@ impl Renderer {
         laps.lap(Phase::Submit);
         // Presented through the queue in wgpu 30, not off the texture.
         self.queue.present(frame);
+        if let Some((buffer, width, height, padded)) = readback {
+            self.captured = self.read_back(&buffer, width, height, padded);
+        }
         if suboptimal {
             self.reconfigure();
         }
@@ -1706,6 +1835,39 @@ impl Renderer {
         self.last_cost = cost;
         self.last_phases = laps.times;
         Ok(true)
+    }
+
+    /// Wait for a copy to land and take its pixels. Stalls the frame, which an
+    /// export can afford and nothing else asks for.
+    fn read_back(
+        &self,
+        buffer: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+        padded: u32,
+    ) -> Option<CapturedFrame> {
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok()?;
+        let pixels = {
+            let data = slice.get_mapped_range().ok()?;
+            crate::export::unpad(&data, width, height, padded)
+        };
+        buffer.unmap();
+        Some(CapturedFrame {
+            width,
+            height,
+            bgra: matches!(
+                self.config.format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            ),
+            pixels,
+        })
     }
 
     fn reconfigure(&mut self) {

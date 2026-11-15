@@ -407,11 +407,29 @@ because each reads what the step before it wrote:
    that baked into solid boxes. Last, run `probe_eye_inside.py`: an eye inside
    any mesh, colliders included, is a see-through bug.
 
-Run the generators on Blender **4.1**. They call `read_factory_settings`, which the
-Blender MCP sandbox refuses. With `HASSAULT_MAP_OUT` set to a scratch directory a
-generator writes there instead of the repo, so a change can be diffed first. The
-generators are deterministic: unchanged, they reproduce the committed GLBs byte
-for byte.
+Run the generators headless on Blender **5.3** (`BLENDER=/path/to/blender`
+for `bake_bounce.py`, which launches it itself); 4.1, which built the committed
+maps, still works. They call `read_factory_settings`, which the Blender MCP
+sandbox refuses, so the MCP connection is for looking at a scene, not for running
+a generator. With `HASSAULT_MAP_OUT` set to a scratch directory a generator
+writes there instead of the repo, so a change can be diffed first.
+
+The generators are deterministic: unchanged, they reproduce their own GLB byte
+for byte, run after run. Moving from 4.1 to 5.3 took two changes to keep that:
+
+- **The exporter's vertex-colour switch was renamed.** 4.1's `export_colors=True`
+  is `export_vertex_color="MATERIAL"` from 4.2 (`maplib._vertex_color_options`,
+  which reads which one the operator has). An unknown keyword fails the export.
+- **Face order stopped being repeatable.** From 4.2 the shape passes emit a
+  mesh's faces in an order that changes between runs — Dust II's merged dressing
+  came out with the same triangles in a different sequence each time, and the
+  AO bake, which follows face order, with them. `maplib.order_faces` sorts every
+  mesh's faces by their centre before export.
+
+Checked on Dust II: 5.3's GLB has the same 560 nodes, the same materials and the
+same vertices as 4.1's; a few faces split along the other diagonal (9 triangles
+of a palm trunk, 6 of 6,890 on the jars); AO within 0.02 on 95% of vertices; and
+`bake_collision.py` bakes the identical 1,227 brushes from it.
 
 **Resizing a map: cut it, do not scale it.** A generator's coordinates are metres, and
 every detail hangs off a wall by a few centimetres (a rug, a frieze, a sconce, a
@@ -575,7 +593,8 @@ nothing at runtime. Three things about it are not obvious:
   `COLOR_0` is repacked from Blender's three floats to four normalised bytes
   (`_bytes_for_colors`). The nine GLBs grew from 34.6 MB to 51.4 MB, 1.49 times;
   Facility, the least detailed, most (2.1 times), Inferno least (1.16).
-- *Blender 4.1 exports a vertex colour only if a material uses it.* So each
+- *The exporter writes a vertex colour only if a material uses it* (4.1, and
+  `export_vertex_color="MATERIAL"` on 5.3). So each
   receiving material's Base Color becomes Mix(Multiply, factor, Color
   Attribute "AO"), the one arrangement the exporter reads, which keeps the
   factor the clients see. Glass, water and anything self-lit take none.
@@ -1007,7 +1026,7 @@ What each map's revision changed:
 
 | Map | Sky | Layout | Dressing and lights |
 | --- | --- | --- | --- |
-| `hd_dust2` | `desert_noon` | Mid doors are a choke. A wall now closes the 9 m of open street beside them. A ramp lets you walk onto Catwalk from mid. Pit exit and Suicide are slopes instead of 1.4 m and 1.2 m steps. Adds a cart in Long A, a planter on the CT side of Short and a well in B. | Plinths, vigas, awnings, banners, cables and rubble. Lanterns and sconces light the tunnels and doorways (17 lights). |
+| `hd_dust2` | `desert_noon` | Mid doors are a choke. A wall now closes the 9 m of open street beside them. A ramp lets you walk onto Catwalk from mid. Pit exit and Suicide are slopes instead of 1.4 m and 1.2 m steps. Adds a cart in Long A, a planter on the CT side of Short and a well in B. | Plinths, vigas, awnings, banners, cables and rubble; 74 louvred blue shutters with sills and flower boxes, a glazed tile frieze on every wall, and crimson, saffron and teal cloth on the mid lines (`build_flourish`). Lanterns and sconces light the tunnels and doorways (17 lights). |
 | `hd_mirage` | `desert_noon`, lower western sun | Palace gets stairs at both ends; its 2.8 m floor had no way up. Walking onto the Window Room from the connector is now possible. The B Apartments get outside stairs and a ground-floor wall with a door. Two houses in mid and a wall short of B break the spawn-to-spawn and T-to-B sightlines. | Plinths, mosaic bands, vigas, awnings, planters and five lanterns. |
 | `hd_inferno` | `golden_hour` | A house in the east street splits the approach to A into two alleys. The pit exit and the T ramp are slopes, and mid gets a well. | Shutters, coping, washing across Banana, awnings. Lanterns now light, with sconces down Banana and under the apartments. |
 | `hd_nuke` | `overcast` | Adds jersey barriers and a container stack in the yard, and crates inside A. Later rebuilt: B moved out from under A into a sunken reactor room with a ramp, stairs and a vent from A, a Lobby and an east door added, and cut to 74 x 76 m (see above). | Door striping, hall pipes, six yard floodlights, wall packs, and the hall's, Lobby's, ramp's and B's troffers and B's reactor as lights. Rule-placed crates, drums and sandbags, and photographed concrete and steel. |
@@ -1925,6 +1944,7 @@ of the reasons that is true.
 | Rule | AC source | Here |
 | --- | --- | --- |
 | Ground/air response | `friction` 6 / 30, blended per frame | `GROUND_RESPONSE` / `AIR_RESPONSE` = `50/friction` per second |
+| Stopping | none: the blend only approaches | `GROUND_STOP_SPEED` 3, Source's `sv_stopspeed` idea |
 | Chained-jump boost | `1.25/max(speed/fullspeed, 1)` within 250 ms while strafing | `JUMP_CHAIN_BOOST` 1.25, `JUMP_CHAIN_WINDOW` 0.25 s |
 | Crouch | eye to 3/4, speed to 0.4, exempt when crouched in air | `CROUCH_EYE_SCALE`, `CROUCH_SPEED_SCALE`, `crouched_in_air` |
 | Gravity ramp | `dropf = (gravity-1) + timeinair/15` | `GRAVITY_RAMP`, capped at `MAX_GRAVITY_SCALE` |
@@ -1933,6 +1953,18 @@ of the reasons that is true.
 Ground control settles in ~0.12 s while air control takes ~0.6 s, which is what
 makes **momentum, not the stick, decide where a jump lands**. That single ratio is
 most of the feel.
+
+Run speed is **18 cubes/s**, which is Counter-Strike's run per body height (3.47
+heights a second). It was 22, a sprint no stride could keep up with, so every body
+skated. And on the floor the gap to the wish velocity closes as though it were
+`GROUND_STOP_SPEED` larger, then stops at zero:
+`gap(dt) = max(0, (gap + STOP)·exp(-k·dt) - STOP)`. The blend alone never arrives:
+a released key left the body drifting for 556 ms, and it is now 228 ms. That form
+is the exact solution of `gap' = -k·(gap + STOP)`, so it is as frame-rate
+independent as the blend. `tools/hassault_feel_report.py` prints the timings.
+
+Stepping off the top of a ladder uses the ground's response, not the air's. On air
+control alone it reached the ledge only at the old run speed.
 
 Two deliberate **deviations** from AC, both because its exact behaviour would be a
 bug here:
@@ -4699,6 +4731,64 @@ saved before this has `"frames": []`, and loading one showed a bar whose
 clock never moved over a world nothing posed, with the pointer captured so the
 bar could not be clicked. Those files cannot be recovered; record new ones.
 
+The recorder keeps its frames on a **grid of the tick**: each frame is due one
+interval after the last was *due*, not after it happened to be drawn. Measured
+from the draw, a 250 fps display kept 28 frames a second instead of 30, each one
+36 ms after the last. A recorder more than a tick behind (a hitch) starts the
+grid again rather than bursting. `parseDemo` also turns an event's `killerId`
+and `victimId`, and a bookmark's `targetPlayerId`, into strings as it already
+did a body's id: a killer read as the number 7 never matched the body now called
+`"7"`.
+
+#### In the native client
+
+The same files, both ways: `demo.rs` is `demo.ts`'s interfaces field for field
+(it had its own format — snake_case, numeric ids, 60 Hz, angles blended as
+degrees when they are radians — and was wired to nothing).
+`__tests__/demo-vectors.json`, written by `demo-vectors.test.ts`
+(`UPDATE_DEMO_VECTORS=1`), holds a file as it might arrive, what `parseDemo`
+makes of it and what `sampleCurrentFrame` draws at nine times; `demo.rs` parses
+the same file, serialises it back to the same JSON and samples the same bodies.
+
+- **Recording.** Pause menu → **REPLAYS** → **RECORD THIS MATCH** (it shows
+  `REC m:ss` while on), or **RECORD EVERY MATCH** (`hassault.replay.autoRecord`,
+  also on the main menu's settings), which starts at the join — from the menu
+  or from a `--map` launch. The `App` records once per tick after the frame is
+  posed: its own view from the prediction it draws with, then every body as
+  drawn; kills from the snapshot's `Fx::Kill`. The player names come from the
+  frames, so somebody who left still has one. It is written when stopped, and
+  on every way out of the match (`App::finish`, waited for, since a client with
+  no front end exits next), to `hAssault/demos/<map>-<UTC time>.hademo` beside
+  the local settings file, through a temporary name.
+- **REPLAYS tab** (`front/replays.rs`). The folder, newest first, read on a
+  worker when the tab opens: map, when, length, frags, whose eyes. **WATCH**
+  loads the recording's map with no server, as Train does, and hands the demo
+  to the `App` (`replay.rs`): nothing is simulated or sent, the bodies are the
+  demo's, and the camera is in the followed body's eyes with their weapon and
+  health on the view model and the HUD — that body left out of the drawn ones,
+  as your own is in a match. Keys: **P** (or Space) plays, arrows seek 5 s and
+  step the speed (0.1× to 4×), **B** jumps to the next frag two seconds early and
+  follows the killer, **N** follows the next body, **F6** the freecam (which
+  sees everyone), **H** hides the HUD and the bar. **OPEN FOLDER** shows the
+  folder. `--replay=<file>` does the same from a terminal, or a double-clicked
+  file once something is associated with it.
+- **EXPORT MP4** (and `--replay=<file> --export`) plays it into
+  `<demo name>.mp4` beside it, **offline**: the replay's clock is the frame
+  count over 60, never the wall's, so a slow machine takes longer and writes
+  the same file (the browser records in real time, at the bar's speed). The
+  surface is made copyable for the export only (`Renderer::enable_capture`),
+  each presented frame is read back and piped raw into `ffmpeg` from the PATH
+  (`export.rs`: H.264 through `libx264` when it has it, `yuv420p`, even sizes,
+  `+faststart`). The picture is clean — no HUD, no bar; the window title says
+  how far it has got, and Escape abandons it and deletes the partial file.
+  Without `ffmpeg` the button says so rather than writing something else. A
+  window resized mid-export stops it, since the encoder was told one size.
+  Video only, as in the browser.
+
+`cargo run --example demo_sample` writes a recording without playing a match —
+four bodies walking Dust II's benchmark framings, through whatever is in the
+way — into the demos folder, or to a path given.
+
 ### The native client
 
 `apps/native-fps` sat in the Play section advertising a "native C++ / Vulkan client
@@ -5836,7 +5926,7 @@ pistol, assault rifle, shotgun, sniper rifle) and the rest are appended, so an
 older client's weapon index still means the same gun: the Hand Cannon, the ARC
 Viper SMG, the ARC Raider (T side), the HALON Lancer and Lancer-S (CT side), the
 Scout and the Breacher auto-shotgun. The numbers are AssaultCube-*flavoured*
-rather than derived: our movement speed is 22 cubes/s, which is not AC's, so
+rather than derived: our movement speed is 18 cubes/s, which is not AC's, so
 copying its damage table would produce a different game wearing its numbers.
 
 They are **served, not duplicated** — `GET /api/hassault/weapons` — for the same
@@ -8380,6 +8470,129 @@ one texture; `front_gpu.rs` draws them in a pass under the overlay. `Front::imag
 lists what goes where by map name, and a map with no picture (`hd_aim` today)
 keeps its flat card.
 
+### The loadout's stage: models, not silhouettes
+
+The LOADOUT tab drew its weapon and operator as silhouettes built from
+rectangles (`front::weapon_art`), which say which class a weapon is and nothing
+about what it looks like — while the models themselves were already compiled
+into the executable for the match to draw. The tab now shows those, in three
+dimensions, and lets them be handled: **drag** turns, the **wheel** closes in,
+**F** turns a weapon over and brings it back, **R** resets. Left alone it turns
+slowly by itself.
+
+- **`showcase.rs`** is the state and the arithmetic, free of `wgpu` and tested
+  headless: what is on the stage, how it has been turned, and where the camera
+  stands. The model turns and the camera only climbs, so the light stays put and
+  moves across the metal. The camera is fitted to what the subject can *sweep*
+  — its widest reach across the frame, its height plus whatever of that reach
+  the climb tips into view — rather than to a bounding sphere, which would leave
+  a rifle (all length, no height) using half the frame it is given.
+- **`showcase_gpu.rs`** borrows the match's own `Props` and `Characters`
+  pipelines and its tone curve, pointed at a small target of its own, so what is
+  turned over in the menu is shaded as it will be in the hands. The operator is
+  the client's own `Squad`, so it breathes and aims where it is turned. Its
+  light is not a map's: a studio rig — key over the left shoulder, cool rim from
+  behind, a bright sky for gun metal to reflect — because under the default rig
+  a black pistol on a dark panel is a hole in the picture.
+- **Placed by coverage, not as a box.** The tone curve does not carry alpha, so
+  the last pass (`showcase.wgsl`) takes its colour from the tone-mapped picture
+  and its alpha from the *scene* it was made from — zero where the stage was
+  cleared, one where a model was drawn. Only the weapon lands on the panel, and
+  the panel's grid runs behind it. The stage is drawn at 1.5× and scaled down,
+  which with FXAA is its anti-aliasing.
+- **Nothing blocks the menu.** The parses are a tenth of a second a weapon and
+  more for the operators' textures, so they run off the frame thread
+  (`prop::preload`, and a worker that warms `Squad::load`); the silhouette holds
+  the place until `Front::staged` says the model has landed. A new `FrontGpu`
+  after a match is a new device, and loads them again.
+
+A weapon is shown as its **class** model (`showcase::prop_for`): there are five
+props and more weapons than that, the same arrangement the match has.
+
+**INVENTORY and STORE have the stage too**, at the top right with the grid or
+the market narrowed to its left. The inventory shows the skin last pointed at —
+it stays after the pointer leaves, since the pointer has to leave to reach the
+model — and the store shows the selected listing when it is a skin (a key or a
+case has no model). A knife is shown as the archetype its design names
+(`inspects::knife_archetype`, the match's rule), so a karambit is a karambit.
+Under the model, the skin's name in its grade's colour, then the grade, the
+wear and the float.
+
+The grade's colour is the server's: `skins.py` serves `rarityColor` beside
+`rarity` on every definition, and the client reads it rather than keeping a
+table of its own. Inventory cards carry it as light rising from their foot and
+a line along it; market rows as their leading edge and their KIND column.
+
+**Finishes are shown, in the match as well.** The weapon models were drawn
+stock in the native client whatever was equipped: `props_gpu` had no input for a
+skin, and only the box fallback was ever recoloured. The browser *tints* its GLB
+prop rather than repainting it — the materials carry real texture maps, and the
+colour multiplies the map — with the skin palette's body colour, worn as the
+boxes wear it, and leaves an archetype knife white because its finish is baked
+into its texture. `viewmodel::prop_tint` is that rule, decoding the colour from
+sRGB as three's `setHex` does, and `Props::tint` multiplies it into each
+material's own base colour (written only when it changes). The first-person
+weapon in a match wears it, and so does the stage. Three things the browser
+also changes are not: roughness, metalness and reflection strength by wear —
+the native prop shader has no environment term to change.
+
+The tab bar's light slides from the last tab to the new one over 0.22 s rather
+than jumping (`Front::tab_light`).
+
+Setting this up found a crash the match could also hit: `Squad` kept an actor's
+pose across a change of side, and the two operators are different rigs (34
+bones and 65), so the next frame reset one from the other and panicked on the
+slice length. An actor is now rebuilt when its player swaps sides.
+
+`cargo run --example showcase_preview` writes a sheet of every prop and both
+operators through the same object; `hud_preview front-loadout`,
+`front-operator`, `front-inventory` and `front-store` draw the stage in place.
+
+The same pass gave the tab colour: each side has its own (`ui_theme::SIDE_T`,
+`SIDE_CT`) on its tab, the panel's edge and the light under the stage; each
+statistic has a hue, graded along its bar; and two slow washes cross the
+backdrop behind every screen.
+
+### The map behind the menu, live
+
+The main menu used to sit on a still picture of a map. Once a map has loaded
+it is the map itself, flying behind the menu: the match's own `Renderer`, with
+the world built from the same compiled GLB a match uses
+(`world3d::is_modelled`, shared with `App::new`) and lit as a match on it would
+be. The camera holds each of the map's benchmark framings (`bench-paths.json`,
+views somebody already chose) for 14 seconds with a slow pan and drift, then dips
+to dark and cuts to the next (`backdrop.rs`) — framings are rooms apart, and a
+glide between two goes through the walls between them.
+
+- **One window, one surface, either owner.** `FrontGpu` starts **flat**, on its
+  own device, and the menu is on screen before anything is fetched. When the
+  backdrop's map has been built on a worker, the shell drops the flat one and
+  makes a `Renderer` on the window; from then on the menu's passes
+  (`FrontPasses`: the pictures, the overlay, the stage) are built on the
+  renderer's device and drawn into each of its finished frames through
+  `Renderer::render_with`. Another map is a `set_world`, not a new renderer.
+- **Darkened under the pictures, not over them.** The map tiles are drawn
+  before the overlay, so a scrim painted in the overlay would darken them with
+  the world. The scrim is its own pass, between the world and the tiles, at
+  0.78 — about as bright as the still picture was, a little more so the motion
+  reads — and to black at the cuts.
+- **Which map:** whatever the home screen's picture would have been — the map
+  under the cursor, or the busiest room's when picking. A map with no framings,
+  and the **Low** quality tier, keep the still picture. While a match loads, its
+  own map's picture is shown, since that is the subject.
+- The renderer does not wait for the display with vsync off, so a live menu is
+  capped at 120 frames a second (`pacing::FramePacer`).
+- `HASSAULT_MENU_SHOT=<file.png>` saves one frame of the live menu
+  (`HASSAULT_MENU_SHOT_AT` seconds in, default 6), for looking at it without a
+  screenshot tool — the export's readback, once.
+
+**The top bar fits seven tabs.** The identity block on the right is as wide as
+what it says (`Front::identity_width`): it used to be a fixed 200 units, and its
+right-aligned status line spilled out under the last tab. When the whole status
+and seven tabs at their natural size do not both fit, the status drops its room
+count first; then the tabs' margins narrow; then, at 4:3, their labels shrink.
+There is always a clear gap before the block.
+
 ### Signing in, with no node
 
 A client with no node played as a guest and owned nothing. It can now sign in
@@ -10748,29 +10961,79 @@ baked into the pixels rather than left to the exporter's canvas transform.
 it is unit tested headless rather than eyeballed in a match. A wrong clip is not
 a crash — it is an enemy who appears to walk forward while retreating.
 
-Velocity is projected onto the player's own facing, and the dominant axis picks
-the clip rather than blending two: two walk cycles at half weight each land both
-feet in the wrong place, whereas one cycle played whole keeps its foot contacts.
-Speed is smoothed, and there is an idle floor (`IDLE_SPEED`), because
-interpolated remote positions jitter by a fraction of a cube at rest and without
-one that jitter drives the walk cycle — an idle enemy pacing on the spot.
+What is chosen is **posture**, not gait: `rifle_aiming_idle` standing, the kneel
+or the crouch-walk crouched, `running_jump` airborne, a death clip dead. It used
+to pick a walk, a strafe or a retreat by direction, and those clips are still in
+the GLB — but their feet do not keep up with the body (below), so a moving
+player's legs are solved and its torso holds the aiming pose.
 
-Death and airborne are checked before direction, because both override it
-entirely: a player killed mid-strafe is dying, not strafing. A dead player now
-stays drawn so the death clip can play out; the old rig had no death animation
-to run, so hiding the body on the frame it died was all there was.
+Death and airborne are checked first, because both override everything: a player
+killed mid-strafe is dying, not strafing. A dead player stays drawn so the death
+clip can play out; the old rig had no death animation to run, so hiding the body
+on the frame it died was all there was.
 
-### Two things a clip cannot know
+### Feet that stay where they are put
 
-Both are applied **after** `mixer.update()`, never before — `AnimationMixer`
+Players looked like they were skating because they were. The clips have their
+root motion stripped and play at a fixed rate, so each implies a foot speed — and
+measured off `hassault-operator.glb` the fastest is 3.4 cubes/s (`rifle_walk`)
+under a body doing 18. The feet covered a fifth of the ground the body did.
+Scaling the playback rate fixes one speed in one direction; a strafe, a diagonal
+or a stop still slides.
+
+So the legs are solved, not played. `models/locomotion.ts` (three-free, like
+`clips.ts`) keeps a gait per body: each foot is either **planted**, and then it
+does not move in the world whatever the body does, or **swinging** to where the
+hip will be when it lands plus the half-stance it lands ahead by. Slide is zero
+by construction rather than by tuning, at any speed and in all eight directions.
+
+- **Cadence rises with speed**, and faster than its line where that is what it
+  takes to keep one foot down — a slow walk with both feet in the air is a hop.
+  Past `CADENCE_MAX` the legs cannot keep up and the share of the cycle a foot
+  spends planted (`duty`) falls below a half: that is a run, with a flight phase,
+  and it falls out of the reach of the leg rather than being a second mode.
+- **The pelvis** turns part of the way toward a diagonal and squares up again on
+  all four axes (`sin 2a`), so backing away to one side still points the hips
+  along the line being travelled. It sinks a little into the stride and leans
+  into the travel.
+- **Velocity is not on the wire**, so it is read off two positions and smoothed.
+  Under `IDLE_SPEED` the legs are handed back to the clip — interpolated
+  positions jitter at rest, and that jitter must not start a stride. A jump in
+  position faster than `TELEPORT_SPEED` is a respawn, not a sprint.
+- A turn or a stop can leave a planted foot out of reach. It is dragged to the
+  edge of reach: a slide, but a short one, where leaving it would tear the leg
+  off the hip.
+
+`CharacterAnimator` applies it after the mixer: the pelvis is squared onto its
+heading (the aiming clips stand it 40° off), then each leg is solved hip to ankle
+with the same two-bone solver the first-person arms use, as two shortest-arc
+turns that leave each bone's own twist as the clip had it.
+
+`locomotion.test.ts` states the complaint as a measurement on both shipped rigs:
+a foot whose ankle is on the ground moves less than 2% of the ground the body
+covers, walking and running, in eight directions — and each foot must be on the
+ground for a minimum share of the time, because a leg that cannot reach its
+target would otherwise pass by never being measured.
+
+### What else a clip cannot know
+
+All of it is applied **after** `mixer.update()`, never before — `AnimationMixer`
 overwrites bone transforms wholesale every update, so anything set beforehand is
 discarded without warning.
 
-- **Aim pitch.** Every Mixamo clip looks at the horizon, so without this an enemy
-  firing down from a balcony appears to be aiming straight ahead, which misreads
-  their attention entirely. Spread across spine, chest and head — all of it in
-  the neck snaps the head off the shoulders — and applied as a delta on the posed
-  rotation so the clip's own spine motion survives.
+- **The aim.** Every Mixamo clip looks at the horizon, and the moving clips
+  carried the rifle across the chest — about 85° off the look direction. A fixed
+  share of the pitch down the spine, which is what this used to be, cannot fix
+  either: it adds to wherever the clip left the weapon. So the barrel's direction
+  is **measured** off the hand that holds it, and the three spine bones each take
+  a third of the rotation that carries it onto the row's yaw and pitch. The
+  thirds are the same rotation about the same axis, so they compose to the whole
+  exactly — no iteration, no residual. The neck and head then turn the rest of
+  the way onto the look and are levelled about it, since the spine's turn leaves
+  the head cocked. Tested on both rigs in every posture, looking down, level and
+  up: barrel and face within 3° on every frame, crossfades and strides included.
+  A reload is the exception — the rifle is meant to come off the line — so the
+  chest is aimed instead and the arms are left to the clip.
 - **Upper-body actions.** Firing and reloading have to layer over whatever the
   legs are doing. `AnimationMixer` blends overlapping actions by weighted
   _average_ rather than letting one win, so a fire clip played over a walk comes
@@ -10798,6 +11061,60 @@ Two things are cloned rather than shared, and both are silent when missed:
 
 Geometry stays shared and is never disposed per player; freeing it with one
 avatar would blank every other body on the field.
+
+### Dust II's colour pass, and the operators' gear
+
+Both made with Blender 5.3, both kept off everything gameplay reads.
+
+**Dust II** got a warmer, more saturated palette — the grey paving a sun-warmed
+cream, the sandstones deeper, the tile a stronger blue, the fabrics richer — and
+`build_flourish` in `generate_dust2.py`: louvred blue shutters with a sill, a
+lintel and every other one a flower box, on both faces of the Long A and Mid
+walls and the inside of the perimeter; a blue-and-gold frieze along every wall
+that lacked one; cloth hung from the mid lines. Two new materials,
+`mat_dust2_canopy_teal` (burlap) and `mat_dust2_wood_shutter_blue` (wood),
+are rows in `glb-surface-vectors.json`.
+
+- **Collision is byte for byte what it was.** Everything new is `_NonCol` and
+  starts above 4.3 m, over the 2.2 m the dressing planner treats as solid, so
+  no rule-placed crate moves either. The bake reproduces all 1,227 brushes;
+  only `collisionSource`/`collisionBaked` changed (the collision mesh now holds
+  the trim). `maplint`, the nav and bake tests, the collision audit (0 floor
+  mismatches) and the eye probe (0 objects) pass.
+- **Windows are placed by what is in front of them.** `_wall_is_bare` reads
+  the warper's scan of everything already built (in the authored frame, before
+  the cuts) and skips any spot with a door, arch, lantern, banner, roof or
+  awning in front of it, so the perimeter could be dressed without a
+  hand-typed list of where its buildings stand.
+- The **key art** (`apps/assault-web/src/assets/maps/hd_dust2.webp`) is a frame
+  of the game itself: the live menu's renderer at Dust II's "site A lo"
+  framing, taken with `HASSAULT_MENU_SHOT_BARE=1 HASSAULT_MENU_SHOT_MAP=hd_dust2
+  HASSAULT_MENU_SHOT_AT=7`, cropped to 1600×782. The old one was a browser
+  screenshot from before the photographed surfaces.
+
+**The operators** (`tools/blender/enhance_operator.py`). T gets a plate carrier
+with three magazine pouches and a radio pouch, a belt with two pouches, a scarf,
+and orange armbands; CT, already in a carrier and helmet, gets blue armbands and
+a blue stripe round the helmet. The armbands are the point: which side somebody
+is on reads at fifty metres as the colour of their arms.
+
+- **Appended, not re-exported.** A Blender round trip of three's export would
+  re-orient bones, resample all 23 clips and rename what the clients look up.
+  Instead Blender's bmesh models the pieces and the script adds them to the GLB
+  as one more mesh (`Gear`) under the same root, with its own skin over bones
+  the rig already has and inverse binds copied from the skins there. Each piece
+  follows one bone rigidly. The original bytes are kept; the rig is still 34
+  and 65 bones.
+- **Sized from the body.** The carrier, belt, scarf and bands are fitted to the
+  bind-pose body read from the file. T's eighty primitives index one vertex
+  buffer (read once), and a sword across his back is weighted to his spine:
+  `core` measures the body as the run of occupied space round the spine,
+  bridging the hollow of the chest but not the gap to the sword.
+- A file with `Gear` in it is refused: run the script on the undressed model
+  (`git show <rev>:apps/web/public/<file>`), never on its own output.
+- `assets/manifest.json` and `assets.manifest.json` carry the new hashes
+  (`pnpm assets:pack`). **The `assets-v5` release is not published**: until it
+  is, `pnpm assets:pull` would fetch the v4 operators and refuse them.
 
 ### The operator in the native client
 
@@ -10865,8 +11182,19 @@ Clip selection is duplicated in `clips.rs`, and the duplication is made safe the
 way the physics is: both clients replay
 `packages/core/src/modules/hassault/__tests__/clip-vectors.json`. The fixture
 pins **agreement**; each side's own unit tests pin correctness. It covers the
-`crouch > 0.5` and `speed > IDLE_SPEED` boundaries, the strafe-dominance
-tie-break, and the three ways glTF export writes Mixamo's bone prefix.
+`crouch > 0.5` and `speed > IDLE_SPEED` boundaries and the three ways glTF
+export writes Mixamo's bone prefix.
+
+The gait is duplicated the same way, in `locomotion.rs`, against
+`__tests__/locomotion-vectors.json` — which the browser suite writes
+(`UPDATE_LOCOMOTION_VECTORS=1`) from scripted runs, stops, strafes, a jump and a
+respawn, on uneven frame times. The port is in `f64` although the renderer is
+`f32`: the gait carries state across hundreds of frames and decides things by
+comparison (is this foot in stance yet), so single precision would land a
+touchdown a frame apart from the browser and fail the fixture over nothing. The
+leg and aim solves on top of it are not fixture-pinned — they are stated in each
+client's own skeleton types — and are instead held to the same measurements on
+each side: `animator.rs` carries the 2% slide and 3° aim tests too.
 
 #### Lighting, and why the two clients stopped matching
 
@@ -11144,8 +11472,15 @@ suite that fails on a machine without one gets ignored.
 The **facing** convention is the exception — it is pinned in code rather than by
 eye, because one operator at one yaw cannot tell a correct rotation from a
 mirrored one: both look right head-on and disagree everywhere else. The test
-walks the full circle and compares against the forward vector `bodies.rs`
-derives, which is the definition the rest of the client already agrees with.
+walks the full circle and compares against `Camera::forward` at the same yaw.
+
+It was first pinned against the forward vector `bodies.rs` derived, and that was
+the bug: the box rig was itself mirrored, so the test agreed with a wrong
+definition. The model was turned by `yaw + π/2` where the camera implies
+`π/2 − yaw`; the two agree at yaw 0 and π and nowhere else, so a player looking
+along cube +y was drawn looking along −y, and every body on a north-south line
+faced away from where it was aiming. The camera is the definition that cannot be
+wrong without the player noticing.
 
 The browser client got this wrong for longer. `avatars.ts` turned the operator
 with the camera's own `-yaw - π/2`, which is correct for a −Z forward. That was

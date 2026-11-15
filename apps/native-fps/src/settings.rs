@@ -84,6 +84,9 @@ pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
 pub const KEY_GRENADE_ARC: &str = "hassault.debug.grenadeArc";
 /// `CONTROLS_KEY` in the pane's `menu-panels.tsx`.
 pub const KEY_CONTROLS: &str = "hassault.controls";
+/// Record every match as a `.hademo` from the moment it is joined. Native
+/// only: the browser records from its menu button.
+pub const KEY_AUTO_RECORD: &str = "hassault.replay.autoRecord";
 
 /// How much the renderer is allowed to spend on looking good.
 ///
@@ -587,6 +590,10 @@ pub struct Settings {
     /// CS's `cl_radar_*` rows, read through the one reader the radar fixture
     /// pins against the browser's (`radar::RadarSettings::from_values`).
     pub radar: crate::radar::RadarSettings,
+    /// Record every match from the moment it is joined (`demo.rs`). Off by
+    /// default: a demo is a file on the player's disk, and filling a folder
+    /// with them is something to choose.
+    pub auto_record: bool,
 }
 
 /// The GPU rows, as the menu steps them.
@@ -645,6 +652,7 @@ impl Default for Settings {
             show_hitboxes: false,
             grenade_arc: false,
             radar: crate::radar::RadarSettings::default(),
+            auto_record: false,
         }
     }
 }
@@ -770,6 +778,9 @@ impl Settings {
         if let Some(v) = flag(KEY_GRENADE_ARC) {
             s.grenade_arc = v;
         }
+        if let Some(v) = flag(KEY_AUTO_RECORD) {
+            s.auto_record = v;
+        }
         s.radar = crate::radar::RadarSettings::from_values(values);
         s
     }
@@ -826,6 +837,7 @@ impl Settings {
             }
             KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
             KEY_GRENADE_ARC => json!(self.grenade_arc),
+            KEY_AUTO_RECORD => json!(self.auto_record),
             key if key.starts_with("hassault.radar.") => return self.radar.value_for(key),
             _ => return None,
         })
@@ -1179,6 +1191,7 @@ mod tests {
             KEY_CROSSHAIR_OUTLINE_THICKNESS,
             KEY_SHOW_HITBOXES,
             KEY_GRENADE_ARC,
+            KEY_AUTO_RECORD,
         ] {
             bag.insert(key.into(), original.value_for(key).expect("a value"));
         }

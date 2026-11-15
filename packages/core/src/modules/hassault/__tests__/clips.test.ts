@@ -11,7 +11,6 @@ import { describe, expect, it } from 'vitest';
 import {
   IDLE_SPEED,
   OPERATOR_CLIPS,
-  RUN_SPEED,
   boneKey,
   fadeFor,
   isOneShot,
@@ -28,9 +27,6 @@ function state(over: Partial<OperatorState> = {}): OperatorState {
     ground: true,
     crouch: 0,
     speed: 0,
-    forward: 1,
-    strafe: 0,
-    hurt: false,
     ...over,
   };
 }
@@ -56,42 +52,28 @@ describe('operator clip manifest', () => {
 });
 
 describe('selectLocomotion', () => {
-  it('holds an idle rather than shuffling on interpolation jitter', () => {
-    // Remote positions wobble a fraction of a cube at rest; without a floor that
-    // wobble drives the walk cycle and an idle enemy paces on the spot.
-    expect(selectLocomotion(state({ speed: 0 }))).toBe('rifle_aiming_idle');
-    expect(selectLocomotion(state({ speed: IDLE_SPEED - 0.01 }))).toBe('rifle_aiming_idle');
-    expect(selectLocomotion(state({ speed: IDLE_SPEED + 0.5 }))).not.toBe('rifle_aiming_idle');
+  it('holds the aiming pose standing, at any speed', () => {
+    // The legs are solved under it (`locomotion.ts`); the walk and strafe clips
+    // are no longer chosen, because their feet do not keep up with the body.
+    for (const speed of [0, IDLE_SPEED + 0.5, 4, 18]) {
+      expect(selectLocomotion(state({ speed }))).toBe('rifle_aiming_idle');
+    }
   });
 
-  it('picks a direction from velocity relative to facing', () => {
-    const moving = { speed: 4 };
-    expect(selectLocomotion(state({ ...moving, forward: 1, strafe: 0 }))).toBe('standard_walk');
-    expect(selectLocomotion(state({ ...moving, forward: -1, strafe: 0 }))).toBe(
-      'walking_backwards',
-    );
-    expect(selectLocomotion(state({ ...moving, forward: 0, strafe: 1 }))).toBe(
-      'right_strafe_walking',
-    );
-    expect(selectLocomotion(state({ ...moving, forward: 0, strafe: -1 }))).toBe('strafing');
+  it('lets death and airborne override everything', () => {
+    // A player killed mid-run is dying, not running.
+    expect(selectLocomotion(state({ alive: false, speed: 8 }))).toBe('death_from_the_front');
+    expect(selectLocomotion(state({ ground: false, speed: 8 }))).toBe('running_jump');
   });
 
-  it('runs rather than walks above the run threshold', () => {
-    expect(selectLocomotion(state({ speed: RUN_SPEED + 2 }))).toBe('rifle_walk');
-    expect(selectLocomotion(state({ speed: RUN_SPEED + 2, hurt: true }))).toBe('injured_run');
-  });
-
-  it('lets death and airborne override direction entirely', () => {
-    // A player killed mid-strafe is dying, not strafing.
-    expect(selectLocomotion(state({ alive: false, speed: 8, strafe: 1 }))).toBe(
-      'death_from_the_front',
-    );
-    expect(selectLocomotion(state({ ground: false, speed: 8, strafe: 1 }))).toBe('running_jump');
-  });
-
-  it('crouches independently of direction', () => {
+  it('crouches, and kneels only when still', () => {
+    // Crouched positions wobble a fraction of a cube at rest; without a floor
+    // that wobble would flick a kneeling enemy in and out of the crouch-walk.
     expect(selectLocomotion(state({ crouch: 1, speed: 3 }))).toBe('crouch_walking');
     expect(selectLocomotion(state({ crouch: 1, speed: 0 }))).toBe('rifle_crouch_walk_to_kneel');
+    expect(selectLocomotion(state({ crouch: 1, speed: IDLE_SPEED - 0.01 }))).toBe(
+      'rifle_crouch_walk_to_kneel',
+    );
   });
 
   it('only ever names a clip the GLB actually contains', () => {
@@ -100,13 +82,7 @@ describe('selectLocomotion', () => {
       for (const ground of [true, false]) {
         for (const crouch of [0, 1]) {
           for (const speed of [0, 3, 12]) {
-            for (const forward of [-1, 0, 1]) {
-              for (const strafe of [-1, 0, 1]) {
-                for (const hurt of [true, false]) {
-                  every.push(state({ alive, ground, crouch, speed, forward, strafe, hurt }));
-                }
-              }
-            }
+            every.push(state({ alive, ground, crouch, speed }));
           }
         }
       }

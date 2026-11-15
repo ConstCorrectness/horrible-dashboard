@@ -66,6 +66,8 @@ that both sides replay, or merely asserted in a comment.
 | Movement, collision, spawn placement | `world.ts` + `player.ts`, `physics.py`, `physics.rs` | `__tests__/physics-vectors.json` (`cases`, `spawns`) |
 | Shot geometry | `trace.ts`, `weapons.py`, `trace.rs` | same fixture (`traces`, `bodies`) |
 | Operator clip selection | `models/clips.ts`, `clips.rs` | `__tests__/clip-vectors.json` |
+| Operator gait: stride, foot plants, pelvis turn and lean | `models/locomotion.ts`, `locomotion.rs` (in `f64`, to land touchdowns on the browser's frame) | `__tests__/locomotion-vectors.json` (`UPDATE_LOCOMOTION_VECTORS=1`) |
+| Demo format (`.hademo`): parse, id normalisation, interpolated sampling | `demo.ts`, `demo.rs` | `__tests__/demo-vectors.json` (`UPDATE_DEMO_VECTORS=1`) |
 | Surface tint, face shades, detail tile | `geometry.ts` + `surfaces.ts`, `geometry.rs` + `detail.rs` | `__tests__/surface-vectors.json` |
 | Radar frame (span, centre, rotation), blip sizes, floor bands, wall outline, palette, settings reader | `radar-view.ts`, `radar.rs` | `__tests__/radar-vectors.json` (`UPDATE_RADAR_VECTORS=1`); its noise radii are also read back by `test_hassault_radar_heard.py` |
 | Light rig, sky, fog and point lights | `atmosphere.py` (served), `atmosphere.ts`, `atmosphere.rs` + `lighting.wgsl.inc` | `tests/browser_parity.rs`, which reads the TS and Python sources: fallback rigs, candela rule, attenuation |
@@ -95,6 +97,9 @@ maintenance hazard, listed so that changing one sends you to the other:
 | Tone curve, sky shader | `HorribleAssaultPanel.tsx` + `atmosphere.ts` `createSky`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
 | Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
 | Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
+| Demo recording cadence (the tick grid) and kill bookmark labels | `demo.ts` `DemoRecorder`, `demo.rs` `DemoRecorder` | A demo from one client keeps a different number of frames, or labels a frag differently |
+| A skin's tint on the GLB weapon (palette body, decoded from sRGB; archetype knives left white) | `viewmodel.ts` `requestProp`, `viewmodel.rs` `prop_tint` → `props_gpu` `Props::tint`. The palette under it is pinned (`tests/cosmetics.rs`); the decode and the knife rule are not | The same skin a different shade in each client, or a karambit painted over its baked finish |
+| Leg and aim solves over the gait (pelvis squaring, two-bone legs, spine thirds, head levelling) | `CharacterAnimator.ts`, `animator.rs` | Not fixture-pinned, but each side carries the same two measurements on the shipped rigs — a grounded foot slides under 2% of the ground covered, barrel and face within 3° of the look (`locomotion.test.ts`, `animator.rs`) — so drift shows as one of them failing rather than as a look |
 | Effect lifetimes, tints, blast curves | `effects.ts`, `effects.rs` | A tracer that lingers in one client and blinks in the other |
 | Build-in timing, band, rise, glow | `reveal.ts`, `reveal.rs` + `shader.wgsl` | The map assembles at a different speed or from a different direction |
 | Grenade and cloud tints, fuse blink rate | `nades.ts`, `nades.rs` | Smoke reads as a different colour depending on which client you launched |
@@ -126,7 +131,7 @@ is absent.
 
 | Feature | Browser | Notes |
 | --- | --- | --- |
-| Boot/backdrop scenery | `backdrop.ts` | Deliberately not ported: it is boot-sequence scenery, faded to zero once you deploy, and the native client goes straight into the map |
+| Boot/backdrop scenery | `backdrop.ts` | Not ported as such: it is boot-sequence scenery, faded to zero once you deploy. The native menu has its own instead — the selected map, live, flying its benchmark framings (`backdrop.rs`) |
 | Joining an invite mid-session | `session.ts` | The invite is now *shown* natively; acting on it means leaving this match and reconnecting to another room, which the client cannot yet do |
 
 And in the other direction, so the list is honest: the native client has a
@@ -143,6 +148,8 @@ browser's to pick up when somebody wants it:
 | --- | --- | --- |
 | Damage-direction arrows | `damage-arrows.ts` | Off `you.hurt`, which both clients receive. Same life (1.2 s), cap (6), square fade, radius and spread in HUD units; `damage-arrows.test.ts` pins the screen-space sign in all four quarters |
 | Damage-lag trail, magazine strip, reload dial | — | Pure presentation, no wire involved |
+| A 3D stage in the loadout, inventory and store: the weapon, operator or skin to turn, zoom and inspect | A static loadout page | `showcase.rs` + `showcase_gpu.rs`, on the match's own prop and character pipelines. No wire involved; the models are the ones both clients already ship |
+| A list of saved replays, auto-recording, and an export stepped at a fixed 60 fps | A file picker, a record button, and a real-time `MediaRecorder` export | `front/replays.rs`, `replay.rs`, `export.rs` (`ffmpeg` from the PATH). The files are the same format both ways — see the demo row above |
 | Armour bar | `armour` in the HUD | The browser has read `armour` all along; the **native client silently dropped the field**, because an undeclared field in serde is not an error. Declared now |
 | Screen shake | — | `camera::Shake`, fed by firing (from the served `kickback`), by damage taken, and by nearby detonations. Applied to a **copy** of the camera at draw time — see below |
 | Weapon draw/holster | — | A swap reads as an action. The holster fires on the *key*, before the server has confirmed the slot, and recovers on its own if it is refused |

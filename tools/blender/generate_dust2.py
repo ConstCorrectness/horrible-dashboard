@@ -116,7 +116,7 @@ def setup_materials():
     # Sun-bleached limestone & ochre sandstone with realistic masonry bump
     mats["sandstone_light"] = create_pbr_material(
         "mat_dust2_sandstone_light",
-        (0.84, 0.74, 0.58),
+        (0.88, 0.74, 0.54),
         metallic=0.02,
         roughness=0.85,
         bump_strength=0.15,
@@ -124,7 +124,7 @@ def setup_materials():
     )
     mats["sandstone_ochre"] = create_pbr_material(
         "mat_dust2_sandstone_ochre",
-        (0.76, 0.58, 0.40),
+        (0.80, 0.56, 0.34),
         metallic=0.02,
         roughness=0.90,
         bump_strength=0.20,
@@ -132,7 +132,7 @@ def setup_materials():
     )
     mats["sandstone_dark"] = create_pbr_material(
         "mat_dust2_sandstone_dark",
-        (0.58, 0.46, 0.35),
+        (0.60, 0.44, 0.30),
         metallic=0.02,
         roughness=0.92,
         bump_strength=0.22,
@@ -140,7 +140,7 @@ def setup_materials():
     )
     mats["limestone_paving"] = create_pbr_material(
         "mat_dust2_limestone_paving",
-        (0.78, 0.72, 0.62),
+        (0.84, 0.73, 0.56),
         metallic=0.01,
         roughness=0.80,
         bump_strength=0.18,
@@ -148,7 +148,7 @@ def setup_materials():
     )
     mats["desert_sand"] = create_pbr_material(
         "mat_dust2_desert_sand",
-        (0.88, 0.76, 0.54),
+        (0.90, 0.74, 0.48),
         metallic=0.0,
         roughness=0.95,
         bump_strength=0.08,
@@ -158,7 +158,7 @@ def setup_materials():
     # Moroccan architectural accents
     mats["moorish_tile_blue"] = create_pbr_material(
         "mat_dust2_moorish_tile_blue",
-        (0.12, 0.35, 0.58),
+        (0.07, 0.33, 0.66),
         metallic=0.10,
         roughness=0.25,
         bump_strength=0.05,
@@ -166,7 +166,7 @@ def setup_materials():
     )
     mats["moorish_tile_gold"] = create_pbr_material(
         "mat_dust2_moorish_tile_gold",
-        (0.82, 0.62, 0.18),
+        (0.90, 0.64, 0.12),
         metallic=0.15,
         roughness=0.30,
         bump_strength=0.05,
@@ -182,7 +182,7 @@ def setup_materials():
     )
     mats["wood_crate"] = create_pbr_material(
         "mat_dust2_wood_crate",
-        (0.52, 0.38, 0.24),
+        (0.58, 0.40, 0.22),
         metallic=0.0,
         roughness=0.68,
         bump_strength=0.25,
@@ -208,7 +208,7 @@ def setup_materials():
     # Fabrics & foliage
     mats["canopy_crimson"] = create_pbr_material(
         "mat_dust2_canopy_crimson",
-        (0.58, 0.12, 0.14),
+        (0.68, 0.10, 0.12),
         metallic=0.0,
         roughness=0.88,
         bump_strength=0.12,
@@ -216,11 +216,29 @@ def setup_materials():
     )
     mats["canopy_saffron"] = create_pbr_material(
         "mat_dust2_canopy_saffron",
-        (0.85, 0.55, 0.10),
+        (0.93, 0.58, 0.08),
         metallic=0.0,
         roughness=0.88,
         bump_strength=0.12,
         bump_scale=35.0,
+    )
+    # A third cloth, and the painted shutters: the blue-green that every
+    # Dust II wall of windows is remembered for, against the sandstone.
+    mats["canopy_teal"] = create_pbr_material(
+        "mat_dust2_canopy_teal",
+        (0.06, 0.45, 0.48),
+        metallic=0.0,
+        roughness=0.88,
+        bump_strength=0.12,
+        bump_scale=35.0,
+    )
+    mats["shutter_blue"] = create_pbr_material(
+        "mat_dust2_wood_shutter_blue",
+        (0.10, 0.36, 0.62),
+        metallic=0.0,
+        roughness=0.72,
+        bump_strength=0.25,
+        bump_scale=12.0,
     )
     mats["palm_bark"] = create_pbr_material(
         "mat_dust2_palm_bark",
@@ -239,7 +257,7 @@ def setup_materials():
         bump_scale=40.0,
     )
     mats["palm_fronds"] = create_pbr_material(
-        "mat_palm_fronds", (0.18, 0.38, 0.12), metallic=0.0, roughness=0.70
+        "mat_palm_fronds", (0.20, 0.44, 0.12), metallic=0.0, roughness=0.70
     )
 
     # Lanterns & lighting
@@ -1744,6 +1762,150 @@ def build_dressing(col, mats):
     )
 
 
+#: The walls the shutters dress: (name the wall was built under, the axis it
+#: runs along, its centre line, from, to, which faces to dress). All 1.4 m
+#: thick; the long walls 9 m tall, the perimeter 10.
+DRESSED_WALLS = (
+    ("Wall_LongA_West", "y", 44.0, 8.0, 48.0, (-1, 1)),
+    ("Wall_Mid_West", "y", 26.0, 16.0, 48.0, (-1, 1)),
+    ("Wall_Perimeter_South", "x", 4.0, 6.0, 64.0, (1,)),
+    ("Wall_Perimeter_North", "x", 66.0, 6.0, 64.0, (-1,)),
+    ("Wall_Perimeter_West", "y", 4.0, 6.0, 64.0, (1,)),
+    ("Wall_Perimeter_East", "y", 66.0, 6.0, 64.0, (-1,)),
+)
+WALL_HALF = 0.7
+SHUTTER_STEP = 4.5
+#: Every shuttered window sits above the tallest door (4 m) and the lanterns
+#: hung in them, and below the vigas (8.3 m): decoration nobody walks into.
+SHUTTER_Z = 5.6
+#: What a window needs clear in front of it: its width and a little either
+#: side, a hand's depth off the wall, from under its planter to over its top.
+SHUTTER_ROOM = (1.1, 0.6, 4.5, 6.6)
+
+
+def _wall_is_bare(wall, axis, face, side, along):
+    """Nothing but the wall itself in front of a window there: no door, arch,
+    lantern, banner, roof or awning — read off everything already built
+    (`Warper.scan`, in the authored frame, before the cuts)."""
+    half, depth, z0, z1 = SHUTTER_ROOM
+    out = sorted((face, face + side * depth))
+    lo, hi = (along - half, along + half)
+    xr, yr = ((lo, hi), out) if axis == "x" else (out, (lo, hi))
+    for _kind, name, sx, sy, sz in W.scan:
+        if name.startswith(wall):
+            continue
+        if (
+            sx[0] < xr[1]
+            and sx[1] > xr[0]
+            and sy[0] < yr[1]
+            and sy[1] > yr[0]
+            and sz[0] < z1
+            and sz[1] > z0
+        ):
+            return False
+    return True
+
+
+def build_flourish(col, mats):
+    """Shutters, a tile frieze and hung cloth: colour above head height.
+
+    All of it `_NonCol`, on the walls or over the lanes, and above the 2.2 m
+    the dressing planner treats as solid, so the collision bake, the rule-placed
+    clutter and every route through the map are exactly what they were.
+    """
+    frames, sills, leaves, planters, greens = [], [], [], [], []
+    frieze_blue, frieze_gold = [], []
+
+    def put(axis, face, side, along, n):
+        def box(off, a, z, size_out, size_along, size_z):
+            if axis == "y":
+                return ((face + side * off, a, z), (size_out, size_along, size_z))
+            return ((a, face + side * off, z), (size_along, size_out, size_z))
+
+        # A dark recess the shutters close over, the two leaves with a crack of
+        # shadow between them, and a sill under the lot.
+        frames.append(box(0.03, along, SHUTTER_Z, 0.06, 1.5, 1.7))
+        # Louvred leaves: a stile down each side and six slats across, each
+        # slat proud of the last, so a shutter catches the sun in stripes.
+        for leaf in (-1, 1):
+            a = along + leaf * 0.34
+            for edge in (-1, 1):
+                leaves.append(box(0.08, a + edge * 0.28, SHUTTER_Z, 0.06, 0.06, 1.5))
+            for k in range(6):
+                z = SHUTTER_Z - 0.6 + k * 0.24
+                leaves.append(box(0.1, a, z, 0.05, 0.5, 0.16))
+        sills.append(box(0.12, along, SHUTTER_Z - 0.9, 0.24, 1.7, 0.12))
+        sills.append(box(0.1, along, SHUTTER_Z + 0.9, 0.2, 1.7, 0.1))
+        # Every other window keeps a box of something green on its sill:
+        # clumps of three heights, not one flat slab.
+        if n % 2 == 0:
+            planters.append(box(0.2, along, SHUTTER_Z - 0.73, 0.28, 1.3, 0.22))
+            for k, (off, h) in enumerate(
+                ((-0.42, 0.22), (-0.12, 0.34), (0.2, 0.26), (0.46, 0.3))
+            ):
+                greens.append(
+                    box(
+                        0.2 + 0.02 * (k % 2),
+                        along + off,
+                        SHUTTER_Z - 0.62 + h / 2,
+                        0.24,
+                        0.3,
+                        h,
+                    )
+                )
+
+    for wall, axis, line, lo, hi, sides in DRESSED_WALLS:
+        for side in sides:
+            face = line + side * WALL_HALF
+            n = 0
+            along = lo + SHUTTER_STEP / 2
+            while along < hi - 1.0:
+                if _wall_is_bare(wall, axis, face, side, along):
+                    put(axis, face, side, along, n)
+                    n += 1
+                along += SHUTTER_STEP
+            if wall.startswith("Wall_Perimeter"):
+                continue
+            # The long walls' frieze: glazed tile under the timbers, a gold
+            # line above it, the length of the wall. The perimeter has its own.
+            mid, length = (lo + hi) / 2, hi - lo
+            frieze_blue.append(((face + side * 0.03, mid, 7.55), (0.06, length, 0.3)))
+            frieze_gold.append(((face + side * 0.04, mid, 7.76), (0.08, length, 0.06)))
+    # The perimeter's east and west walls, given the frieze north and south
+    # always had (`build_dust2_terrain_and_perimeter`).
+    for x, side in ((4.0, 1), (66.0, -1)):
+        face = x + side * WALL_HALF
+        frieze_blue.append(((face + side * 0.05, 35.0, 9.4), (0.1, 62.0, 0.45)))
+        frieze_gold.append(((face + side * 0.06, 35.0, 9.15), (0.08, 62.0, 0.12)))
+    add_boxes(col, "Trim_Window_Frames_NonCol", frames, mats["sandstone_dark"])
+    add_boxes(col, "Trim_Window_Sills_NonCol", sills, mats["sandstone_ochre"])
+    add_boxes(col, "Trim_Shutters_NonCol", leaves, mats["shutter_blue"])
+    add_boxes(col, "Trim_Planters_NonCol", planters, mats["sandstone_dark"])
+    add_boxes(col, "Trim_Planter_Greens_NonCol", greens, mats["palm_fronds"])
+    add_boxes(col, "Trim_Frieze_Tile_NonCol", frieze_blue, mats["moorish_tile_blue"])
+    add_boxes(col, "Trim_Frieze_Gold_NonCol", frieze_gold, mats["moorish_tile_gold"])
+    print(f"flourish: {len(frames)} shuttered windows")
+
+    # Cloth on the lines strung across mid (`build_dressing`), three colours
+    # in turn, hanging from each line's own height.
+    cloth = {"canopy_crimson": [], "canopy_saffron": [], "canopy_teal": []}
+    kinds = list(cloth)
+    for i, y in enumerate((20.0, 26.0, 38.0, 44.0)):
+        top = 7.2 - (i % 2) * 0.4
+        for j, x in enumerate((28.4, 31.2, 34.0, 36.8, 39.6)):
+            drop = 0.8 + 0.25 * ((i + j) % 3)
+            cloth[kinds[(i + j) % 3]].append(
+                ((x, y, top - drop / 2), (0.7, 0.03, drop))
+            )
+    for kind, boxes in cloth.items():
+        add_boxes(
+            col,
+            f"Cloth_Mid_{kind.split('_')[1].capitalize()}_NonCol",
+            boxes,
+            mats[kind],
+        )
+
+
 def build_lights(col, mats):
     """Sconces where the sun cannot reach, and the map's sky."""
     # Dark: the roofed tunnel between T and B, lit only by what hangs in it.
@@ -1939,6 +2101,7 @@ def build_dust2_scene():
     build_spawns_and_props(c_props, mats)
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing(get_or_create_collection("Dressing"), mats)
+    build_flourish(get_or_create_collection("Flourish"), mats)
     build_lights(get_or_create_collection("Lights"), mats)
     build_natural_dressing(
         get_or_create_collection("Clutter"), mats

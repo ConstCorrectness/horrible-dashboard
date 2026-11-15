@@ -45,14 +45,20 @@ pub const OPERATOR_GLB: &[u8] = include_bytes!("../../web/public/hassault-operat
 /// The Terrorist variant (Phoenix / Yaku Ignite), also compiled into the binary.
 pub const OPERATOR_T_GLB: &[u8] = include_bytes!("../../web/public/hassault-operator-t.glb");
 
-/// Mixamo characters face **+Z** in model space; the renderer's forward for a
-/// player at yaw 0 is derived in `bodies.rs` as `[-sin, cos]` of
-/// `-yaw - FRAC_PI_2`. Solving the two against each other gives a model rotation
-/// of `yaw + FRAC_PI_2` about the render-space Y axis.
+/// Mixamo characters face **+Z** in model space, and a +Z-facing model turned
+/// by θ about the render-space Y axis faces `(sin θ, cos θ)` in render `(x, z)`.
+/// A player at `yaw` looks along the cube heading `(cos yaw, sin yaw)`, and cube
+/// `y` is render `z` (`Camera::forward`), so θ = `FACING_OFFSET - yaw`.
+///
+/// It shipped as `yaw + FACING_OFFSET`, solved against the box rig in
+/// `bodies.rs` — which was itself mirrored. The two agree at yaw 0 and π and
+/// nowhere else: a player looking along cube +y was drawn looking along -y, so
+/// every body on a north-south line faced away from where it was aiming. The
+/// browser's `avatarRotationY` is the same expression as this one.
 ///
 /// It is a named constant rather than an inline literal because a character
-/// facing exactly backwards is the single most likely thing to be wrong here,
-/// and a reader needs somewhere to look.
+/// facing the wrong way is the single most likely thing to be wrong here, and a
+/// reader needs somewhere to look.
 pub const FACING_OFFSET: f32 = std::f32::consts::FRAC_PI_2;
 
 /// A node's local transform, kept decomposed because that is what animation
@@ -571,25 +577,52 @@ impl Pose {
         }
     }
 
-    /// Rotate one bone about its local X, on top of whatever the clips posed.
+    /// Resolve every node's transform in model space from the locals.
     ///
-    /// This is the aim pitch, and it is a *delta* rather than a set so the
-    /// clip's own spine motion survives. No clip knows the pitch — Mixamo's
-    /// animations all look at the horizon — so without it an enemy shooting down
-    /// at you from a balcony appears to be firing straight ahead, which misreads
-    /// their attention entirely.
-    ///
-    /// Pre-multiplied, which is what the browser's `bone.rotation.x -= p` comes
-    /// out as for three's default XYZ Euler order.
-    pub fn rotate_bone_x(&mut self, op: &Operator, bone: &str, radians: f32) {
-        if radians == 0.0 {
-            return;
+    /// `skinning` does this itself; it is separate for the solves that run
+    /// between the clips and the skinning (`animator.rs`), which have to read
+    /// where a bone *is* before deciding where to turn it.
+    pub fn update_globals(&mut self, op: &Operator) {
+        for &node in &op.order {
+            let local = self.locals[node].matrix();
+            self.globals[node] = match op.parents[node] {
+                Some(parent) => self.globals[parent] * local,
+                None => local,
+            };
         }
-        let Some(node) = op.bone_node(bone) else {
-            return;
+    }
+
+    /// A node's position in model space, as of the last `update_globals`.
+    pub fn global_position(&self, node: usize) -> Vec3 {
+        self.globals[node].w_axis.truncate()
+    }
+
+    /// A node's rotation in model space, as of the last `update_globals`.
+    ///
+    /// Decomposed rather than read off the matrix: the rig's unit is 1/35th of
+    /// a cube, so every global carries that scale, and a quaternion taken
+    /// straight from a scaled matrix is not a rotation.
+    pub fn global_rotation(&self, node: usize) -> Quat {
+        self.globals[node].to_scale_rotation_translation().1
+    }
+
+    /// Give a node a rotation in model space, and carry it down the skeleton.
+    pub fn set_global_rotation(&mut self, op: &Operator, node: usize, rotation: Quat) {
+        let parent = match op.parents[node] {
+            Some(parent) => self.global_rotation(parent),
+            None => Quat::IDENTITY,
         };
-        let local = &mut self.locals[node];
-        local.rotation = Quat::from_rotation_x(radians) * local.rotation;
+        self.locals[node].rotation = (parent.inverse() * rotation).normalize();
+        self.update_globals(op);
+    }
+
+    /// Put a node at a position in model space. The globals are stale until
+    /// the next `update_globals` or `set_global_rotation`.
+    pub fn set_global_position(&mut self, op: &Operator, node: usize, position: Vec3) {
+        self.locals[node].translation = match op.parents[node] {
+            Some(parent) => self.globals[parent].inverse().transform_point3(position),
+            None => position,
+        };
     }
 
     /// Resolve the pose to one skinning matrix per bone, in world space.
@@ -599,13 +632,7 @@ impl Pose {
     /// matrix per vertex, and a second one would be a second multiply on every
     /// vertex to save 64 bytes per player.
     pub fn skinning(&mut self, op: &Operator, model: Mat4, out: &mut [Mat4]) {
-        for &node in &op.order {
-            let local = self.locals[node].matrix();
-            self.globals[node] = match op.parents[node] {
-                Some(parent) => self.globals[parent] * local,
-                None => local,
-            };
-        }
+        self.update_globals(op);
         for (slot, (&node, inverse)) in op.bone_nodes.iter().zip(op.inverse_bind.iter()).enumerate()
         {
             if slot >= out.len() {

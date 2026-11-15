@@ -673,9 +673,35 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         );
     }
     // The front end is a whole screen, not a layer: it replaces the HUD.
+    // The loadout's 3D stage, when the screen has one: the client's own
+    // `ShowcaseGpu`, with whatever the fixture has selected on it.
+    let mut stage: Option<(hassault_native::showcase_gpu::ShowcaseGpu, hassault_native::hud::Hit, hassault_native::showcase::Showcase)> = None;
     if let Some(which) = flags.iter().find(|a| a.starts_with("front")) {
+        use hassault_native::showcase::{Showcase, Subject};
         verts.clear();
-        front_fixture(which).paint(Some(&kit), width as f32, height as f32, &mut verts);
+        let mut front = front_fixture(which);
+        if let Some(staged) = front.stage(width as f32, height as f32) {
+            let (rect, subject) = (staged.rect, staged.subject);
+            let mut gpu = hassault_native::showcase_gpu::ShowcaseGpu::new(&device, &queue, FORMAT);
+            match &subject {
+                Subject::Weapon(id) => {
+                    let bytes = hassault_native::prop::weapon_glb(id).expect("a prop for the stage");
+                    let prop = hassault_native::prop::Prop::from_slice(bytes).expect("prop parses");
+                    gpu.add_prop(&device, &queue, id, &prop);
+                }
+                Subject::Operator(_) => gpu.add_operators(
+                    &device,
+                    &queue,
+                    hassault_native::animator::Squad::load().expect("operators"),
+                ),
+            }
+            let mut show = Showcase::default();
+            show.show(Some(subject));
+            show.dress(staged.tint);
+            front.staged = true;
+            stage = Some((gpu, rect, show));
+        }
+        front.paint(Some(&kit), width as f32, height as f32, &mut verts);
     }
     println!(
         "{} overlay vertices ({:.1}% of the client's 65536 cap)",
@@ -731,6 +757,14 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
         overlay.upload_atlas(&queue, &upload);
     }
 
+    // A few frames first, so an operator has settled into its pose.
+    if let Some((gpu, rect, show)) = stage.as_mut() {
+        for _ in 0..20 {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            gpu.render(&device, &queue, &mut encoder, show, rect.w, rect.h, 1.0 / 60.0);
+            queue.submit([encoder.finish()]);
+        }
+    }
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -750,6 +784,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nob
             multiview_mask: None,
         });
         overlay.draw(&mut pass);
+        if let Some((gpu, rect, _)) = stage.as_ref() {
+            gpu.place(&mut pass, (rect.x, rect.y, rect.w, rect.h), (width, height));
+        }
     }
 
     // Readback. `bytes_per_row` must be a multiple of 256, which is why the
@@ -1054,6 +1091,99 @@ fn front_fixture(which: &str) -> hassault_native::front::Front {
             f.slot = 2;
             f.side = 1;
             f.clock = 60.0;
+        }
+        "front-replays" => {
+            f.set_tab(Tab::Replays);
+            f.replays = Some(
+                [
+                    ("hd_dust2", 1_794_740_000_000.0, 412_000.0, 14, "Sable"),
+                    ("hd_mirage", 1_794_650_000_000.0, 247_000.0, 6, "Sable"),
+                    ("hd_inferno", 1_794_560_000_000.0, 93_000.0, 2, "Sable"),
+                    ("hd_aim", 1_794_470_000_000.0, 61_000.0, 9, "Operative-417"),
+                ]
+                .iter()
+                .map(|(map, at, ms, kills, pov)| ReplayView {
+                    path: format!("/demos/{map}.hademo"),
+                    map: map.to_string(),
+                    recorded_at: *at,
+                    duration_ms: *ms,
+                    kills: *kills,
+                    pov_name: Some(pov.to_string()),
+                })
+                .collect(),
+            );
+            f.replay = 1;
+            f.clock = 60.0;
+            f.pointer = (0.0, 0.0);
+        }
+        "front-inventory" | "front-store" => {
+            f.account = Some(AccountView {
+                name: "Sable".into(),
+                handle: Some("sable".into()),
+            });
+            // (name, weapon, skin id, base, wear, rarity, rarity colour)
+            let skins = [
+                ("Ember", "assault", "assault_ember", "#f97316", 0.03, "covert", "#eb4b4b"),
+                ("Glacier", "sniper", "sniper_glacier", "#38bdf8", 0.12, "classified", "#d32ce6"),
+                ("Karambit | Fade", "knife", "knife_karambit_fade", "#a855f7", 0.01, "special", "#ffd700"),
+                ("Slate", "pistol", "pistol_slate", "#09090b", 0.31, "mil_spec", "#4b69ff"),
+                ("Moss", "shotgun", "shotgun_moss", "#4d7c0f", 0.41, "industrial", "#5e98d9"),
+                ("Sandstorm", "assault", "assault_sandstorm", "#d6b98c", 0.62, "consumer", "#b0c3d9"),
+                ("Violet Haze", "pistol", "pistol_violet", "#8b5cf6", 0.09, "restricted", "#8847ff"),
+            ];
+            f.items = skins
+                .iter()
+                .enumerate()
+                .map(|(i, (name, weapon, id, base, wear, rarity, color))| ItemView {
+                    instance_id: format!("i{i}"),
+                    name: name.to_string(),
+                    weapon_id: weapon.to_string(),
+                    wear: *wear,
+                    equipped: i == 0 || i == 3,
+                    skin_id: id.to_string(),
+                    base_color: base.to_string(),
+                    accent_color: "#e5e7eb".into(),
+                    pattern_type: "solid".into(),
+                    rarity: rarity.to_string(),
+                    rarity_color: color.to_string(),
+                })
+                .collect();
+            f.wallet = Some(WalletView {
+                balance: 1250,
+                keys: 2,
+                key_price: 250,
+                cases: vec![CaseView {
+                    instance_id: "c1".into(),
+                    name: "Fever Case".into(),
+                }],
+            });
+            f.listings = f
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| ListingView {
+                    id: format!("l{i}"),
+                    name: item.name.clone(),
+                    kind: "skin".into(),
+                    price: 80 + 140 * i as i64,
+                    skin: Some(item.clone()),
+                })
+                .chain(std::iter::once(ListingView {
+                    id: "key".into(),
+                    name: "key".into(),
+                    kind: "key".into(),
+                    price: 250,
+                    skin: None,
+                }))
+                .collect();
+            if which == "front-store" {
+                f.set_tab(Tab::Store);
+                f.listing = 1;
+            } else {
+                f.set_tab(Tab::Inventory);
+            }
+            f.clock = 60.0;
+            f.pointer = (0.0, 0.0);
         }
         "front-search" => {
             f.begin_search();

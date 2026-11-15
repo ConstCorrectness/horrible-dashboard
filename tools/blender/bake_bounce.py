@@ -76,8 +76,10 @@ import tempfile
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MAPS_DIR = os.path.join(REPO_ROOT, "backend", "modules", "hassault", "maps")
 WEB_DIR = os.path.join(REPO_ROOT, "apps", "web", "public")
-BLENDER = os.environ.get(
-    "BLENDER", r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe"
+#: `BLENDER` if set, else `blender` on the PATH, else the old Windows default.
+#: The pipeline is checked on 5.3 (`docs/modules/hassault.mdx`); 4.1 still works.
+BLENDER = os.environ.get("BLENDER") or shutil.which("blender") or (
+    r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe"
 )
 
 #: `bounce = BOUNCE_SCALE * c^2`. Four irradiance units is twice the brightest

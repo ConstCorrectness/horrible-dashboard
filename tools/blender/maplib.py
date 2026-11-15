@@ -225,13 +225,54 @@ NAME_LIMIT = 63
 
 def check_names() -> None:
     """Refuse a scene with a name at Blender's limit: it was likely truncated."""
-    long = [o.name for o in bpy.data.objects if len(o.name.encode("utf-8")) >= NAME_LIMIT]
+    long = [
+        o.name for o in bpy.data.objects if len(o.name.encode("utf-8")) >= NAME_LIMIT
+    ]
     if long:
         raise RuntimeError(
             f"{len(long)} object names at Blender's {NAME_LIMIT}-byte limit, so"
             " probably cut short (a cut `_NonCol` turns decoration solid): "
             + ", ".join(long[:8])
         )
+
+
+def order_faces() -> int:
+    """Put every mesh's faces in an order that depends only on the geometry.
+
+    The passes above leave faces in whatever order their operators emit them,
+    and from Blender 4.2 on that order is not the same from one run to the
+    next: Dust II's merged dressing meshes came out with the same triangles in
+    a different sequence each time, so a generator no longer reproduced its
+    own GLB. Sorted by each face's centre (rounded well below a millimetre)
+    and then its vertices, the sequence is the geometry's. Loops, UVs, colours
+    and material slots travel with their faces.
+    """
+    moved = 0
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.data.users == 0:
+            continue
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.verts.index_update()
+
+        def key(f):
+            c = f.calc_center_median()
+            return (
+                round(c.x, 5),
+                round(c.y, 5),
+                round(c.z, 5),
+                tuple(sorted(v.index for v in f.verts)),
+            )
+
+        # `sort` takes a number, so the faces are ranked first.
+        bm.faces.index_update()
+        rank = {f.index: i for i, f in enumerate(sorted(bm.faces, key=key))}
+        if any(rank[i] != i for i in rank):
+            moved += 1
+        bm.faces.sort(key=lambda f: rank[f.index])
+        bm.to_mesh(obj.data)
+        bm.free()
+    return moved
 
 
 def mark_sharp_edges() -> None:
@@ -797,9 +838,15 @@ def soften_edges(factor: float = 1.0, skip: set[str] | None = None) -> dict:
         width_of = {}
         for island in _islands(bm):
             cos = [matrix @ v.co for f in island for v in f.verts]
-            side = min(max(c[i] for c in cos) - min(c[i] for c in cos) for i in range(3))
+            side = min(
+                max(c[i] for c in cos) - min(c[i] for c in cos) for i in range(3)
+            )
             side /= factor
-            w = 0.0 if side < SOFTEN_MIN_SIDE else round(min(radius, side * fraction) * factor, 6)
+            w = (
+                0.0
+                if side < SOFTEN_MIN_SIDE
+                else round(min(radius, side * fraction) * factor, 6)
+            )
             for f in island:
                 for e in f.edges:
                     width_of[e] = w
@@ -1078,7 +1125,9 @@ def _dir_axes(face_dir: str):
 
 
 def _oriented_size(tangent_w: float, normal_d: float, height: float, is_x_normal: bool):
-    return (normal_d, tangent_w, height) if is_x_normal else (tangent_w, normal_d, height)
+    return (
+        (normal_d, tangent_w, height) if is_x_normal else (tangent_w, normal_d, height)
+    )
 
 
 def add_window_row(
@@ -1234,9 +1283,7 @@ def add_window_row(
             collection, f"{prefix}_WinShutter_NonCol", shutter_boxes, mats["shutter"]
         )
     if mosaic_boxes and "mosaic" in mats:
-        boxes_fn(
-            collection, f"{prefix}_WinMosaic_NonCol", mosaic_boxes, mats["mosaic"]
-        )
+        boxes_fn(collection, f"{prefix}_WinMosaic_NonCol", mosaic_boxes, mats["mosaic"])
     if foliage_boxes and "foliage" in mats:
         boxes_fn(
             collection, f"{prefix}_WinFoliage_NonCol", foliage_boxes, mats["foliage"]
@@ -1342,7 +1389,9 @@ def add_ceiling_mep(
         pos = (-run_len * 0.5) + step * (i + 1)
         tx = cx + (pos if along_x else 0.0)
         ty = cy + (0.0 if along_x else pos)
-        b_size = (0.18, span_len - 0.2, 0.28) if along_x else (span_len - 0.2, 0.18, 0.28)
+        b_size = (
+            (0.18, span_len - 0.2, 0.28) if along_x else (span_len - 0.2, 0.18, 0.28)
+        )
         truss_boxes.append(((tx, ty, z_ceil - 0.16), b_size))
         flange_size = (
             (0.32, span_len - 0.2, 0.05) if along_x else (span_len - 0.2, 0.32, 0.05)
@@ -2126,7 +2175,9 @@ def _bytes_for_colors(path: str) -> None:
     json_len = struct.unpack_from("<I", data, 12)[0]
     doc = json.loads(data[20 : 20 + json_len])
     bin_start = 20 + json_len + 8
-    blob = data[bin_start : bin_start + struct.unpack_from("<I", data, 20 + json_len)[0]]
+    blob = data[
+        bin_start : bin_start + struct.unpack_from("<I", data, 20 + json_len)[0]
+    ]
 
     colour_views = {}
     for mesh in doc.get("meshes", []):
@@ -2151,7 +2202,9 @@ def _bytes_for_colors(path: str) -> None:
             stride = view.get("byteStride", 4 * comps)
             packed = bytearray()
             for k in range(acc["count"]):
-                vals = struct.unpack_from(f"<{comps}f", raw, acc.get("byteOffset", 0) + k * stride)
+                vals = struct.unpack_from(
+                    f"<{comps}f", raw, acc.get("byteOffset", 0) + k * stride
+                )
                 rgb = [max(0, min(255, round(v * 255))) for v in vals[:3]]
                 packed += bytes((*rgb, 255))
             raw = bytes(packed)
@@ -2176,6 +2229,22 @@ def _bytes_for_colors(path: str) -> None:
         f.write(struct.pack("<II", len(out), 0x004E4942) + bytes(out))
 
 
+def _vertex_color_options() -> dict:
+    """The exporter's switch for the baked colours, in whichever form it has.
+
+    Blender 4.1's exporter took `export_colors=True` and wrote a colour
+    attribute only where a material reads it (`_wire_ao_into_material`). From
+    4.2 that is `export_vertex_color`, and an unknown keyword fails the whole
+    export, so the form is read off the operator rather than off a version
+    number. `MATERIAL` is 4.1's rule: glass, water and self-lit surfaces, whose
+    materials take no AO, still export none.
+    """
+    props = bpy.ops.export_scene.gltf.get_rna_type().properties
+    if "export_vertex_color" in props:
+        return {"export_vertex_color": "MATERIAL"}
+    return {"export_colors": True}
+
+
 def _export_glb(path: str) -> None:
     bpy.ops.export_scene.gltf(
         filepath=path,
@@ -2186,7 +2255,7 @@ def _export_glb(path: str) -> None:
         export_materials="EXPORT",
         export_lights=False,
         export_cameras=False,
-        export_colors=True,
+        **_vertex_color_options(),
     )
     _bytes_for_colors(path)
 
@@ -2222,6 +2291,7 @@ def export_map_glb(name: str) -> str:
         clean_meshes()
     separate_coplanar(factor)
     mark_sharp_edges()
+    order_faces()
     audit_colliders()
     collision_dir = os.path.join(override, "collision") if override else COLLISION_DIR
     os.makedirs(collision_dir, exist_ok=True)
@@ -2242,7 +2312,9 @@ def export_map_glb(name: str) -> str:
         os.makedirs(web_dir, exist_ok=True)
         shutil.copyfile(backend_path, os.path.join(web_dir, f"{name}.glb"))
         _write_map_json(os.path.join(backend_dir, f"{name}.json"), factor)
-        _write_collision_source(os.path.join(backend_dir, f"{name}.json"), collision_glb)
+        _write_collision_source(
+            os.path.join(backend_dir, f"{name}.json"), collision_glb
+        )
     return backend_path
 
 

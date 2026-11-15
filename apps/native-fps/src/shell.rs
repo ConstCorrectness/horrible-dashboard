@@ -39,7 +39,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -54,16 +56,18 @@ use hassault_native::controls::Controls;
 use hassault_native::front::{
     self, AccountView, CaseView, DevTool, DrillEntry, Found, Front, Intent, ItemView, ListingView,
     LobbyView, MapEntry, ModeEntry, RoomDetail, RoomEntry, Screen, SignIn, Step, StepState,
-    WalletView, PROVIDERS,
+    ReplayView, WalletView, PROVIDERS,
 };
-use hassault_native::front_gpu::FrontGpu;
+use hassault_native::front_gpu::{FrontGpu, MenuFrame};
 use hassault_native::geometry::{self, MeshData};
 use hassault_native::hud::OverlayVertex;
 use hassault_native::map_art::{self, ArtVertex, Atlas};
 use hassault_native::menu::{self, Action, LoadoutAgent, LoadoutWeapon, Menu};
 use hassault_native::net::MatchSocket;
 use hassault_native::radar::{self, Run};
+use hassault_native::prop::{self, Prop};
 use hassault_native::settings::{self, Settings, SettingsWriter};
+use hassault_native::showcase::Showcase;
 use hassault_native::text_kit::TextKit;
 use hassault_native::viewmodel::{self, Skin};
 use hassault_native::world::World;
@@ -140,6 +144,9 @@ enum ToolPlan {
     Edit,
     /// The model viewer: the range, with every weapon and finish in reach.
     Viewer,
+    /// Play a recording back (`demo.rs`); with `export`, step it into an MP4
+    /// beside it (`export.rs`) and come back.
+    Replay { path: String, export: bool },
 }
 
 /// One match to load: where, and as what.
@@ -199,6 +206,8 @@ struct Loaded {
     draft: Option<(DraftInfo, Vec<u16>)>,
     /// Every skin design, for the model viewer; empty otherwise.
     catalog: Vec<SkinDefinition>,
+    /// The recording to play, read and checked on the loading thread.
+    demo: Option<hassault_native::demo::DemoData>,
 }
 
 enum Msg {
@@ -214,6 +223,8 @@ enum Msg {
     Roster(Option<RoomDetail>),
     /// The map art, decoded.
     Art(Arc<Atlas>),
+    /// Both operators are parsed: `Squad::load` is now a lookup.
+    Operators,
     /// The lobby, as the server describes it. The token rides along when this
     /// is the answer to entering one.
     Lobby(Result<(Option<String>, LobbyView), String>),
@@ -239,7 +250,26 @@ enum Msg {
     Plan(Vec<Run>, f32),
     Loaded(Box<Loaded>),
     LoadFailed(String),
+    /// The demos folder, read.
+    Replays(Vec<ReplayView>),
+    /// A map ready to fly behind the menu, or why it is not.
+    Backdrop(Result<Box<BackdropWorld>, String>),
 }
+
+/// A map, built for drawing behind the menu (`backdrop.rs`).
+struct BackdropWorld {
+    map: String,
+    mesh: MeshData,
+    lighting: hassault_native::atmosphere::Lighting,
+    modelled: bool,
+}
+
+/// How much of a live map is darkened away behind the menu: about the
+/// brightness of the still picture it replaces, a little more so it moves.
+const LIVE_DIM: f32 = 0.78;
+/// A live menu's frame cap. The match's renderer does not wait for the
+/// display when vsync is off, and a menu has no use for a thousand frames.
+const LIVE_FPS: u32 = 120;
 
 enum Stage {
     Front,
@@ -286,6 +316,20 @@ pub struct Shell {
     last_frame: Instant,
     last_rooms: Instant,
     overlay: Vec<OverlayVertex>,
+    /// How the loadout's 3D stage has been turned (`showcase.rs`).
+    show: Showcase,
+    /// The camera flying the live backdrop's map, and how far along it is.
+    flight: Option<(hassault_native::backdrop::Flight, f32)>,
+    /// The map a backdrop load is under way for.
+    backdrop_loading: Option<String>,
+    /// The last map built for the backdrop, kept so that coming back from a
+    /// match goes live again without fetching it.
+    backdrop_cache: Option<Box<BackdropWorld>>,
+    pacer: hassault_native::pacing::FramePacer,
+    /// Weapon props still being parsed for the stage, off this thread.
+    prop_loads: Option<Receiver<(String, Result<Prop, String>)>>,
+    /// The last frame's length, for what the draw animates.
+    frame_dt: f32,
 }
 
 /// Run the front end until the window closes.
@@ -438,6 +482,7 @@ impl Shell {
                 .unwrap_or(serde_json::Value::Null)
         };
         let mut front = Front::new(&host_label(&args.server), &callsign);
+        front.export_blocked = hassault_native::export::blocked_reason();
         let token = values
             .get(settings::KEY_TOKEN)
             .and_then(|v| v.as_str())
@@ -478,12 +523,54 @@ impl Shell {
             last_frame: Instant::now(),
             last_rooms: Instant::now(),
             overlay: Vec::new(),
+            show: Showcase::default(),
+            flight: None,
+            backdrop_loading: None,
+            backdrop_cache: None,
+            pacer: Default::default(),
+            prop_loads: None,
+            frame_dt: 0.0,
         }
     }
 
     /// Every queued setting reaches the file before the process ends. The
     /// match's handle on the writer is dropped first: the thread only stops
     /// once every handle has let go.
+    /// Start fetching what the loadout's stage draws, for a `FrontGpu` that has
+    /// just been made and so has none of it.
+    ///
+    /// Both halves are parses of assets compiled into this executable, slow
+    /// enough to be seen (a tenth of a second a weapon, more for the operators'
+    /// textures) and so done off this thread. The menu is up without them: the
+    /// loadout shows its silhouettes until each model lands.
+    fn load_stage(&mut self) {
+        self.prop_loads = Some(prop::preload());
+        let tx = self.tx.clone();
+        spawn("hassault-operators", move || {
+            // Parsed once a process and kept (`animator.rs`); after the first
+            // match this returns at once.
+            if hassault_native::animator::Squad::load().is_ok() {
+                let _ = tx.send((0, Msg::Operators));
+            }
+        });
+    }
+
+    /// Where the stage is this frame and whether it may be handled: not while
+    /// the settings pages are drawn over it.
+    fn stage_rect(&self) -> Option<hassault_native::hud::Hit> {
+        if self.menu.open || !self.front.staged {
+            return None;
+        }
+        let (w, h) = self.size();
+        self.front.stage(w, h).map(|staged| staged.rect)
+    }
+
+    fn pointer_on_stage(&self) -> bool {
+        let (x, y) = self.front.pointer;
+        self.stage_rect()
+            .is_some_and(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+    }
+
     fn shutdown(&mut self) {
         self.stage = Stage::Front;
         self.writer.finish();
@@ -546,6 +633,15 @@ impl Shell {
         self.tables = Some(tables);
         self.last_rooms = Instant::now();
         self.front.show(Screen::Home);
+        // `HASSAULT_MENU_SHOT_MAP=<map>`: open on that map in Practice, so the
+        // live backdrop flies it — for taking its key art (see `menu_shot`).
+        if let Some(want) = std::env::var_os("HASSAULT_MENU_SHOT_MAP") {
+            let want = want.to_string_lossy();
+            if let Some(i) = self.front.maps.iter().position(|m| m.name == want) {
+                self.front.kind = hassault_native::front::PlayKind::Practice;
+                self.front.map = Some(i);
+            }
+        }
     }
 
     // -- rooms ------------------------------------------------------------------
@@ -730,16 +826,7 @@ impl Shell {
             let items = inventory
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|item| {
-                    let def = item.definition?;
-                    Some(ItemView {
-                        instance_id: item.instance_id,
-                        name: def.name,
-                        weapon_id: def.weapon_id,
-                        wear: item.float_value,
-                        equipped: item.is_equipped,
-                    })
-                })
+                .filter_map(ItemView::from_instance)
                 .collect();
             let wallet = node.account_wallet().ok().map(|w| WalletView {
                 balance: w.balance,
@@ -760,6 +847,7 @@ impl Shell {
                 .into_iter()
                 .map(|l| ListingView {
                     name: l.name(),
+                    skin: l.skin().and_then(ItemView::from_instance),
                     id: l.listing_id,
                     kind: l.kind,
                     price: l.price,
@@ -1030,6 +1118,148 @@ impl Shell {
         self.found = Some((Instant::now() + FOUND_BEAT, load));
     }
 
+    // -- the live backdrop -------------------------------------------------------
+
+    /// The map that should be flying behind the menu now, if any: the one the
+    /// home screen is showing, when it has framings to fly and the quality is
+    /// above Low, which keeps the still pictures.
+    fn wanted_backdrop(&self) -> Option<String> {
+        if self.front.screen != Screen::Home
+            || self.settings.video.quality == hassault_native::settings::Quality::Low
+        {
+            return None;
+        }
+        self.front
+            .backdrop_map()
+            .filter(|map| hassault_native::bench::path_for(map).is_some())
+            .map(str::to_string)
+    }
+
+    /// Start building the wanted map for the backdrop, unless it is already
+    /// flying or on its way. From the cache when it was the last one.
+    fn want_backdrop(&mut self) {
+        let Some(map) = self.wanted_backdrop() else {
+            return;
+        };
+        let live = self.gpu.as_ref().and_then(|g| g.live_map.as_deref());
+        if live == Some(map.as_str()) || self.backdrop_loading.as_deref() == Some(map.as_str()) {
+            return;
+        }
+        if self.backdrop_cache.as_ref().is_some_and(|c| c.map == map) {
+            if let Some(world) = self.backdrop_cache.take() {
+                self.go_live(world);
+            }
+            return;
+        }
+        self.backdrop_loading = Some(map.clone());
+        let (node, tx) = (self.api(), self.tx.clone());
+        spawn("hassault-backdrop", move || {
+            let built = build_backdrop(&node, &map).map(Box::new);
+            let _ = tx.send((0, Msg::Backdrop(built)));
+        });
+    }
+
+    /// Fly `world` behind the menu: in the renderer already live, or by
+    /// handing the window to a new one. A map that is no longer the one
+    /// wanted (the player moved on while it loaded) is kept for later.
+    fn go_live(&mut self, world: Box<BackdropWorld>) {
+        if self.wanted_backdrop().as_deref() != Some(world.map.as_str()) {
+            self.backdrop_cache = Some(world);
+            return;
+        }
+        let Some(flight) = hassault_native::bench::path_for(&world.map)
+            .and_then(hassault_native::backdrop::Flight::new)
+        else {
+            return;
+        };
+        if let Some(renderer) = self.gpu.as_mut().and_then(|g| g.renderer()) {
+            renderer.set_world(&world.mesh);
+            renderer.set_lighting(world.lighting.clone());
+            renderer.set_is_3d(world.modelled);
+        } else {
+            let Some(window) = self.window.clone() else {
+                return;
+            };
+            // One surface per window: the flat menu lets go first.
+            self.gpu = None;
+            let made = pollster::block_on(hassault_native::renderer::Renderer::new(
+                window.clone(),
+                &world.mesh,
+                self.settings.video,
+                world.lighting.clone(),
+                &self.settings.gpu.choice(),
+            ));
+            let mut gpu = match made {
+                Ok(mut renderer) => {
+                    renderer.set_is_3d(world.modelled);
+                    FrontGpu::live(renderer, &world.map)
+                }
+                Err(e) => {
+                    // Back to the flat menu, which needs nothing but a device.
+                    eprintln!("hassault: no live backdrop ({e})");
+                    match pollster::block_on(FrontGpu::new(window, &self.settings.gpu.choice())) {
+                        Ok(gpu) => gpu,
+                        Err(e) => {
+                            eprintln!("hassault: {e}");
+                            return;
+                        }
+                    }
+                }
+            };
+            if let Some(atlas) = &self.atlas {
+                gpu.set_art(atlas);
+            }
+            self.gpu = Some(gpu);
+            // A new device: the stage's models and every glyph go up again.
+            self.load_stage();
+            self.kit.mark_all_dirty();
+        }
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.live_map = Some(world.map.clone());
+        }
+        self.front.live = self.gpu.as_ref().is_some_and(|g| g.live_map.is_some());
+        self.flight = Some((flight, 0.0));
+        self.backdrop_cache = Some(world);
+    }
+
+    // -- replays ---------------------------------------------------------------
+
+    /// Read the demos folder on a worker: a long recording is tens of
+    /// megabytes, and the list parses each one.
+    fn list_replays(&mut self) {
+        self.front.replays = None;
+        let tx = self.tx.clone();
+        spawn("hassault-replays", move || {
+            let found = hassault_native::demo::demos_dir()
+                .map(|dir| hassault_native::demo::list(&dir))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(path, s)| ReplayView {
+                    path: path.to_string_lossy().into_owned(),
+                    map: s.map,
+                    recorded_at: s.recorded_at,
+                    duration_ms: s.duration_ms,
+                    kills: s.kills,
+                    pov_name: s.pov_name,
+                })
+                .collect();
+            let _ = tx.send((0, Msg::Replays(found)));
+        });
+    }
+
+    /// Load a recording's map with no server, and play it back or export it.
+    fn start_replay(&mut self, path: String, map: String, export: bool) {
+        self.start_load(LoadPlan {
+            map,
+            room: String::new(),
+            mode: String::new(),
+            bots: 0,
+            online: false,
+            own: false,
+            tool: Some(ToolPlan::Replay { path, export }),
+        });
+    }
+
     // -- loading ----------------------------------------------------------------
 
     fn start_load(&mut self, load: LoadPlan) {
@@ -1045,6 +1275,8 @@ impl Shell {
                 Some(ToolPlan::Bench) => "BENCHMARK".to_string(),
                 Some(ToolPlan::Edit) => "MAP EDITOR - A DRAFT".to_string(),
                 Some(ToolPlan::Viewer) => "MODEL VIEWER".to_string(),
+                Some(ToolPlan::Replay { export: false, .. }) => "REPLAY".to_string(),
+                Some(ToolPlan::Replay { export: true, .. }) => "EXPORTING TO MP4".to_string(),
                 None => "PRACTICE - NO SERVER".to_string(),
             },
             (true, true) => "A NEW ROOM".to_string(),
@@ -1076,9 +1308,12 @@ impl Shell {
             load,
             draft,
             catalog,
+            demo,
         } = loaded;
         // One surface per window: the menu lets go before the match takes it.
         self.gpu = None;
+        self.front.live = false;
+        self.flight = None;
         let online = socket.is_some();
         let mut app = App::new(
             world,
@@ -1102,7 +1337,10 @@ impl Shell {
         // would be drawn over a map nobody is standing in.
         // Nor in the viewer, for the opposite reason: a loadout is three
         // weapons, and the viewer is there to hold all of them.
-        let editing = matches!(load.tool, Some(ToolPlan::Edit | ToolPlan::Viewer));
+        let editing = matches!(
+            load.tool,
+            Some(ToolPlan::Edit | ToolPlan::Viewer | ToolPlan::Replay { .. })
+        );
         if !editing && !self.front.loadout.choice.is_null() {
             app.set_loadout(self.front.loadout.choice.clone());
         }
@@ -1144,6 +1382,15 @@ impl Shell {
                 }
             }
             Some(ToolPlan::Viewer) => app.start_viewer(catalog),
+            Some(ToolPlan::Replay { path, export }) => {
+                if let Some(demo) = demo {
+                    let video = export.then(|| {
+                        hassault_native::export::video_path(std::path::Path::new(&path))
+                    });
+                    app.start_replay(demo, video);
+                }
+            }
+            None if online && self.settings.auto_record => app.start_recording(),
             _ => {}
         }
         app.attach(window, event_loop);
@@ -1156,6 +1403,7 @@ impl Shell {
             return;
         };
         let benched = app.take_bench();
+        let note = app.take_note();
         // What the pause menu changed carries into the next match.
         let (settings, choice, agents) = app.hand_back();
         self.settings = settings;
@@ -1177,7 +1425,8 @@ impl Shell {
                 if let Some(atlas) = &self.atlas {
                     gpu.set_art(atlas);
                 }
-                self.gpu = Some(gpu)
+                self.gpu = Some(gpu);
+                self.load_stage();
             }
             Err(e) => {
                 eprintln!("hassault: {e}");
@@ -1198,6 +1447,13 @@ impl Shell {
         }
         if let Some(line) = benched {
             self.front.home_with(bench_summary(&line), false);
+        }
+        if let Some((note, error)) = note {
+            self.front.home_with(note, error);
+        }
+        // A match may have saved a recording, and an export a video.
+        if self.front.tab == front::Tab::Replays {
+            self.list_replays();
         }
         self.last_frame = Instant::now();
         self.refresh_rooms();
@@ -1242,9 +1498,27 @@ impl Shell {
                         .collect();
                     self.atlas = Some(atlas);
                 }
+                Msg::Operators => {
+                    if let (Some(gpu), Ok(squad)) =
+                        (&mut self.gpu, hassault_native::animator::Squad::load())
+                    {
+                        gpu.add_operators(squad);
+                    }
+                }
                 Msg::Lobby(Ok((token, view))) => self.lobby_seen(token, view),
                 Msg::Lobby(Err(why)) => self.front.home_with(why.to_uppercase(), true),
                 Msg::Providers(providers) => self.front.providers = providers,
+                Msg::Backdrop(built) => {
+                    self.backdrop_loading = None;
+                    match built {
+                        Ok(world) => self.go_live(world),
+                        Err(why) => eprintln!("hassault: no live backdrop ({why})"),
+                    }
+                }
+                Msg::Replays(found) => {
+                    self.front.replay = self.front.replay.min(found.len().saturating_sub(1));
+                    self.front.replays = Some(found);
+                }
                 Msg::Account(Some(account)) => {
                     self.front.account = Some(account_view(&account));
                 }
@@ -1337,6 +1611,16 @@ impl Shell {
             Intent::LobbyJoin(code) => self.lobby_join(code),
             Intent::LobbyLeave => self.lobby_leave(),
             Intent::LobbyPlay { maps, mode } => self.lobby_play(maps, mode),
+            Intent::ListReplays => self.list_replays(),
+            Intent::WatchReplay { path, map } => self.start_replay(path, map, false),
+            Intent::ExportReplay { path, map } => self.start_replay(path, map, true),
+            Intent::RevealReplays => {
+                let shown = hassault_native::demo::demos_dir()
+                    .is_some_and(|dir| hassault_native::export::reveal(&dir));
+                if !shown {
+                    self.front.notice = Some(("COULD NOT OPEN THE DEMOS FOLDER".into(), true));
+                }
+            }
             Intent::Join { room, map, mode } => self.start_load(LoadPlan {
                 map,
                 room,
@@ -1519,7 +1803,13 @@ impl Shell {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
+                let (px, py) = self.front.pointer;
+                self.show.drag(x - px, y - py);
                 self.front.pointer = (x, y);
+                if !self.menu.open && !self.show.held() {
+                    let (w, h) = self.size();
+                    self.front.hover(Some(&self.kit), w, h);
+                }
                 if self.menu.open {
                     let (w, h) = self.size();
                     let count = self.menu_rows();
@@ -1537,10 +1827,25 @@ impl Shell {
                     if let Some(index) = self.menu.hit(count, w, h) {
                         self.menu_activate(index, 1);
                     }
+                } else if self.pointer_on_stage() {
+                    // Taking hold of the model, not clicking through it.
+                    self.show.press();
                 } else {
                     let intent = self.front.click(Some(&self.kit), w, h);
                     self.carry_out(intent, event_loop);
                 }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => self.show.release(),
+            WindowEvent::MouseWheel { delta, .. } if self.pointer_on_stage() => {
+                self.show.scroll(match delta {
+                    MouseScrollDelta::LineDelta(_, lines) => lines,
+                    // A trackpad reports pixels; about forty to a notch.
+                    MouseScrollDelta::PixelDelta(by) => by.y as f32 / 40.0,
+                });
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let PhysicalKey::Code(code) = event.physical_key else {
@@ -1556,6 +1861,13 @@ impl Shell {
                 if let Some(text) = event.text.as_deref() {
                     self.front.text(text);
                 }
+                if self.stage_rect().is_some() {
+                    match code {
+                        KeyCode::KeyF => self.show.inspect(),
+                        KeyCode::KeyR => self.show.reset(),
+                        _ => {}
+                    }
+                }
                 let intent = self.front.key(code);
                 self.carry_out(intent, event_loop);
             }
@@ -1567,6 +1879,30 @@ impl Shell {
     fn draw(&mut self, event_loop: &ActiveEventLoop) {
         let (w, h) = self.size();
         let Some(gpu) = self.gpu.as_mut() else { return };
+        // One prop a frame, as each finishes parsing: an upload is a few
+        // megabytes of texture, and five in one frame is a visible hitch.
+        if let Some(Ok((id, parsed))) = self.prop_loads.as_ref().map(|rx| rx.try_recv()) {
+            match parsed {
+                Ok(prop) => gpu.add_prop(&id, &prop),
+                Err(e) => eprintln!("hassault: {id} has no model for the menu: {e}"),
+            }
+        }
+        // What the stage shows follows the loadout; whether it is drawn
+        // depends on the model having arrived, and the painter is told which.
+        let stage = self.front.stage(w, h);
+        self.show.show(stage.as_ref().map(|staged| staged.subject.clone()));
+        if let Some(staged) = &stage {
+            self.show.dress(staged.tint);
+        }
+        self.front.staged = stage
+            .as_ref()
+            .is_some_and(|staged| gpu.passes.stage.ready(&staged.subject));
+        let stage = stage
+            .filter(|_| self.front.staged && !self.menu.open)
+            .map(|staged| {
+                let r = staged.rect;
+                ((r.x, r.y, r.w, r.h), &self.show)
+            });
         self.kit.begin_frame();
         self.overlay.clear();
         self.front.paint(Some(&self.kit), w, h, &mut self.overlay);
@@ -1594,7 +1930,33 @@ impl Shell {
             }
         }
         let upload = self.kit.take_upload();
-        match gpu.draw(&self.overlay, upload.as_ref(), &self.art_verts) {
+        // Live, the camera flies the map's framings, and the cuts between
+        // them go dark under the menu.
+        let mut dim = LIVE_DIM;
+        if let Some((flight, t)) = self.flight.as_mut().filter(|_| gpu.live_map.is_some()) {
+            *t += self.frame_dt;
+            let base = hassault_native::camera::Camera {
+                fov: self.settings.video.fov,
+                ..Default::default()
+            };
+            let (camera, dark) = flight.camera(*t, base);
+            gpu.set_camera(camera);
+            dim += (1.0 - LIVE_DIM) * dark;
+            self.pacer.wait(LIVE_FPS);
+            menu_shot(gpu, *t, false);
+        }
+        // `HASSAULT_MENU_SHOT_BARE`: the live map alone, undimmed — how the
+        // maps' key art is taken (see `menu_shot`).
+        let bare = gpu.live_map.is_some() && std::env::var_os("HASSAULT_MENU_SHOT_BARE").is_some();
+        match gpu.draw(MenuFrame {
+            vertices: if bare { &[] } else { &self.overlay },
+            atlas: upload.as_ref(),
+            art: if bare { &[] } else { &self.art_verts },
+            stage: stage.filter(|_| !bare),
+            dt: self.frame_dt,
+            dim: if bare { 0.0 } else { dim },
+        }) {
+            Ok(true) if gpu.live_map.is_some() => menu_shot(gpu, 0.0, true),
             Ok(true) => {}
             // Minimised or covered: nothing was presented, so nothing paced
             // this pass of the loop. Sleep rather than spin a core on it.
@@ -1646,6 +2008,7 @@ impl ApplicationHandler for Shell {
             Ok(gpu) => {
                 eprintln!("hassault: menu on {}", gpu.adapter_name);
                 self.gpu = Some(gpu);
+                self.load_stage();
             }
             Err(e) => {
                 eprintln!("hassault: {e}");
@@ -1689,10 +2052,12 @@ impl ApplicationHandler for Shell {
             return;
         }
         let now = Instant::now();
-        self.front
-            .tick(now.duration_since(self.last_frame).as_secs_f32());
+        self.frame_dt = now.duration_since(self.last_frame).as_secs_f32();
+        self.front.tick(self.frame_dt);
+        self.show.tick(self.frame_dt);
         self.last_frame = now;
         self.pump();
+        self.want_backdrop();
 
         if self.found.as_ref().is_some_and(|(at, _)| now >= *at) {
             if let Some((_, load)) = self.found.take() {
@@ -1869,6 +2234,76 @@ fn boot(server: &str, ticket: u64, tx: &Sender<(u64, Msg)>) {
 ///
 /// Everything a direct launch does before it opens a window (`main.rs`), in
 /// the same order, reporting each phase as it goes.
+/// `HASSAULT_MENU_SHOT=<file.png>`: save one frame of the live menu, taken
+/// `HASSAULT_MENU_SHOT_AT` seconds into the backdrop's flight (default 6), for
+/// looking at it without a screenshot tool. With `HASSAULT_MENU_SHOT_BARE=1`
+/// the frame is the map alone, as the game draws it, which is how a map's key
+/// art (`apps/assault-web/src/assets/maps/`) is taken. Called before a frame with the
+/// flight's time, to ask for the copy, and after it with `taken`, to save it.
+fn menu_shot(gpu: &mut FrontGpu, t: f32, taken: bool) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // 0 waiting, 1 asked for, 2 saved.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    let Some(path) = std::env::var_os("HASSAULT_MENU_SHOT") else {
+        return;
+    };
+    let Some(renderer) = gpu.renderer() else {
+        return;
+    };
+    match (STATE.load(Ordering::Relaxed), taken) {
+        (0, false) => {
+            let at = std::env::var("HASSAULT_MENU_SHOT_AT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6.0);
+            if t >= at && renderer.enable_capture() {
+                renderer.capture_next();
+                STATE.store(1, Ordering::Relaxed);
+            }
+        }
+        (1, true) => {
+            let Some(frame) = renderer.take_capture() else {
+                return;
+            };
+            let mut rgba = frame.pixels;
+            if frame.bgra {
+                for px in rgba.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+            }
+            match image::save_buffer(&path, &rgba, frame.width, frame.height, image::ColorType::Rgba8) {
+                Ok(()) => eprintln!("hassault: saved the menu to {}", std::path::Path::new(&path).display()),
+                Err(e) => eprintln!("hassault: could not save the menu ({e})"),
+            }
+            STATE.store(2, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
+/// A map as the backdrop draws it: its info from the server, then the
+/// modelled GLB compiled into this executable, or the cube grid for a map
+/// that has none. Lit as a match on it would be.
+fn build_backdrop(node: &NodeApi, map: &str) -> Result<BackdropWorld, String> {
+    let info = node.map_info(map).map_err(|e| e.to_string())?;
+    let lighting = hassault_native::atmosphere::Lighting::for_map(&info);
+    let modelled = hassault_native::world3d::is_modelled(&info);
+    let mesh = if modelled {
+        hassault_native::world3d::create_world_3d(info).to_mesh_data()
+    } else {
+        let expected = info.cubic_size * info.plane_order.len();
+        let cubes = node.map_cubes(map, expected).map_err(|e| e.to_string())?;
+        let world = World::new(info, &cubes).map_err(|e| e.to_string())?;
+        geometry::build_world_mesh(&world)
+    };
+    Ok(BackdropWorld {
+        map: map.to_string(),
+        mesh,
+        lighting,
+        modelled,
+    })
+}
+
 fn load_match(
     server: &str,
     callsign: &str,
@@ -1887,6 +2322,22 @@ fn load_match(
     };
 
     say(0, StepState::Running, String::new());
+    // A recording is read before anything is fetched: one that will not play
+    // should say so now, not after the map has been built for it.
+    let demo = match &load.tool {
+        Some(ToolPlan::Replay { path, .. }) => {
+            let read = std::fs::read_to_string(path)
+                .map_err(|e| format!("could not read the recording - {e}"))
+                .and_then(|text| {
+                    hassault_native::demo::parse_demo(&text).map_err(|e| e.to_string())
+                });
+            match read {
+                Ok(demo) => Some(demo),
+                Err(why) => return fail(0, why),
+            }
+        }
+        _ => None,
+    };
     // The editor works on a draft, which the server serves as a map named
     // `draft:<id>` — so from here on it is the ordinary load.
     let mut opened: Option<DraftInfo> = None;
@@ -2002,6 +2453,7 @@ fn load_match(
             load,
             draft,
             catalog,
+            demo,
         })),
     ));
 }

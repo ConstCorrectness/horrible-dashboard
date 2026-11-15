@@ -14,6 +14,8 @@
 //! margins, the cards, the one big button — without those becoming public.
 
 use super::*;
+use crate::inspects::{knife_archetype, knife_prop_id};
+use crate::viewmodel::{parse_color, Skin};
 
 /// The sign-in providers, in button order: the server's id, and the label.
 pub const PROVIDERS: [(&str, &str); 2] = [("github", "GITHUB"), ("google", "GOOGLE")];
@@ -43,7 +45,7 @@ pub enum SignIn {
     Failed(String),
 }
 
-/// One owned skin.
+/// One skin: owned, or for sale.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemView {
     pub instance_id: String,
@@ -51,6 +53,69 @@ pub struct ItemView {
     pub weapon_id: String,
     pub wear: f32,
     pub equipped: bool,
+    /// The design, which picks a knife's model.
+    pub skin_id: String,
+    /// What the stage dresses the model in — see `finish`.
+    pub base_color: String,
+    pub accent_color: String,
+    pub pattern_type: String,
+    /// `consumer` … `special`, and the server's `#rrggbb` for it.
+    pub rarity: String,
+    pub rarity_color: String,
+}
+
+impl ItemView {
+    /// An inventory or market item, if its design came with it. One without
+    /// is **skipped rather than guessed**, as `viewmodel::equipped_skins` does.
+    pub fn from_instance(item: crate::api::SkinInstance) -> Option<ItemView> {
+        let def = item.definition?;
+        Some(ItemView {
+            instance_id: item.instance_id,
+            name: def.name,
+            weapon_id: def.weapon_id,
+            wear: item.float_value,
+            equipped: item.is_equipped,
+            skin_id: def.id,
+            base_color: def.base_color,
+            accent_color: def.accent_color,
+            pattern_type: def.pattern_type,
+            rarity: def.rarity,
+            rarity_color: def.rarity_color,
+        })
+    }
+
+    /// The skin as the view model wears it.
+    pub fn finish(&self) -> Skin {
+        Skin {
+            id: Some(self.skin_id.clone()),
+            base_color: self.base_color.clone(),
+            accent_color: self.accent_color.clone(),
+            pattern_type: self.pattern_type.clone(),
+            float_value: self.wear,
+        }
+    }
+
+    /// The model this skin is shown on: its class's, or for a knife the
+    /// archetype its design names, by the rule the match draws it with.
+    pub fn prop(&self) -> &'static str {
+        if self.weapon_id == "knife" {
+            knife_prop_id(knife_archetype(&self.skin_id, &self.name))
+        } else {
+            crate::showcase::prop_for("", &self.weapon_id)
+        }
+    }
+
+    /// The rarity's colour, or `None` for a server that sent none.
+    pub fn rarity_hue(&self) -> Option<[f32; 4]> {
+        const UNSET: [f32; 3] = [-1.0; 3];
+        let [r, g, b] = parse_color(&self.rarity_color, UNSET);
+        (r >= 0.0).then_some([r, g, b, 1.0])
+    }
+
+    /// `mil_spec` as `MIL SPEC`.
+    pub fn rarity_label(&self) -> String {
+        self.rarity.replace('_', " ").to_uppercase()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -73,6 +138,8 @@ pub struct ListingView {
     pub name: String,
     pub kind: String,
     pub price: i64,
+    /// The skin for sale; `None` for a key or a case.
+    pub skin: Option<ItemView>,
 }
 
 /// Wear as the five grades a skin's float falls into.
@@ -84,6 +151,26 @@ pub fn wear_label(wear: f32) -> &'static str {
         w if w < 0.45 => "WELL WORN",
         _ => "BATTLE SCARRED",
     }
+}
+
+/// Where a skin is shown on the account screens: the top right of the
+/// content area, with the grid or the market to its left. Laid out whether or
+/// not there is a skin to show, so nothing moves when one arrives.
+fn account_art(width: f32, k: f32, top: f32) -> Hit {
+    let area_x = (MARGIN + COLUMN + 32.0) * k;
+    let right = width - MARGIN * k;
+    let w = ((right - area_x) * 0.4).min(440.0 * k);
+    Hit {
+        x: right - w,
+        y: top + 22.0 * k,
+        w,
+        h: w * 0.6,
+    }
+}
+
+/// Where the grid or the market stops, short of the stage.
+fn list_right(width: f32, k: f32, top: f32) -> f32 {
+    account_art(width, k, top).x - 28.0 * k
 }
 
 const ITEM_W: f32 = 204.0;
@@ -99,6 +186,48 @@ impl Front {
         self.items.clear();
         self.wallet = None;
         self.signin = SignIn::Idle;
+    }
+
+    /// The skin the stage is on: in the inventory the one last pointed at,
+    /// in the store the listing selected — when it is a skin.
+    pub(super) fn staged_item(&self) -> Option<&ItemView> {
+        self.account.as_ref()?;
+        match self.tab {
+            Tab::Inventory => self.items.get(self.focus).or(self.items.first()),
+            Tab::Store => self.listings.get(self.listing)?.skin.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn account_stage(&self, width: f32, height: f32) -> Option<Staging> {
+        let item = self.staged_item()?;
+        let k = unit(height);
+        let prop = item.prop();
+        Some(Staging {
+            rect: account_art(width, k, self.content_top(k)),
+            subject: Subject::Weapon(prop.to_string()),
+            tint: crate::viewmodel::prop_tint(Some(&item.finish()), prop),
+        })
+    }
+
+    /// The pointer moved. Over an inventory skin, that skin goes on the
+    /// stage and stays there after the pointer leaves — which it has to, to
+    /// reach the model and turn it.
+    pub fn hover(&mut self, kit: Option<&TextKit>, width: f32, height: f32) {
+        if self.screen != Screen::Home || self.tab != Tab::Inventory {
+            return;
+        }
+        let (x, y) = self.pointer;
+        let under = self
+            .hits(kit, width, height)
+            .into_iter()
+            .find_map(|(t, r)| match t {
+                Target::Item(i) if r.contains(x, y) => Some(i),
+                _ => None,
+            });
+        if let Some(i) = under {
+            self.focus = i;
+        }
     }
 
     pub(super) fn account_hits(
@@ -149,7 +278,8 @@ impl Front {
             out.push((Target::AccountRefresh, wide(top + 112.0 * k, 36.0 * k)));
             out.push((Target::SignOut, wide(top + 156.0 * k, 36.0 * k)));
             let (w, h, gap) = (ITEM_W * k, ITEM_H * k, 10.0 * k);
-            let columns = (((right - area_x) + gap) / (w + gap)).floor().max(1.0) as usize;
+            let span = list_right(width, k, top) - area_x;
+            let columns = ((span + gap) / (w + gap)).floor().max(1.0) as usize;
             for i in 0..self.items.len() {
                 let (col, row) = (i % columns, i / columns);
                 let y = area_y + row as f32 * (h + gap);
@@ -187,7 +317,7 @@ impl Front {
                 Hit {
                     x: area_x,
                     y,
-                    w: right - area_x,
+                    w: list_right(width, k, top) - area_x,
                     h: (ROW_H - 4.0) * k,
                 },
             ));
@@ -222,6 +352,7 @@ impl Front {
             Target::SignOut => return Some(Intent::SignOut),
             Target::AccountRefresh => return Some(Intent::AccountRefresh),
             Target::Item(i) => {
+                self.focus = i;
                 let item = self.items.get(i)?;
                 return Some(if item.equipped {
                     Intent::Unequip(item.weapon_id.clone())
@@ -276,7 +407,6 @@ impl Front {
         top: f32,
     ) {
         let left = MARGIN * k;
-        let right = width - MARGIN * k;
         let area_x = left + (COLUMN + 32.0) * k;
         let Some(account) = &self.account else {
             return self.paint_signin(p, hits, width, k, top);
@@ -365,17 +495,20 @@ impl Front {
                 );
             } else {
                 let y = top + 28.0 * k;
+                let list = list_right(width, k, top);
                 p.num(area_x + 14.0 * k, y, 1.0 * k, theme::FAINT, "ITEM");
                 p.num(
-                    area_x + (right - area_x) * 0.62,
+                    area_x + (list - area_x) * 0.62,
                     y,
                     1.0 * k,
                     theme::FAINT,
                     "KIND",
                 );
-                p.num_right(right - 14.0 * k, y, 1.0 * k, theme::FAINT, "CREDITS");
+                p.num_right(list - 14.0 * k, y, 1.0 * k, theme::FAINT, "CREDITS");
             }
         }
+
+        self.paint_account_stage(p, width, k, top);
 
         for (target, rect) in hits {
             let hot = self.hovered(rect);
@@ -392,6 +525,27 @@ impl Front {
                     };
                     let a = self.arrive(*i);
                     card(p, rect, 10.0 * k, item.equipped, hot, a);
+                    let hue = item.rarity_hue();
+                    if let Some(hue) = hue {
+                        // The grade, as light rising from the card's foot:
+                        // stronger on the skin the stage is showing.
+                        let shown = *i == self.focus;
+                        p.gradient_v(
+                            rect.x,
+                            rect.y + rect.h * 0.4,
+                            rect.w,
+                            rect.h * 0.6 - 2.0,
+                            theme::with_alpha(hue, 0.0),
+                            theme::with_alpha(hue, if shown { 0.2 } else { 0.08 } * a),
+                        );
+                        p.rect(
+                            rect.x,
+                            rect.y + rect.h - 2.0,
+                            rect.w,
+                            2.0,
+                            theme::with_alpha(hue, if shown { 1.0 } else { 0.6 } * a),
+                        );
+                    }
                     p.text(
                         rect.x + 12.0 * k,
                         rect.y + 10.0 * k,
@@ -411,14 +565,18 @@ impl Front {
                         rect.y + 32.0 * k,
                         1.0 * k,
                         theme::faded(theme::FAINT, a * 1.6),
-                        &format!("{}  /  {:.3}", wear_label(item.wear), item.wear),
+                        &format!(
+                            "{}  /  {}",
+                            item.weapon_id.to_uppercase(),
+                            wear_label(item.wear)
+                        ),
                     );
                     p.num(
                         rect.x + 12.0 * k,
                         rect.y + 50.0 * k,
                         1.0 * k,
-                        theme::faded(theme::FAINT, a * 1.6),
-                        &item.weapon_id.to_uppercase(),
+                        theme::faded(hue.unwrap_or(theme::FAINT), a),
+                        &item.rarity_label(),
                     );
                     if item.equipped {
                         p.num_right(
@@ -475,8 +633,11 @@ impl Front {
                             [1.0, 1.0, 1.0, 0.03 * a]
                         },
                     );
+                    let hue = listing.skin.as_ref().and_then(ItemView::rarity_hue);
                     if active {
                         p.rect(rect.x, rect.y, 2.0, rect.h, theme::ACCENT);
+                    } else if let Some(hue) = hue {
+                        p.rect(rect.x, rect.y, 2.0, rect.h, theme::with_alpha(hue, 0.8 * a));
                     }
                     let y = rect.y + 11.0 * k;
                     let ink = theme::faded(if active { theme::TEXT } else { theme::TEXT_DIM }, a);
@@ -487,13 +648,15 @@ impl Front {
                         ink,
                         &listing.name.to_uppercase(),
                     );
-                    p.num(
-                        rect.x + rect.w * 0.62,
-                        y + 1.0 * k,
-                        1.1 * k,
-                        theme::faded(theme::FAINT, a * 1.5),
-                        &listing.kind.to_uppercase(),
-                    );
+                    // A skin's kind is its grade, in its colour.
+                    let (kind, ink) = match (&listing.skin, hue) {
+                        (Some(skin), Some(hue)) => (skin.rarity_label(), theme::faded(hue, a)),
+                        _ => (
+                            listing.kind.to_uppercase(),
+                            theme::faded(theme::FAINT, a * 1.5),
+                        ),
+                    };
+                    p.num(rect.x + rect.w * 0.62, y + 1.0 * k, 1.1 * k, ink, &kind);
                     p.num_right(
                         rect.x + rect.w - 14.0 * k,
                         y,
@@ -518,6 +681,75 @@ impl Front {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// What the stage stands in, and what it is showing: the light under the
+    /// model in the skin's grade, and its name, grade and wear below it. Until
+    /// the model has loaded, the class's silhouette holds the place.
+    fn paint_account_stage(&self, p: &mut Painter, width: f32, k: f32, top: f32) {
+        let Some(item) = self.staged_item() else {
+            return;
+        };
+        let art = account_art(width, k, top);
+        let hue = item.rarity_hue().unwrap_or(theme::ACCENT);
+        if self.staged {
+            let pulse = 0.85 + 0.15 * (self.clock * 1.3).sin();
+            let glow_h = art.h * 0.6;
+            p.gradient_v(
+                art.x,
+                art.y + art.h - glow_h,
+                art.w,
+                glow_h,
+                theme::with_alpha(hue, 0.0),
+                theme::with_alpha(hue, 0.12 * pulse),
+            );
+        } else {
+            let ink = theme::with_alpha(hue, 0.6);
+            let class = weapon_class(&item.weapon_id);
+            weapon_art(
+                p,
+                art.x,
+                art.y + art.h * 0.2,
+                art.w,
+                art.w * 0.4,
+                class,
+                ink,
+            );
+        }
+        p.rect(
+            art.x,
+            art.y + art.h - 1.0,
+            art.w,
+            2.0,
+            theme::with_alpha(hue, 0.7),
+        );
+
+        let x = art.x;
+        let mut y = art.y + art.h + 12.0 * k;
+        p.text(x, y, 1.7 * k, hue, &item.name.to_uppercase());
+        y += 26.0 * k;
+        p.num(
+            x,
+            y,
+            1.0 * k,
+            theme::TEXT_DIM,
+            &format!(
+                "{}  /  {}  /  {:.3}",
+                item.rarity_label(),
+                wear_label(item.wear),
+                item.wear
+            ),
+        );
+        y += 20.0 * k;
+        if self.staged {
+            p.num(
+                x,
+                y,
+                0.95 * k,
+                theme::FAINT,
+                "DRAG TURNS  /  WHEEL ZOOMS  /  F INSPECTS  /  R RESETS",
+            );
         }
     }
 
@@ -561,9 +793,21 @@ impl Front {
         heading(p, x, y + 24.0 * k, k, "ACCOUNT");
         p.text(x, y + 50.0 * k, 2.6 * k, theme::TEXT, "SIGN IN");
         // Who you are right now, opposite the title: a guest, by this name.
-        p.text_right(x + inner, y + 26.0 * k, 1.0 * k, theme::FAINT, "PLAYING AS A GUEST");
+        p.text_right(
+            x + inner,
+            y + 26.0 * k,
+            1.0 * k,
+            theme::FAINT,
+            "PLAYING AS A GUEST",
+        );
         let name_w = p.name_width(&self.callsign, 1.35 * k);
-        p.name(x + inner - name_w, y + 46.0 * k, 1.35 * k, theme::AMBER, &self.callsign);
+        p.name(
+            x + inner - name_w,
+            y + 46.0 * k,
+            1.35 * k,
+            theme::AMBER,
+            &self.callsign,
+        );
         p.rule(x, y + 84.0 * k, inner, [1.0, 1.0, 1.0, 0.10], theme::ACCENT);
 
         match &self.signin {
@@ -643,7 +887,13 @@ impl Front {
                 };
                 p.rect(field.x, field.y, field.w, field.h, [0.0, 0.0, 0.0, 0.34]);
                 p.rect(field.x, field.y, 2.0, field.h, theme::ACCENT);
-                p.name(field.x + 12.0 * k, field.y + 10.0 * k, 1.2 * k, theme::TEXT, url);
+                p.name(
+                    field.x + 12.0 * k,
+                    field.y + 10.0 * k,
+                    1.2 * k,
+                    theme::TEXT,
+                    url,
+                );
                 // Step two: the code, one character to a cell, so it is read
                 // in the groups it is typed in.
                 if let Some(code) = code {
@@ -699,8 +949,20 @@ fn waiting_dots(clock: f32) -> &'static str {
 
 /// A numbered step's heading: the number in a small filled square.
 fn step_label(p: &mut Painter, x: f32, y: f32, k: f32, number: &str, text: &str) {
-    p.rect(x, y - 2.0 * k, 13.0 * k, 13.0 * k, theme::with_alpha(theme::ACCENT, 0.9));
-    p.num(x + 3.5 * k, y + 1.0 * k, 1.0 * k, [0.03, 0.05, 0.09, 1.0], number);
+    p.rect(
+        x,
+        y - 2.0 * k,
+        13.0 * k,
+        13.0 * k,
+        theme::with_alpha(theme::ACCENT, 0.9),
+    );
+    p.num(
+        x + 3.5 * k,
+        y + 1.0 * k,
+        1.0 * k,
+        [0.03, 0.05, 0.09, 1.0],
+        number,
+    );
     p.num(x + 21.0 * k, y, 1.0 * k, theme::FAINT, text);
 }
 
@@ -721,7 +983,13 @@ fn code_cells(p: &mut Painter, x: f32, y: f32, room: f32, k: f32, code: &str) {
     let mut cx = x;
     for c in code.chars() {
         if c == '-' || c == ' ' {
-            p.rect(cx + 3.0 * k, y + cell_h * 0.5 - 1.0 * k, dash - 6.0 * k, 2.0 * k, theme::FAINT);
+            p.rect(
+                cx + 3.0 * k,
+                y + cell_h * 0.5 - 1.0 * k,
+                dash - 6.0 * k,
+                2.0 * k,
+                theme::FAINT,
+            );
             cx += dash + gap;
             continue;
         }
@@ -786,7 +1054,11 @@ fn provider_button(p: &mut Painter, r: &Hit, k: f32, name: &str, on: bool, hot: 
         r.x + (mark - w) * 0.5,
         r.y + (r.h - 7.0 * scale) * 0.5,
         scale,
-        if on { [0.03, 0.05, 0.09, 1.0] } else { theme::FAINT },
+        if on {
+            [0.03, 0.05, 0.09, 1.0]
+        } else {
+            theme::FAINT
+        },
         &initial,
     );
     let label_scale = 1.45 * k;
@@ -847,6 +1119,160 @@ mod tests {
             name: "Sable".into(),
             handle: Some("sable".into()),
         });
+    }
+
+    fn skin(name: &str, weapon: &str, base: &str, rarity: &str) -> ItemView {
+        ItemView {
+            instance_id: format!("i-{name}"),
+            name: name.into(),
+            weapon_id: weapon.into(),
+            skin_id: format!("{weapon}_{}", name.to_lowercase()),
+            base_color: base.into(),
+            accent_color: "#ffffff".into(),
+            pattern_type: "solid".into(),
+            rarity: "covert".into(),
+            rarity_color: rarity.into(),
+            ..Default::default()
+        }
+    }
+
+    fn point_at(f: &mut Front, target: Target) {
+        let hit = f
+            .hits(None, 1280.0, 720.0)
+            .into_iter()
+            .find(|(t, _)| *t == target)
+            .unwrap_or_else(|| panic!("{target:?} is not on screen"))
+            .1;
+        f.pointer = (hit.x + hit.w * 0.5, hit.y + hit.h * 0.5);
+        f.hover(None, 1280.0, 720.0);
+    }
+
+    #[test]
+    fn the_inventory_stages_the_skin_last_pointed_at_in_its_finish() {
+        let mut f = front();
+        f.tab = Tab::Inventory;
+        f.items = vec![
+            skin("Ember", "assault", "#f97316", "#eb4b4b"),
+            skin("Karambit", "knife", "#38bdf8", "#ffd700"),
+        ];
+        assert_eq!(f.stage(1280.0, 720.0), None, "a guest owns nothing to show");
+
+        signed_in(&mut f);
+        let first = f.stage(1280.0, 720.0).expect("the first skin, unprompted");
+        assert_eq!(first.subject, Subject::Weapon("assault".into()));
+        assert!(
+            first.tint[0] > first.tint[2],
+            "worn in its orange: {:?}",
+            first.tint
+        );
+
+        point_at(&mut f, Target::Item(1));
+        let knife = f.stage(1280.0, 720.0).expect("the knife");
+        assert_eq!(knife.subject, Subject::Weapon("knife_karambit".into()));
+        assert_eq!(
+            knife.tint, [1.0; 3],
+            "a karambit's finish is in its texture"
+        );
+
+        // Off the grid and onto the model: the knife stays.
+        f.pointer = (knife.rect.x + 4.0, knife.rect.y + 4.0);
+        f.hover(None, 1280.0, 720.0);
+        assert_eq!(f.stage(1280.0, 720.0), Some(knife));
+    }
+
+    #[test]
+    fn the_store_stages_a_selected_skin_but_not_a_key() {
+        let mut f = front();
+        signed_in(&mut f);
+        f.tab = Tab::Store;
+        f.listings = vec![
+            ListingView {
+                id: "l1".into(),
+                name: "Ember".into(),
+                kind: "skin".into(),
+                price: 120,
+                skin: Some(skin("Ember", "assault", "#f97316", "#eb4b4b")),
+            },
+            ListingView {
+                id: "l2".into(),
+                name: "key".into(),
+                kind: "key".into(),
+                price: 250,
+                skin: None,
+            },
+        ];
+        assert_eq!(
+            f.stage(1280.0, 720.0).map(|s| s.subject),
+            Some(Subject::Weapon("assault".into()))
+        );
+        click(&mut f, Target::Listing(1));
+        assert_eq!(f.stage(1280.0, 720.0), None);
+    }
+
+    #[test]
+    fn a_market_row_carries_the_skin_it_sells() {
+        let row: crate::api::Listing = serde_json::from_value(serde_json::json!({
+            "listingId": "l1",
+            "price": 120,
+            "kind": "skin",
+            "item": {
+                "instanceId": "i1",
+                "skinId": "assault_ember",
+                "floatValue": 0.21,
+                "definition": {
+                    "id": "assault_ember", "name": "Ember", "weaponId": "assault",
+                    "rarity": "classified", "rarityColor": "#d32ce6",
+                    "baseColor": "#f97316", "accentColor": "#ffffff", "patternType": "solid"
+                }
+            }
+        }))
+        .unwrap();
+        let item = row
+            .skin()
+            .and_then(ItemView::from_instance)
+            .expect("a skin");
+        assert_eq!((item.name.as_str(), item.wear), ("Ember", 0.21));
+        assert_eq!(item.rarity_label(), "CLASSIFIED");
+        let hue = item.rarity_hue().expect("a colour");
+        assert!(hue[0] > 0.8 && hue[1] < 0.2 && hue[2] > 0.85, "{hue:?}");
+
+        let key: crate::api::Listing = serde_json::from_value(serde_json::json!({
+            "listingId": "l2", "price": 250, "kind": "key",
+            "item": {"instanceId": "k1", "defId": "key"}
+        }))
+        .unwrap();
+        assert!(key.skin().is_none());
+    }
+
+    #[test]
+    fn the_stage_keeps_clear_of_the_grid_and_the_market() {
+        let mut f = front();
+        signed_in(&mut f);
+        f.items = (0..14)
+            .map(|n| skin(&format!("Skin {n}"), "assault", "#f97316", "#4b69ff"))
+            .collect();
+        f.listings = (0..20)
+            .map(|n| ListingView {
+                id: format!("l{n}"),
+                name: format!("Listing {n}"),
+                kind: "skin".into(),
+                price: 100 + n,
+                skin: Some(skin("Ember", "assault", "#f97316", "#eb4b4b")),
+            })
+            .collect();
+        for tab in [Tab::Inventory, Tab::Store] {
+            f.tab = tab;
+            for (w, h) in [(1280.0, 720.0), (1920.0, 1080.0)] {
+                let stage = f.stage(w, h).expect("a skin on the stage").rect;
+                for (target, r) in f.hits(None, w, h) {
+                    let apart = r.x >= stage.x + stage.w
+                        || r.x + r.w <= stage.x
+                        || r.y >= stage.y + stage.h
+                        || r.y + r.h <= stage.y;
+                    assert!(apart, "{tab:?} at {w}x{h}: {target:?} is under the stage");
+                }
+            }
+        }
     }
 
     #[test]
@@ -919,6 +1345,7 @@ mod tests {
                 weapon_id: "assault".into(),
                 wear: 0.02,
                 equipped: false,
+                ..Default::default()
             },
             ItemView {
                 instance_id: "i2".into(),
@@ -926,6 +1353,7 @@ mod tests {
                 weapon_id: "knife".into(),
                 wear: 0.5,
                 equipped: true,
+                ..Default::default()
             },
         ];
         f.tab = Tab::Inventory;
@@ -962,12 +1390,14 @@ mod tests {
                 name: "Ember".into(),
                 kind: "skin".into(),
                 price: 120,
+                skin: None,
             },
             ListingView {
                 id: "l2".into(),
                 name: "Fade".into(),
                 kind: "skin".into(),
                 price: 900,
+                skin: None,
             },
         ];
         assert_eq!(click(&mut f, Target::BuyKey), Some(Intent::BuyKey));
@@ -1030,6 +1460,9 @@ mod tests {
                     weapon_id: "assault".into(),
                     wear: n as f32 / 14.0,
                     equipped: n == 0,
+                    rarity: "mil_spec".into(),
+                    rarity_color: "#4b69ff".into(),
+                    ..Default::default()
                 })
                 .collect();
             f.wallet = Some(WalletView {
@@ -1049,6 +1482,7 @@ mod tests {
                     name: format!("Listing {n}"),
                     kind: "skin".into(),
                     price: 100 + n,
+                    skin: None,
                 })
                 .collect();
         }));

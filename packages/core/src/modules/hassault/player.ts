@@ -28,7 +28,7 @@ import { currentHitbox, eyeAt, heightAt } from './hitbox';
 import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, World, type Ladder } from './world';
 
 /** Cubes per second at a walk. Tuned to feel like AC rather than derived from it. */
-export const MOVE_SPEED = 22;
+export const MOVE_SPEED = 18;
 export const GRAVITY = 55;
 export const JUMP_SPEED = 19;
 
@@ -72,6 +72,9 @@ export const CROUCH_TRANSITION = 0.15;
  * expressed as `50/friction`. Ground settles in ~0.12 s, air in ~0.6 s. */
 export const GROUND_RESPONSE = 50 / 6;
 export const AIR_RESPONSE = 50 / 30;
+/** The floor under ground response, so a stop arrives instead of drifting.
+ * `GROUND_STOP_SPEED` in `physics.py`, which has the reasoning. */
+export const GROUND_STOP_SPEED = 3;
 
 /** Gravity ramps with time in air (AC's `dropf`), capped so a long drop is a fall
  * rather than a teleport. */
@@ -485,6 +488,7 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   // the wish direction and the whole vertical branch.
   let ladder = ladderAt(world, player);
   let climb = 0;
+  let steppingOff = false;
   if (ladder) {
     climb = climbRate(player, ladder, input);
     if (climb > 0 && player.z >= ladder.top - LADDER_TOP_RELEASE) {
@@ -494,6 +498,8 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
       // where "toward the ladder" reverses, the alignment flips sign, and the
       // input that was climbing up starts climbing down. See `physics.py`.
       ladder = null;
+      // The top rung is footing: step off it with the ground's grip.
+      steppingOff = true;
     }
   }
 
@@ -516,16 +522,25 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
     [wx, wy] = tangential(player, ladder, wx, wy);
   }
 
-  let response = under ? WATER_RESPONSE : player.onGround ? GROUND_RESPONSE : AIR_RESPONSE;
+  let response = under
+    ? WATER_RESPONSE
+    : player.onGround || steppingOff
+      ? GROUND_RESPONSE
+      : AIR_RESPONSE;
   // Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
   // apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
   if (player.onGround && !under && !ladder && wx * player.velX + wy * player.velY < -0.1) {
     response = GROUND_RESPONSE * 3.2;
   }
   response *= knifeBoost;
-  const blend = 1 - Math.exp(-response * dt);
-  player.velX += (wx * speedCap - player.velX) * blend;
-  player.velY += (wy * speedCap - player.velY) * blend;
+  const gapX = player.velX - wx * speedCap;
+  const gapY = player.velY - wy * speedCap;
+  const gap = Math.hypot(gapX, gapY);
+  const stop = player.onGround && !under && !ladder ? GROUND_STOP_SPEED : 0;
+  const left = Math.max(0, (gap + stop) * Math.exp(-response * dt) - stop);
+  const keep = gap > 1e-9 ? left / gap : 0;
+  player.velX = wx * speedCap + gapX * keep;
+  player.velY = wy * speedCap + gapY * keep;
 
   // -- jump, and the chained-jump boost ---------------------------------------
   //

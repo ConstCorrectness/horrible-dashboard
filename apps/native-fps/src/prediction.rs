@@ -551,10 +551,10 @@ mod tests {
         let stopped = MoveState::default();
         let rebased = run(Some(&stopped));
         let carried = run(None);
-        // Ten commands from a standstill barely move a body that has to
-        // accelerate; ten replayed at full sprint cover several times as much.
+        // Ten commands from a standstill move a body that has to accelerate
+        // well short of ten replayed at full sprint.
         assert!(
-            carried > rebased * 2.0,
+            carried > rebased * 1.5,
             "rebased replay travelled {rebased:.3}, carried-over {carried:.3} —              the block is supposed to make a difference"
         );
     }

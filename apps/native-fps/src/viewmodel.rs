@@ -206,7 +206,7 @@ const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
 ///
 /// The catalogue is data, and a client that rendered an unparseable colour as
 /// black would show a weapon nobody designed.
-fn parse_color(value: &str, fallback: [f32; 3]) -> [f32; 3] {
+pub fn parse_color(value: &str, fallback: [f32; 3]) -> [f32; 3] {
     let hex = value.trim().trim_start_matches('#');
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return fallback;
@@ -330,6 +330,31 @@ fn palette_for(skin: Option<&Skin>) -> Palette {
 pub fn palette_rgb(skin: Option<&Skin>) -> [[f32; 3]; 4] {
     let p = palette_for(skin);
     [p.body, p.dark, p.grip, p.accent]
+}
+
+/// What a skin multiplies a textured weapon model by, in linear light.
+///
+/// `viewmodel.ts`'s rule for the GLB prop: the skin **tints** it rather than
+/// repainting it, because those materials carry real texture maps and the
+/// factor multiplies the map. The colour is the palette's body, worn as the
+/// boxes would be, decoded from sRGB the way three's `setHex` decodes it. An
+/// archetype knife (`knife_karambit` and the rest) has its finish baked into
+/// its texture, so it is left white like a weapon with no skin at all.
+pub fn prop_tint(skin: Option<&Skin>, prop_id: &str) -> [f32; 3] {
+    match skin {
+        Some(skin) if !prop_id.starts_with("knife_") => {
+            palette_for(Some(skin)).body.map(srgb_to_linear)
+        }
+        _ => WHITE,
+    }
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// The equipped skin for each weapon, keyed by weapon id.
@@ -2899,6 +2924,34 @@ mod tests {
         let red = parse_color("#ff0000", METAL);
         assert!((red[0] - 1.0).abs() < 1e-6 && red[1] == 0.0 && red[2] == 0.0);
         assert_eq!(parse_color("ff0000", METAL), red);
+    }
+
+    #[test]
+    fn a_skin_tints_the_model_except_a_knife_whose_finish_is_baked_in() {
+        let skin = Skin {
+            id: Some("assault_ember".into()),
+            base_color: "#f97316".into(),
+            accent_color: "#ffffff".into(),
+            pattern_type: "solid".into(),
+            float_value: 0.0,
+        };
+        assert_eq!(prop_tint(None, "assault"), WHITE, "stock is untouched");
+        assert_eq!(prop_tint(Some(&skin), "knife_karambit"), WHITE);
+        let tint = prop_tint(Some(&skin), "assault");
+        // Orange, in linear light: red well above green, blue nearly gone.
+        assert!(
+            tint[0] > 0.9 && tint[1] > 0.1 && tint[1] < 0.25 && tint[2] < 0.02,
+            "{tint:?}"
+        );
+        // A worn one is greyer: closer to the grime colour than a new one.
+        let worn = prop_tint(
+            Some(&Skin {
+                float_value: 1.0,
+                ..skin
+            }),
+            "assault",
+        );
+        assert!(worn[0] < tint[0] && worn[2] > tint[2], "{worn:?}");
     }
 
     #[test]

@@ -105,28 +105,25 @@ pub struct OperatorState {
     pub crouch: f32,
     /// Ground speed in cubes/second.
     pub speed: f32,
-    /// Velocity along the way the player is facing, -1 (backwards) to 1.
-    pub forward: f32,
-    /// Velocity across the way the player is facing, -1 (left) to 1.
-    pub strafe: f32,
-    /// Wounded enough that the limp reads as information, not decoration.
-    pub hurt: bool,
 }
 
 /// Below this, a player is standing still rather than walking slowly.
 ///
 /// Interpolated remote positions jitter by a fraction of a cube even at rest,
-/// and without a floor that jitter drives the walk cycle — an idle enemy
+/// and without a floor that jitter drives the stride — an idle enemy
 /// shuffling on the spot, which reads as movement and is worse than none.
 pub const IDLE_SPEED: f32 = 0.6;
 
-/// Above this, the run cycle rather than the walk cycle.
-pub const RUN_SPEED: f32 = 9.0;
-
-/// The locomotion clip for a state — the full-body base layer.
+/// The base clip for a state — what the whole body plays under the solved legs.
 ///
-/// Death is checked first and jump second because both override direction
-/// entirely: a player killed mid-strafe is dying, not strafing.
+/// It used to pick a walk, a strafe or a retreat by direction. Those clips are
+/// still in the GLB and no longer chosen: their feet cover a fifth of the ground
+/// the body does and their rifles point across the chest, so a moving player's
+/// legs are solved (`locomotion.rs`) and its torso holds the aiming pose, turned
+/// onto the look direction by the animator. What is left to choose is posture.
+///
+/// Death is checked first and jump second because both override everything: a
+/// player killed mid-strafe is dying, not strafing.
 pub fn select_locomotion(state: &OperatorState) -> &'static str {
     if !state.alive {
         return "death_from_the_front";
@@ -134,45 +131,17 @@ pub fn select_locomotion(state: &OperatorState) -> &'static str {
     if !state.ground {
         return "running_jump";
     }
-
-    let crouched = state.crouch > 0.5;
-    let moving = state.speed > IDLE_SPEED;
-
-    if crouched {
-        // There is no crouched idle in the set, so the crouch-walk cycle stands
-        // in; held at weight it still reads as a braced low posture.
-        return if moving {
+    if state.crouch > 0.5 {
+        // There is no crouched idle in the set, so the kneel stands in; moving,
+        // the crouch-walk supplies the low torso and the legs are solved under
+        // it.
+        return if state.speed > IDLE_SPEED {
             "crouch_walking"
         } else {
             "rifle_crouch_walk_to_kneel"
         };
     }
-
-    if !moving {
-        return "rifle_aiming_idle";
-    }
-
-    // Direction is decided by whichever axis dominates, not by blending: two
-    // walk cycles at half weight each land both feet in the wrong place,
-    // whereas one cycle played whole keeps its foot contacts.
-    if state.strafe.abs() > state.forward.abs() {
-        return if state.strafe > 0.0 {
-            "right_strafe_walking"
-        } else {
-            "strafing"
-        };
-    }
-    if state.forward < 0.0 {
-        return "walking_backwards";
-    }
-    if state.hurt && state.speed > RUN_SPEED {
-        return "injured_run";
-    }
-    if state.speed > RUN_SPEED {
-        "rifle_walk"
-    } else {
-        "standard_walk"
-    }
+    "rifle_aiming_idle"
 }
 
 /// The death animation for how a player was killed.
@@ -235,9 +204,6 @@ mod tests {
             ground: value["ground"].as_bool().expect("ground"),
             crouch: value["crouch"].as_f64().expect("crouch") as f32,
             speed: value["speed"].as_f64().expect("speed") as f32,
-            forward: value["forward"].as_f64().expect("forward") as f32,
-            strafe: value["strafe"].as_f64().expect("strafe") as f32,
-            hurt: value["hurt"].as_bool().expect("hurt"),
         }
     }
 
@@ -245,7 +211,7 @@ mod tests {
     fn locomotion_matches_the_browser_client() {
         let vectors = vectors();
         let cases = vectors["locomotion"].as_array().expect("locomotion");
-        assert!(cases.len() >= 19, "the fixture has lost cases");
+        assert!(cases.len() >= 12, "the fixture has lost cases");
         for case in cases {
             let state = state_from(&case["state"]);
             let expected = case["clip"].as_str().expect("clip");
