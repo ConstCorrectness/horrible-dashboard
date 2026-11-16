@@ -205,7 +205,13 @@ export function WindowLayer() {
 
   if (frame.windows.length === 0) return <div className="os-window-layer" ref={ref} aria-hidden />;
 
-  const ordered = [...frame.windows].sort((a, b) => a.z - b.z);
+  // Store order, never z-order. Stacking is the inline `zIndex` each window sets
+  // from `win.z`; sorting the keyed list by `z` as well made every raise reorder
+  // the DOM, and a moved `<iframe>` reloads — focusing a window behind a docs or
+  // browser pane threw that pane's page away. The store keeps `windows` in
+  // creation order across a raise, so this list only changes when a window is
+  // added or removed.
+  const ordered = frame.windows;
   // The presented pane's window, if any. Resolved to a *window* id here so
   // `DesktopWindow` takes a boolean and does not have to search the frame.
   const presentedWindowId = frame.presentedInstanceId
