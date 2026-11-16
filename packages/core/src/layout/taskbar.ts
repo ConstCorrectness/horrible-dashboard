@@ -1,30 +1,26 @@
 /**
- * Taskbar derivation: what the window buttons say, and what clicking one does.
+ * Pane-switcher derivation: every open pane, what it is called, and whether the
+ * user can see it. Read by the status bar's agent button and Spotlight's open
+ * pane results.
  *
- * Pure over `FrameState` + the registry — the taskbar should have no opinion of
- * its own about what is open. The rendering half lives in
- * packages/ui/src/desktop/taskbar/.
+ * Pure over `FrameState` + the registry — the switcher should have no opinion of
+ * its own about what is open.
  *
- * See docs/architecture/desktop-shell.mdx.
+ * Named for the taskbar of the floating desktop, whose window buttons it fed.
  */
 import { registry } from '../registry';
-import { listPanes } from './model';
+import { listPanes, visiblePanes } from './model';
 import type { FrameState, PaneLocation } from './types';
 
-/**
- * A taskbar button's current meaning. Note that a taskbar button is per **pane
- * instance**, not per window: a window merged into three tabs is three things
- * the user can switch to, and one button for it would make two of them
- * unreachable from here.
- */
+/** Whether a pane is on screen. Per **pane instance**, not per group. */
 export type TaskbarState =
-  /** The active tab of the focused window. Click minimizes it. */
+  /** The focused pane. */
   | 'focused'
-  /** Open and on screen, but not focused. Click focuses. */
+  /** On screen, but not focused. */
   | 'open'
-  /** In a minimized window. Click restores. */
+  /** In a hidden dock. */
   | 'minimized'
-  /** Open but not showing: a background tab of its window. */
+  /** Open but not showing: a background tab, or behind a maximized group. */
   | 'hidden';
 
 export interface TaskbarEntry {
@@ -35,8 +31,6 @@ export interface TaskbarEntry {
   state: TaskbarState;
   /** The pane's background work finished while it was out of sight. */
   attention: boolean;
-  /** The pane's window — the taskbar's minimize target. */
-  windowId: string;
   /** Where the pane actually is, for callers that need to route the click. */
   location: PaneLocation;
 }
@@ -104,7 +98,6 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
           icon: resolveViewIcon(pane.viewId, d.icon, d.title),
           state: stateOf(frame, located),
           attention: pane.attention ?? false,
-          windowId: location.windowId,
           location,
         },
       ];
@@ -114,12 +107,9 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
 
 function stateOf(frame: FrameState, located: ReturnType<typeof listPanes>[number]): TaskbarState {
   const { pane, location } = located;
-  const win = frame.windows.find((w) => w.id === location.windowId);
-  if (!win) return 'hidden';
-  if (win.mode === 'minimized') return 'minimized';
-  // A merged window's background tabs are open but not showing.
-  if (win.area.tabs[win.area.activeTab]?.instanceId !== pane.instanceId) return 'hidden';
-  return frame.focusedWindowId === win.id ? 'focused' : 'open';
+  if (location.kind === 'dock' && !frame.docks[location.side].visible) return 'minimized';
+  if (!visiblePanes(frame).some((p) => p.pane.instanceId === pane.instanceId)) return 'hidden';
+  return frame.focusedInstanceId === pane.instanceId ? 'focused' : 'open';
 }
 
 /**

@@ -1,9 +1,9 @@
 /**
  * The desktop surface: the backdrop, and the right-click menu over it.
  *
- * It renders nothing of the windows themselves — `WindowLayer` is a sibling that
- * floats over every shell view, so windows survive a trip to the tiling frame or
- * back. What lives here is only what belongs *behind* them.
+ * It renders nothing of the panes themselves — the workbench is a sibling laid
+ * over it, and an empty workbench centre is where this shows through. What lives
+ * here is only what belongs *behind* the panes.
  *
  * See docs/architecture/desktop-shell.mdx.
  */

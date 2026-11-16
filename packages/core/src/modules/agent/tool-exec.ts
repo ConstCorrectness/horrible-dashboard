@@ -3,13 +3,13 @@
  * can run against the registry + frame controller. Both the agent orchestrator
  * (orchestrator-client.ts) and the Python REPL (../repl/client.ts) relay tool
  * calls over the `/ws` socket and execute them here, so any verb one can run, the
- * other can too — one source of truth. The vocabulary is the desktop's: every
- * pane lives in a **window** (several merged panes are its tabs), and **regions**
- * are the strips inside a pane. See docs/modules/agent-chat.md and
+ * other can too — one source of truth. The vocabulary is the workbench's: every
+ * pane is a tab in a **group** (in the centre, an edge dock, or a popout), and
+ * **regions** are the strips inside a pane. The `*_window` tool names predate the
+ * workbench and are answered in its terms. See docs/modules/agent-chat.md and
  * docs/modules/repl.md.
  */
 import {
-  arrangeDesktop,
   describeLayout,
   listOpenPanesDetailed,
   presentPane,
@@ -18,17 +18,18 @@ import {
   setBackdrop,
   setPaneSection,
   setRegionView,
-  setWindowMode,
   showTarget,
-  snapWindow,
+  movePaneTo,
   tearOffPane,
+  toggleDock,
+  toggleMaximizedGroup,
   resolveView,
   toggleRegion,
 } from '../../layout/controller';
-import { windowOfInstance } from '../../layout/model';
-import { isSnapZone, SNAP_ZONES } from '../../layout/snap';
+import type { PlaceTarget, SplitSide } from '../../layout/dock/types';
+import { findPaneAnywhere } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
-import type { RegionPosition, SnapZone, WindowRect } from '../../layout/types';
+import type { RegionPosition } from '../../layout/types';
 import { applyTheme, isKnownTheme, THEME_SETTING_KEY } from '../../theme';
 import { getSetting, setSetting } from '../../settings';
 import { registry } from '../../registry';
@@ -36,7 +37,6 @@ import { executeDynamicTool, serializeManifest } from './manifest';
 import { LAYOUT_VERBS, nearestToolNames } from './tool-names';
 
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
-const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
 
 /**
  * The taskbar config setting key.
@@ -47,22 +47,40 @@ const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
  */
 const TASKBAR_SETTING_KEY = 'desktop.taskbar';
 
-/** A snap zone from the wire, or null - never a guess. */
-function resolveSnapZone(value: unknown): SnapZone | null {
-  return isSnapZone(value) ? value : null;
-}
+/** The floating desktop's snap zones the workbench can still honour, as splits. */
+const SNAP_AS_SPLIT: Record<string, SplitSide> = {
+  left: 'left',
+  'third-l': 'left',
+  right: 'right',
+  'third-r': 'right',
+  top: 'above',
+  bottom: 'below',
+};
+const SNAP_NAMES = [...Object.keys(SNAP_AS_SPLIT), 'max'];
 
 /**
- * A pixel rect from the wire. Every field must be a finite number: a partial
- * rect would place a window somewhere nobody asked for.
+ * Place a pane the way a snap zone used to: a half becomes a split of the centre
+ * group beside it, `max` maximizes its group. Null for a zone that has no
+ * workbench meaning — never a guess.
  */
-function resolveRect(value: unknown): WindowRect | null {
-  if (!value || typeof value !== 'object') return null;
-  const r = value as Record<string, unknown>;
-  const nums = ['x', 'y', 'w', 'h'].map((k) => Number(r[k]));
-  return nums.every((n) => Number.isFinite(n))
-    ? { x: nums[0], y: nums[1], w: nums[2], h: nums[3] }
-    : null;
+function snapToWorkbench(instanceId: string, snap: unknown): boolean | null {
+  const frame = layoutStore.getSnapshot().frame;
+  const located = findPaneAnywhere(frame, instanceId);
+  if (!located) return false;
+  if (snap === 'max') {
+    if (frame.maximizedAreaId === located.location.areaId) return true;
+    return toggleMaximizedGroup(instanceId);
+  }
+  const side = typeof snap === 'string' ? SNAP_AS_SPLIT[snap] : undefined;
+  if (!side) return null;
+  // Split the group it is in when that is a centre group with company; otherwise
+  // split the focused centre group, so a docked tool snapped left lands in the
+  // centre's left half rather than nowhere.
+  const area =
+    located.location.kind === 'center' ? located.location.areaId : frame.focusedAreaId ?? '';
+  const target: PlaceTarget = { kind: 'split', areaId: area, side };
+  movePaneTo(instanceId, target);
+  return true;
 }
 
 /** Display title for a pane id (panel or widget), falling back to the id. */
@@ -140,41 +158,54 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'focus_pane':
       return { focused: lc?.focusPane(String(args.instanceId)) ?? false };
     // ----------------------------------------------------------- windows
+    // Floating-desktop names, answered in workbench terms.
     case 'open_window': {
-      // Give a pane a window of its own — tearing it out of a tabbed window if it
-      // shares one — and optionally place that window.
+      // Give a pane a group of its own, and optionally place it.
       const instanceId = String(args.instanceId);
-      if (!windowOfInstance(layoutStore.getSnapshot().frame, instanceId)) {
+      if (!findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId)) {
         return { error: `unknown instanceId: ${instanceId}` };
       }
-      tearOffPane(instanceId);
-      // Placement is applied after the tear, so a bad snap/rect leaves an ordinary
-      // window rather than failing the whole call.
       if (args.snap != null) {
-        const zone = resolveSnapZone(args.snap);
-        if (!zone) return { ok: true, warning: `unknown snap zone "${String(args.snap)}"` };
-        snapWindow(instanceId, zone);
-      } else if (args.rect != null) {
-        const rect = resolveRect(args.rect);
-        if (!rect) return { ok: true, warning: 'rect needs finite x, y, w and h' };
-        const win = windowOfInstance(layoutStore.getSnapshot().frame, instanceId);
-        if (win) layoutStore.dispatch({ type: 'SET_WINDOW_RECT', windowId: win.id, rect });
+        const ok = snapToWorkbench(instanceId, args.snap);
+        if (ok === null) {
+          tearOffPane(instanceId);
+          return { ok: true, warning: `snap must be one of ${SNAP_NAMES.join(', ')}` };
+        }
+        return { ok };
       }
-      return { ok: true };
+      tearOffPane(instanceId);
+      return args.rect != null
+        ? { ok: true, warning: 'the workbench has no free windows; rect is ignored' }
+        : { ok: true };
     }
     case 'window_state': {
       const instanceId = String(args.instanceId);
+      const frame = layoutStore.getSnapshot().frame;
+      const located = findPaneAnywhere(frame, instanceId);
       switch (String(args.state)) {
         case 'minimize':
-          return { ok: setWindowMode(instanceId, 'minimized') };
+          // Only a docked pane can be put away; a centre tab is a document in front.
+          if (located?.location.kind !== 'dock') {
+            return { ok: false, error: 'only a pane in an edge dock can be hidden' };
+          }
+          return { ok: toggleDock(located.location.side, false) };
         case 'maximize':
-          return { ok: setWindowMode(instanceId, 'maximized') };
+          if (!located) return { ok: false };
+          return {
+            ok:
+              frame.maximizedAreaId === located.location.areaId ||
+              toggleMaximizedGroup(instanceId),
+          };
         case 'restore':
-          return { ok: setWindowMode(instanceId, 'normal') };
+          if (!located) return { ok: false };
+          if (frame.maximizedAreaId === located.location.areaId) {
+            return { ok: toggleMaximizedGroup(instanceId) };
+          }
+          return { ok: lc?.focusPane(instanceId) ?? false };
         case 'snap': {
-          const zone = resolveSnapZone(args.snap);
-          if (!zone) return { error: `snap must be one of ${SNAP_ZONES.join(', ')}` };
-          return { ok: snapWindow(instanceId, zone) };
+          const ok = snapToWorkbench(instanceId, args.snap);
+          if (ok === null) return { error: `snap must be one of ${SNAP_NAMES.join(', ')}` };
+          return { ok };
         }
         case 'present':
           return { ok: presentPane(instanceId) };
@@ -186,14 +217,11 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           };
       }
     }
-    case 'arrange_windows': {
-      const style = String(args.style);
-      if (!(ARRANGE_STYLES as readonly string[]).includes(style)) {
-        return { error: `style must be one of ${ARRANGE_STYLES.join(', ')}` };
-      }
-      const ok = arrangeDesktop(style as (typeof ARRANGE_STYLES)[number]);
-      return ok ? { ok } : { error: 'no open windows to arrange' };
-    }
+    case 'arrange_windows':
+      return {
+        error:
+          'the workbench lays panes out in groups and docks, so there are no free windows to arrange; use window_state snap to split',
+      };
 
     // ------------------------------------------------------- appearance
     case 'desktop.set_backdrop': {

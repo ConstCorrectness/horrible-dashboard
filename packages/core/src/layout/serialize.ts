@@ -8,13 +8,12 @@
  * callers treat as "start empty".
  */
 import type { SerializedLayout } from '../workspace';
-import { windowsFromLegacyFrame } from './legacy-frame';
-import { areaId, windowId } from './model';
-import { isSnapZone, NOMINAL_VIEWPORT } from './snap';
+import { isSnapZone, NOMINAL_VIEWPORT, windowId, windowsFromLegacyFrame } from './legacy-frame';
+import { areaId } from './model';
 import { DEFAULT_BACKDROP } from './types';
 import type {
   BackdropRef,
-  FrameState,
+  WindowFrame,
   PaneState,
   RegionPosition,
   RegionState,
@@ -101,12 +100,12 @@ function renamedSection(viewId: string): string | undefined {
   return typeof rename === 'string' ? undefined : rename?.section;
 }
 
-export function serialize(frame: FrameState): SerializedLayout {
+export function serialize(frame: WindowFrame): SerializedLayout {
   // `presentedInstanceId` is dropped rather than written and ignored on the way
   // back. It is a momentary way of looking at a pane, not a property of the
   // workspace — and a blob carrying it would look, to anyone reading one, like a
   // state the loader is supposed to restore.
-  const persisted: Partial<FrameState> = { ...frame };
+  const persisted: Partial<WindowFrame> = { ...frame };
   delete persisted.presentedInstanceId;
   return {
     schema: FRAME_SCHEMA,
@@ -116,7 +115,7 @@ export function serialize(frame: FrameState): SerializedLayout {
 }
 
 /**
- * Parse a stored layout blob into a FrameState, or null when the blob is not a
+ * Parse a stored layout blob into a WindowFrame, or null when the blob is not a
  * frame layout (wrong schema — including legacy dockview blobs) or too corrupt
  * to salvage. `knownViews` filters out panes/regions whose views no longer
  * exist.
@@ -124,7 +123,7 @@ export function serialize(frame: FrameState): SerializedLayout {
 export function deserialize(
   blob: SerializedLayout | null | undefined,
   knownViews: ReadonlySet<string>,
-): FrameState | null {
+): WindowFrame | null {
   if (!blob || typeof blob !== 'object') return null;
   if (blob.schema !== FRAME_SCHEMA) return null;
   if (typeof blob.version !== 'number' || blob.version > FRAME_VERSION) return null;

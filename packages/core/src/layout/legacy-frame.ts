@@ -19,9 +19,55 @@
  * caller's `readPane`, so a retired view is pruned here by exactly the same rule as
  * everywhere else in a blob.
  */
-import { areaId, windowId } from './model';
-import { NOMINAL_VIEWPORT } from './snap';
-import type { PaneState, WindowRect, WindowState } from './types';
+import { areaId } from './model';
+import { DEFAULT_BACKDROP } from './types';
+import type { PaneState, SnapZone, WindowFrame, WindowRect, WindowState } from './types';
+
+// ---------------------------------------------------------------------------
+// What the v3 reader still needs from the floating desktop. Everything else it
+// had (snap geometry, clamping, cascades) went with the window layer.
+// ---------------------------------------------------------------------------
+
+/** The surface a v1/v2 blob is assumed to have been laid out on. */
+export const NOMINAL_VIEWPORT = { w: 1280, h: 800 };
+
+const SNAP_ZONES: readonly SnapZone[] = [
+  'left',
+  'right',
+  'top',
+  'bottom',
+  'tl',
+  'tr',
+  'bl',
+  'br',
+  'center',
+  'third-l',
+  'third-c',
+  'third-r',
+  'max',
+];
+
+/** Narrow an untrusted string to a zone. Never guesses. */
+export function isSnapZone(value: unknown): value is SnapZone {
+  return typeof value === 'string' && (SNAP_ZONES as readonly string[]).includes(value);
+}
+
+export function windowId(seq: number): string {
+  return `w${seq}`;
+}
+
+/** An empty v3 desktop. For the v3 reader's tests and fixtures only. */
+export function createEmptyWindowFrame(): WindowFrame {
+  return {
+    windows: [],
+    windowViewport: null,
+    backdrop: { id: DEFAULT_BACKDROP },
+    presentedInstanceId: null,
+    focusedInstanceId: null,
+    focusedWindowId: null,
+    paneSeq: 1,
+  };
+}
 
 type Raw = Record<string, unknown>;
 type Size = { w: number; h: number };

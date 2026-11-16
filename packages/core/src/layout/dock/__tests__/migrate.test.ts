@@ -4,8 +4,15 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { createArea, createEmptyFrame } from '../../model';
-import type { FrameState, PaneRole, SnapZone, WindowMode, WindowState } from '../../types';
+import { createEmptyWindowFrame as createEmptyFrame } from '../../legacy-frame';
+import { createArea } from '../../model';
+import type {
+  PaneRole,
+  SnapZone,
+  WindowFrame as FrameState,
+  WindowMode,
+  WindowState,
+} from '../../types';
 import { findPane, listPanes } from '../frame';
 import { dockFrameFromWindows } from '../migrate';
 import { collectAreas } from '../tree';

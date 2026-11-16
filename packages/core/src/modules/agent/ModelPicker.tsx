@@ -28,7 +28,7 @@
  * a narrow flex row inside a pane that clips its overflow, so an absolutely
  * positioned list would be cut off after two rows. **And it is portaled to
  * `document.body`**, because `fixed` alone is not enough inside a desktop window:
- * `.os-window-body` has `contain: strict`, which makes it the containing block for
+ * a workbench pane (`.wb-pane`) has `contain: strict`, which makes it the containing block for
  * fixed descendants *and* clips them — so the viewport clamp below was measuring
  * against the screen while the panel was laid out against, and cut off by, the
  * window.

@@ -7,10 +7,10 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
-import { activateTaskbarEntry, minimizePane, requestPaneAttention } from '../controller';
+import { activateTaskbarEntry, requestPaneAttention, toggleDock } from '../controller';
 import { layoutStore } from '../store';
 import { taskbarEntries } from '../taskbar';
-import { current, loadFrame, windowsFrame } from './fixtures';
+import { current, groupsFrame, loadFrame } from './fixtures';
 
 const Stub = () => null;
 
@@ -27,25 +27,26 @@ beforeAll(() => {
 
 beforeEach(() => {
   layoutStore.resetForTests();
-  loadFrame(windowsFrame(['ft.a', 'ft.b']), 'ft');
-  // The second window is the one in front, as it would be after opening both.
-  activateTaskbarEntry(current().windows[1].area.tabs[0].instanceId);
+  // `ft.a` docked at the bottom, `ft.b` in the centre and focused.
+  loadFrame(groupsFrame(['ft.b'], { bottom: 'ft.a' }), 'ft');
+  activateTaskbarEntry('ft.b#4');
 });
 
 const entryFor = (id: string) => taskbarEntries(current()).find((e) => e.instanceId === id)!;
-const ids = () => taskbarEntries(current()).map((e) => e.instanceId);
+/** `[ft.a, ft.b]`: the docked one, then the focused one. */
+const ids = () => ['ft.a#6', 'ft.b#4'];
 
 describe('attention', () => {
   it('flags a pane that finished while out of sight', () => {
     const [a] = ids();
-    minimizePane(a);
+    toggleDock('bottom', false);
     expect(requestPaneAttention(a)).toBe(true);
     expect(entryFor(a).attention).toBe(true);
   });
 
   it('is cleared by looking at the pane', () => {
     const [a] = ids();
-    minimizePane(a);
+    toggleDock('bottom', false);
     requestPaneAttention(a);
     activateTaskbarEntry(a);
     expect(entryFor(a).attention).toBe(false);
@@ -59,7 +60,7 @@ describe('attention', () => {
     expect(entryFor(b).attention).toBe(false);
   });
 
-  it('can be raised for a window that is on screen but not focused', () => {
+  it('can be raised for a pane that is on screen but not focused', () => {
     const [a, b] = ids();
     expect(requestPaneAttention(a)).toBe(true);
     expect(entryFor(a).attention).toBe(true);

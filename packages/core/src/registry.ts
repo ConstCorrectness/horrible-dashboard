@@ -2,6 +2,7 @@
 // the exact same contract; re-exported here so existing imports keep working.
 import type { ComponentType } from 'react';
 
+import type { PlaceTarget } from './layout/dock/types';
 import { frameCommandHandler } from './layout/frame-bus';
 import { noteViewOpened } from './layout/recents';
 import type { ContextMenuProvider } from './overlay/context-menu';
@@ -166,12 +167,17 @@ export interface OpenPaneInfo {
 export interface OpenPaneOptions {
   instanceId?: string;
   params?: Record<string, unknown>;
+  /**
+   * Where to open a new pane, overriding the view's remembered placement and its
+   * role. Ignored when the pane is already open (that is a focus, not a move).
+   */
+  target?: PlaceTarget;
 }
 
 /**
  * Desktop mutations the agent relay and shell chrome drive, decoupled from the
  * engine. Implemented by the desktop controller (core/layout/controller.ts,
- * installed by the shell); richer verbs (windows, regions) are plain controller
+ * installed by the shell); richer verbs (groups, docks, regions) are plain controller
  * exports rather than part of this seam.
  */
 export interface LayoutController {
@@ -181,7 +187,7 @@ export interface LayoutController {
   focusPane(instanceId: string): boolean;
   /** List all open pane instances on the desktop. */
   listOpenPanes(): OpenPaneInfo[];
-  /** Tear a tab out of its window into a window of its own. */
+  /** Move a tab out of its group into a new group beside it. */
   tearOffPane(instanceId: string): boolean;
   /**
    * Swap an open pane's view content in place (preserves geometry and instanceId).

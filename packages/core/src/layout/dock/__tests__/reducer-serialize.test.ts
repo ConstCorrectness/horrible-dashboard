@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { createArea, createEmptyFrame } from '../../model';
+import { createEmptyWindowFrame as createEmptyFrame } from '../../legacy-frame';
+import { createArea } from '../../model';
 import { serialize } from '../../serialize';
 import type { PaneRole, PaneState } from '../../types';
 import { createEmptyDockFrame, findPane, listPanes } from '../frame';

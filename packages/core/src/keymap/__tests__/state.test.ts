@@ -4,6 +4,7 @@ import { registry } from '../../registry';
 import { getKeymap, initKeymapHost, setKeymapOverrides, unreachableDefaults } from '../state';
 import { keyContextStore } from '../state';
 import { releaseCapture, requestCapture } from '../capture';
+import { listPanes } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import { windowsFrame } from '../../layout/__tests__/fixtures';
 
@@ -141,7 +142,7 @@ describe('the context store notices a capture', () => {
       workspaceId: 'test',
       frame: windowsFrame(['hassault.play']),
     });
-    const instanceId = layoutStore.getSnapshot().frame.windows[0].area.tabs[0].instanceId;
+    const instanceId = listPanes(layoutStore.getSnapshot().frame)[0].pane.instanceId;
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId });
 
     let emits = 0;

@@ -23,6 +23,8 @@
  */
 import type { PaneShareDecl } from '@horribledashboard/sdk';
 
+import { computeWorkbench, type Surface } from '../../layout/dock/geometry';
+import { listAreas } from '../../layout/dock/frame';
 import type { AreaNode, FrameState, PaneState, WindowRect } from '../../layout/types';
 
 /** What a guest is told about one pane. */
@@ -58,7 +60,13 @@ export interface MirrorWindow {
   minimized: boolean;
 }
 
-/** The host's desktop as a guest sees it. */
+/**
+ * The host's workbench as a guest sees it.
+ *
+ * Still shaped as windows: that is what guests on every build since the share
+ * module shipped know how to draw, and a group with a rect is a window with no
+ * chrome. Each group on the host's screen becomes one, at the rect it occupies.
+ */
 export interface MirrorFrame {
   windows: MirrorWindow[];
   windowViewport: { w: number; h: number } | null;
@@ -163,6 +171,9 @@ function redactArea(area: AreaNode, lookup: ViewLookup, walk: Walk): MirrorArea 
   };
 }
 
+/** Assumed when the caller has no measured surface (tests, a hidden shell). */
+const NOMINAL_SURFACE: Surface = { w: 1280, h: 800 };
+
 /**
  * Project a frame into what a guest may see.
  *
@@ -171,20 +182,35 @@ function redactArea(area: AreaNode, lookup: ViewLookup, walk: Walk): MirrorArea 
  * `presentedInstanceId` is dropped because it is not serialized anywhere else
  * either — it is a way of looking at a pane for a moment, not a property of the
  * workspace.
+ *
+ * Groups that are not on the host's screen — a hidden dock, a popout in its own
+ * OS window — go out as minimized windows, so the guest's count of panes stays
+ * honest. A group behind a maximized one keeps its rect and sits underneath.
  */
-export function redactFrame(frame: FrameState, lookup: ViewLookup): MirrorFrame {
+export function redactFrame(
+  frame: FrameState,
+  lookup: ViewLookup,
+  surface: Surface = NOMINAL_SURFACE,
+): MirrorFrame {
   const walk: Walk = { n: 0, ids: new Map() };
-  const windows = frame.windows.map((w) => ({
-    id: w.id,
-    area: redactArea(w.area, lookup, walk),
-    rect: w.rect,
-    z: w.z,
-    minimized: w.mode === 'minimized',
-  }));
+  const layout = computeWorkbench(frame, surface);
+  const windows: MirrorWindow[] = listAreas(frame)
+    .filter(({ area }) => area.tabs.length > 0)
+    .map(({ area }) => {
+      const rect = layout.areas.get(area.id);
+      const covered = layout.covered.has(area.id);
+      return {
+        id: area.id,
+        area: redactArea(area, lookup, walk),
+        rect: rect ? roundRect(rect) : { x: 0, y: 0, w: 0, h: 0 },
+        z: area.id === frame.maximizedAreaId ? 2 : covered ? 0 : 1,
+        minimized: !rect,
+      };
+    });
 
   return {
     windows,
-    windowViewport: frame.windowViewport,
+    windowViewport: { w: Math.round(surface.w), h: Math.round(surface.h) },
     // Mapped through the same table: the host may well be looking at a pane the
     // guest cannot see, and forwarding the raw id there would put the view id
     // back into the payload by the side door.
@@ -193,6 +219,10 @@ export function redactFrame(frame: FrameState, lookup: ViewLookup): MirrorFrame 
       : null,
     redactedCount: walk.n,
   };
+}
+
+function roundRect(r: WindowRect): WindowRect {
+  return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
 }
 
 /**

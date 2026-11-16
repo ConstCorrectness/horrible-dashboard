@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../registry';
 import { openPane } from '../layout/controller';
+import { listPanes } from '../layout/model';
 import { layoutStore } from '../layout/store';
 import { loadFrame, windowsFrame } from '../layout/__tests__/fixtures';
 import { parseSpotlightQuery, spotlightResults } from '../spotlight';
@@ -97,7 +98,7 @@ describe('the agent', () => {
 
 describe('actions', () => {
   it('gives a pane its live instance id', () => {
-    const instanceId = frame().windows[0].area.tabs[0].instanceId;
+    const instanceId = listPanes(frame())[0].pane.instanceId;
     const hit = results('@terminal')[0];
     expect(hit.action).toEqual({ type: 'focusPane', instanceId });
   });

@@ -1,14 +1,26 @@
+/**
+ * The store wrapper around the workbench reducer: loads are atomic and clean,
+ * edits bump the autosave revision, ways of looking do not, and a no-op returns
+ * the same snapshot.
+ */
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { collectAreas } from '../dock/tree';
 import { layoutStore } from '../store';
-import { areaId, findPaneAnywhere, instanceId, windowId } from '../model';
+import { findPaneAnywhere, instanceId } from '../model';
 import type { PaneState } from '../types';
-import { current, loadFrame, windowsFrame } from './fixtures';
+import { current, groupOf, groupsFrame, loadFrame } from './fixtures';
 
-/** Two windows: an editor with a second tab, and the welcome card. */
+/**
+ * Two centre groups: an editor with a second tab, and the welcome card.
+ * `editor.buffer#4`, `scratch.note#5` in a6; `dashboard.welcome#7` in a8.
+ */
 function load(): void {
-  loadFrame(windowsFrame([['editor.buffer', 'scratch.note'], 'dashboard.welcome']), 'test');
+  loadFrame(groupsFrame([['editor.buffer', 'scratch.note'], 'dashboard.welcome']), 'test');
 }
+const EDITOR = 'editor.buffer#4';
+const NOTE = 'scratch.note#5';
+const WELCOME = 'dashboard.welcome#7';
 
 function freshPane(viewId: string): PaneState {
   return { instanceId: instanceId(viewId, current().paneSeq), viewId };
@@ -23,7 +35,7 @@ describe('hydration and revisions', () => {
     const snap = layoutStore.getSnapshot();
     expect(snap.hydrated).toBe(false);
     expect(snap.workspaceId).toBeNull();
-    expect(snap.frame.windows).toEqual([]);
+    expect(snap.frame.center).toMatchObject({ kind: 'area', tabs: [] });
   });
 
   it('LOAD_WORKSPACE swaps id+frame atomically without bumping revision', () => {
@@ -33,32 +45,34 @@ describe('hydration and revisions', () => {
     expect(snap.hydrated).toBe(true);
     expect(snap.workspaceId).toBe('test');
     expect(snap.revision).toBe(before);
+    // Loading resolves focus against what is there.
+    expect(snap.frame.focusedInstanceId).toBe(EDITOR);
   });
 
   it('mutations bump revision; no-ops return the same snapshot', () => {
     load();
-    const [editor, welcome] = current().windows;
-    const focused = layoutStore.dispatch({
-      type: 'FOCUS_PANE',
-      instanceId: editor.area.tabs[0].instanceId,
-    });
+    const loaded = layoutStore.getSnapshot();
     // No-op: focusing the already-focused pane.
-    expect(
-      layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: editor.area.tabs[0].instanceId }),
-    ).toBe(focused);
-    const next = layoutStore.dispatch({
-      type: 'FOCUS_PANE',
-      instanceId: welcome.area.tabs[0].instanceId,
-    });
-    expect(next.revision).toBe(focused.revision + 1);
-    expect(next.frame.focusedInstanceId).toBe(welcome.area.tabs[0].instanceId);
+    expect(layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: EDITOR })).toBe(loaded);
+    const next = layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: WELCOME });
+    expect(next.revision).toBe(loaded.revision + 1);
+    expect(next.frame.focusedInstanceId).toBe(WELCOME);
+  });
+
+  it('maximizing and presenting re-render but do not dirty the workspace', () => {
+    load();
+    const before = layoutStore.getSnapshot();
+    const maxed = layoutStore.dispatch({ type: 'TOGGLE_MAXIMIZED', areaId: groupOf(EDITOR)!.id });
+    expect(maxed).not.toBe(before);
+    expect(maxed.revision).toBe(before.revision);
+    const presented = layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: EDITOR });
+    expect(presented.revision).toBe(before.revision);
   });
 });
 
 describe('pane actions', () => {
   it('SET_REGION patches per-instance region state', () => {
     load();
-    const inst = current().windows[0].area.tabs[0].instanceId;
     const region = {
       open: true,
       size: 280,
@@ -68,23 +82,23 @@ describe('pane actions', () => {
     };
     const next = layoutStore.dispatch({
       type: 'SET_REGION',
-      instanceId: inst,
+      instanceId: EDITOR,
       position: 'right',
       region,
     });
-    expect(findPaneAnywhere(next.frame, inst)?.pane.regions?.right).toEqual(region);
+    expect(findPaneAnywhere(next.frame, EDITOR)?.pane.regions?.right).toEqual(region);
     const cleared = layoutStore.dispatch({
       type: 'SET_REGION',
-      instanceId: inst,
+      instanceId: EDITOR,
       position: 'right',
       region: null,
     });
-    expect(findPaneAnywhere(cleared.frame, inst)?.pane.regions).toBeUndefined();
+    expect(findPaneAnywhere(cleared.frame, EDITOR)?.pane.regions).toBeUndefined();
   });
 
   it('RETARGET_PANE renames in place, keeping position and regions', () => {
     load();
-    const inst = findPaneAnywhere(current(), current().windows[0].area.tabs[0].instanceId)!;
+    const inst = findPaneAnywhere(current(), EDITOR)!;
     const region = {
       open: true,
       size: 300,
@@ -92,20 +106,15 @@ describe('pane actions', () => {
       views: ['editor.recentNotes'],
       activeView: 'editor.recentNotes',
     };
-    layoutStore.dispatch({
-      type: 'SET_REGION',
-      instanceId: inst.pane.instanceId,
-      position: 'left',
-      region,
-    });
+    layoutStore.dispatch({ type: 'SET_REGION', instanceId: EDITOR, position: 'left', region });
     const next = layoutStore.dispatch({
       type: 'RETARGET_PANE',
-      instanceId: inst.pane.instanceId,
+      instanceId: EDITOR,
       newInstanceId: 'editor.buffer:note:7',
       params: { source: 'note:7' },
     });
     const moved = findPaneAnywhere(next.frame, 'editor.buffer:note:7');
-    expect(findPaneAnywhere(next.frame, inst.pane.instanceId)).toBeNull();
+    expect(findPaneAnywhere(next.frame, EDITOR)).toBeNull();
     expect(moved?.location).toEqual(inst.location);
     expect(moved?.pane.viewId).toBe('editor.buffer');
     expect(moved?.pane.params).toEqual({ source: 'note:7' });
@@ -117,102 +126,57 @@ describe('pane actions', () => {
     const frame = current();
     const next = layoutStore.dispatch({
       type: 'RETARGET_PANE',
-      instanceId: frame.windows[0].area.tabs[0].instanceId,
-      newInstanceId: frame.windows[1].area.tabs[0].instanceId,
+      instanceId: EDITOR,
+      newInstanceId: WELCOME,
     });
     expect(next.frame).toBe(frame);
   });
 
-  it('INSERT_PANE adds a tab to a window and advances the id counter', () => {
+  it('INSERT_PANE adds a tab to a group and advances the id counter', () => {
     load();
-    const win = current().windows[1];
+    const target = groupOf(WELCOME)!;
     const pane = freshPane('scratch.note');
     const seq = current().paneSeq;
-    const next = layoutStore.dispatch({ type: 'INSERT_PANE', areaId: win.area.id, pane });
-    const area = next.frame.windows.find((w) => w.id === win.id)!.area;
-    expect(area.tabs.map((t) => t.instanceId)).toContain(pane.instanceId);
+    const next = layoutStore.dispatch({
+      type: 'INSERT_PANE',
+      pane,
+      target: { kind: 'area', areaId: target.id },
+    });
+    const area = groupOf(pane.instanceId)!;
+    expect(area.id).toBe(target.id);
     expect(area.activeTab).toBe(area.tabs.length - 1);
     expect(next.frame.paneSeq).toBe(seq + 1);
   });
 
-  it('REMOVE_PANE closes a window when its last tab goes', () => {
+  it('REMOVE_PANE removes a group when its last tab goes', () => {
     load();
-    const welcome = current().windows[1];
-    layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: welcome.id });
-    const next = layoutStore.dispatch({
-      type: 'REMOVE_PANE',
-      instanceId: welcome.area.tabs[0].instanceId,
-    });
-    expect(next.frame.windows.map((w) => w.id)).not.toContain(welcome.id);
-    expect(next.frame.focusedWindowId).toBeNull();
+    const welcome = groupOf(WELCOME)!;
+    const next = layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: WELCOME });
+    expect(collectAreas(next.frame.center).map((a) => a.id)).not.toContain(welcome.id);
   });
 
-  it('REMOVE_PANE of one tab leaves its window open', () => {
+  it('REMOVE_PANE of one tab leaves its group open', () => {
     load();
-    const editor = current().windows[0];
-    const next = layoutStore.dispatch({
-      type: 'REMOVE_PANE',
-      instanceId: editor.area.tabs[1].instanceId,
-    });
-    const win = next.frame.windows.find((w) => w.id === editor.id)!;
-    expect(win.area.tabs).toHaveLength(1);
-    expect(win.area.activeTab).toBe(0);
-  });
-});
-
-describe('window actions', () => {
-  it('OPEN_WINDOW mints precomputable ids and stacks the window on top', () => {
-    load();
-    const seq = current().paneSeq;
-    const pane = { instanceId: instanceId('scratch.note', seq), viewId: 'scratch.note' };
-    const next = layoutStore.dispatch({ type: 'OPEN_WINDOW', pane });
-    const win = next.frame.windows.at(-1)!;
-    expect(win.id).toBe(windowId(seq + 1));
-    expect(win.area.id).toBe(areaId(seq + 2));
-    expect(win.area.tabs).toEqual([pane]);
-    expect(win.z).toBe(Math.max(...next.frame.windows.map((w) => w.z)));
-    expect(next.frame.focusedWindowId).toBe(win.id);
-    expect(next.frame.paneSeq).toBe(seq + 3);
-  });
-
-  it('OPEN_WINDOW refuses a pane that is already open', () => {
-    load();
-    const frame = current();
-    const pane = frame.windows[1].area.tabs[0];
-    expect(layoutStore.dispatch({ type: 'OPEN_WINDOW', pane }).frame).toBe(frame);
-  });
-
-  it('WINDOW_FROM_PANE tears a tab out into a window of its own', () => {
-    load();
-    const editor = current().windows[0];
-    const tab = editor.area.tabs[1].instanceId;
-    const next = layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: tab });
-    expect(next.frame.windows).toHaveLength(3);
-    const located = findPaneAnywhere(next.frame, tab)!;
-    expect(located.location.windowId).not.toBe(editor.id);
-    expect(next.frame.windows.find((w) => w.id === editor.id)!.area.tabs).toHaveLength(1);
-  });
-
-  it('WINDOW_FROM_PANE is a no-op for a pane already alone in its window', () => {
-    load();
-    const frame = current();
-    const alone = frame.windows[1].area.tabs[0].instanceId;
-    expect(layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: alone }).frame).toBe(frame);
+    const editor = groupOf(EDITOR)!;
+    layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: NOTE });
+    const area = groupOf(EDITOR)!;
+    expect(area.id).toBe(editor.id);
+    expect(area.tabs).toHaveLength(1);
+    expect(area.activeTab).toBe(0);
   });
 
   it('SET_PRESENTED takes only a pane that exists, and clears when it closes', () => {
     load();
-    const welcome = current().windows[1].area.tabs[0].instanceId;
     expect(
       layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: 'nope#9' }).frame
         .presentedInstanceId,
     ).toBeNull();
     expect(
-      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: welcome }).frame
+      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: WELCOME }).frame
         .presentedInstanceId,
-    ).toBe(welcome);
+    ).toBe(WELCOME);
     expect(
-      layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: welcome }).frame.presentedInstanceId,
+      layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: WELCOME }).frame.presentedInstanceId,
     ).toBeNull();
   });
 });

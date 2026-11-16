@@ -21,7 +21,7 @@
  * Pure and registry-free: the caller supplies the role lookup.
  */
 import { areaId, createArea } from '../model';
-import type { AreaNode, FrameState, PaneRole, PaneState, SnapZone, WindowState } from '../types';
+import type { AreaNode, PaneRole, PaneState, SnapZone, WindowFrame, WindowState } from '../types';
 import { DEFAULT_DOCK_SIZES, MIN_DOCK_SIZE, sanitize } from './frame';
 import { splitId, withTab } from './tree';
 import { DOCK_SIDES } from './types';
@@ -53,7 +53,7 @@ const MAX_SIDE_DOCK = 520;
 const MAX_BOTTOM_DOCK = 420;
 
 /** The dock a tool window's shape and position suggest. */
-function dockFromShape(win: WindowState, viewport: FrameState['windowViewport']): DockSide {
+function dockFromShape(win: WindowState, viewport: WindowFrame['windowViewport']): DockSide {
   const { rect } = win;
   if (rect.h > 0 && rect.w / rect.h >= BOTTOM_ASPECT) return 'bottom';
   if (!viewport || viewport.w <= 0) return 'right';
@@ -68,7 +68,7 @@ interface Slot {
   shownBy: WindowState | null;
 }
 
-export function dockFrameFromWindows(frame: FrameState, opts: MigrateOptions): DockFrame {
+export function dockFrameFromWindows(frame: WindowFrame, opts: MigrateOptions): DockFrame {
   let seq = frame.paneSeq;
   const mint = (): Slot => ({ area: createArea(areaId(seq++)), shownZ: -1, shownBy: null });
 

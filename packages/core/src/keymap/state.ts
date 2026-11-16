@@ -99,7 +99,8 @@ export function readKeyContext(): KeyContext {
     // now. `reserved.ts` reads this to stop reporting alt+tab as unreachable, and
     // reporting a capability we don't have is the failure that table exists for.
     keyboardLock: canHoldSystemKeys(),
-    windowFocused: frame.focusedWindowId !== null,
+    // Kept under its old name for saved `when` clauses: a group holds focus.
+    windowFocused: frame.focusedAreaId !== null,
     shellView,
     platform,
     host,

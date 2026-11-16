@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { layoutStore } from '../store';
 import { listPanes } from '../model';
-import { current, loadFrame, windowsFrame } from './fixtures';
+import { current, groupOf, loadFrame, windowsFrame } from './fixtures';
 
 const frame = () => windowsFrame([['editor.buffer', 'scratch.note'], 'files.tree']);
 
@@ -31,9 +31,9 @@ describe('FOCUS_PANE', () => {
     expect(layoutStore.getSnapshot()).toBe(before);
   });
 
-  it('null clears the focused pane', () => {
+  it('CLEAR_FOCUS clears the focused pane', () => {
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: instanceOf('editor.buffer') });
-    layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: null });
+    layoutStore.dispatch({ type: 'CLEAR_FOCUS' });
     expect(current().focusedInstanceId).toBeNull();
   });
 
@@ -47,33 +47,35 @@ describe('FOCUS_PANE', () => {
 });
 
 describe('focus is never left dangling', () => {
-  it('closing the focused pane clears it', () => {
+  it('closing the focused tab hands focus to the tab that takes its place', () => {
     const editor = instanceOf('editor.buffer');
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: editor });
     layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: editor });
-    expect(current().focusedInstanceId).toBeNull();
+    expect(current().focusedInstanceId).toBe(instanceOf('scratch.note'));
   });
 
-  it('closing the focused window’s last pane clears the focused window too', () => {
+  it('closing the last pane of the focused group moves focus to another group', () => {
     const tool = instanceOf('files.tree');
-    const win = current().windows[1];
-    layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: win.id });
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: tool });
     layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: tool });
-    expect(current().focusedInstanceId).toBeNull();
-    expect(current().focusedWindowId).toBeNull();
+    expect(current().focusedInstanceId).toBe(instanceOf('editor.buffer'));
+    expect(current().focusedAreaId).toBe(groupOf(instanceOf('editor.buffer'))!.id);
   });
 
-  it('a pane torn into its own window keeps focus', () => {
+  it('a pane split into its own group keeps focus', () => {
     const note = instanceOf('scratch.note');
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: note });
-    layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: note });
+    layoutStore.dispatch({
+      type: 'MOVE_PANE',
+      instanceId: note,
+      target: { kind: 'split', areaId: groupOf(note)!.id, side: 'right' },
+    });
     expect(current().focusedInstanceId).toBe(note);
   });
 
   it('loading a desktop drops a focus id it does not contain', () => {
     layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: instanceOf('editor.buffer') });
     loadFrame({ ...frame(), focusedInstanceId: 'ghost.pane#42' }, 'other');
-    expect(current().focusedInstanceId).toBeNull();
+    expect(current().focusedInstanceId).not.toBe('ghost.pane#42');
   });
 });

@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { isPresenting, presentFocusedPane, presentPane } from '../controller';
-import { serialize, deserialize } from '../serialize';
+import { deserializeDock, serializeDock } from '../dock/serialize';
 import { layoutStore } from '../store';
 import type { FrameState } from '../types';
 import { current, loadFrame, windowsFrame } from './fixtures';
@@ -19,7 +19,7 @@ beforeEach(() => {
   loadFrame(windowsFrame(['editor.buffer', 'scratch.note']));
 });
 
-const first = () => current().windows[0].area.tabs[0].instanceId;
+const first = () => 'editor.buffer#4';
 
 describe('SET_PRESENTED', () => {
   it('presents an open pane', () => {
@@ -47,8 +47,8 @@ describe('SET_PRESENTED', () => {
 });
 
 describe('presentFocusedPane', () => {
-  it('toggles the focused window’s showing pane', () => {
-    layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: current().windows[0].id });
+  it('toggles the focused pane', () => {
+    layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: first() });
     presentFocusedPane();
     expect(current().presentedInstanceId).toBe(first());
     expect(isPresenting()).toBe(true);
@@ -56,7 +56,8 @@ describe('presentFocusedPane', () => {
     expect(isPresenting()).toBe(false);
   });
 
-  it('does nothing with no window focused', () => {
+  it('does nothing with no pane focused', () => {
+    layoutStore.dispatch({ type: 'CLEAR_FOCUS' });
     presentFocusedPane();
     expect(isPresenting()).toBe(false);
   });
@@ -74,8 +75,10 @@ describe('persistence', () => {
     // Restoring one hands the user a full-screen pane with the chrome hidden and
     // no memory of having asked for it.
     const presented: FrameState = { ...current(), presentedInstanceId: first() };
-    const blob = serialize(presented);
+    const blob = serializeDock(presented);
     expect((blob.frame as Record<string, unknown>).presentedInstanceId).toBeUndefined();
-    expect(deserialize(blob, KNOWN)?.presentedInstanceId).toBeNull();
+    expect(
+      deserializeDock(blob, KNOWN, { roleOf: () => 'document' })?.presentedInstanceId,
+    ).toBeNull();
   });
 });

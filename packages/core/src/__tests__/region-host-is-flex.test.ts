@@ -5,7 +5,7 @@
  * `PaneWithRegions`'s root is `.frame-pane-regions`, which sizes itself with
  * `flex: 1` and declares **no height of its own**. That was fine inside the tiling
  * frame's areas and docks, which were always `display: flex`. It was not fine
- * inside `.os-window-body`, which was not — and the failure is about as quiet as a
+ * inside the floating desktop's `.os-window-body` (now the workbench's `.wb-pane`), which was not — and the failure is about as quiet as a
  * layout bug gets: with no flex context the `flex: 1` is inert, the
  * div collapses to its content's natural height, and a floating window renders as
  * **a titlebar with nothing under it**. Measured on the hAssault pane: 44px of
@@ -44,30 +44,29 @@ function declares(body: string | null, property: string, value: string): boolean
   return new RegExp(`(^|;|\\n)\\s*${property}\\s*:\\s*${value}\\s*(;|$)`).test(body);
 }
 
-const desktopCss = readFileSync(join(REPO, 'packages/ui/src/desktop/desktop.css'), 'utf8');
+const workbenchCss = readFileSync(join(REPO, 'packages/ui/src/workbench/workbench.css'), 'utf8');
 const frameCss = readFileSync(join(REPO, 'packages/ui/src/layout/frame.css'), 'utf8');
-const windowTsx = readFileSync(join(REPO, 'packages/ui/src/desktop/Window.tsx'), 'utf8');
+const workbenchTsx = readFileSync(join(REPO, 'packages/ui/src/workbench/Workbench.tsx'), 'utf8');
 
 describe('a region host establishes a flex context', () => {
   it('still describes the situation this guard is about', () => {
     // A guard on the guard. If windows stop rendering regions, or
     // `.frame-pane-regions` grows a height of its own, the assertion below stops
     // meaning anything and should be revisited rather than left passing.
-    expect(windowTsx).toContain('PaneWithRegions');
+    expect(workbenchTsx).toContain('PaneWithRegions');
     const regions = ruleBody(frameCss, '.frame-pane-regions');
     expect(regions).not.toBeNull();
     expect(declares(regions, 'flex', '1')).toBe(true);
     expect(regions).not.toMatch(/(^|;|\n)\s*height\s*:/);
   });
 
-  it('makes .os-window-body a flex container', () => {
-    const body = ruleBody(desktopCss, '.os-window-body');
+  it('makes the workbench pane box a flex container', () => {
+    const body = ruleBody(workbenchCss, '.wb-pane');
     expect(
       declares(body, 'display', 'flex'),
-      '.os-window-body holds PaneWithRegions, whose root sizes itself with `flex: 1` ' +
+      '.wb-pane holds PaneWithRegions, whose root sizes itself with `flex: 1` ' +
         'and has no height. Without `display: flex` here that is inert, and every ' +
-        'floating window renders as a titlebar with an empty body — which is the ' +
-        'entire desktop layout.',
+        'pane renders as a header with an empty body.',
     ).toBe(true);
   });
 

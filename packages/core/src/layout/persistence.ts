@@ -15,19 +15,32 @@ import {
   saveWorkspace,
   saveWorkspaceOnUnload,
   setActiveWorkspace,
+  type SerializedLayout,
   type Workspace as WorkspaceModel,
   type WorkspacesState,
 } from '../workspace';
 import { workspaceStore } from '../workspace-store';
-import { createEmptyFrame } from './model';
-import { deserialize, serialize } from './serialize';
+import { createEmptyDockFrame } from './dock/frame';
+import { DOCK_FRAME_VERSION, deserializeDock, serializeDock } from './dock/serialize';
+import type { DockSide } from './dock/types';
+import { lastPlacement } from './pane-placement';
+import { FRAME_SCHEMA } from './serialize';
 import { layoutStore } from './store';
-import type { FrameState } from './types';
+import type { FrameState, PaneRole } from './types';
 
 const AUTOSAVE_MS = 600;
 
 /** The workspace row the desktop is stored under. */
 export const DESKTOP_WORKSPACE = 'desktop';
+
+/**
+ * Where the last pre-workbench layout is kept, untouched.
+ *
+ * Older builds reject a blob from a newer version and start empty, so the first
+ * v4 save is one-way for anyone who downgrades. This row is the way back: a copy
+ * of the v3 blob as it was before the workbench read it. Nothing loads it.
+ */
+export const DESKTOP_V3_BACKUP = 'desktop-v3-backup';
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSavedRevision = 0;
@@ -75,9 +88,35 @@ export function setWorkspaceAgent(workspaceId: string | null, agentId: string): 
   }
 }
 
+/** A view's role, read from the registry without going through the controller. */
+function roleOf(viewId: string): PaneRole | undefined {
+  const panel = registry.panels.find((p) => p.id === viewId);
+  if (panel) return panel.role ?? 'document';
+  const widget = registry.widgets.find((w) => w.id === viewId);
+  return widget ? (widget.role ?? 'widget') : undefined;
+}
+
+/** Where a tool belongs when migrating: where it was last left, else where it says. */
+function dockOf(viewId: string): DockSide | undefined {
+  const placed = lastPlacement(viewId);
+  if (placed && placed !== 'center') return placed;
+  return [...registry.panels, ...registry.widgets].find((v) => v.id === viewId)?.dock;
+}
+
 /** The desktop's frame: its stored blob if it is one of ours, else empty. */
 function frameOf(ws: WorkspaceModel): FrameState {
-  return deserialize(ws.layout, knownViews()) ?? createEmptyFrame();
+  return deserializeDock(ws.layout, knownViews(), { roleOf, dockOf }) ?? createEmptyDockFrame();
+}
+
+/** True for a frame blob written before the workbench (v1–v3). */
+function isPreWorkbench(layout: WorkspaceModel['layout']): layout is SerializedLayout {
+  return (
+    !!layout &&
+    typeof layout === 'object' &&
+    layout.schema === FRAME_SCHEMA &&
+    typeof layout.version === 'number' &&
+    layout.version < DOCK_FRAME_VERSION
+  );
 }
 
 function load(workspaceId: string, frameState: FrameState): void {
@@ -102,7 +141,7 @@ async function saveSnapshotNow(): Promise<void> {
   const snap = layoutStore.getSnapshot();
   if (!snap.hydrated || !snap.workspaceId || snap.revision === lastSavedRevision) return;
   const revision = snap.revision;
-  const run = saveWorkspace(snap.workspaceId, { layout: serialize(snap.frame) }).then(() => {
+  const run = saveWorkspace(snap.workspaceId, { layout: serializeDock(snap.frame) }).then(() => {
     // Marked saved only once the backend has it. This used to be set *before* the
     // await, so a PUT that failed — the backend restarting under `--reload`, a
     // dropped connection — left the revision marked saved and no retry was ever
@@ -182,7 +221,7 @@ function bindUnloadFlush(): void {
   const flushBeacon = (): void => {
     const snap = layoutStore.getSnapshot();
     if (!snap.hydrated || !snap.workspaceId || snap.revision === lastSavedRevision) return;
-    if (saveWorkspaceOnUnload(snap.workspaceId, serialize(snap.frame)))
+    if (saveWorkspaceOnUnload(snap.workspaceId, serializeDock(snap.frame)))
       lastSavedRevision = snap.revision;
   };
   window.addEventListener('pagehide', flushBeacon);
@@ -233,11 +272,17 @@ export async function hydrate(): Promise<void> {
   if (!ws) {
     await saveWorkspace(DESKTOP_WORKSPACE, {
       name: 'Desktop',
-      layout: serialize(createEmptyFrame()),
+      layout: serializeDock(createEmptyDockFrame()),
     });
     state = await getWorkspaces();
     ws = state.workspaces.find((w) => w.id === DESKTOP_WORKSPACE);
     if (!ws) throw new Error('the desktop workspace could not be created');
+  }
+  if (isPreWorkbench(ws.layout)) {
+    // Before anything can autosave over it. Awaited, and a failure stops the
+    // boot like a failed read does: the store stays un-hydrated, so autosave is
+    // off and the v3 blob is still on disk for the next attempt.
+    await saveWorkspace(DESKTOP_V3_BACKUP, { name: 'Desktop (before the workbench)', layout: ws.layout });
   }
   workspaceStore.publish({ workspaces: [{ id: ws.id, name: ws.name }], activeId: ws.id });
   load(ws.id, frameOf(ws));

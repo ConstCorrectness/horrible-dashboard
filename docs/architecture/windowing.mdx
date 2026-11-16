@@ -5,6 +5,16 @@ sidebar_label: Windowing
 
 # Windowing: the desktop model
 
+:::warning The shell now renders the docked workbench
+Since the switch to frame schema v4 the app no longer shows floating windows. Panes
+live in tab groups: a centre split tree and three edge docks. See
+[The docked workbench](#the-docked-workbench) at the end of this page. The sections
+in between still describe the floating desktop where they talk about window rects,
+snapping, minimizing and window placement; they are kept until the rest of this
+page is rewritten, because the pane, region, section and controller rules they
+also cover are unchanged.
+:::
+
 There is one desktop, and every pane on it lives in a **window**. A window can hold
 several panes as **tabs**; inside a pane, **region strips** (the successor of panel
 groups — see [panel-groups.mdx](panel-groups.mdx)) run down its own sides. That is
@@ -623,19 +633,18 @@ its migrations from v1 and from the tiling frame, the agent layout tools, and th
 native shell's two capabilities (`window.fullscreen`, `chrome.workspaceTabs`). Not
 yet: region view cycling on repeat-press.
 
-### In progress: the docked workbench
+### The docked workbench
 
-The floating desktop is being replaced by an IDE-style docked workbench: a centre
-split tree of tab groups, three edge docks (`left`, `right`, `bottom`), and on
-desktop, groups popped out into real OS windows. It is one paradigm, like the
-desktop it replaces. There is no floating layer and no mode switch; the escape
-hatches are maximizing a group, presenting a pane, and popping a group out. The
-reasons for reversing the floating-only decision were window geometry bugs,
-overlap that had to be managed by hand, drag and maximize jank, and the native
-browser view drawing over other windows.
+The floating desktop has been replaced by an IDE-style docked workbench: a centre
+split tree of tab groups, three edge docks (`left`, `right`, `bottom`), and, still
+to come on desktop, groups popped out into real OS windows. It is one paradigm, like
+the desktop it replaces. There is no floating layer and no mode switch; the escape
+hatches are maximizing a group and presenting a pane. The reasons for reversing the
+floating-only decision were window geometry bugs, overlap that had to be managed by
+hand, drag and maximize jank, and the native browser view drawing over other
+windows.
 
-The engine is built and tested but **not wired in yet**; the shell still renders
-the floating desktop described above. It lives in `packages/core/src/layout/dock/`:
+**The engine** is in `packages/core/src/layout/dock/`:
 
 - `tree.ts`: the centre split tree, revived from the tiling frame removed in
   `9738e4f5`.
@@ -644,16 +653,53 @@ the floating desktop described above. It lives in `packages/core/src/layout/dock
 - `geometry.ts` and `drop.ts`: pixel layout and drop targets, derived from the
   frame and the surface size every time, so no rect is stored and none can land
   off-screen.
-- `reducer.ts`: the action set, with the same no-op and sanitize contract as the
-  v3 reducer.
+- `reducer.ts`: the action set. `layout/store.ts` delegates to it; maximizing and
+  presenting re-render without bumping `revision`.
 - `migrate.ts` and `serialize.ts`: frame schema **v4**. Older blobs load by
   running the migrations in order (v1/v2 to windows in `legacy-frame.ts`, then
   windows to docks). Documents become centre tabs, left/right snapped windows seed
   columns, tools go to a dock chosen by the view or the window's shape, and
-  minimized windows become background tabs. No pane is closed. Pane validation is
-  shared with v3 through `createPaneReader` in `serialize.ts`.
+  minimized windows become background tabs. No pane is closed.
 
-Still to come: the workbench UI and the switch to v4 (with a backup of the v3
-blob, since a downgrade rejects newer versions), the agent tool vocabulary
-(`place_pane`, `pane_state`, `arrange_panes`, with the old names kept as aliases),
+**Where a pane opens** is decided by `placeFor` in the controller: an explicit
+target first, then the view's remembered placement (`frame.panePlacement`, a dock
+side or the centre, recorded whenever the user moves a pane), then its role. A
+document opens in the focused centre group; a tool or widget opens in the dock its
+declaration names (`PanelDecl.dock`), else the right dock.
+
+**The UI** is in `packages/ui/src/workbench/`. `Workbench.tsx` measures the surface,
+lays it out with `computeWorkbench`, and draws three layers: the groups' tab strips
+(`GroupHeader.tsx`), the dividers, and the panes. Three rules there are
+load-bearing:
+
+- **Panes live in one flat layer keyed by instance id**, placed over their group's
+  body rather than inside the group. Moving a tab to another group, splitting,
+  maximizing, presenting or hiding a dock moves a box on screen; it never remounts
+  the pane, so an iframe keeps its page and a terminal its shell. The layer renders
+  in first-seen order, never layout order, because React moves a keyed node to
+  match a new order and a moved iframe reloads.
+- **Nothing is hidden with `display: none`.** A group behind a maximized one, or a
+  hidden dock, keeps its pane mounted at its last size and hides it with
+  `visibility`.
+- **Drags are local until pointer-up.** A divider drag lays live sizes over the
+  frame and commits one `SET_SPLIT_SIZES` or `SET_DOCK_SIZE`; a tab drag commits
+  one `MOVE_PANE` or `REORDER_TAB`. A drop on a group's tab strip always joins its
+  tabs; elsewhere `resolveDrop` picks a split side or the group's tabs.
+
+The desktop backdrop shows through an empty centre, so Home is what an empty
+workbench looks like.
+
+**Keys**: `alt+grave` / `alt+shift+grave` cycle groups, `alt+arrow` moves focus by
+geometry (docks included), `mod+alt+up` maximizes the focused group,
+`mod+shift+arrow` moves the focused tab into a new group on that side, and
+`mod+alt+[`, `mod+alt+]` and `mod+alt+j` show or hide the left, right and bottom
+docks. The pane region keys `t`, `n` and `b` are unchanged.
+
+**The first v4 save** is preceded by a copy of the untouched v3 blob in a
+`desktop-v3-backup` workspace row. It is the only rollback: an older build rejects
+a newer schema version.
+
+Still to come: the agent tool vocabulary (`place_pane`, `pane_state`,
+`arrange_panes`, with the old names kept as aliases; today the old tools are
+answered in workbench terms), the native browser view's simpler occlusion check,
 and pop-out windows behind the `window.multi` capability.

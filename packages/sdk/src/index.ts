@@ -34,6 +34,7 @@ export type {
   KeybindingDecl,
   PaneCaptureDecl,
   PaneCategory,
+  PaneDock,
   PaneRole,
   PanelDecl,
   RegionPosition,

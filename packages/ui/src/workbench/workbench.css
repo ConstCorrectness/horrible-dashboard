@@ -1,0 +1,111 @@
+/*
+ * The workbench's stylesheet: only what inline styles cannot say — hover and
+ * focus states, keyframes, and the drag-time rules that reach into panes.
+ * Geometry and colour are inline in Workbench.tsx / GroupHeader.tsx.
+ */
+
+/* A pane's box. `display: flex` is load-bearing: it holds `PaneWithRegions`,
+   whose root sizes itself with `flex: 1` and has no height of its own, so
+   without a flex context here every pane renders as a header over nothing
+   (region-host-is-flex.test.ts). `contain: strict` keeps a pane's layout and
+   paint from leaking into its neighbours — every box here has an explicit size. */
+.wb-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  contain: strict;
+}
+
+.wb-pane.is-presented {
+  contain: none;
+}
+
+.wb-pane-enter {
+  animation: wb-pane-in var(--dur-enter, 180ms) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes wb-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+:root[data-motion='off'] .wb-pane-enter {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-pane-enter {
+    animation: none;
+  }
+}
+
+/* --- tab strip ----------------------------------------------------------- */
+
+.wb-tab:hover:not(.is-active) {
+  color: var(--text-strong) !important;
+  background: color-mix(in srgb, var(--text-strong) 6%, transparent) !important;
+}
+
+.wb-tab:focus-visible,
+.wb-strip-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wb-strip-btn:hover {
+  color: var(--text-strong) !important;
+  background: color-mix(in srgb, var(--text-strong) 8%, transparent) !important;
+}
+
+.wb-strip-btn.is-danger:hover {
+  color: #fff !important;
+  background: var(--danger, #c42b1c) !important;
+}
+
+/* --- dividers ------------------------------------------------------------ */
+
+/* The 1px line, drawn centred in the wider grab band. */
+.wb-sash::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  transition: background 120ms ease;
+}
+
+.wb-sash[aria-orientation='vertical']::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.wb-sash[aria-orientation='horizontal']::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.wb-sash:hover::after,
+.wb-sash:active::after {
+  background: var(--accent);
+}
+
+/* While a sash or tab is dragged, nothing inside a pane may take the pointer:
+   an iframe swallows every move that crosses it and the drag stalls. */
+body.is-workbench-dragging .wb-pane,
+body.is-workbench-dragging iframe {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+body.is-workbench-dragging {
+  cursor: grabbing;
+}
