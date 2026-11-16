@@ -622,3 +622,38 @@ remembered window placement, the minibuffer, the versioned serialization schema 
 its migrations from v1 and from the tiling frame, the agent layout tools, and the
 native shell's two capabilities (`window.fullscreen`, `chrome.workspaceTabs`). Not
 yet: region view cycling on repeat-press.
+
+### In progress: the docked workbench
+
+The floating desktop is being replaced by an IDE-style docked workbench: a centre
+split tree of tab groups, three edge docks (`left`, `right`, `bottom`), and on
+desktop, groups popped out into real OS windows. It is one paradigm, like the
+desktop it replaces. There is no floating layer and no mode switch; the escape
+hatches are maximizing a group, presenting a pane, and popping a group out. The
+reasons for reversing the floating-only decision were window geometry bugs,
+overlap that had to be managed by hand, drag and maximize jank, and the native
+browser view drawing over other windows.
+
+The engine is built and tested but **not wired in yet**; the shell still renders
+the floating desktop described above. It lives in `packages/core/src/layout/dock/`:
+
+- `tree.ts`: the centre split tree, revived from the tiling frame removed in
+  `9738e4f5`.
+- `frame.ts`: verbs that address a pane or group wherever it lives (centre, dock
+  or popout). Closing a popout docks its panes back; it never closes them.
+- `geometry.ts` and `drop.ts`: pixel layout and drop targets, derived from the
+  frame and the surface size every time, so no rect is stored and none can land
+  off-screen.
+- `reducer.ts`: the action set, with the same no-op and sanitize contract as the
+  v3 reducer.
+- `migrate.ts` and `serialize.ts`: frame schema **v4**. Older blobs load by
+  running the migrations in order (v1/v2 to windows in `legacy-frame.ts`, then
+  windows to docks). Documents become centre tabs, left/right snapped windows seed
+  columns, tools go to a dock chosen by the view or the window's shape, and
+  minimized windows become background tabs. No pane is closed. Pane validation is
+  shared with v3 through `createPaneReader` in `serialize.ts`.
+
+Still to come: the workbench UI and the switch to v4 (with a backup of the v3
+blob, since a downgrade rejects newer versions), the agent tool vocabulary
+(`place_pane`, `pane_state`, `arrange_panes`, with the old names kept as aliases),
+and pop-out windows behind the `window.multi` capability.

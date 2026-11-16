@@ -133,89 +133,8 @@ export function deserialize(
 
   try {
     const src = raw as Record<string, unknown>;
-    let maxSeq = 0;
-    const seenInstances = new Set<string>();
-    // Views a rename has already landed on, so two retired views collapsing onto
-    // one replacement (games.board + games.loadout → games.lobby) leave one pane,
-    // not two of the same. A pane the layout already names natively wins over a
-    // renamed one — it's the instance the user actually placed.
-    const nativeViews = collectViewIds(src);
-    const renamedInto = new Set<string>();
-
-    const readPane = (value: unknown): PaneState | null => {
-      if (!value || typeof value !== 'object') return null;
-      const p = value as Record<string, unknown>;
-      if (typeof p.instanceId !== 'string' || typeof p.viewId !== 'string') return null;
-      const renamed = renamedTo(p.viewId);
-      const viewId = renamed ?? p.viewId;
-      if (!knownViews.has(viewId)) return null;
-      if (renamed !== undefined) {
-        if (nativeViews.has(renamed) || renamedInto.has(renamed)) return null;
-        renamedInto.add(renamed);
-      }
-      if (seenInstances.has(p.instanceId)) return null;
-      seenInstances.add(p.instanceId);
-      const seqPart = Number(p.instanceId.split('#').pop());
-      if (Number.isFinite(seqPart)) maxSeq = Math.max(maxSeq, seqPart);
-      const pane: PaneState = { instanceId: p.instanceId, viewId };
-      if (p.params && typeof p.params === 'object') {
-        pane.params = p.params as Record<string, unknown>;
-      }
-      const regions = readRegions(p.regions);
-      if (regions) pane.regions = regions;
-      // Kept as written, without checking it against the view's declarations:
-      // this module is deliberately registry-free. A section that has since been
-      // removed is resolved away by `activeSectionOf`, which has to handle that
-      // case regardless (sections can disappear while a pane is open).
-      if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
-      // A pane renamed into a section of another view lands on that section. Its
-      // stored section named a tab of the *old* view and means nothing here.
-      const landing = renamedSection(p.viewId);
-      if (landing) pane.activeSection = landing;
-      return pane;
-    };
-
-    const readRegions = (value: unknown): PaneState['regions'] => {
-      if (!value || typeof value !== 'object') return undefined;
-      const out: PaneState['regions'] = {};
-      for (const pos of REGION_POSITIONS) {
-        const r = (value as Record<string, unknown>)[pos];
-        if (!r || typeof r !== 'object') continue;
-        const region = r as Record<string, unknown>;
-        if (!Array.isArray(region.views)) continue;
-        const views = [
-          ...new Set(
-            region.views
-              .filter((v): v is string => typeof v === 'string')
-              .map((v) => renamedTo(v) ?? v)
-              .filter((v) => knownViews.has(v)),
-          ),
-        ];
-        if (views.length === 0) continue;
-        const rawActive =
-          typeof region.activeView === 'string'
-            ? (renamedTo(region.activeView) ?? region.activeView)
-            : null;
-        const activeView = rawActive && views.includes(rawActive) ? rawActive : views[0];
-        const state: RegionState = {
-          open: region.open === true,
-          size: clampSize(region.size, 260),
-          collapsed: region.collapsed === true,
-          views,
-          activeView,
-        };
-        out[pos] = state;
-      }
-      return Object.keys(out).length ? out : undefined;
-    };
-
-    // Window and area ids draw from the same counter as pane instances, so a
-    // restored layout must not mint one that already exists. (`s` is a split id
-    // from a pre-v3 grid: not reused, but it still says how far the counter got.)
-    const trackNodeSeq = (id: string): void => {
-      const m = /^[asw](\d+)$/.exec(id);
-      if (m) maxSeq = Math.max(maxSeq, Number(m[1]));
-    };
+    const reader = createPaneReader(src, knownViews);
+    const { readPane, trackNodeSeq } = reader;
 
     const num = (v: unknown, d: number): number =>
       typeof v === 'number' && Number.isFinite(v) ? v : d;
@@ -249,7 +168,7 @@ export function deserialize(
         // Generated ids are derived from the entry's index, not a shared counter:
         // a legacy blob supplies neither id, and two entries that both carried a
         // `z` would otherwise be handed the same one.
-        const base = maxSeq + 1 + index * 2;
+        const base = reader.maxSeq() + 1 + index * 2;
         const id = typeof entry.id === 'string' ? entry.id : windowId(base);
         const aid = typeof areaSrc?.id === 'string' ? areaSrc.id : areaId(base + 1);
         trackNodeSeq(id);
@@ -308,10 +227,10 @@ export function deserialize(
     let windows = read;
     if (blob.version < 3 && (src.center || src.docks)) {
       const surface = windowViewport ?? (legacy ? { w: 1, h: 1 } : NOMINAL_VIEWPORT);
-      const seq = Math.max(maxSeq + 1 + read.length * 2, 1);
+      const seq = Math.max(reader.maxSeq() + 1 + read.length * 2, 1);
       const migrated = windowsFromLegacyFrame(src, readPane, surface, seq);
       if (migrated.windows.length > 0) {
-        maxSeq = Math.max(maxSeq, migrated.seq - 1);
+        reader.bumpSeq(migrated.seq - 1);
         // Beneath the windows the blob already had: those floated above the grid.
         const below = migrated.windows.length;
         windows = [...migrated.windows, ...read.map((w) => ({ ...w, z: w.z + below }))];
@@ -319,20 +238,9 @@ export function deserialize(
       }
     }
 
-    const backdropSrc = src.backdrop as Record<string, unknown> | undefined;
-    const backdrop: BackdropRef =
-      backdropSrc && typeof backdropSrc.id === 'string'
-        ? {
-            id: backdropSrc.id,
-            ...(backdropSrc.params && typeof backdropSrc.params === 'object'
-              ? { params: backdropSrc.params as Record<string, unknown> }
-              : {}),
-          }
-        : { id: DEFAULT_BACKDROP };
-
     const paneSeq = Math.max(
       typeof src.paneSeq === 'number' && Number.isFinite(src.paneSeq) ? src.paneSeq : 0,
-      maxSeq + 1,
+      reader.maxSeq() + 1,
     );
 
     // Restoring focus is best-effort: a stored instance id that no longer exists
@@ -348,7 +256,7 @@ export function deserialize(
     return {
       windows,
       windowViewport,
-      backdrop,
+      backdrop: readBackdrop(src.backdrop),
       // Never restored, and never written either (see `serialize`). A presented
       // pane covers the taskbar; bringing a desktop back into that state hands the
       // user a screen with no visible way out and no memory of having asked for it.
@@ -360,6 +268,134 @@ export function deserialize(
   } catch {
     return null;
   }
+}
+
+/** A stored backdrop, or the default when the blob has none or a broken one. */
+export function readBackdrop(value: unknown): BackdropRef {
+  const src = value as Record<string, unknown> | undefined;
+  return src && typeof src === 'object' && typeof src.id === 'string'
+    ? {
+        id: src.id,
+        ...(src.params && typeof src.params === 'object'
+          ? { params: src.params as Record<string, unknown> }
+          : {}),
+      }
+    : { id: DEFAULT_BACKDROP };
+}
+
+/**
+ * Validates panes out of one raw blob, shared by every schema version so a
+ * rename, a pruned view or a duplicate instance is handled by one rule.
+ *
+ * Stateful for the blob it was made for: it dedupes instances first-come and
+ * tracks the highest id number it has seen, so the loaded frame's `paneSeq`
+ * never mints an id that already exists.
+ */
+export interface PaneReader {
+  readPane(value: unknown): PaneState | null;
+  /** Record a node id (`a`/`s`/`w`/`p` + n) so the counter moves past it. */
+  trackNodeSeq(id: string): void;
+  /** The highest id number seen so far. */
+  maxSeq(): number;
+  /** Raise the high-water mark (a migration minted ids up to `seq`). */
+  bumpSeq(seq: number): void;
+}
+
+export function createPaneReader(
+  src: Record<string, unknown>,
+  knownViews: ReadonlySet<string>,
+): PaneReader {
+  let maxSeq = 0;
+  const seenInstances = new Set<string>();
+  // Views a rename has already landed on, so two retired views collapsing onto
+  // one replacement (games.board + games.loadout → games.lobby) leave one pane,
+  // not two of the same. A pane the layout already names natively wins over a
+  // renamed one — it's the instance the user actually placed.
+  const nativeViews = collectViewIds(src);
+  const renamedInto = new Set<string>();
+
+  const readPane = (value: unknown): PaneState | null => {
+    if (!value || typeof value !== 'object') return null;
+    const p = value as Record<string, unknown>;
+    if (typeof p.instanceId !== 'string' || typeof p.viewId !== 'string') return null;
+    const renamed = renamedTo(p.viewId);
+    const viewId = renamed ?? p.viewId;
+    if (!knownViews.has(viewId)) return null;
+    if (renamed !== undefined) {
+      if (nativeViews.has(renamed) || renamedInto.has(renamed)) return null;
+      renamedInto.add(renamed);
+    }
+    if (seenInstances.has(p.instanceId)) return null;
+    seenInstances.add(p.instanceId);
+    const seqPart = Number(p.instanceId.split('#').pop());
+    if (Number.isFinite(seqPart)) maxSeq = Math.max(maxSeq, seqPart);
+    const pane: PaneState = { instanceId: p.instanceId, viewId };
+    if (p.params && typeof p.params === 'object') {
+      pane.params = p.params as Record<string, unknown>;
+    }
+    const regions = readRegions(p.regions);
+    if (regions) pane.regions = regions;
+    // Kept as written, without checking it against the view's declarations:
+    // this module is deliberately registry-free. A section that has since been
+    // removed is resolved away by `activeSectionOf`, which has to handle that
+    // case regardless (sections can disappear while a pane is open).
+    if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
+    // A pane renamed into a section of another view lands on that section. Its
+    // stored section named a tab of the *old* view and means nothing here.
+    const landing = renamedSection(p.viewId);
+    if (landing) pane.activeSection = landing;
+    return pane;
+  };
+
+  const readRegions = (value: unknown): PaneState['regions'] => {
+    if (!value || typeof value !== 'object') return undefined;
+    const out: PaneState['regions'] = {};
+    for (const pos of REGION_POSITIONS) {
+      const r = (value as Record<string, unknown>)[pos];
+      if (!r || typeof r !== 'object') continue;
+      const region = r as Record<string, unknown>;
+      if (!Array.isArray(region.views)) continue;
+      const views = [
+        ...new Set(
+          region.views
+            .filter((v): v is string => typeof v === 'string')
+            .map((v) => renamedTo(v) ?? v)
+            .filter((v) => knownViews.has(v)),
+        ),
+      ];
+      if (views.length === 0) continue;
+      const rawActive =
+        typeof region.activeView === 'string'
+          ? (renamedTo(region.activeView) ?? region.activeView)
+          : null;
+      const activeView = rawActive && views.includes(rawActive) ? rawActive : views[0];
+      const state: RegionState = {
+        open: region.open === true,
+        size: clampSize(region.size, 260),
+        collapsed: region.collapsed === true,
+        views,
+        activeView,
+      };
+      out[pos] = state;
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+
+  // Window, area, split and popout ids draw from the same counter as pane
+  // instances, so a restored layout must not mint one that already exists.
+  const trackNodeSeq = (id: string): void => {
+    const m = /^[apsw](\d+)$/.exec(id);
+    if (m) maxSeq = Math.max(maxSeq, Number(m[1]));
+  };
+
+  return {
+    readPane,
+    trackNodeSeq,
+    maxSeq: () => maxSeq,
+    bumpSeq: (seq: number) => {
+      maxSeq = Math.max(maxSeq, seq);
+    },
+  };
 }
 
 /** Every `viewId` named anywhere in a raw blob that is NOT itself a retired view —
