@@ -10,9 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   closePaneSession,
-  closeWorkspaceSessions,
   hasPaneSession,
-  movePaneSession,
   paneSession,
   paneSessionKey,
   resetPaneSessionsForTests,
@@ -78,37 +76,6 @@ describe('workspace scoping', () => {
     expect(a).toBe('A');
     expect(b).toBe('B');
   });
-
-  it('closes a deleted workspace’s panes, including unmounted ones', () => {
-    const gone = vi.fn();
-    const kept = vi.fn();
-    paneSession(paneSessionKey('scratchpad', 'terminal.instance#1'), () => ({}), gone);
-    paneSession(paneSessionKey('scripting', 'terminal.instance#1'), () => ({}), kept);
-
-    closeWorkspaceSessions('scratchpad');
-
-    expect(gone).toHaveBeenCalledTimes(1);
-    expect(kept).not.toHaveBeenCalled();
-  });
-
-  it('a reset keeps the panes the preset still declares', () => {
-    const survives = vi.fn();
-    const dropped = vi.fn();
-    paneSession(paneSessionKey('scripting', 'editor.buffer#1'), () => ({}), survives);
-    paneSession(paneSessionKey('scripting', 'terminal.instance#7'), () => ({}), dropped);
-
-    closeWorkspaceSessions('scripting', new Set(['editor.buffer#1']));
-
-    expect(survives).not.toHaveBeenCalled();
-    expect(dropped).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not treat one workspace id as a prefix of another', () => {
-    const dispose = vi.fn();
-    paneSession(paneSessionKey('scripting-two', 'p#1'), () => ({}), dispose);
-    closeWorkspaceSessions('scripting');
-    expect(dispose).not.toHaveBeenCalled();
-  });
 });
 
 describe('region views', () => {
@@ -130,22 +97,5 @@ describe('region views', () => {
     paneSession(paneSessionKey('w', 'agent.chat#10:right:browser.view'), () => ({}), dispose);
     closePaneSession(paneSessionKey('w', host));
     expect(dispose).not.toHaveBeenCalled();
-  });
-
-  it('is kept by a reset that keeps its host', () => {
-    const dispose = vi.fn();
-    paneSession(paneSessionKey('w', dock), () => ({}), dispose);
-    closeWorkspaceSessions('w', new Set([host]));
-    expect(dispose).not.toHaveBeenCalled();
-    closeWorkspaceSessions('w');
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it('moves to another workspace with its host', () => {
-    const value = {};
-    paneSession(paneSessionKey('a', dock), () => value, () => {});
-    movePaneSession(paneSessionKey('a', host), paneSessionKey('b', host));
-    expect(hasPaneSession(paneSessionKey('a', dock))).toBe(false);
-    expect(paneSession(paneSessionKey('b', dock), () => ({}), () => {})).toBe(value);
   });
 });

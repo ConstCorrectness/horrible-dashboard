@@ -315,7 +315,7 @@ neither the Drive mount nor the GitHub viewer ships a file viewer of its own.
 Closing a buffer with unsaved edits prompts before discarding them, VS Code-style.
 The mechanism is a generic **pane close guard** in the frame engine
 (`layout/close-guards.ts`): a pane registers `registerCloseGuard(instanceId, fn)`,
-and every close path — the window's **✕**, a tab's middle-click, the taskbar, and
+and every close path — the group header's **✕**, a tab's middle-click, the status bar, and
 `LayoutController.closePane` (so agent-driven closes are covered too) — routes
 through `closePaneGuarded`, which runs the guard and only dispatches `REMOVE_PANE`
 when it resolves `true`. `BufferView` registers a guard that, when the buffer is

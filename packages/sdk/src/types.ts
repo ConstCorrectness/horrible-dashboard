@@ -204,6 +204,11 @@ export interface PanelDecl {
   component: ComponentType;
   /** What kind of pane this is. See `PaneRole`. */
   role: PaneRole;
+  /**
+   * The edge dock a `tool` opens in until the user moves it somewhere else.
+   * Ignored for other roles. Omitted, a tool opens in the right dock.
+   */
+  dock?: PaneDock;
   /** Region strips (Blender N/T-panel style) this view hosts inside its window. */
   regions?: RegionViewDecl[];
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
@@ -282,6 +287,15 @@ export interface PanelDecl {
    * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
+  /**
+   * This view may be **popped out** into its own OS window (desktop only,
+   * `window.multi`). Opt-in because a pop-out is the same page drawing into a
+   * second document: a view that portals to `document.body`, sizes itself from
+   * `window.innerWidth` or listens on `window` for keys must use
+   * `usePaneWindow()` instead, or it does those things in the wrong window.
+   * Set it once the view has been checked for that. See docs/architecture/windowing.mdx.
+   */
+  popout?: boolean;
 }
 
 /**
@@ -298,6 +312,11 @@ export interface WidgetDecl {
   requiredCapabilities?: Capability[];
   /** What kind of pane this is. See `PaneRole`. */
   role: PaneRole;
+  /**
+   * The edge dock a `tool` opens in until the user moves it somewhere else.
+   * Ignored for other roles. Omitted, a tool opens in the right dock.
+   */
+  dock?: PaneDock;
   /** Region strips (Blender N/T-panel style) this view hosts inside its window. */
   regions?: RegionViewDecl[];
   /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
@@ -370,6 +389,15 @@ export interface WidgetDecl {
    * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
+  /**
+   * This view may be **popped out** into its own OS window (desktop only,
+   * `window.multi`). Opt-in because a pop-out is the same page drawing into a
+   * second document: a view that portals to `document.body`, sizes itself from
+   * `window.innerWidth` or listens on `window` for keys must use
+   * `usePaneWindow()` instead, or it does those things in the wrong window.
+   * Set it once the view has been checked for that. See docs/architecture/windowing.mdx.
+   */
+  popout?: boolean;
 }
 
 /**
@@ -560,6 +588,9 @@ export interface WsMessage {
  * See docs/architecture/windowing.mdx.
  */
 export type PaneRole = 'document' | 'tool' | 'widget';
+
+/** The workbench edge docks a tool can live in. There is no top dock. */
+export type PaneDock = 'left' | 'right' | 'bottom';
 
 /**
  * The launcher band a pane is filed under — a closed vocabulary, so the Start

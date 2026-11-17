@@ -181,11 +181,11 @@ The most recent I/O events (newest last), each as a dict.
 ### `arrange`
 
 ````text
-arrange(style: str='grid') -> Any
+arrange(style: str='columns') -> Any
 ````
 
 ````text
-Lay every open window out: `grid`, `cascade`, `columns` or `rows`.
+Re-lay the centre: `columns`, `rows`, `grid`, `tabs` or `even`.
 ````
 
 ### `backdrop`
@@ -205,8 +205,20 @@ describe() -> Any
 ````
 
 ````text
-The whole desktop: every window (rect, mode, snap, tabs with their
-regions), which one is focused, and the backdrop.
+The whole workbench: the centre tree of tab groups, the docks, what is
+maximized and focused, and the backdrop.
+````
+
+### `place`
+
+````text
+place(instance_id: str, to: str, group: str | None=None) -> Any
+````
+
+````text
+Move a pane: `center`, `dock-left`/`dock-right`/`dock-bottom`,
+`split-left`/`split-right`/`split-above`/`split-below` (beside `group`, or
+the group it is in), or `group` (as a tab of `group`).
 ````
 
 ### `set_region_view`
@@ -217,6 +229,18 @@ set_region_view(instance_id: str, view_id: str) -> Any
 
 ````text
 Show a specific region view on its host pane (opens the strip).
+````
+
+### `state`
+
+````text
+state(instance_id: str, state: str) -> Any
+````
+
+````text
+`maximize`, `restore`, `hide`, `show`, `present` or `unpresent`.
+
+Only a docked pane hides, and a hidden one keeps running.
 ````
 
 ### `theme`
@@ -246,10 +270,8 @@ window(instance_id: str, snap: str | None=None, rect: dict[str, float] | None=No
 ````
 
 ````text
-Give a pane a window of its own (tearing it out of a tabbed window).
-
-`snap` places it in a screen region (`left`/`right`/`top`/`bottom`, a
-corner, or `max`); `rect` gives exact pixels.
+Deprecated: use `place()`. Gives the pane a group of its own; `snap`
+maps to a split on that side, `max` to maximize; `rect` is ignored.
 ````
 
 ### `window_state`
@@ -259,9 +281,7 @@ window_state(instance_id: str, state: str, snap: str | None=None) -> Any
 ````
 
 ````text
-`minimize`, `maximize`, `restore`, `snap`, `present` or `unpresent`.
-
-A minimized window keeps running — it is hidden, not closed.
+Deprecated: use `state()` / `place()`. `minimize` hides the pane's dock.
 ````
 
 ## `dash.lens`
@@ -420,7 +440,7 @@ focus(instance_id: str) -> Any
 ````
 
 ````text
-Bring a pane forward: raise its window and show its tab.
+Bring a pane forward: show its tab, and its dock if hidden.
 ````
 
 ### `open`
@@ -430,7 +450,7 @@ open(view_id: str) -> Any
 ````
 
 ````text
-Open a view by its view ID (from `available()`) in a new window.
+Open a view by its view ID (from `available()`) where its role puts it.
 ````
 
 ### `open_list`
@@ -440,8 +460,8 @@ open_list() -> Any
 ````
 
 ````text
-Pane instances currently open (view id, instanceId, role, and the window
-each one is in).
+Pane instances currently open (view id, instanceId, role, and where
+each one lives).
 ````
 
 ## `dash.settings`

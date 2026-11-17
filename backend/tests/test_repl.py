@@ -137,21 +137,37 @@ def test_manager_complete_and_inspect() -> None:
         conn = FakeConn()
         mgr = ReplManager(conn)
         await mgr.handle({"event": "start", "data": {"id": "r1"}})
-        await mgr.handle({"event": "exec", "data": {"id": "r1", "code": "numbers = [1, 2, 3]"}})
+        await mgr.handle(
+            {"event": "exec", "data": {"id": "r1", "code": "numbers = [1, 2, 3]"}}
+        )
         await _wait_for(conn, "result")
 
-        await mgr.handle({
-            "event": "complete",
-            "data": {"id": "r1", "callId": "c1", "code": "numbers.ap", "cursorPos": 10},
-        })
+        await mgr.handle(
+            {
+                "event": "complete",
+                "data": {
+                    "id": "r1",
+                    "callId": "c1",
+                    "code": "numbers.ap",
+                    "cursorPos": 10,
+                },
+            }
+        )
         comp = await _wait_for(conn, "complete_result")
         assert comp["id"] == "r1" and comp["callId"] == "c1"
         assert any(m["text"] == "append" for m in comp.get("matches", []))
 
-        await mgr.handle({
-            "event": "inspect",
-            "data": {"id": "r1", "callId": "c2", "code": "numbers.append", "cursorPos": 14},
-        })
+        await mgr.handle(
+            {
+                "event": "inspect",
+                "data": {
+                    "id": "r1",
+                    "callId": "c2",
+                    "code": "numbers.append",
+                    "cursorPos": 14,
+                },
+            }
+        )
         insp = await _wait_for(conn, "inspect_result")
         assert insp["id"] == "r1" and insp["callId"] == "c2"
         assert insp.get("entry") is not None
@@ -250,15 +266,29 @@ def _capturing_dash() -> tuple[Dash, list[tuple[str, dict[str, Any]]]]:
     return Dash(call), calls
 
 
-def test_dash_layout_relays_window_verbs() -> None:
+def test_dash_layout_relays_arrangement_verbs() -> None:
     dash, calls = _capturing_dash()
-    dash.layout.window("editor.buffer#1", snap="left")
-    dash.layout.window_state("editor.buffer#1", "present")
+    dash.layout.place("editor.buffer#1", "split-right")
+    dash.layout.place("editor.buffer#2", "group", group="a7")
+    dash.layout.state("editor.buffer#1", "present")
     dash.layout.arrange("columns")
     assert calls == [
+        ("place_pane", {"instanceId": "editor.buffer#1", "to": "split-right"}),
+        ("place_pane", {"instanceId": "editor.buffer#2", "to": "group", "group": "a7"}),
+        ("pane_state", {"instanceId": "editor.buffer#1", "state": "present"}),
+        ("arrange_panes", {"style": "columns"}),
+    ]
+
+
+def test_dash_layout_keeps_the_floating_desktop_methods() -> None:
+    # Scripts written for the floating desktop still run; the frontend relay maps
+    # these names onto place_pane / pane_state.
+    dash, calls = _capturing_dash()
+    dash.layout.window("editor.buffer#1", snap="left")
+    dash.layout.window_state("editor.buffer#1", "minimize")
+    assert calls == [
         ("open_window", {"instanceId": "editor.buffer#1", "snap": "left"}),
-        ("window_state", {"instanceId": "editor.buffer#1", "state": "present"}),
-        ("arrange_windows", {"style": "columns"}),
+        ("window_state", {"instanceId": "editor.buffer#1", "state": "minimize"}),
     ]
 
 

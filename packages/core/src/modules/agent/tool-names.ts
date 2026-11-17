@@ -25,9 +25,9 @@ export const LAYOUT_VERBS: readonly string[] = [
   'focus_pane',
   'toggle_region',
   'set_region_view',
-  'open_window',
-  'window_state',
-  'arrange_windows',
+  'place_pane',
+  'pane_state',
+  'arrange_panes',
 ];
 
 /** Case/separator-insensitive key: `openPane`, `open-pane` and `open_pane` collapse. */

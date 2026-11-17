@@ -33,7 +33,7 @@ hue:
 
 | id | The idea |
 | --- | --- |
-| `glass` | Translucent chrome over the desktop backdrop. Real `backdrop-filter` blur on windows and the taskbar, large radii, and window controls on the **left**. |
+| `glass` | Translucent chrome over the desktop backdrop. Real `backdrop-filter` blur on the chrome and the status bar, and large radii. |
 | `hud` | Terminal cyberpunk. Near-black, **every radius 0**, hairline accent borders, mono type in the chrome as well as the content, and a glow instead of a drop shadow — a dark theme's shadow on a dark ground is invisible. |
 | `daylight` | The light productivity theme: opaque surfaces, a faint cool tint, and elevation you can actually see because the ground is bright. |
 | `retro` | Beveled grey 90s chrome, square corners, hard offset shadows, and a teal desktop. |
@@ -62,9 +62,10 @@ left alone a code block becomes a hole punched in the page.
 
 ## The OS-chrome tokens
 
-Windows, the taskbar and the snap preview read **only** a `--win-*` / `--taskbar-*`
-group, so a theme restyles the entire desktop by redefining tokens and touching no
-component. `packages/ui/src/desktop/desktop.css` contains no per-theme branch.
+Group headers, pane boxes and the status bar read **only** a `--win-*` /
+`--taskbar-*` group (the names are the floating desktop's, kept so existing themes
+still apply), so a theme restyles the entire shell by redefining tokens and touching
+no component. `packages/ui/src/desktop/desktop.css` contains no per-theme branch.
 
 The group is **derived once**, in the alias block at the bottom of `themes.css`
 (`--win-bg: var(--bg-raised)`, `--win-radius: var(--radius-lg)`, and so on). A new

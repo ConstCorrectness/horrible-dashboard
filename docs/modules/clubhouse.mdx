@@ -1503,11 +1503,11 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
   opened on a second desktop got its own empty session, and closing that window left
   the first desktop's call playing out of sight until the app was closed. Now every
   Clubhouse pane — and a desktop board tile — renders the same room.
-  - **Unmount never leaves** (tab switch, minimize): see
+  - **Unmount never leaves** (tab switch, hiding a dock): see
     [pane lifetime](../architecture/windowing.mdx).
-  - **A real close of any Clubhouse pane leaves the room** — the ✕, the taskbar, an
+  - **A real close of any Clubhouse pane leaves the room** — the ✕, the status bar, an
     or an agent `close_pane`.
-- **Shell indicator:** `clubhouse.room` — a chip in the taskbar tray / titlebar while
+- **Shell indicator:** `clubhouse.room` — a chip in the status bar's tray / titlebar while
   in a room (people count, muted), with **Leave**. It reads `presence.ts`, a
   dependency-free store the session publishes to, so the shell never loads the Agora
   SDK just to learn that nothing is playing.

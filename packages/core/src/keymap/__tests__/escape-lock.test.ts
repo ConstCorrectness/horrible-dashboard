@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { listPanes } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import { windowsFrame } from '../../layout/__tests__/fixtures';
 import { releaseCapture, requestCapture } from '../capture';
@@ -16,7 +17,7 @@ const doc = {
 const keyboard = { lock: vi.fn(async () => {}), unlock: vi.fn() };
 
 function editorInstance(): string {
-  return layoutStore.getSnapshot().frame.windows[0]!.area.tabs[0]!.instanceId;
+  return listPanes(layoutStore.getSnapshot().frame)[0]!.pane.instanceId;
 }
 
 function captureEditor(escape: 'passthrough' | 'release'): void {

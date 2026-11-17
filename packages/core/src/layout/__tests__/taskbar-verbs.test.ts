@@ -1,19 +1,19 @@
 /**
- * The taskbar's Minimize and Close are on opposite sides of "unmount is not close".
+ * Hiding a dock and closing a pane are on opposite sides of "unmount is not close".
  *
- * Close is the one verb that must dispose the pane's long-lived resources; Minimize
- * must never touch them. With a live room, a terminal or a browser engine behind the
- * pane, getting this backwards either kills an Agora/PubNub session because someone
- * minimized a window, or leaks one after they closed it.
+ * Close is the one verb that must dispose the pane's long-lived resources; hiding
+ * must never touch them. With a live room, a terminal or a browser engine behind
+ * the pane, getting this backwards either kills an Agora/PubNub session because
+ * someone put a panel away, or leaks one after they closed it.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registry } from '../../registry';
-import { closePaneGuarded, minimizePane, openPane } from '../controller';
+import { closePaneGuarded, openPane, toggleDock } from '../controller';
 import { paneSession, paneSessionKey, resetPaneSessionsForTests } from '../pane-lifetime';
 import { layoutStore } from '../store';
 import { taskbarEntries } from '../taskbar';
-import { loadFrame, windowsFrame } from './fixtures';
+import { groupsFrame, loadFrame } from './fixtures';
 
 const Stub = () => null;
 
@@ -22,8 +22,8 @@ beforeAll(() => {
     id: 'taskbar-verbs-test',
     title: 'Taskbar verbs test',
     panels: [
-      { id: 'tv.a', title: 'Alpha', component: Stub, role: 'document', icon: 'A' },
-      { id: 'tv.b', title: 'Beta', component: Stub, role: 'document', icon: 'B' },
+      { id: 'tv.a', title: 'Alpha', component: Stub, role: 'tool', icon: 'A' },
+      { id: 'tv.b', title: 'Beta', component: Stub, role: 'tool', icon: 'B' },
     ],
   });
 });
@@ -31,7 +31,7 @@ beforeAll(() => {
 beforeEach(() => {
   resetPaneSessionsForTests();
   layoutStore.resetForTests();
-  loadFrame(windowsFrame([['tv.a', 'tv.b']]), 'tv');
+  loadFrame(groupsFrame([], { bottom: ['tv.a', 'tv.b'] }), 'tv');
 });
 
 const frame = () => layoutStore.getSnapshot().frame;
@@ -48,7 +48,7 @@ function attach(instanceId: string) {
   return dispose;
 }
 
-describe('taskbar verbs and pane-lifetime', () => {
+describe('dock verbs and pane-lifetime', () => {
   it('Close disposes the pane resource', async () => {
     const { instanceId } = firstEntry();
     const dispose = attach(instanceId);
@@ -59,32 +59,32 @@ describe('taskbar verbs and pane-lifetime', () => {
     expect(taskbarEntries(frame()).some((e) => e.instanceId === instanceId)).toBe(false);
   });
 
-  it('Minimize keeps the pane resource alive', () => {
+  it('hiding its dock keeps the pane resource alive', () => {
     const { instanceId } = firstEntry();
     const dispose = attach(instanceId);
 
-    expect(minimizePane(instanceId)).toBe(true);
+    expect(toggleDock('bottom', false)).toBe(true);
 
-    // The room is still connected; only its window went away.
+    // The room is still connected; only its dock went away.
     expect(dispose).not.toHaveBeenCalled();
     expect(taskbarEntries(frame()).some((e) => e.instanceId === instanceId)).toBe(true);
   });
 
-  it('Minimize keeps a background tab alive too', () => {
-    /** Minimizing a tab minimizes its whole window — the tab that was not even
-     *  showing must come through it untouched. */
+  it('hiding keeps a background tab alive too', () => {
+    /** Hiding a dock hides every tab in it — the tab that was not even showing
+     *  must come through it untouched. */
     const background = taskbarEntries(frame())[1].instanceId;
     const dispose = attach(background);
 
-    minimizePane(background);
+    toggleDock('bottom', false);
 
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it('a minimized pane can still be closed, and then disposes', async () => {
+  it('a pane in a hidden dock can still be closed, and then disposes', async () => {
     const { instanceId } = firstEntry();
     const dispose = attach(instanceId);
-    minimizePane(instanceId);
+    toggleDock('bottom', false);
     expect(dispose).not.toHaveBeenCalled();
 
     await closePaneGuarded(instanceId);

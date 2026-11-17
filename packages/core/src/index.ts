@@ -173,24 +173,29 @@ export { closePaneSession, paneSessionKey } from './layout/pane-lifetime';
 /** Recently opened panes — the Start menu's Recent band. */
 export { MAX_RECENTS, recentViewIds, subscribeRecents } from './layout/recents';
 export type { LayoutAction } from './layout/actions';
-export { findAreaAnywhere, findPaneAnywhere, findWindow, listPanes } from './layout/model';
-export {
-  arrangeWindows,
-  cascadeRect,
-  clampRect,
-  complementZone,
-  DEFAULT_SNAP,
-  fillTarget,
-  MIN_WINDOW_SIZE,
-  NOMINAL_VIEWPORT,
-  overlapFraction,
-  rectForZone,
-  rescaleRect,
-  snapZoneAt,
-  TITLEBAR_KEEP,
-  type ArrangeStyle,
-  type SnapConfig,
-} from './layout/snap';
+export { findAreaAnywhere, findPaneAnywhere, listPanes, visiblePanes } from './layout/model';
+export { computeWorkbench, dockExtent, areaAt } from './layout/dock/geometry';
+export type { Surface, WorkbenchLayout } from './layout/dock/geometry';
+export { resolveDrop, dropToPlace } from './layout/dock/drop';
+export type { DropTarget, DropZone } from './layout/dock/drop';
+export { DEFAULT_DOCK_SIZES, MIN_DOCK_SIZE, isPaneShowing } from './layout/dock/frame';
+export { MIN_FRACTION } from './layout/dock/tree';
+export { ARRANGE_STYLES } from './layout/dock/arrange';
+export type { ArrangeStyle } from './layout/dock/arrange';
+export { DOCK_SIDES } from './layout/dock/types';
+export type {
+  AreaHost,
+  DockFrame,
+  DockLocation,
+  DockSide,
+  DockState,
+  LayoutNode,
+  PlaceTarget,
+  PopoutBounds,
+  PopoutState,
+  SplitNode,
+  SplitSide,
+} from './layout/dock/types';
 export { resolveViewIcon, taskbarEntries } from './layout/taskbar';
 export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
 export { DEFAULT_BACKDROP } from './layout/types';
@@ -223,10 +228,6 @@ export type { MinibufferState } from './minibuffer';
 export type {
   AreaNode,
   BackdropRef,
-  SnapZone,
-  WindowMode,
-  WindowRect,
-  WindowState,
   FrameState,
   LayoutStoreState,
   LocatedPane,
@@ -260,26 +261,44 @@ export {
   roleOf,
   sectionsOf,
   activateTaskbarEntry,
-  arrangeDesktop,
-  cycleWindows,
-  desktopViewport,
-  focusWindow,
-  focusWindowDirection,
-  minimizePane,
+  cycleGroups,
+  defaultDockOf,
+  focusDirection,
+  focusGroup,
+  movePaneTo,
+  placeFor,
   requestPaneAttention,
   setBackdrop,
-  setDesktopMeasurer,
-  setWindowMode,
-  snapFocused,
+  setWorkbenchMeasurer,
+  splitFocused,
   tearOffPane,
-  snapWindow,
-  toggleWindowMaximized,
-  toggleWindowMinimized,
+  toggleDock,
+  toggleMaximizedGroup,
+  workbenchSurface,
   setPaneSection,
   setRegionView,
   toggleRegion,
   toggleRegionView,
+  canPopOut,
+  dockPopoutBack,
+  popOutPane,
 } from './layout/controller';
+export {
+  PaneWindowContext,
+  allDocuments,
+  focusedDocument,
+  popoutWindow,
+  registerPopoutWindow,
+  usePanePopoutId,
+  usePaneWindow,
+  windowOf,
+  type PaneWindow,
+} from './layout/pane-window';
+export {
+  forwardPointerEvents,
+  installCrossWindowObservers,
+  rehomeObservers,
+} from './layout/cross-window';
 export {
   anyPaneDirty,
   isPaneDirty,
@@ -289,19 +308,13 @@ export {
   type CloseGuard,
 } from './layout/close-guards';
 export {
-  PANE_EXIT_MAX_MS,
-  runPaneExit,
-  setPaneExitAnimator,
-  type PaneExitAnimator,
-} from './layout/pane-exit';
-export {
   usePaneSection,
   sectionOfInstance,
   SectionScopeContext,
   type PaneSections,
 } from './layout/use-sections';
-export { lastPlacement, rememberPlacement, WINDOW_PLACEMENT_KEY } from './layout/window-placement';
-export type { WindowPlacement } from './layout/window-placement';
+export { lastPlacement, rememberPlacement, PANE_PLACEMENT_KEY } from './layout/pane-placement';
+export type { PanePlacement } from './layout/pane-placement';
 export * as framePersistence from './layout/persistence';
 export { DESKTOP_WORKSPACE } from './layout/persistence';
 export {

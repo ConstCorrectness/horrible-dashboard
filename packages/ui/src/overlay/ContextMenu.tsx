@@ -39,20 +39,20 @@ import {
  *  they would measure as zero. */
 const MEASURING: Placement = { left: -9999, top: -9999, side: 'bottom' };
 
-function useViewport(): { width: number; height: number } {
-  const [size, setSize] = useState(() => ({
-    width: typeof window === 'undefined' ? 0 : window.innerWidth,
-    height: typeof window === 'undefined' ? 0 : window.innerHeight,
-  }));
+function useViewport(win: Window): { width: number; height: number } {
+  const [size, setSize] = useState(() => ({ width: win.innerWidth, height: win.innerHeight }));
   useEffect(() => {
-    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    const onResize = () => setSize({ width: win.innerWidth, height: win.innerHeight });
+    onResize();
+    win.addEventListener('resize', onResize);
+    return () => win.removeEventListener('resize', onResize);
+  }, [win]);
   return size;
 }
 
 interface PanelProps {
+  /** The window the menu is drawn in: the main one, or a pop-out. */
+  win: Window;
   anchor: Rect;
   items: ContextMenuItem[][];
   side?: 'bottom' | 'right';
@@ -64,6 +64,7 @@ interface PanelProps {
 }
 
 function MenuPanel({
+  win,
   anchor,
   items,
   side = 'bottom',
@@ -72,7 +73,7 @@ function MenuPanel({
   autoFocus = true,
 }: PanelProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const viewport = useViewport();
+  const viewport = useViewport(win);
   const [placement, setPlacement] = useState<Placement>(MEASURING);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [openSubmenu, setOpenSubmenu] = useState<{ index: number; anchor: Rect } | null>(null);
@@ -256,6 +257,7 @@ function MenuPanel({
       </div>
       {openSubmenu && flat[openSubmenu.index]?.submenu?.length ? (
         <MenuPanel
+          win={win}
           anchor={openSubmenu.anchor}
           items={[flat[openSubmenu.index].submenu!]}
           side="right"
@@ -270,9 +272,15 @@ function MenuPanel({
   );
 }
 
-/** Mounted once by the shell. Renders nothing until something is right-clicked. */
-export function ContextMenuLayer() {
-  const open = useSyncExternalStore(contextMenuStore.subscribe, contextMenuStore.getSnapshot);
+/**
+ * Mounted once by the shell, and once by each pop-out window (`view`). Each draws
+ * only the menus opened in its own window: the event's coordinates are that
+ * window's. Renders nothing until something is right-clicked.
+ */
+export function ContextMenuLayer({ view }: { view?: Window } = {}) {
+  const win = view ?? window;
+  const store = useSyncExternalStore(contextMenuStore.subscribe, contextMenuStore.getSnapshot);
+  const open = store && (store.view ?? window) === win ? store : null;
   const dismiss = useCallback(() => closeContextMenu(), []);
 
   // Escape goes through the shell's ladder, so the menu closes before (say) an
@@ -291,21 +299,22 @@ export function ContextMenuLayer() {
     };
     // Scrolling the surface under a menu leaves it pointing at the wrong row.
     const onScroll = () => dismiss();
-    window.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('scroll', onScroll, true);
+    win.addEventListener('pointerdown', onDown, true);
+    win.addEventListener('scroll', onScroll, true);
     return () => {
-      window.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('scroll', onScroll, true);
+      win.removeEventListener('pointerdown', onDown, true);
+      win.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, dismiss]);
+  }, [open, dismiss, win]);
 
   if (!open) return null;
   return createPortal(
     <MenuPanel
+      win={win}
       anchor={{ x: open.x, y: open.y, width: 0, height: 0 }}
       items={open.groups}
       onDismiss={dismiss}
     />,
-    document.body,
+    win.document.body,
   );
 }

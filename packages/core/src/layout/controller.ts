@@ -7,6 +7,8 @@
  * packages/ui/src/layout/install.ts).
  */
 import { hasAgentContext, readAgentContext } from '../agent-context';
+import { hasCapability } from '../capabilities';
+import { desktopBridge } from '../desktop';
 import { isAppFullscreen, setAppFullscreen } from '../fullscreen';
 import { currentThemeId, THEMES } from '../theme';
 import { windowControl } from '../window';
@@ -19,6 +21,9 @@ import {
   type WidgetDecl,
 } from '../registry';
 import { isPaneDirty, runCloseGuard } from './close-guards';
+import type { ArrangeStyle } from './dock/arrange';
+import { computeWorkbench, type Surface } from './dock/geometry';
+import type { DockSide, PlaceTarget, SplitSide } from './dock/types';
 import { setFrameCommandHandler } from './frame-bus';
 import { resolveShowTarget, type ShowCandidates, type ShowTarget } from './show';
 import {
@@ -28,13 +33,15 @@ import {
   listPanes,
   visiblePanes,
 } from './model';
-import { runPaneExit } from './pane-exit';
+import { allDocuments, popoutWindow } from './pane-window';
 import { closePaneSession, paneSessionKey } from './pane-lifetime';
+import { lastPlacement, rememberPlacement, type PanePlacement } from './pane-placement';
 import { taskbarEntries } from './taskbar';
-import { lastPlacement, rememberPlacement } from './window-placement';
-import { arrangeWindows, NOMINAL_VIEWPORT, type ArrangeStyle } from './snap';
 import { layoutStore } from './store';
+import { DOCK_SIDES } from './dock/types';
+import type { LayoutNode } from './dock/types';
 import type {
+  AreaNode,
   BackdropRef,
   LocatedPane,
   NavDirection,
@@ -42,10 +49,6 @@ import type {
   PaneState,
   RegionPosition,
   RegionState,
-  SnapZone,
-  WindowMode,
-  WindowRect,
-  WindowState,
 } from './types';
 
 type ViewDecl = PanelDecl | WidgetDecl;
@@ -209,33 +212,23 @@ export function focusedViewId(): string | null {
  */
 export function focusPaneDom(instanceId: string): void {
   if (typeof document === 'undefined') return;
-  const host = document.querySelector<HTMLElement>(
-    `[data-pane-instance="${CSS.escape(instanceId)}"]`,
-  );
+  // A popped-out pane's container is in its pop-out's document, not this one.
+  const selector = `[data-pane-instance="${CSS.escape(instanceId)}"]`;
+  const host = allDocuments()
+    .map((doc) => doc.querySelector<HTMLElement>(selector))
+    .find((el) => el !== null);
   if (!host) return;
   const target = host.querySelector<HTMLElement>('[data-autofocus]') ?? host;
   target.focus({ preventScroll: true });
 }
 
-/** Bring an already-open pane forward — raise its window, show its tab — and focus it. */
+/** Bring an already-open pane forward — show its tab, show its dock — and focus it. */
 export function focusInstance(located: LocatedPane): void {
-  const { location, pane } = located;
-  layoutStore.dispatch({ type: 'BRING_WINDOW_FRONT', windowId: location.windowId });
-  layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId: location.windowId });
-  const index = findAreaAnywhere(frame(), location.areaId)?.area.tabs.findIndex(
-    (t) => t.instanceId === pane.instanceId,
-  );
-  if (index !== undefined && index >= 0) {
-    layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: location.areaId, index });
-  }
-  // Un-minimize: focusing a pane the user cannot see would silently do nothing.
-  const win = frame().windows.find((w) => w.id === location.windowId);
-  if (win?.mode === 'minimized') {
-    layoutStore.dispatch({ type: 'SET_WINDOW_MODE', windowId: win.id, mode: 'normal' });
-  }
-  layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: pane.instanceId });
+  layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: located.pane.instanceId });
+  // A pane in a pop-out is brought forward with its window.
+  if (located.location.kind === 'popout') popoutWindow(located.location.popoutId)?.focus();
   // After React has committed the tab/dock change, so the container exists.
-  queueMicrotask(() => focusPaneDom(pane.instanceId));
+  queueMicrotask(() => focusPaneDom(located.pane.instanceId));
 }
 
 /**
@@ -254,9 +247,6 @@ export async function closePaneGuarded(idOrInstance: string): Promise<boolean> {
   if (!(await runCloseGuard(instanceId))) return false;
   // Re-check existence: the guard's dialog is async and the pane could have gone.
   if (!findPaneAnywhere(frame(), instanceId)) return false;
-  // Its exit, now that the guard has agreed to the close (capped; see pane-exit).
-  await runPaneExit(instanceId);
-  if (!findPaneAnywhere(frame(), instanceId)) return false;
   layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId });
   // The one place a pane genuinely goes away, so the one place its long-lived
   // resources are torn down. Unmount does not do this — see `pane-lifetime`.
@@ -265,19 +255,17 @@ export async function closePaneGuarded(idOrInstance: string): Promise<boolean> {
 }
 
 /**
- * Open a view in a window, or focus it if it is already open — the
- * `registry.openPanel` target. Returns the instance id, or null.
+ * Open a view, or focus it if it is already open — the `registry.openPanel`
+ * target. Returns the instance id, or null.
  *
  * Identity: a caller-supplied `instanceId` is focus-or-create. A singleton (every
  * widget, and any panel that says so) uses its view id as its instance id and is
  * found by view id, so a second open focuses the first rather than adding a twin.
- * Anything else opens a fresh window each time — a second terminal is a second
+ * Anything else opens a fresh pane each time — a second terminal is a second
  * shell.
  *
- * A new window opens where that view was last left: a pane snapped to the right
- * edge was put there on purpose, and a placement cannot live in the frame because
- * a closed pane has no window to hold one (see `window-placement`). Absent a
- * memory it lands on the cascade.
+ * Where it opens is `placeFor`: the caller's explicit target, else where that
+ * view was last left, else where its role belongs.
  */
 export function openPane(viewId: string, opts?: OpenPaneOptions): string | null {
   const decl = resolveView(viewId);
@@ -356,24 +344,35 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
     regions: regionsFor(viewId),
     ...(opts?.params ? { params: opts.params } : {}),
   };
-  const placement = lastPlacement(viewId);
   const before = layoutStore.getSnapshot();
   if (
-    layoutStore.dispatch({
-      type: 'OPEN_WINDOW',
-      pane,
-      ...(placement ? { rect: placement.rect } : {}),
-    }) === before
+    layoutStore.dispatch({ type: 'INSERT_PANE', pane, target: placeFor(viewId, opts?.target) }) ===
+    before
   ) {
     return null;
   }
-  // Re-snap rather than only restoring the geometry: a snapped window keeps a
-  // `restoreRect` to un-snap back to and re-derives its rect when the desktop
-  // resizes. Replaying the pixels alone would look identical until the first
-  // time either of those mattered.
-  if (placement?.snap) snapWindow(pane.instanceId, placement.snap);
-  layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: pane.instanceId });
+  queueMicrotask(() => focusPaneDom(pane.instanceId));
   return pane.instanceId;
+}
+
+/** The dock a view belongs in when nothing else says: its declaration, else the right. */
+export function defaultDockOf(viewId: string): DockSide {
+  return resolveView(viewId)?.dock ?? 'right';
+}
+
+/**
+ * Where a view opens: the caller's explicit target, else where it was last left
+ * (`pane-placement`), else by role — a document into the focused centre group, a
+ * tool or widget into its dock.
+ */
+export function placeFor(viewId: string, explicit?: PlaceTarget): PlaceTarget {
+  if (explicit) return explicit;
+  const remembered = lastPlacement(viewId);
+  if (remembered === 'center') return { kind: 'center' };
+  if (remembered) return { kind: 'dock', side: remembered };
+  return roleOf(viewId) === 'document'
+    ? { kind: 'center' }
+    : { kind: 'dock', side: defaultDockOf(viewId) };
 }
 
 /**
@@ -922,245 +921,213 @@ export function showTarget(target: string): ShowResult {
 }
 
 // ---------------------------------------------------------------------------
-// Window verbs
+// Workbench verbs
 //
 // One set of verbs, three callers: pointer gestures, keybindings, and agent tools.
 // A gesture that reached into the store directly would be the one path whose rules
-// (clamping, un-snapping, raising) drifted from the other two.
+// drifted from the other two.
 // ---------------------------------------------------------------------------
 
-/** The window a verb should act on: the named one, else the focused one. */
-function targetWindowId(id?: string): string | null {
+/** The workbench surface size, measured by the workbench component. */
+let workbenchMeasurer: (() => Surface | null) | null = null;
+
+/** Installed by the workbench so pure verbs (direction focus, `get_layout`) get pixels. */
+export function setWorkbenchMeasurer(fn: (() => Surface | null) | null): void {
+  workbenchMeasurer = fn;
+}
+
+/** Assumed before the workbench has measured itself (tests, a hidden shell). */
+const NOMINAL_SURFACE: Surface = { w: 1280, h: 800 };
+
+export function workbenchSurface(): Surface {
+  return workbenchMeasurer?.() ?? NOMINAL_SURFACE;
+}
+
+/** The group a verb should act on: the named one (or a pane's), else the focused one. */
+function targetAreaId(idOrInstance?: string): string | null {
   const f = frame();
-  if (id) {
-    // Accept a pane instance id too — every caller that has a pane has one, and
-    // making them look up the window first is a lookup they can get wrong.
-    if (f.windows.some((w) => w.id === id)) return id;
-    return findPaneAnywhere(f, id)?.location.windowId ?? null;
+  if (idOrInstance) {
+    if (findAreaAnywhere(f, idOrInstance)) return idOrInstance;
+    return findPaneAnywhere(f, idOrInstance)?.location.areaId ?? null;
   }
-  return f.focusedWindowId;
+  return f.focusedAreaId;
 }
 
-/** The live desktop surface size, measured by the window layer. */
-let desktopMeasurer: (() => { w: number; h: number } | null) | null = null;
-
-/** Installed by the window layer so pure verbs can resolve pixel geometry. */
-export function setDesktopMeasurer(fn: (() => { w: number; h: number } | null) | null): void {
-  desktopMeasurer = fn;
-}
-
-export function desktopViewport(): { w: number; h: number } {
-  return desktopMeasurer?.() ?? frame().windowViewport ?? NOMINAL_VIEWPORT;
-}
-
-/**
- * `fill` asks for snap-assist: the window covering the other half is snapped into
- * it, so the result is a split rather than one window over another. Deliberately a
- * parameter — a user snapping is arranging a screen, while the `window_state` agent
- * tool is moving one named window and must not shuffle a second.
- */
-export function snapWindow(
-  idOrInstance: string | undefined,
-  zone: SnapZone | null,
-  fill = false,
-): boolean {
-  const windowId = targetWindowId(idOrInstance);
-  if (!windowId) return false;
+/** Move an open pane somewhere else. False when nothing moved. */
+export function movePaneTo(instanceId: string, target: PlaceTarget): boolean {
   const before = layoutStore.getSnapshot();
-  return (
-    layoutStore.dispatch({
-      type: 'SET_WINDOW_MODE',
-      windowId,
-      mode: zone === 'max' ? 'maximized' : 'normal',
-      ...(zone && zone !== 'max' ? { snap: zone } : {}),
-      viewport: desktopViewport(),
-      ...(fill ? { fill: true } : {}),
-    }) !== before
-  );
+  const after = layoutStore.dispatch({ type: "MOVE_PANE", instanceId, target });
+  if (after === before) return false;
+  queueMicrotask(() => focusPaneDom(instanceId));
+  return true;
 }
 
 /**
- * Snap whatever the user is looking at: the focused window, else the window of the
- * focused pane. Shared by the chords, the snap palette and the `window_state` agent
- * tool so all three behave identically.
+ * Split the focused group: its showing pane moves into a new group on `side`.
+ * A group holding one pane has nothing to split off, so that is a no-op.
  */
-export function snapFocused(zone: SnapZone | null, fill = false): boolean {
+export function splitFocused(side: SplitSide): boolean {
   const f = frame();
-  return snapWindow(f.focusedWindowId ?? f.focusedInstanceId ?? undefined, zone, fill);
+  const areaId = f.focusedAreaId;
+  const area = areaId ? findAreaAnywhere(f, areaId)?.area : null;
+  const pane = area?.tabs[area.activeTab];
+  if (!area || !pane || area.tabs.length < 2) return false;
+  return movePaneTo(pane.instanceId, { kind: "split", areaId: area.id, side });
 }
 
-export function setWindowMode(idOrInstance: string | undefined, mode: WindowMode): boolean {
-  const windowId = targetWindowId(idOrInstance);
-  if (!windowId) return false;
+/** Show, hide or (omitting `visible`) toggle an edge dock. */
+export function toggleDock(side: DockSide, visible?: boolean): boolean {
   const before = layoutStore.getSnapshot();
-  return (
-    layoutStore.dispatch({
-      type: 'SET_WINDOW_MODE',
-      windowId,
-      mode,
-      viewport: desktopViewport(),
-    }) !== before
-  );
+  const after = layoutStore.dispatch({
+    type: "SET_DOCK_VISIBLE",
+    side,
+    visible,
+  });
+  if (after === before) return false;
+  const dock = after.frame.docks[side];
+  const pane = dock.visible ? dock.area.tabs[dock.area.activeTab] : null;
+  if (pane)
+    focusInstance({
+      pane,
+      location: { kind: "dock", side, areaId: dock.area.id },
+    });
+  return true;
+}
+
+/** Rebuild the centre in one move: equal shares, one tab group, or a group per pane. */
+export function arrangePanes(style: ArrangeStyle): boolean {
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: "ARRANGE_CENTER", style }) !== before;
+}
+
+/** Maximize a group over the workbench, or restore it (the tab strip double-click). */
+export function toggleMaximizedGroup(idOrInstance?: string): boolean {
+  const areaId = targetAreaId(idOrInstance);
+  if (!areaId) return false;
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: "TOGGLE_MAXIMIZED", areaId }) !== before;
+}
+
+export function focusGroup(idOrInstance?: string): boolean {
+  const areaId = targetAreaId(idOrInstance);
+  if (!areaId) return false;
+  const before = layoutStore.getSnapshot();
+  const after = layoutStore.dispatch({ type: "FOCUS_AREA", areaId });
+  const pane = after.frame.focusedInstanceId;
+  if (pane) queueMicrotask(() => focusPaneDom(pane));
+  return after !== before || after.frame.focusedAreaId === areaId;
+}
+
+/** The groups on screen in the main window, in reading order. */
+function visibleGroups(): string[] {
+  const f = frame();
+  const layout = computeWorkbench(f, workbenchSurface());
+  return [...layout.areas.entries()]
+    .filter(([id]) => !layout.covered.has(id))
+    .sort(([, a], [, b]) => a.x - b.x || a.y - b.y)
+    .map(([id]) => id);
+}
+
+/** Cycle focus through the groups on screen. */
+export function cycleGroups(direction: 1 | -1 = 1): boolean {
+  const ids = visibleGroups();
+  if (ids.length === 0) return false;
+  const current = ids.indexOf(frame().focusedAreaId ?? "");
+  return focusGroup(ids[(current + direction + ids.length) % ids.length]);
 }
 
 /**
- * What clicking a taskbar button does, resolved from the pane's current state.
- *
- * The universal convention, and the reason this is one verb rather than the
- * caller branching: clicking the thing you are already looking at **hides** it,
- * and clicking anything else brings it forward. A taskbar where the focused
- * button does nothing is one that silently swallows every second click.
+ * Move focus to the group beside the focused one (the i3 gesture). Docks count:
+ * left of the leftmost centre group is the left dock, when it is showing.
  */
+export function focusDirection(direction: NavDirection): boolean {
+  const f = frame();
+  const layout = computeWorkbench(f, workbenchSurface());
+  const from = f.focusedAreaId ? layout.areas.get(f.focusedAreaId) : undefined;
+  if (!from) return false;
+  const horizontal = direction === "left" || direction === "right";
+  const sign = direction === "left" || direction === "up" ? -1 : 1;
+  const centre = (r: { x: number; y: number; w: number; h: number }) => ({
+    x: r.x + r.w / 2,
+    y: r.y + r.h / 2,
+  });
+  const origin = centre(from);
+  const best = [...layout.areas.entries()]
+    .filter(([id]) => id !== f.focusedAreaId && !layout.covered.has(id))
+    .map(([id, r]) => ({ id, c: centre(r), r }))
+    // Only groups genuinely on that side, that overlap on the other axis, then the
+    // nearest — raw distance alone would jump to a group mostly perpendicular.
+    .filter(({ c, r }) => {
+      const ahead = horizontal
+        ? (c.x - origin.x) * sign > 1
+        : (c.y - origin.y) * sign > 1;
+      const overlaps = horizontal
+        ? r.y < from.y + from.h && r.y + r.h > from.y
+        : r.x < from.x + from.w && r.x + r.w > from.x;
+      return ahead && overlaps;
+    })
+    .sort((a, b) =>
+      horizontal
+        ? Math.abs(a.c.x - origin.x) - Math.abs(b.c.x - origin.x)
+        : Math.abs(a.c.y - origin.y) - Math.abs(b.c.y - origin.y),
+    )[0];
+  return best ? focusGroup(best.id) : false;
+}
+
 /**
  * Flag a pane as wanting attention — its background work finished while it was
- * out of sight. Its taskbar button flashes until the user looks at it.
+ * out of sight. Its tab (and its dock's toggle) flashes until the user looks.
  *
- * The point of minimizing being non-destructive: a pane can be put away and keep
- * working (a research run, a training job, an ingest), so it needs a way to say it
- * is done. No-op when the pane is already the one on screen and focused — flashing
- * a button for something the user is looking at is noise.
+ * No-op when the pane is the one on screen and focused — flashing something the
+ * user is looking at is noise.
  */
-export function requestPaneAttention(instanceId: string, attention = true): boolean {
+export function requestPaneAttention(
+  instanceId: string,
+  attention = true,
+): boolean {
   const f = frame();
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
   if (attention) {
     const entry = taskbarEntries(f).find((e) => e.instanceId === instanceId);
-    if (entry?.state === 'focused') return false;
+    if (entry?.state === "focused") return false;
   }
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: 'SET_PANE_ATTENTION', instanceId, attention }) !== before;
+  return (
+    layoutStore.dispatch({
+      type: "SET_PANE_ATTENTION",
+      instanceId,
+      attention,
+    }) !== before
+  );
 }
 
+/**
+ * What a pane switcher entry (the status bar's agent button, Spotlight's open-pane
+ * results) does when clicked. Clicking the pane you are already looking at in a
+ * dock puts the dock away — the toggle every IDE panel button has; anything else
+ * is brought forward and focused.
+ */
 export function activateTaskbarEntry(instanceId: string): boolean {
   const f = frame();
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
-  const { pane, location } = located;
-  // Looking at it is what acknowledges it, wherever it lives and whatever the
-  // click then does. Clearing it anywhere else (on focus, on a timer) would let a
-  // button keep flashing after the user had plainly dealt with it.
-  if (pane.attention) {
-    layoutStore.dispatch({ type: 'SET_PANE_ATTENTION', instanceId, attention: false });
+  const entry = taskbarEntries(f).find((e) => e.instanceId === instanceId);
+  if (entry?.state === "focused" && located.location.kind === "dock") {
+    return toggleDock(located.location.side, false);
   }
-  const win = f.windows.find((w) => w.id === location.windowId);
-  const showing =
-    win &&
-    win.mode !== 'minimized' &&
-    f.focusedWindowId === win.id &&
-    win.area.tabs[win.area.activeTab]?.instanceId === instanceId;
-  if (showing) return setWindowMode(win.id, 'minimized');
   focusInstance(located);
-  return true;
-}
-
-/**
- * Minimize a pane's window — the taskbar's double-click gesture and its context
- * menu both land here.
- *
- * Unlike `activateTaskbarEntry` this never toggles and never focuses: "minimize"
- * asked for directly should hide the pane whether or not it happened to be the
- * focused one, so a double-click doesn't depend on what the first click of it
- * did.
- */
-export function minimizePane(instanceId: string): boolean {
-  const located = findPaneAnywhere(frame(), instanceId);
-  return located ? setWindowMode(located.location.windowId, 'minimized') : false;
-}
-
-/** Minimize ⇄ restore, the taskbar-button behaviour. */
-export function toggleWindowMinimized(idOrInstance?: string): boolean {
-  const windowId = targetWindowId(idOrInstance);
-  const win = windowId ? frame().windows.find((w) => w.id === windowId) : null;
-  if (!win) return false;
-  return setWindowMode(win.id, win.mode === 'minimized' ? 'normal' : 'minimized');
-}
-
-/** Maximize ⇄ restore, the titlebar double-click behaviour. */
-export function toggleWindowMaximized(idOrInstance?: string): boolean {
-  const windowId = targetWindowId(idOrInstance);
-  const win = windowId ? frame().windows.find((w) => w.id === windowId) : null;
-  if (!win) return false;
-  return setWindowMode(win.id, win.mode === 'maximized' ? 'normal' : 'maximized');
-}
-
-export function focusWindow(idOrInstance?: string): boolean {
-  const windowId = targetWindowId(idOrInstance);
-  if (!windowId) return false;
-  layoutStore.dispatch({ type: 'BRING_WINDOW_FRONT', windowId });
-  layoutStore.dispatch({ type: 'FOCUS_WINDOW', windowId });
-  const win = frame().windows.find((w) => w.id === windowId);
-  if (win?.mode === 'minimized') setWindowMode(windowId, 'normal');
-  const pane = win?.area.tabs[win.area.activeTab];
-  if (pane) {
-    layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: pane.instanceId });
-    queueMicrotask(() => focusPaneDom(pane.instanceId));
-  }
-  return true;
-}
-
-/**
- * Cycle window focus in z-order. Minimized windows are included: they are exactly
- * what a window switcher exists to bring back, and skipping them would make a
- * minimized window reachable only with the mouse.
- */
-export function cycleWindows(direction: 1 | -1 = 1): boolean {
-  const f = frame();
-  const ordered = [...f.windows].sort((a, b) => b.z - a.z);
-  if (ordered.length === 0) return false;
-  const current = ordered.findIndex((w) => w.id === f.focusedWindowId);
-  const next = ordered[(current + direction + ordered.length) % ordered.length];
-  return focusWindow(next.id);
-}
-
-/** Move focus to the window nearest in a viewport direction (the i3 gesture). */
-export function focusWindowDirection(direction: NavDirection): boolean {
-  const f = frame();
-  const from = f.windows.find((w) => w.id === f.focusedWindowId) ?? f.windows[0];
-  if (!from) return false;
-  const axis = direction === 'left' || direction === 'right' ? 'x' : 'y';
-  const sign = direction === 'left' || direction === 'up' ? -1 : 1;
-  const centerOf = (r: { x: number; y: number; w: number; h: number }) => ({
-    x: r.x + r.w / 2,
-    y: r.y + r.h / 2,
-  });
-  const origin = centerOf(from.rect);
-  const best = f.windows
-    .filter((w) => w.id !== from.id && w.mode !== 'minimized')
-    .map((w) => ({ w, c: centerOf(w.rect) }))
-    // Only windows genuinely on that side, then the nearest of them — measuring
-    // by raw distance alone would jump to a window that is mostly perpendicular.
-    .filter(({ c }) => (c[axis] - origin[axis]) * sign > 1)
-    .sort(
-      (a, b) =>
-        Math.abs(a.c[axis] - origin[axis]) - Math.abs(b.c[axis] - origin[axis]) ||
-        Math.abs(a.c[axis === 'x' ? 'y' : 'x'] - origin[axis === 'x' ? 'y' : 'x']) -
-          Math.abs(b.c[axis === 'x' ? 'y' : 'x'] - origin[axis === 'x' ? 'y' : 'x']),
-    )[0];
-  return best ? focusWindow(best.w.id) : false;
-}
-
-/** Lay every window out at once (the desktop context menu and `desktop.arrange`). */
-export function arrangeDesktop(style: ArrangeStyle): boolean {
-  const f = frame();
-  const open = f.windows.filter((w) => w.mode !== 'minimized');
-  if (open.length === 0) return false;
-  const viewport = desktopViewport();
-  const rects = arrangeWindows(open, viewport, style);
-  open.forEach((w, i) => {
-    layoutStore.dispatch({ type: 'SET_WINDOW_RECT', windowId: w.id, rect: rects[i] });
-  });
   return true;
 }
 
 export function setBackdrop(backdrop: BackdropRef): boolean {
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: 'SET_BACKDROP', backdrop }) !== before;
+  return layoutStore.dispatch({ type: "SET_BACKDROP", backdrop }) !== before;
 }
 
 /**
- * Present a pane over everything — including the taskbar, which a maximized
- * window stops short of by design.
+ * Present a pane over everything — including the status bar, which a maximized
+ * group stops short of by design.
  *
  * On a native shell, presenting a pane whose view declares `fullscreen` also
  * takes the OS window fullscreen — the point of the opt-in. A pane that has not
@@ -1172,14 +1139,14 @@ export function presentPane(instanceId: string | null): boolean {
   const f = frame();
   if (instanceId === null) {
     if (f.presentedInstanceId) {
-      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: null });
+      layoutStore.dispatch({ type: "SET_PRESENTED", instanceId: null });
       void restoreAppFullscreen();
     }
     return true;
   }
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
-  layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId });
+  layoutStore.dispatch({ type: "SET_PRESENTED", instanceId });
   void escalateAppFullscreen(located.pane.viewId);
   return true;
 }
@@ -1211,18 +1178,15 @@ export function isPresenting(): boolean {
   return frame().presentedInstanceId !== null;
 }
 
-/** Toggle presentation on the focused window's showing pane. */
+/** Toggle presentation on the focused pane. */
 export function presentFocusedPane(): void {
-  const f = frame();
   if (isPresenting()) {
     presentPane(null);
     return;
   }
-  const win = f.focusedWindowId ? f.windows.find((w) => w.id === f.focusedWindowId) : null;
-  const activeTab = win?.area.tabs[win.area.activeTab];
-  if (activeTab) presentPane(activeTab.instanceId);
+  const focused = frame().focusedInstanceId;
+  if (focused) presentPane(focused);
 }
-
 // ---------------------------------------------------------------------------
 // Reads for the agent (get_layout / list_open_panes)
 // ---------------------------------------------------------------------------
@@ -1249,21 +1213,40 @@ function describePane(pane: PaneState): Record<string, unknown> {
   return out;
 }
 
-/** A compact JSON description of the desktop, for the agent's `get_layout`. */
+function describeNode(node: LayoutNode): Record<string, unknown> {
+  if (node.kind === 'split') {
+    return {
+      split: node.orientation,
+      id: node.id,
+      sizes: node.sizes.map((x) => Math.round(x * 1000) / 1000),
+      children: node.children.map(describeNode),
+    };
+  }
+  return describeGroup(node);
+}
+
+function describeGroup(area: AreaNode): Record<string, unknown> {
+  return { group: area.id, tabs: area.tabs.map(describePane), activeTab: area.activeTab };
+}
+
+/** A compact JSON description of the workbench, for the agent's `get_layout`. */
 export function describeLayout(): Record<string, unknown> {
   const f = frame();
   return {
     presentedInstanceId: f.presentedInstanceId,
-    focusedWindowId: f.focusedWindowId,
-    windows: f.windows.map((w) => ({
-      id: w.id,
-      rect: w.rect,
-      mode: w.mode,
-      z: w.z,
-      ...(w.snap ? { snap: w.snap } : {}),
-      tabs: w.area.tabs.map(describePane),
-      activeTab: w.area.activeTab,
-    })),
+    maximizedGroup: f.maximizedAreaId,
+    focusedGroup: f.focusedAreaId,
+    focusedInstanceId: f.focusedInstanceId,
+    center: describeNode(f.center),
+    docks: Object.fromEntries(
+      DOCK_SIDES.filter((side) => f.docks[side].area.tabs.length > 0).map((side) => [
+        side,
+        { visible: f.docks[side].visible, size: f.docks[side].size, ...describeGroup(f.docks[side].area) },
+      ]),
+    ),
+    ...(f.popouts.length
+      ? { popouts: f.popouts.map((p) => ({ id: p.id, ...describeGroup(p.area) })) }
+      : {}),
     // The appearance verbs need ids they cannot guess, and this is the read tool
     // they already call — so the catalogs ride here rather than costing two more
     // always-on `list_*` schemas.
@@ -1283,9 +1266,9 @@ export function describeLayout(): Record<string, unknown> {
  * `list_open_panes` + `get_pane_context` round-trip on it.
  *
  * Budgeted by the caller, not here: `limit` caps how many panes are attached (the
- * topmost windows first — the ones the user reached for most recently) and
- * `maxChars` truncates each serialized snapshot. Unbudgeted, this would hand back the token
- * savings the gateable `layout` group just won.
+ * focused pane first, then the centre, then the docks) and `maxChars` truncates
+ * each serialized snapshot. Unbudgeted, this would hand back the token savings
+ * the gateable `layout` group just won.
  */
 export function readVisibleAgentContexts(
   limit: number,
@@ -1293,10 +1276,9 @@ export function readVisibleAgentContexts(
   skipInstanceId?: string,
 ): Array<Record<string, unknown>> {
   const f = frame();
-  const z = new Map(f.windows.map((w) => [w.id, w.z]));
-  const ranked = visiblePanes(f).sort(
-    (a, b) => (z.get(b.location.windowId) ?? 0) - (z.get(a.location.windowId) ?? 0),
-  );
+  const rank = (p: LocatedPane) =>
+    p.pane.instanceId === f.focusedInstanceId ? 0 : p.location.kind === 'center' ? 1 : 2;
+  const ranked = visiblePanes(f).sort((a, b) => rank(a) - rank(b));
   const out: Array<Record<string, unknown>> = [];
   for (const { pane, location } of ranked) {
     if (out.length >= limit) break;
@@ -1307,7 +1289,8 @@ export function readVisibleAgentContexts(
       instanceId: pane.instanceId,
       viewId: pane.viewId,
       title: resolveView(pane.viewId)?.title ?? pane.viewId,
-      windowId: location.windowId,
+      groupId: location.areaId,
+      where: location.kind === 'dock' ? `${location.side} dock` : location.kind,
       snapshot: truncateSnapshot(snapshot, maxChars),
     });
   }
@@ -1315,15 +1298,100 @@ export function readVisibleAgentContexts(
 }
 
 /**
- * Tear a tab out of its window into a window of its own. Returns false when the
- * pane is unknown or already alone in its window.
+ * Move a tab out of its group into a new group beside it (to the right). False
+ * when the pane is unknown or already alone in its group.
  */
-export function tearOffPane(instanceId: string, rect?: WindowRect): boolean {
-  const before = layoutStore.getSnapshot();
-  return (
-    layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId, ...(rect ? { rect } : {}) }) !==
-    before
+export function tearOffPane(instanceId: string): boolean {
+  const located = findPaneAnywhere(frame(), instanceId);
+  if (!located) return false;
+  const target: PlaceTarget =
+    located.location.kind === 'center'
+      ? { kind: 'split', areaId: located.location.areaId, side: 'right' }
+      : { kind: 'center' };
+  return movePaneTo(instanceId, target);
+}
+
+// ---------------------------------------------------------------------------
+// Pop-outs
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a view may go into its own OS window: the shell can open one
+ * (`window.multi`, desktop only) and the view has opted in (`PanelDecl.popout`).
+ */
+export function canPopOut(viewId: string): boolean {
+  return hasCapability('window.multi') && resolveView(viewId)?.popout === true;
+}
+
+/** Move a pane into a new pop-out window. A pane already in one is brought forward. */
+export function popOutPane(instanceId: string): boolean {
+  const located = findPaneAnywhere(frame(), instanceId);
+  if (!located || !canPopOut(located.pane.viewId)) return false;
+  if (located.location.kind === 'popout') {
+    popoutWindow(located.location.popoutId)?.focus();
+    return true;
+  }
+  return movePaneTo(instanceId, { kind: 'popout' });
+}
+
+/**
+ * Put a pop-out's panes back in the workbench and close its window — the OS close
+ * button, and the strip's "Dock back". Each pane goes where it would open
+ * (`placeFor`: where it was last docked, else by role). Never closes a pane.
+ */
+export function dockPopoutBack(popoutId: string): boolean {
+  const popout = frame().popouts.find((p) => p.id === popoutId);
+  if (!popout) return false;
+  const targets = Object.fromEntries(
+    popout.area.tabs.map((pane) => [pane.instanceId, placeFor(pane.viewId)]),
   );
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: 'DOCK_POPOUT', popoutId, targets }) !== before;
+}
+
+/** Shell → page, on the desktop `popout` channel (apps/desktop/src/popouts.ts). */
+type PopoutShellEvent =
+  | {
+      kind: 'bounds';
+      id: string;
+      bounds: { x: number; y: number; w: number; h: number };
+      maximized: boolean;
+      displayId: number;
+    }
+  | { kind: 'closed'; id: string };
+
+let popoutBridgeBound = false;
+
+/**
+ * Follow the pop-out windows the shell reports: a move or resize is remembered, a
+ * close docks the panes back. And where there are no pop-outs (the browser, a
+ * hosted build) a layout saved on the desktop still names some — their panes
+ * would be invisible, so they are docked back on load.
+ */
+function installPopoutBridge(): void {
+  if (popoutBridgeBound) return;
+  popoutBridgeBound = true;
+  desktopBridge()?.listen('popout', (payload) => {
+    const e = payload as PopoutShellEvent;
+    if (e.kind === 'closed') {
+      dockPopoutBack(e.id);
+    } else if (e.kind === 'bounds') {
+      layoutStore.dispatch({
+        type: 'SET_POPOUT_BOUNDS',
+        popoutId: e.id,
+        bounds: e.bounds,
+        maximized: e.maximized,
+        displayId: e.displayId,
+      });
+    }
+  });
+  const dockStranded = () => {
+    if (hasCapability('window.multi')) return;
+    const ids = layoutStore.getSnapshot().frame.popouts.map((p) => p.id);
+    if (ids.length > 0) queueMicrotask(() => ids.forEach(dockPopoutBack));
+  };
+  layoutStore.subscribe(dockStranded);
+  dockStranded();
 }
 
 /** Serialize a snapshot, clipping any oversized string field rather than the whole
@@ -1362,95 +1430,48 @@ export function listOpenPanesDetailed(): Array<Record<string, unknown>> {
 // ---------------------------------------------------------------------------
 
 /**
- * Keep {@link lastPlacement} in step with where windows actually are.
+ * Keep {@link lastPlacement} in step with where panes actually are.
  *
- * A subscriber rather than a hook in the reducer or the drag handler: a window
- * gets its geometry from six places (drag, resize, snap, un-snap, maximize, an
- * agent tool), and remembering from each of them means the seventh silently does
- * not. Reading the result catches them all by construction.
+ * A subscriber rather than a hook in each verb: a pane changes place from a tab
+ * drag, a keybinding, an agent tool and a migration, and remembering from each of
+ * them means the next one silently does not. Reading the result catches them all.
  *
- * Only **single-pane** windows are recorded. A window holding three merged tabs
- * has one rect and three views, and filing that rect under each of them would
- * teach every pane in the group a placement that belonged to the group.
- * `rememberPlacement` no-ops when nothing changed, so this is a cheap walk.
- *
- * A change of the **surface** is not a placement. Resizing the app rescales every
- * window's rect once per frame; recording those wrote a setting per window per
- * frame (each one a `PUT` and an app-wide settings notification) and taught each
- * view a size the user never chose. The rect the user last gave it stays on file,
- * and opening clamps it to whatever the surface is then.
+ * Only a **move** is recorded — a pane whose place differs from the last snapshot.
+ * A pane appearing for the first time was placed by `placeFor`, so recording that
+ * would only re-file the default; and a popout is a window, not a place a view
+ * belongs.
  */
 function installPlacementRecorder(): void {
   if (placementRecorderBound) return;
   placementRecorderBound = true;
-  // What each window looked like at the last notification. Comparing against the
-  // snapshot, not against the stored placement, is what keeps a rescale out: the
-  // dispatch after a resize sees rescaled rects that differ from the stored ones
-  // but not from the last snapshot.
-  let seen = new Map<string, Placed>();
-  let viewport = layoutStore.getSnapshot().frame.windowViewport;
+  const placeOf = (p: LocatedPane): PanePlacement | null =>
+    p.location.kind === 'center' ? 'center' : p.location.kind === 'dock' ? p.location.side : null;
+  let seen = new Map<string, PanePlacement | null>();
+  let workspace = layoutStore.getSnapshot().workspaceId;
   layoutStore.subscribe(() => {
-    const f = layoutStore.getSnapshot().frame;
+    const snap = layoutStore.getSnapshot();
     const before = seen;
-    seen = new Map();
-    for (const win of f.windows) {
-      const placed = placedOf(win);
-      if (placed) seen.set(win.id, placed);
-    }
-    const next = f.windowViewport;
-    if (next?.w !== viewport?.w || next?.h !== viewport?.h) {
-      viewport = next;
+    seen = new Map(listPanes(snap.frame).map((p) => [p.pane.instanceId, placeOf(p)]));
+    // A load is not a move: every pane "appears" somewhere at once.
+    if (snap.workspaceId !== workspace) {
+      workspace = snap.workspaceId;
       return;
     }
-    for (const [id, placed] of seen) {
-      if (samePlaced(before.get(id), placed)) continue;
-      rememberPlacement(placed.viewId, placed.rect, placed.snap);
+    for (const p of listPanes(snap.frame)) {
+      const now = seen.get(p.pane.instanceId) ?? null;
+      const was = before.get(p.pane.instanceId);
+      if (now && was !== undefined && was !== now) rememberPlacement(p.pane.viewId, now);
     }
   });
-}
-
-interface Placed {
-  viewId: string;
-  rect: WindowRect;
-  snap?: SnapZone;
-}
-
-/** The placement a window would record, or null if it records none. */
-function placedOf(win: WindowState): Placed | null {
-  // A minimized window's rect is where it will come *back* to, so it stays
-  // worth recording; its `mode` is not, since reopening minimized would be a
-  // pane that answers a click by not appearing.
-  if (win.area.tabs.length !== 1) return null;
-  // A minimized window carries its zone in `minimizedFrom`, not `snap`. Read
-  // only `snap` and a maximized-then-minimized window records a full-surface
-  // rect with no zone — so the view reopens the size of the screen and un-
-  // snapped, which is neither what it was nor anything the user asked for.
-  const snap =
-    win.mode === 'minimized' && win.minimizedFrom
-      ? (win.minimizedFrom.snap ?? (win.minimizedFrom.mode === 'maximized' ? 'max' : undefined))
-      : win.snap;
-  return { viewId: win.area.tabs[0].viewId, rect: win.rect, snap };
-}
-
-function samePlaced(a: Placed | undefined, b: Placed): boolean {
-  return (
-    !!a &&
-    a.viewId === b.viewId &&
-    a.snap === b.snap &&
-    a.rect.x === b.rect.x &&
-    a.rect.y === b.rect.y &&
-    a.rect.w === b.rect.w &&
-    a.rect.h === b.rect.h
-  );
 }
 
 let placementRecorderBound = false;
 
 /** Implements the LayoutController verbs against the layout store. Installed by
- * the shell; also wires the region command bus and the window-placement
- * recorder. */
+ * the shell; also wires the region command bus and the placement recorder. */
 export function installFrameController(): void {
   installPlacementRecorder();
+  installPopoutBridge();
   setFrameCommandHandler({
     togglePosition: (hostViewId, position) => {
       const instance = hostInstanceOf(hostViewId);

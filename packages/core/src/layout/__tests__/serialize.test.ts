@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { listPanes } from '../model';
 import { deserialize, FRAME_SCHEMA, FRAME_VERSION, serialize } from '../serialize';
 import { DEFAULT_BACKDROP } from '../types';
-import type { FrameState, RegionState } from '../types';
-import { windowsFrame } from './fixtures';
+import type { WindowFrame as FrameState, RegionState } from '../types';
+import { v3Panes as listPanes, v3WindowsFrame as windowsFrame } from './fixtures';
 
 const KNOWN = new Set([
   'scratch.note',

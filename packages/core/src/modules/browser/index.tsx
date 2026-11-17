@@ -29,6 +29,9 @@ export const browserModule: ModuleManifest = {
       // A web page is a full-page medium; reading one inside a window inside a
       // desktop inside a window is two frames too many.
       fullscreen: true,
+      // Checked for the pop-out rules (sdk `PanelDecl.popout`); the native
+      // surface follows the pane into its window (NativeBrowserView note 5).
+      popout: true,
       icon: '🌐',
       // Non-singleton: open as many browser tabs as you like.
       // The agent reads/opens the web through these (see agentTools.ts).

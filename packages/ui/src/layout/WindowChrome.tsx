@@ -59,6 +59,22 @@ export const LeaveFullscreenIcon = () => (
   </svg>
 );
 
+/** A box with an arrow leaving it: put this group in its own OS window. */
+export const PopOutIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <path d="M4 1.5H1.5v7h7V6" stroke="currentColor" strokeWidth="1" fill="none" />
+    <path d="M6 1h3v3M9 1L5 5" stroke="currentColor" strokeWidth="1" fill="none" />
+  </svg>
+);
+
+/** A box with an arrow coming back into it: dock a pop-out's panes back. */
+export const DockBackIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <path d="M4 1.5H1.5v7h7V6" stroke="currentColor" strokeWidth="1" fill="none" />
+    <path d="M9 1L5 5M5 2v3h3" stroke="currentColor" strokeWidth="1" fill="none" />
+  </svg>
+);
+
 export const CloseIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" fill="none" />

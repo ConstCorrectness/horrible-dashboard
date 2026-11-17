@@ -13,7 +13,8 @@ import { setPaneDirty } from '../close-guards';
 import { openDocument, openPane, roleOf, tearOffPane } from '../controller';
 import { findPaneAnywhere, listPanes } from '../model';
 import { layoutStore } from '../store';
-import { current, loadFrame, windowsFrame } from './fixtures';
+import { collectAreas } from '../dock/tree';
+import { current, groupOf, groupsFrame, loadFrame } from './fixtures';
 
 const Stub = () => null;
 
@@ -35,8 +36,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   layoutStore.resetForTests();
-  // `t.doc#1`: a singleton restored from an older layout, with a `#n` suffix.
-  loadFrame(windowsFrame(['t.doc']), 'test');
+  // `t.doc#4`: a singleton restored from an older layout, with a `#n` suffix.
+  loadFrame(groupsFrame(['t.doc']), 'test');
 });
 
 const panesOf = (viewId: string) => listPanes(current()).filter((p) => p.pane.viewId === viewId);
@@ -49,13 +50,25 @@ describe('roleOf', () => {
 });
 
 describe('openPane', () => {
-  it('opens a new view in a window of its own, and focuses it', () => {
+  it('opens a tool in its dock, shows the dock, and focuses it', () => {
     const id = openPane('t.tool')!;
-    const located = findPaneAnywhere(current(), id)!;
-    const win = current().windows.find((w) => w.id === located.location.windowId)!;
-    expect(win.area.tabs).toHaveLength(1);
-    expect(current().focusedWindowId).toBe(win.id);
+    expect(findPaneAnywhere(current(), id)!.location).toMatchObject({
+      kind: 'dock',
+      side: 'right',
+    });
+    expect(current().docks.right.visible).toBe(true);
     expect(current().focusedInstanceId).toBe(id);
+  });
+
+  it('opens a document as a tab of the focused centre group', () => {
+    const id = openPane('t.multiDoc')!;
+    expect(findPaneAnywhere(current(), id)!.location.kind).toBe('center');
+    expect(groupOf(id)!.tabs.map((t) => t.instanceId)).toEqual(['t.doc#4', id]);
+  });
+
+  it('opens where the caller says, overriding the role', () => {
+    const id = openPane('t.multiDoc', { target: { kind: 'dock', side: 'bottom' } })!;
+    expect(findPaneAnywhere(current(), id)!.location).toMatchObject({ side: 'bottom' });
   });
 
   it('focuses a singleton on a second open instead of adding a twin', () => {
@@ -65,11 +78,11 @@ describe('openPane', () => {
   });
 
   it('finds a singleton restored with a `#n` suffix by its view id', () => {
-    expect(openPane('t.doc')).toBe('t.doc#1');
+    expect(openPane('t.doc')).toBe('t.doc#4');
     expect(panesOf('t.doc')).toHaveLength(1);
   });
 
-  it('opens a fresh window per call for a non-singleton', () => {
+  it('opens a fresh pane per call for a non-singleton', () => {
     const a = openPane('t.multiTool');
     const b = openPane('t.multiTool');
     expect(a).not.toBe(b);
@@ -97,23 +110,23 @@ describe('opening an already-open pane with params', () => {
    */
   it('delivers params to a singleton that is already open', () => {
     openPane('t.doc', { params: { runNames: ['a', 'b'] } });
-    expect(findPaneAnywhere(current(), 't.doc#1')!.pane.params).toEqual({ runNames: ['a', 'b'] });
+    expect(findPaneAnywhere(current(), 't.doc#4')!.pane.params).toEqual({ runNames: ['a', 'b'] });
   });
 
   it('leaves existing params alone when a caller supplies none', () => {
     // Absent params mean "no opinion", not "clear it".
     openPane('t.doc', { params: { runNames: ['a', 'b'] } });
     openPane('t.doc');
-    expect(findPaneAnywhere(current(), 't.doc#1')!.pane.params).toEqual({ runNames: ['a', 'b'] });
+    expect(findPaneAnywhere(current(), 't.doc#4')!.pane.params).toEqual({ runNames: ['a', 'b'] });
   });
 });
 
 describe('tearOffPane', () => {
-  it('moves a tab into a window of its own, and refuses a pane already alone', () => {
-    loadFrame(windowsFrame([['t.doc', 't.multiDoc']]), 'test');
-    const tab = current().windows[0].area.tabs[1].instanceId;
+  it('moves a tab into a group of its own, and refuses a pane already alone', () => {
+    loadFrame(groupsFrame([['t.doc', 't.multiDoc']]), 'test');
+    const tab = 't.multiDoc#5';
     expect(tearOffPane(tab)).toBe(true);
-    expect(current().windows).toHaveLength(2);
+    expect(collectAreas(current().center)).toHaveLength(2);
     expect(tearOffPane(tab)).toBe(false);
   });
 });
@@ -130,10 +143,10 @@ describe('openDocument', () => {
 
   it('takes over a clean pane in place instead of opening a second one', () => {
     open('a');
-    const windows = current().windows.length;
+    const groups = collectAreas(current().center).length;
     expect(open('b')).toBe('t.multiDoc:b');
     expect(panesOf('t.multiDoc').map((p) => p.pane.instanceId)).toEqual(['t.multiDoc:b']);
-    expect(current().windows).toHaveLength(windows);
+    expect(collectAreas(current().center)).toHaveLength(groups);
     expect(findPaneAnywhere(current(), 't.multiDoc:b')?.pane.params).toEqual({ thing: 'b' });
   });
 

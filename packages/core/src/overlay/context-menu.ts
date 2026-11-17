@@ -145,9 +145,15 @@ export function itemsForTarget(target: ContextTarget): ContextMenuItem[][] {
 // --- the open menu ----------------------------------------------------------
 
 export interface OpenContextMenu {
-  /** Viewport coordinates of the click. */
+  /** Viewport coordinates of the click, in the window it happened in. */
   x: number;
   y: number;
+  /**
+   * The window the click happened in (the event's `view`): a pop-out draws the
+   * menu in its own document. Null when the caller passed bare coordinates,
+   * which means the main window.
+   */
+  view: Window | null;
   target: ContextTarget;
   groups: ContextMenuItem[][];
 }
@@ -178,7 +184,8 @@ export const contextMenuStore = {
  * native menu rather than swallowing the gesture and showing an empty box.
  */
 export function openContextMenu(
-  at: { clientX: number; clientY: number },
+  // `view` is `unknown` because React types a synthetic event's as `AbstractView`.
+  at: { clientX: number; clientY: number; view?: unknown },
   target: ContextTarget,
 ): boolean {
   const groups = itemsForTarget(target);
@@ -187,9 +194,15 @@ export function openContextMenu(
     emit();
     return false;
   }
-  open = { x: at.clientX, y: at.clientY, target, groups };
+  open = { x: at.clientX, y: at.clientY, view: asWindow(at.view), target, groups };
   emit();
   return true;
+}
+
+function asWindow(v: unknown): Window | null {
+  return v && typeof v === 'object' && 'document' in v && 'addEventListener' in v
+    ? (v as Window)
+    : null;
 }
 
 export function closeContextMenu(): void {

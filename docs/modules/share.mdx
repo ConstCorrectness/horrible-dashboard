@@ -163,7 +163,16 @@ title leaking anything, and the guest is told the count outright ("3 hidden")
 rather than left to wonder about unexplained gaps.
 
 Split geometry is preserved exactly, so "the pane on the left" means the same
-thing to both people. The backdrop is dropped (a backdrop ref can carry a
+thing to both people.
+
+**The projection is still shaped as windows** (`MirrorFrame.windows[]`, each with a
+pixel `rect`), although the host has a docked workbench. That is what guests on
+every build since this module shipped know how to draw, and a group with a rect is
+a window with no chrome: `mirror.ts` lays the host's frame out with the same
+`computeWorkbench` the host draws with, and each group on screen becomes one window
+at the rect it occupies. A background tab is in its window's tab list; a group in a
+hidden dock is sent `minimized`. Changing the wire shape would blank the mirror for
+every older guest. The backdrop is dropped (a backdrop ref can carry a
 wallpaper path), and so is `presentedInstanceId`, which is not serialized anywhere
 else either.
 
@@ -316,7 +325,7 @@ Two rules keep the warning trustworthy:
   nothing new. Reading `pixels` as a stricter permission would flag every shared
   pane in the workspace and train the host to click through.
 - **Only panes actually on screen are checked** (`visiblePanes`). A background tab
-  and a minimized window are not in the light, and a warning with false positives
+  and a hidden dock are not in the light, and a warning with false positives
   is one people learn to dismiss.
 
 This is a warning, not a boundary. `redactFrame` enforces; `preflight` explains.

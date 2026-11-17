@@ -11,7 +11,9 @@ function instanceOf(viewId: string): string {
 }
 
 function focus(instanceId: string | null): void {
-  layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId });
+  layoutStore.dispatch(
+    instanceId === null ? { type: 'CLEAR_FOCUS' } : { type: 'FOCUS_PANE', instanceId },
+  );
 }
 
 beforeEach(() => {

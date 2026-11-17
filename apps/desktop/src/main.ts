@@ -1,7 +1,8 @@
 /**
  * The desktop shell's main process. It stays thin: app logic lives in the backend
  * and packages/. Its jobs are supervising the backend (backend.ts), owning the one
- * frameless window the app draws its own chrome into, and answering the page's
+ * frameless window the app draws its own chrome into (plus the pop-out windows the
+ * page fills itself, popouts.ts), and answering the page's
  * commands — the same command names and argument shapes the Tauri shell answered,
  * so the frontend's seams (apps/web/src/desktop*.ts) did not have to learn a new
  * vocabulary.
@@ -25,6 +26,8 @@ import { configureAppSession, startBrowserNetwork } from './sessions.js';
 import { registerShortcuts, unregisterAllShortcuts } from './shortcuts.js';
 import { checkForUpdate, installUpdate } from './updater.js';
 import { isWebUrl, type Bounds } from './urls.js';
+import { popoutIdOf } from './popoutBounds.js';
+import { PopoutWindows, popoutWindowOptions } from './popouts.js';
 import { BrowserViews } from './webview.js';
 import * as win from './window.js';
 
@@ -110,6 +113,7 @@ function isAppOrigin(url: string): boolean {
 const supervisor = new BackendSupervisor(packaged ? process.resourcesPath : null);
 let mainWindow: BrowserWindow | null = null;
 let views: BrowserViews | null = null;
+let popouts: PopoutWindows | null = null;
 
 async function main(): Promise<void> {
   app.on('second-instance', () => {
@@ -202,22 +206,46 @@ function createWindow(): void {
       relaunchDisplayName: 'horrible-dashboard',
     });
   }
-  views = new BrowserViews(window, (channel, payload) => {
+  popouts = new PopoutWindows(window, (payload) => {
+    if (!window.isDestroyed()) window.webContents.send('popout', payload);
+  });
+  const windowFor = (popoutId: string | null) =>
+    popoutId === null ? window : (popouts?.get(popoutId) ?? null);
+  views = new BrowserViews(windowFor, (channel, payload) => {
     if (!window.isDestroyed()) window.webContents.send(channel, payload);
   });
 
   window.once('ready-to-show', () => window.show());
+  // Pop-outs are not owned windows: left open, they would keep the app from
+  // quitting (`window-all-closed`) with nothing in them.
+  window.on('close', () => popouts?.closeAll());
   window.on('closed', () => {
     mainWindow = null;
     views = null;
+    popouts = null;
   });
 
   const wc = window.webContents;
   // The app page never becomes a browser: links that leave it open in the user's
-  // browser, and `window.open` never creates a window that would inherit the preload.
-  wc.setWindowOpenHandler(({ url }) => {
+  // browser. The one window it may open is a blank pop-out it fills itself
+  // (popouts.ts) — exactly `about:blank` under a `horrible-popout:` frame name.
+  wc.setWindowOpenHandler(({ url, frameName }) => {
+    if (url === 'about:blank' && popoutIdOf(frameName) !== null) {
+      return { action: 'allow', overrideBrowserWindowOptions: popoutWindowOptions() };
+    }
     if (isWebUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  wc.on('did-create-window', (child, { frameName }) => {
+    const id = popoutIdOf(frameName);
+    if (id !== null && popouts) popouts.adopt(id, child);
+    else child.close();
+  });
+  // A pop-out's content lived in the old page's realm: a reload or a navigation
+  // leaves it an empty window the new page knows nothing about. The new page
+  // reopens the pop-outs its saved layout has.
+  wc.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) popouts?.closeAll();
   });
   wc.on('will-navigate', (event, url) => {
     if (isAppOrigin(url)) return;
@@ -241,6 +269,7 @@ function createWindow(): void {
   // crash and a freeze looked the same.
   const crashes = new CrashPolicy();
   wc.on('render-process-gone', (_e, details) => {
+    popouts?.closeAll();
     if (details.reason === 'clean-exit') return;
     console.error(`[desktop] ${describeCrash(details)}`);
     if (window.isDestroyed()) return;
@@ -312,6 +341,13 @@ const bounds = (args: Args): Bounds => {
   if (!b || typeof b !== 'object') throw new Error('`bounds` is required');
   return { x: Number(b.x), y: Number(b.y), width: Number(b.width), height: Number(b.height) };
 };
+/** The pop-out a native view lives in; absent or null is the main window. */
+const popoutArg = (args: Args): string | null => {
+  const v = args.popoutId;
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') throw new Error('`popoutId` must be a string or null');
+  return v;
+};
 const browserViews = (): BrowserViews => {
   if (!views) throw new Error('the window is gone');
   return views;
@@ -328,13 +364,19 @@ const COMMANDS: Record<string, Command> = {
   window_is_maximized: (_a, w) => w.isMaximized(),
   window_toggle_maximize: (_a, w) => win.toggleMaximize(w),
   window_close: (_a, w) => w.close(),
-  window_set_zoom: (a, w) => win.setZoom(w, Number(a.factor)),
+  window_set_zoom: (a, w) => {
+    const factor = win.setZoom(w, Number(a.factor));
+    popouts?.setZoom(factor);
+    return factor;
+  },
   window_start_resize_dragging: () => win.startResizeDragging(),
   browser_open_url: (a) => win.openBrowserWindow(str(a, 'url')),
   open_external: (a) => win.openExternal(str(a, 'url')),
   open_path: (a) => win.openPath(str(a, 'path')),
 
-  create_browser_webview: (a) => browserViews().create(str(a, 'id'), str(a, 'url'), bounds(a)),
+  create_browser_webview: (a) =>
+    browserViews().create(str(a, 'id'), str(a, 'url'), bounds(a), popoutArg(a)),
+  attach_browser_webview: (a) => browserViews().attachTo(str(a, 'id'), popoutArg(a)),
   update_browser_webview_bounds: (a) => browserViews().updateBounds(str(a, 'id'), bounds(a)),
   set_browser_webview_visible: (a) => browserViews().setVisible(str(a, 'id'), bool(a, 'visible')),
   navigate_browser_webview: (a) => browserViews().navigate(str(a, 'id'), str(a, 'url')),

@@ -153,6 +153,10 @@ export const editorModule: ModuleManifest = {
       component: BufferView,
       role: 'document',
       editor: true,
+      // Checked for the pop-out rules (sdk `PanelDecl.popout`); CodeMirror reads
+      // its window from its own element, and the focused-view lookup asks the
+      // focused document.
+      popout: true,
       icon: '✎',
       // Visible to a guest as a pane, with no content protocol yet — a
       // buffer's text arrives when the editor grows a collab room. The

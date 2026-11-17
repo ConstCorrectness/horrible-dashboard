@@ -18,6 +18,7 @@
  *   second to know a split moved.
  */
 import { registry } from '../../registry';
+import { workbenchSurface } from '../../layout/controller';
 import { layoutStore } from '../../layout/store';
 import {
   mirrorChanged,
@@ -46,7 +47,7 @@ function flush(): void {
   timer = null;
   if (!pending) return;
   pending = false;
-  const frame = redactFrame(layoutStore.getSnapshot().frame, lookup);
+  const frame = redactFrame(layoutStore.getSnapshot().frame, lookup, workbenchSurface());
   if (!mirrorChanged(last, frame)) return;
   last = frame;
   sendMirror(frame, summarize(frame));

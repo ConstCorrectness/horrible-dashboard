@@ -23,17 +23,21 @@ function area(id: string, tabs: PaneState[], activeTab = 0): AreaNode {
   return { kind: 'area', id, tabs, activeTab };
 }
 
-/** One window per area, in order. */
+/** One centre group per area, side by side. */
 function frameWith(...areas: AreaNode[]): FrameState {
+  const empty = createEmptyFrame();
   return {
-    ...createEmptyFrame(),
-    windows: areas.map((a, i) => ({
-      id: `w${i + 1}`,
-      area: a,
-      rect: { x: 40 * i, y: 40 * i, w: 400, h: 300 },
-      mode: 'normal' as const,
-      z: i + 1,
-    })),
+    ...empty,
+    center:
+      areas.length === 1
+        ? areas[0]
+        : {
+            kind: 'split',
+            id: 's99',
+            orientation: 'row',
+            children: areas,
+            sizes: areas.map(() => 1 / areas.length),
+          },
   };
 }
 
@@ -98,32 +102,15 @@ describe('preflight', () => {
     expect(result.undeclared.map((p) => p.title)).toEqual(['Settings']);
   });
 
-  it('checks a window that is on screen', () => {
-    const frame = createEmptyFrame();
-    frame.windows = [
-      {
-        id: 'w1',
-        area: area('wa1', [pane('secret.settings')]),
-        rect: { x: 0, y: 0, w: 10, h: 10 },
-        mode: 'normal',
-        z: 1,
-      },
-    ];
+  it('checks a group that is on screen', () => {
+    const frame = frameWith(area('wa1', [pane('secret.settings')]));
     expect(isClear(preflight(frame, lookup))).toBe(false);
   });
 
-  it('ignores a minimized window', () => {
+  it('ignores a hidden dock', () => {
     // The pane stays mounted, but nobody can see it — including the capture.
     const frame = createEmptyFrame();
-    frame.windows = [
-      {
-        id: 'w1',
-        area: area('wa1', [pane('secret.settings')]),
-        rect: { x: 0, y: 0, w: 10, h: 10 },
-        mode: 'minimized',
-        z: 1,
-      },
-    ];
+    frame.docks.bottom = { visible: false, size: 240, area: area('wa1', [pane('secret.settings')]) };
     expect(isClear(preflight(frame, lookup))).toBe(true);
   });
 

@@ -3,13 +3,14 @@
  * can run against the registry + frame controller. Both the agent orchestrator
  * (orchestrator-client.ts) and the Python REPL (../repl/client.ts) relay tool
  * calls over the `/ws` socket and execute them here, so any verb one can run, the
- * other can too — one source of truth. The vocabulary is the desktop's: every
- * pane lives in a **window** (several merged panes are its tabs), and **regions**
- * are the strips inside a pane. See docs/modules/agent-chat.md and
- * docs/modules/repl.md.
+ * other can too — one source of truth. The vocabulary is the workbench's: every
+ * pane is a tab in a **group** (in the centre, an edge dock, or a popout), and
+ * **regions** are the strips inside a pane. The floating desktop's `*_window` names
+ * are still answered, mapped onto `place_pane` / `pane_state` / `arrange_panes`. See
+ * docs/modules/agent-chat.md and docs/modules/repl.md.
  */
 import {
-  arrangeDesktop,
+  arrangePanes,
   describeLayout,
   listOpenPanesDetailed,
   presentPane,
@@ -18,17 +19,19 @@ import {
   setBackdrop,
   setPaneSection,
   setRegionView,
-  setWindowMode,
   showTarget,
-  snapWindow,
+  movePaneTo,
   tearOffPane,
+  toggleDock,
+  toggleMaximizedGroup,
   resolveView,
   toggleRegion,
 } from '../../layout/controller';
-import { windowOfInstance } from '../../layout/model';
-import { isSnapZone, SNAP_ZONES } from '../../layout/snap';
+import { ARRANGE_STYLES, type ArrangeStyle } from '../../layout/dock/arrange';
+import type { PlaceTarget, SplitSide } from '../../layout/dock/types';
+import { findAreaAnywhere, findPaneAnywhere } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
-import type { RegionPosition, SnapZone, WindowRect } from '../../layout/types';
+import type { RegionPosition } from '../../layout/types';
 import { applyTheme, isKnownTheme, THEME_SETTING_KEY } from '../../theme';
 import { getSetting, setSetting } from '../../settings';
 import { registry } from '../../registry';
@@ -36,7 +39,6 @@ import { executeDynamicTool, serializeManifest } from './manifest';
 import { LAYOUT_VERBS, nearestToolNames } from './tool-names';
 
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
-const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
 
 /**
  * The taskbar config setting key.
@@ -47,22 +49,129 @@ const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
  */
 const TASKBAR_SETTING_KEY = 'desktop.taskbar';
 
-/** A snap zone from the wire, or null - never a guess. */
-function resolveSnapZone(value: unknown): SnapZone | null {
-  return isSnapZone(value) ? value : null;
-}
+/** `place_pane`'s destinations, one flat word each: a small model picks from a list
+ * far more reliably than it composes a kind and a side. */
+const PLACES: Record<string, PlaceTarget | 'split' | 'group'> = {
+  center: { kind: 'center' },
+  'dock-left': { kind: 'dock', side: 'left' },
+  'dock-right': { kind: 'dock', side: 'right' },
+  'dock-bottom': { kind: 'dock', side: 'bottom' },
+  'split-left': 'split',
+  'split-right': 'split',
+  'split-above': 'split',
+  'split-below': 'split',
+  group: 'group',
+};
+export const PLACE_WORDS = Object.keys(PLACES);
+
+const PANE_STATES = ['maximize', 'restore', 'hide', 'show', 'present', 'unpresent'] as const;
 
 /**
- * A pixel rect from the wire. Every field must be a finite number: a partial
- * rect would place a window somewhere nobody asked for.
+ * The floating desktop's snap zones, as `place_pane` words. Corners and thirds had
+ * no workbench meaning beyond their side, so they keep that much; `max` is a state.
  */
-function resolveRect(value: unknown): WindowRect | null {
-  if (!value || typeof value !== 'object') return null;
-  const r = value as Record<string, unknown>;
-  const nums = ['x', 'y', 'w', 'h'].map((k) => Number(r[k]));
-  return nums.every((n) => Number.isFinite(n))
-    ? { x: nums[0], y: nums[1], w: nums[2], h: nums[3] }
-    : null;
+const SNAP_AS_PLACE: Record<string, string> = {
+  left: 'split-left',
+  'third-l': 'split-left',
+  tl: 'split-left',
+  bl: 'split-left',
+  right: 'split-right',
+  'third-r': 'split-right',
+  tr: 'split-right',
+  br: 'split-right',
+  top: 'split-above',
+  bottom: 'split-below',
+};
+
+type Reply = Record<string, unknown>;
+
+/**
+ * Move an open pane. A split is made beside `group` when given, else beside the
+ * pane's own centre group, else beside the focused centre group — so a docked tool
+ * sent `split-left` lands in the centre's left half rather than nowhere.
+ */
+function placePane(instanceId: string, to: string, group?: string): Reply {
+  const frame = layoutStore.getSnapshot().frame;
+  const located = findPaneAnywhere(frame, instanceId);
+  if (!located) return { error: `unknown instanceId: ${instanceId}` };
+  const place = PLACES[to];
+  if (!place) return { error: `to must be one of ${PLACE_WORDS.join(', ')}` };
+
+  let target: PlaceTarget;
+  if (place === 'group') {
+    if (!group || !findAreaAnywhere(frame, group)) {
+      return { error: 'group must be a group id from get_layout' };
+    }
+    target = { kind: 'area', areaId: group };
+  } else if (place === 'split') {
+    const side = to.slice('split-'.length) as SplitSide;
+    const beside =
+      group ??
+      (located.location.kind === 'center' ? located.location.areaId : (frame.focusedAreaId ?? ''));
+    if (!findAreaAnywhere(frame, beside)) {
+      return { error: 'group must be a group id from get_layout' };
+    }
+    target = { kind: 'split', areaId: beside, side };
+  } else {
+    target = place;
+  }
+  const moved = movePaneTo(instanceId, target);
+  const after = findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId);
+  return {
+    ok: true,
+    moved,
+    ...(after ? { location: after.location } : {}),
+    // A no-op is not a failure, but the model should know why nothing changed,
+    // and the commonest one has a next step.
+    ...(moved
+      ? {}
+      : {
+          note:
+            place === 'split' && !group
+              ? 'it is alone in its group, so there is nothing to split off; pass `group` to split beside another group'
+              : 'already there',
+        }),
+  };
+}
+
+function setPaneState(instanceId: string, state: string): Reply {
+  const frame = layoutStore.getSnapshot().frame;
+  if (state === 'unpresent') return { ok: presentPane(null) };
+  const located = findPaneAnywhere(frame, instanceId);
+  if (!located) return { error: `unknown instanceId: ${instanceId}` };
+  const { location } = located;
+  switch (state) {
+    case 'maximize':
+      return {
+        ok: frame.maximizedAreaId === location.areaId || toggleMaximizedGroup(instanceId),
+      };
+    case 'restore':
+      if (frame.maximizedAreaId === location.areaId) {
+        return { ok: toggleMaximizedGroup(instanceId) };
+      }
+      return { ok: true, note: 'its group was not maximized' };
+    case 'hide':
+      // Only a dock can be put away; a centre tab is a document in front of the user.
+      if (location.kind !== 'dock') {
+        return { ok: false, error: 'only a pane in an edge dock can be hidden' };
+      }
+      return {
+        ok: !frame.docks[location.side].visible || toggleDock(location.side, false),
+      };
+    case 'show':
+      return { ok: registry.layoutController?.focusPane(instanceId) ?? false };
+    case 'present':
+      return { ok: presentPane(instanceId) };
+    default:
+      return { error: `state must be one of ${PANE_STATES.join(', ')}` };
+  }
+}
+
+function arrange(style: string): Reply {
+  if (!(ARRANGE_STYLES as readonly string[]).includes(style)) {
+    return { error: `style must be one of ${ARRANGE_STYLES.join(', ')}` };
+  }
+  return { ok: true, changed: arrangePanes(style as ArrangeStyle) };
 }
 
 /** Display title for a pane id (panel or widget), falling back to the id. */
@@ -139,60 +248,53 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { closed: lc?.closePane(String(args.id)) ?? false };
     case 'focus_pane':
       return { focused: lc?.focusPane(String(args.instanceId)) ?? false };
-    // ----------------------------------------------------------- windows
+    // ------------------------------------------------------- arrangement
+    case 'place_pane':
+      return placePane(
+        String(args.instanceId),
+        String(args.to),
+        typeof args.group === 'string' ? args.group : undefined,
+      );
+    case 'pane_state':
+      return setPaneState(String(args.instanceId), String(args.state));
+    case 'arrange_panes':
+      return arrange(String(args.style));
+
+    // The floating desktop's names. Kept because transcripts, saved prompts and
+    // older REPL code call them, and a case here costs no schema: the model is
+    // only ever shown the names above.
     case 'open_window': {
-      // Give a pane a window of its own — tearing it out of a tabbed window if it
-      // shares one — and optionally place that window.
       const instanceId = String(args.instanceId);
-      if (!windowOfInstance(layoutStore.getSnapshot().frame, instanceId)) {
+      if (args.snap === 'max') return setPaneState(instanceId, 'maximize');
+      const word = typeof args.snap === 'string' ? SNAP_AS_PLACE[args.snap] : undefined;
+      if (word) return placePane(instanceId, word);
+      if (!findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId)) {
         return { error: `unknown instanceId: ${instanceId}` };
       }
+      // "A window of its own": a group of its own beside the one it was in.
       tearOffPane(instanceId);
-      // Placement is applied after the tear, so a bad snap/rect leaves an ordinary
-      // window rather than failing the whole call.
-      if (args.snap != null) {
-        const zone = resolveSnapZone(args.snap);
-        if (!zone) return { ok: true, warning: `unknown snap zone "${String(args.snap)}"` };
-        snapWindow(instanceId, zone);
-      } else if (args.rect != null) {
-        const rect = resolveRect(args.rect);
-        if (!rect) return { ok: true, warning: 'rect needs finite x, y, w and h' };
-        const win = windowOfInstance(layoutStore.getSnapshot().frame, instanceId);
-        if (win) layoutStore.dispatch({ type: 'SET_WINDOW_RECT', windowId: win.id, rect });
-      }
       return { ok: true };
     }
     case 'window_state': {
       const instanceId = String(args.instanceId);
-      switch (String(args.state)) {
-        case 'minimize':
-          return { ok: setWindowMode(instanceId, 'minimized') };
-        case 'maximize':
-          return { ok: setWindowMode(instanceId, 'maximized') };
-        case 'restore':
-          return { ok: setWindowMode(instanceId, 'normal') };
-        case 'snap': {
-          const zone = resolveSnapZone(args.snap);
-          if (!zone) return { error: `snap must be one of ${SNAP_ZONES.join(', ')}` };
-          return { ok: snapWindow(instanceId, zone) };
-        }
-        case 'present':
-          return { ok: presentPane(instanceId) };
-        case 'unpresent':
-          return { ok: presentPane(null) };
-        default:
-          return {
-            error: 'state must be minimize, maximize, restore, snap, present or unpresent',
-          };
+      const state = String(args.state);
+      if (state === 'minimize') return setPaneState(instanceId, 'hide');
+      if (state === 'snap') {
+        if (args.snap === 'max') return setPaneState(instanceId, 'maximize');
+        const word = typeof args.snap === 'string' ? SNAP_AS_PLACE[args.snap] : undefined;
+        return word ? placePane(instanceId, word) : { error: 'unknown snap zone' };
       }
+      if (state === 'restore') {
+        // The desktop's restore also un-minimized; here that is showing the pane.
+        const res = setPaneState(instanceId, 'restore');
+        return res.note ? setPaneState(instanceId, 'show') : res;
+      }
+      return setPaneState(instanceId, state);
     }
     case 'arrange_windows': {
+      // Cascade overlapped windows so each title showed: tabs are that, here.
       const style = String(args.style);
-      if (!(ARRANGE_STYLES as readonly string[]).includes(style)) {
-        return { error: `style must be one of ${ARRANGE_STYLES.join(', ')}` };
-      }
-      const ok = arrangeDesktop(style as (typeof ARRANGE_STYLES)[number]);
-      return ok ? { ok } : { error: 'no open windows to arrange' };
+      return arrange(style === 'cascade' ? 'tabs' : style);
     }
 
     // ------------------------------------------------------- appearance

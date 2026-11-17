@@ -20,7 +20,7 @@
  * rather than a desktop — the destination of the transition did not exist.
  * `resolveHomeUnderlay` picks a second, decorative backdrop to paint behind
  * `HomeView`, stored per desktop in splash's own params, so collapsing lands on a
- * genuine floating desktop: wallpaper, taskbar, ask-bar strip. The underlay is
+ * genuine desktop: wallpaper, status bar, ask-bar strip. The underlay is
  * painted in **both** states, not swapped in on collapse — the landing screen has
  * always been translucent over whatever is behind it, and a wallpaper that
  * appeared only once you minimized would read as a rendering glitch.

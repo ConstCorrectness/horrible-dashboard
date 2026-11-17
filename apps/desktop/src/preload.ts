@@ -10,7 +10,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 /** Shell → page events the page may listen to. */
-const EVENTS = new Set(['global-shortcut', 'browser-webview', 'browser-cdp']);
+const EVENTS = new Set(['global-shortcut', 'browser-webview', 'browser-cdp', 'popout']);
 
 type Reply = { ok: true; value: unknown } | { ok: false; error: string };
 

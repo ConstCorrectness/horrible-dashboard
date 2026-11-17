@@ -653,13 +653,13 @@
   background: var(--bg-raised);
 }
 
-/* The minibuffer as a floating-desktop overlay.
+/* The minibuffer as an overlay.
  *
- * Same component, different mount: on a floating desktop there is no frame to be
- * the bottom row of, so it hovers just above the taskbar instead and renders
- * nothing at all when idle. `bottom` is the taskbar's own height token, so the
- * two cannot drift apart, and the z-index clears the window layer — a prompt
- * that opens behind a window is a prompt the user cannot answer. */
+ * Same component, different mount: there is no tiling frame to be the bottom row
+ * of, so it hovers just above the status bar instead and renders nothing at all
+ * when idle. `bottom` is the status bar's own height token, so the two cannot
+ * drift apart, and the z-index clears the workbench — a prompt that opens behind
+ * a pane is a prompt the user cannot answer. */
 .frame-minibuffer--overlay {
   position: absolute;
   left: 0;

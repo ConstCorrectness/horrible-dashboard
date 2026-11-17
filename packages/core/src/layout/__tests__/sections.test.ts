@@ -26,7 +26,7 @@ import {
 } from '../controller';
 import { findPaneAnywhere } from '../model';
 import { resolveShowTarget } from '../show';
-import { deserialize, serialize } from '../serialize';
+import { deserializeDock, serializeDock } from '../dock/serialize';
 import { layoutStore } from '../store';
 
 const Stub = () => null;
@@ -381,7 +381,9 @@ describe('sections', () => {
     const instanceId = openPane('s.host')!;
     setPaneSection(instanceId, 'requests');
     const known = new Set([...registry.panels, ...registry.widgets].map((v) => v.id));
-    const restored = deserialize(serialize(layoutStore.getSnapshot().frame), known)!;
+    const restored = deserializeDock(serializeDock(layoutStore.getSnapshot().frame), known, {
+      roleOf: () => 'document',
+    })!;
     const pane = findPaneAnywhere(restored, instanceId)!.pane;
     expect(pane.activeSection).toBe('requests');
     expect(activeSectionOf(pane)).toBe('requests');

@@ -28,7 +28,7 @@
  * a narrow flex row inside a pane that clips its overflow, so an absolutely
  * positioned list would be cut off after two rows. **And it is portaled to
  * `document.body`**, because `fixed` alone is not enough inside a desktop window:
- * `.os-window-body` has `contain: strict`, which makes it the containing block for
+ * a workbench pane (`.wb-pane`) has `contain: strict`, which makes it the containing block for
  * fixed descendants *and* clips them — so the viewport clamp below was measuring
  * against the screen while the panel was laid out against, and cut off by, the
  * window.
@@ -45,6 +45,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { usePaneWindow } from '../../layout/pane-window';
 import { resetSetting, setSetting, useSetting } from '../../settings';
 import { getAgentStatus, type AgentStatus } from './api';
 import { matchesModelQuery } from './model-filter';
@@ -124,6 +125,8 @@ export function ModelPicker({
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // The window this pane is in: a pop-out draws its panel in its own document.
+  const win = usePaneWindow();
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [anchor, setAnchor] = useState<{
@@ -185,23 +188,23 @@ export function ModelPicker({
       // Wide enough for an OpenRouter id (`inclusionai/ling-3.0-flash-sante:free`);
       // the trigger is ~11rem, and at that width every row ellipsises to the
       // vendor prefix, which is the half that does not identify the model.
-      const width = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
+      const width = Math.min(Math.max(r.width, 340), win.innerWidth - 16);
       // Clamp to the viewport rather than letting it run off: the bar sits at the
       // right edge of a window that is often itself at the right edge of the screen.
-      const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+      const left = Math.max(8, Math.min(r.left, win.innerWidth - width - 8));
       // Flip above when the space below cannot hold a usable list.
-      const below = window.innerHeight - r.bottom - 12;
+      const below = win.innerHeight - r.bottom - 12;
       const above = r.top - 12;
       const flip = below < 200 && above > below;
       const maxHeight = Math.max(140, Math.min(352, flip ? above : below));
       setAnchor({ left, top: flip ? r.top - 4 - maxHeight : r.bottom + 4, width, maxHeight });
     };
     place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    win.addEventListener('resize', place);
+    win.addEventListener('scroll', place, true);
     return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      win.removeEventListener('resize', place);
+      win.removeEventListener('scroll', place, true);
     };
   }, [open]);
 
@@ -225,8 +228,8 @@ export function ModelPicker({
       if (panelRef.current?.contains(t) || triggerRef.current?.contains(t)) return;
       setOpen(false);
     };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
+    win.document.addEventListener('pointerdown', onDown, true);
+    return () => win.document.removeEventListener('pointerdown', onDown, true);
   }, [open]);
 
   // Scroll the highlighted row into view when the keyboard moves it.
@@ -378,7 +381,7 @@ export function ModelPicker({
                   : `${filtered.length} of ${choices.length}`}
             </p>
           </div>,
-          document.body,
+          win.document.body,
         )}
     </>
   );

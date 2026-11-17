@@ -25,6 +25,7 @@ import {
   setGlobalShortcuts,
   initBackendOrigin,
   initCapabilities,
+  installCrossWindowObservers,
   initCommons,
   explorerModule,
   initKeymapHost,
@@ -191,6 +192,10 @@ async function boot(): Promise<void> {
 
   if (desktop) {
     initCapabilities(desktopCapabilities());
+    // Before anything builds a ResizeObserver: one built in this page never fires
+    // for an element shown in a pop-out window. The router sends each element to
+    // its own window's observer (core/layout/cross-window.ts).
+    installCrossWindowObservers();
     const control = createDesktopWindowControl();
     setWindowControl(control);
     // A reload wiped every pane session that owned a native browser overlay, but
@@ -201,8 +206,9 @@ async function boot(): Promise<void> {
       // Nothing to sweep, or the shell predates the command — not worth a toast.
     });
     setGlobalShortcuts(createDesktopGlobalShortcuts());
-    // The app page opens no windows of its own (the shell refuses window.open and
-    // target="_blank"), so route external-link clicks to the system browser.
+    // The app page opens no windows of its own besides blank pop-outs it fills
+    // itself (the shell refuses every other window.open and target="_blank"), so
+    // route external-link clicks to the system browser.
     installExternalLinkBridge();
   } else {
     initCapabilities(BROWSER_CAPABILITIES);

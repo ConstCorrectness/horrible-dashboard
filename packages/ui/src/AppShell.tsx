@@ -40,8 +40,7 @@ import { Oobe } from './desktop/Oobe';
 import { OOBE_COMPLETE_KEY } from './desktop/constants';
 import { Taskbar } from './desktop/Taskbar';
 import { registerDesktopModule } from './desktop/module';
-import { SnapAssist } from './desktop/SnapAssist';
-import { WindowLayer } from './desktop/WindowLayer';
+import { Workbench } from './workbench/Workbench';
 import { Minibuffer } from './layout/Minibuffer';
 import { installFrameShell, openPaneWhenReady } from './layout/install';
 import { TitleBar } from './layout/TitleBar';
@@ -59,7 +58,7 @@ import './overlay/docs.css';
 
 /**
  * The shell: the native titlebar (desktop builds only), the `desktop` — a
- * backdrop with windows over it — and the taskbar. Global chrome (palette,
+ * backdrop with the docked workbench over it — and the taskbar. Global chrome (palette,
  * toasts, dialogs, keybinding dispatch) lives here.
  *
  * The old `home` view is gone: it was a second top-level surface doing the
@@ -329,17 +328,17 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         <div hidden={view !== 'desktop'} className="shell-view os-shell-view">
           <Desktop />
         </div>
-        {/* Windows float over BOTH views, so this is a sibling of them rather than
-            a child: `.shell-view[hidden]` is `display:none`, and a window layer
-            nested inside a view would vanish the moment you went home. It is
-            inside `.shell-content` (already `position: relative`) so its
-            coordinate space stops below the titlebar — which is what keeps a
-            window's titlebar from sliding under the titlebar drag region. */}
-        <WindowLayer />
+        {/* The workbench lies over the desktop backdrop, which shows through an
+            empty centre. A sibling of the views rather than a child:
+            `.shell-view[hidden]` is `display:none`, and panes nested inside a view
+            would unmount (and lose their sessions) whenever the wizard showed.
+            Inside `.shell-content`, so it stops below the titlebar and above the
+            taskbar. */}
+        <Workbench appTitle={appTitle} />
       </div>
       {/* Outside `.shell-content`, so it takes its own strip of the shell rather
-          than overlapping the desktop — the window layer's coordinate space
-          then stops at the taskbar, and a maximized window cannot cover it. */}
+          than overlapping the desktop — the workbench then stops at the status
+          bar, and a maximized group cannot cover it. */}
       {/* The minibuffer prompt. Without it `alt+x` flipped a store nothing
           rendered, and — worse — a `dialogs.prompt()` waited forever on an
           answer the user was never shown. It renders nothing when idle; the
@@ -349,11 +348,6 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       {/* Half-typed chord (mod+k …) — without this the keyboard just goes quiet
           for a second and the user has no idea the shell is waiting. */}
       {chordHint && <div className="shell-chord-hint">{chordHint}&nbsp;…</div>}
-      {/* The snap prefix gets a grid rather than the bare hint above: thirteen
-          zones is more than anyone memorizes, and the palette is where the
-          corners and thirds are discovered at all. It renders nothing unless the
-          pending chord is that prefix. */}
-      <SnapAssist hint={chordHint} />
       <CaptureHud />
       <Spotlight open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <SymbolSearchModal />

@@ -3,10 +3,9 @@ import { registry } from '@horrible/core';
 /**
  * The shell's slot for module status readouts (`ModuleManifest.shellIndicators`).
  *
- * Rendered in both chrome surfaces — the workspace tab strip and the floating
- * desktop's taskbar — because a tiled workspace and a floating desktop never
- * show both, and the canonical indicator ("your screen is being broadcast") must
- * never depend on which paradigm the active desktop happens to run.
+ * Rendered in both chrome surfaces — the status bar's tray and, on the native
+ * shell, the titlebar — so the canonical indicator ("your screen is being
+ * broadcast") is on screen whichever one the user is looking at.
  *
  * Each indicator renders null when it has nothing to say; this wrapper adds no
  * box of its own when none of them render anything, since `display: contents`

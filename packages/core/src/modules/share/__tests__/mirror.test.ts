@@ -23,17 +23,21 @@ function area(id: string, tabs: PaneState[], activeTab = 0): AreaNode {
   return { kind: 'area', id, tabs, activeTab };
 }
 
-/** One window per area, in order. */
+/** One centre group per area, side by side. */
 function frameWith(...areas: AreaNode[]): FrameState {
+  const empty = createEmptyFrame();
   return {
-    ...createEmptyFrame(),
-    windows: areas.map((a, i) => ({
-      id: `w${i + 1}`,
-      area: a,
-      rect: { x: 40 * i, y: 40 * i, w: 400, h: 300 },
-      mode: 'normal' as const,
-      z: i + 1,
-    })),
+    ...empty,
+    center:
+      areas.length === 1
+        ? areas[0]
+        : {
+            kind: 'split',
+            id: 's99',
+            orientation: 'row',
+            children: areas,
+            sizes: areas.map(() => 1 / areas.length),
+          },
   };
 }
 
@@ -120,12 +124,15 @@ describe('redactFrame', () => {
     expect(JSON.stringify(out)).not.toContain('SECRET');
   });
 
-  it('redacts panes in every window, minimized ones included', () => {
-    const frame = frameWith(
-      area('a1', [pane('secret.connectors')]),
-      area('a2', [pane('secret.settings')]),
-    );
-    frame.windows[1].mode = 'minimized';
+  it('redacts panes in every group, hidden docks included', () => {
+    const base = frameWith(area('a1', [pane('secret.connectors')]));
+    const frame: FrameState = {
+      ...base,
+      docks: {
+        ...base.docks,
+        bottom: { visible: false, size: 240, area: area('a2', [pane('secret.settings')]) },
+      },
+    };
     const out = redactFrame(frame, lookup);
     expect(out.redactedCount).toBe(2);
     const blob = JSON.stringify(out);
@@ -133,16 +140,24 @@ describe('redactFrame', () => {
     expect(blob).not.toContain('secret.settings');
   });
 
-  it('preserves window geometry so both sides mean the same thing by "on the left"', () => {
-    const frame = frameWith(
-      area('a1', [pane('shared.note')]),
-      area('a2', [pane('secret.settings')]),
-    );
-    frame.windows[1].mode = 'minimized';
-    const out = redactFrame(frame, lookup);
-    expect(out.windows.map((w) => w.rect)).toEqual(frame.windows.map((w) => w.rect));
-    expect(out.windows.map((w) => w.z)).toEqual([1, 2]);
-    expect(out.windows.map((w) => w.minimized)).toEqual([false, true]);
+  it('sends each group as a window at the rect it occupies', () => {
+    const base = frameWith(area('a1', [pane('shared.note')]), area('a2', [pane('secret.settings')]));
+    const frame: FrameState = {
+      ...base,
+      docks: {
+        ...base.docks,
+        bottom: { visible: false, size: 240, area: area('a3', [pane('shared.note', 2)]) },
+      },
+    };
+    const out = redactFrame(frame, lookup, { w: 1000, h: 600 });
+    expect(out.windowViewport).toEqual({ w: 1000, h: 600 });
+    expect(out.windows.map((w) => w.rect)).toEqual([
+      { x: 0, y: 0, w: 500, h: 600 },
+      { x: 500, y: 0, w: 500, h: 600 },
+      { x: 0, y: 0, w: 0, h: 0 },
+    ]);
+    // A hidden dock is not on the host's screen, so it is not on the guest's.
+    expect(out.windows.map((w) => w.minimized)).toEqual([false, false, true]);
   });
 
   it('reports how many panes were withheld', () => {

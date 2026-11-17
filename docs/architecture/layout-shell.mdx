@@ -14,8 +14,7 @@ to modules.
 flowchart TB
     subgraph Shell["Layout shell (packages/ui)"]
         direction LR
-        WL["Window layer<br/>every pane in a window, over the desktop"]
-        TB["Taskbar"]
+        WB["Workbench<br/>tab groups: centre, docks, pop-outs"]
         CP["Spotlight"]
         SB["Status bar"]
         KB["Keybinding service"]
@@ -44,11 +43,11 @@ The shell has exactly **one** main view. `ShellView` is `'boot' | 'oobe' |
 
 That is a change from the original two-view design. The `workspace` view (a tiling
 frame) is gone along with tiling itself — see
-[desktop-shell.mdx](desktop-shell.mdx#one-desktop-no-tiling) — and:
+[desktop-shell.mdx](desktop-shell.mdx#one-desktop-one-paradigm) — and:
 
 - **`home` was a second landing screen** competing with the desktop for the same
   job. It survives as the `splash` **backdrop** — same avatar, greeting and ask bar,
-  now with windows able to float over it. `shell.home` still exists and still means
+  now under the workbench. `shell.home` still exists and still means
   "take me to the landing surface"; the destination is now the desktop.
 
 Installing the layout engine is correspondingly a **shell** job rather than the
@@ -59,7 +58,7 @@ was the only place you could be — once the desktop became the landing surface 
 fresh boot installed none of it, and every one of those failures was silent.
 
 See [desktop-shell.mdx](desktop-shell.mdx) for the desktop, its backdrops, the
-taskbar and the boot flow.
+status bar and the boot flow.
 
 What survived from the old `home` view is the avatar
 (`packages/core/src/Avatar3D.tsx` — moved to core so feature modules like the agent
@@ -76,33 +75,31 @@ chat pane can use it too). It is a
   showing the `splash` backdrop never loads it. The scene itself lives in
   `packages/core/src/avatar-scene.ts`, apart from the component, because building
   it is expensive (a 4.7 MB model, fifteen textures, seven shader programs — over a
-  second of main-thread work, which froze every window): assets are parsed once
+  second of main-thread work, which froze every pane): assets are parsed once
   per session, textures are shrunk to 512px off the main thread before upload,
   shaders compile through `compileAsync`, and an unmounted avatar's scene is
   **parked** for five minutes and adopted by the next mount instead of rebuilt.
 
-Every pane opens in a **window**; a window can hold several panes as tabs, and
-region strips run down a pane's own sides. See [windowing.mdx](windowing.mdx) for the
-model, roles, pane types vs instances, and persistence. Panes are opened from the
-spotlight, the Start menu, a command, or the agent. The **minibuffer** floats above
-the taskbar — `alt+x` for slash commands, and where `dialogs.prompt()` renders (see
+Every pane lives in a **tab group** of the docked workbench: the centre split tree,
+an edge dock, or on desktop a pop-out window. Region strips run down a pane's own
+sides. See [windowing.mdx](windowing.mdx) for the model, roles, pane types vs
+instances, and persistence. Panes are opened from the spotlight, the Start menu, a
+command, or the agent. The **minibuffer** floats above the status bar — `alt+x` for
+slash commands, and where `dialogs.prompt()` renders (see
 [windowing.mdx](windowing.mdx#the-minibuffer)).
 
-The **window layer** sits over the view as a sibling of it, not inside it, so windows
-do not vanish when the view is hidden (`.shell-view[hidden]` is `display: none`). It
-is bounded by `.shell-content`, which keeps a window titlebar from sliding under the
-native titlebar and its drag region — and the taskbar sits outside
-`.shell-content`, so a maximized window cannot cover it. See
-[desktop-shell.mdx](desktop-shell.mdx).
+The **workbench** sits over the view as a sibling of it, not inside it, so panes do
+not unmount when the view is hidden (`.shell-view[hidden]` is `display: none`). It
+is bounded by `.shell-content`, which keeps it below the native titlebar and its
+drag region — and the status bar sits outside `.shell-content`, so a maximized
+group cannot cover it. See [desktop-shell.mdx](desktop-shell.mdx).
 
-Neither the layer nor the shell may ever scroll, and both say so with
-`overflow: clip` rather than `hidden`. A `hidden` box hides its scrollbar but is
-still a scroll container: the browser scrolls it to reveal a focused element, and a
-window hanging off the bottom of the layer has plenty of those. That scrolled every
-window up at once and left titlebars above the surface, out of reach, while the
-store still had each window in view. Likewise a taskbar label that wrapped overflowed
-the shell by 2px, the *page* grew a scrollbar, and the desktop lost 10px of width.
-A `clip` box cannot be scrolled by anything.
+The shell may never scroll, and says so with `overflow: clip` rather than `hidden`.
+A `hidden` box hides its scrollbar but is still a scroll container: the browser
+scrolls it to reveal a focused element. On the floating desktop a window hanging off
+the bottom of the layer scrolled every window up at once, out of reach; and a status
+bar label that wrapped overflowed the shell by 2px, the *page* grew a scrollbar, and
+the desktop lost 10px of width. A `clip` box cannot be scrolled by anything.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
@@ -111,10 +108,10 @@ Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 
 ## The workspace
 
-The shell owns the desktop: panes in windows, persisted as one layout. Modules never
-render themselves into the DOM directly — they **register panels** with the module
-registry (`packages/core`), and the shell decides where panes live (a window, placed
-where that view was last left; the user can rearrange freely).
+The shell owns the desktop: panes in tab groups, persisted as one layout. Modules
+never render themselves into the DOM directly — they **register panels** with the
+module registry (`packages/core`), and the shell decides where panes live (where
+that view was last left, else by its role; the user can rearrange freely).
 
 A pane body is **loaded when it first renders, not at boot.** Every manifest is
 registered before the shell paints, so a component a manifest imports statically is
@@ -170,13 +167,13 @@ keymaps; this service is for registry command bindings.)
 | --- | --- |
 | `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
 | declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
-| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | present the focused window's pane over the whole screen |
+| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | present the focused group's pane over the whole screen |
 | `f11` (desktop only) | toggle native OS-window fullscreen. Desktop-only because `f11` is browser-owned and **unpreventable** — the browser layout reaches app fullscreen through the tray control instead |
-| `alt+arrows` | focus the nearest window in that direction |
-| `alt+grave` / `alt+shift+grave` | next / previous window |
-| `mod+shift+arrows` | snap the focused window to a half (top maximizes) |
-| `mod+alt+s` then a key | snap palette: corners, centre, thirds — see [desktop-shell.mdx](desktop-shell.mdx#the-snap-palette) |
-| `mod+alt+up` / `mod+alt+down` | maximize / minimize the focused window |
+| `alt+arrows` | focus the nearest group in that direction (docks included) |
+| `alt+grave` / `alt+shift+grave` | next / previous group |
+| `mod+shift+arrows` | move the focused tab into a new group on that side |
+| `mod+alt+up` | maximize / restore the focused group |
+| `mod+alt+[` / `mod+alt+]` / `mod+alt+j` | show / hide the left, right, bottom dock |
 | `mod+k` | spotlight — ask, run a command, or jump to a pane (a focused pane may shadow it — the terminal binds it to `terminal.clear`) |
 | `alt+x` | minibuffer / M-x — slash commands (`override`, never shadowable) |
 | `mod+k mod+s` | Keyboard Shortcuts pane |
@@ -197,7 +194,7 @@ gracefully:
 | `fs.nativeDialogs`     | no (backend workspace roots only)  | yes (native open/save dialogs)   |
 | `shell.revealInOS`     | no                                 | yes                              |
 | `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
-| `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
+| `window.multi`         | no (no pop-out control)            | yes (a tab group pops out to its own OS window) |
 | `window.fullscreen`    | **yes** (DOM Fullscreen API; tray control, no F11) | **yes** (native OS-window fullscreen; F11 or the titlebar control) |
 | `chrome.workspaceTabs` | no (the page is already in a window) | **yes** (undecorated window; the app draws the titlebar) |
 | `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
@@ -213,13 +210,19 @@ That is why it is a capability at all, and why `desktopCapabilities()` is still 
 function: a shell that cannot do something must subtract it there. Everything else
 about capture is feature-detected; see [the share module](../modules/share.mdx).
 
-The `window.*`/`chrome.*` rows are the contract for the native shell (an
-app-drawn titlebar, OS fullscreen). They exist in the `Capability` union so the
+The `window.*`/`chrome.*` rows are the contract for the native shell (pop-out
+windows, an app-drawn titlebar, OS fullscreen). They exist in the `Capability` union so the
 shell can branch on them. The desktop shell grants these through `DESKTOP_CAPABILITIES`, and the
 desktop entry wires a `WindowControl` seam (`packages/core/src/window.ts`) to
 the shell's `window_*` commands (`apps/desktop/src/window.ts`).
 Shipped so far:
 
+- **`window.multi`** — a tab group of views that declare `popout: true` can pop out
+  into an OS window and dock back. The page opens the window itself
+  (`window.open('', 'horrible-popout:<id>')`) and portals the group into it, so one
+  realm keeps every store and the backend socket; the shell only allows that window,
+  clamps it to a display, syncs zoom and reports moves and closes. See
+  [windowing.mdx](windowing.mdx#pop-out-windows).
 - **`window.fullscreen`** — `shell.toggleFullscreen` takes the whole app
   fullscreen, distinct from presenting a pane in-window. It is granted in **both** layouts: `toggleAppFullscreen`
   (`core/fullscreen.ts`) drives the native OS window through the `WindowControl`
@@ -236,7 +239,7 @@ Shipped so far:
   borders on a frameless window, so the OS takes an edge press before the grips
   see it. The name is the workspace tab strip's, which used to be that
   titlebar.
-Both ship. (`window.perWorkspace` — a workspace in its own OS window — was removed
+All three ship. (`window.perWorkspace` — a workspace in its own OS window — was removed
 with the workspaces.)
 
 Every shell command goes through one door: the preload exposes
@@ -282,7 +285,7 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
   and uses **absolute** http/ws URLs from then on — no Vite proxy in the loop,
   so dev and packaged builds exercise the same path. If the backend never comes
   up, boot proceeds pluginless; the boot splash records the failed step and the
-  taskbar's tray shows the backend as offline.
+  status bar's tray shows the backend as offline.
 - **Desktop renderer crashes** (`apps/desktop/src/crashPolicy.ts`). When the UI's
   process dies, the shell logs `renderer process gone: reason=… exitCode=…` and
   reloads the page — at once, then after 2 s, then 5 s. Four crashes inside a minute

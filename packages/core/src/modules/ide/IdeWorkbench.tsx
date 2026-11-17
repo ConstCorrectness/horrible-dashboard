@@ -1,7 +1,9 @@
 /**
- * The **workbench** — the IDE surface: a tab strip of open files over one nested
- * `BufferView`, with Explorer / Search / Source Control / Outline / Provenance on
- * the left, the agent on the right, and Terminal / Problems below.
+ * The **IDE pane** — a tab strip of open files over one nested `BufferView`, with
+ * Explorer / Search / Source Control / Outline / Provenance on the left, the agent
+ * on the right, and Terminal / Problems below. (Named `IdeWorkbench` before the
+ * shell itself became the docked workbench; the shell's is `packages/ui/src/
+ * workbench/`. This one is a single pane inside it.)
  *
  * Those sidebars are **not rendered here.** They are `regions:` declarations in
  * this module's manifest, drawn by the ui layer's `PaneWithRegions`. That is not

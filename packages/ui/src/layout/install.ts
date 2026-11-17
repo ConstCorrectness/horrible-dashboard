@@ -6,6 +6,7 @@
  */
 import {
   executeTool,
+  findAreaAnywhere,
   framePersistence,
   installFrameController,
   layoutStore,
@@ -20,11 +21,11 @@ import {
 
 let installed = false;
 
-/** The pane region keys act on: the focused window's showing tab. */
+/** The pane region keys act on: the focused group's showing tab. */
 function focusedPaneId(): string | null {
   const f = layoutStore.getSnapshot().frame;
-  const win = f.windows.find((w) => w.id === f.focusedWindowId);
-  return win?.area.tabs[win.area.activeTab]?.instanceId ?? f.focusedInstanceId;
+  const group = f.focusedAreaId ? findAreaAnywhere(f, f.focusedAreaId)?.area : undefined;
+  return group?.tabs[group.activeTab]?.instanceId ?? f.focusedInstanceId;
 }
 
 /** Idempotent, and safe to call before anything renders. */

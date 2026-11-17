@@ -1,16 +1,19 @@
 /**
- * Data model for the desktop — the pure, React-free source of truth for
- * everything it shows: its windows, its backdrop, and the per-pane region strips
- * inside them. Rendering lives in packages/ui/src/desktop and
- * packages/ui/src/layout; this layer is plain data + pure functions so it can be
- * unit-tested and driven identically by user gestures, keybindings, and the
- * agent's layout tools. See docs/architecture/windowing.mdx.
+ * Data model for the workbench — the pure, React-free source of truth for
+ * everything it shows: its tab groups, docks and popouts (`dock/types.ts`), its
+ * backdrop, and the per-pane region strips inside them. Rendering lives in
+ * packages/ui/src/workbench and packages/ui/src/layout; this layer is plain data
+ * + pure functions so it can be unit-tested and driven identically by user
+ * gestures, keybindings, and the agent's layout tools. See
+ * docs/architecture/windowing.mdx.
  *
- * There is one paradigm. The tiling frame (a Blender-style centre grid, tool
- * docks and activity rails) was removed in 2026-10; a blob saved by it is turned
- * into windows on load by `legacy-frame.ts`.
+ * There is one paradigm. The floating desktop (frame v3, 2026-10 to 2026-11) and
+ * the tiling frame before it are gone; their blobs are migrated on load, which is
+ * the only reason the `Window*` types below still exist.
  */
 import type { PaneRole, RegionPosition } from '@horribledashboard/sdk';
+
+import type { DockFrame, DockLocation } from './dock/types';
 
 export type { PaneRole, RegionPosition };
 
@@ -62,25 +65,18 @@ export interface PaneState {
 }
 
 /**
- * A window's content: its tab list. Invariant (enforced by the controller's role
- * routing, not here): `tabs` is either `document` panes, which stack as tabs, or
- * exactly one pane of another role.
- *
- * Named for the centre-grid leaf it used to be, and kept as its own type rather
- * than inlined into `WindowState` because every tab verb (`SET_ACTIVE_TAB`,
- * `REORDER_TAB`, `INSERT_PANE`, `dropPaneOnTab`) addresses a window by its area
- * id.
+ * A tab group: a centre leaf, a dock's content, or a popout's content. Every tab
+ * verb (`SET_ACTIVE_TAB`, `REORDER_TAB`, `INSERT_PANE`, a tab drop) addresses a
+ * group by its id.
  */
 export interface AreaNode {
   kind: 'area';
   id: string;
   tabs: PaneState[];
   activeTab: number;
-  /** Hide the window's tab strip (chrome-less panes). */
-  headerCollapsed?: boolean;
 }
 
-/** A window's position and size, in pixels within the desktop surface. */
+/** Legacy (frame v3): a window's position and size, in pixels. */
 export interface WindowRect {
   x: number;
   y: number;
@@ -191,8 +187,11 @@ export interface BackdropRef {
  */
 export const DEFAULT_BACKDROP = 'splash';
 
-/** Everything the desktop shows. Serialized as the workspace's layout blob. */
-export interface FrameState {
+/**
+ * Legacy (frame v3): the floating desktop. Read from old blobs by `serialize.ts`
+ * and turned into a workbench by `dock/migrate.ts`; nothing renders it.
+ */
+export interface WindowFrame {
   /** The windows on this desktop, in no particular order — `z` is the stacking. */
   windows: WindowState[];
   /**
@@ -233,6 +232,9 @@ export interface FrameState {
   paneSeq: number;
 }
 
+/** Everything the workbench shows. Serialized as the workspace's layout blob. */
+export type FrameState = DockFrame;
+
 /**
  * The layout store's full snapshot. `workspaceId` and `frame` live in ONE atom
  * so autosave can never write a layout under the wrong workspace id — loading a
@@ -246,25 +248,10 @@ export interface LayoutStoreState {
   hydrated: boolean;
   /** Bumped by every user mutation, NOT by loads — the autosave dirty check. */
   revision: number;
-  /**
-   * True once the window layer has reported the real surface size. Until then a
-   * loaded frame's `windowViewport` is the size it was *saved* on, and the first
-   * measurement rescales the layout onto the live surface; after it, a change of
-   * size is the user's own surface resizing and moves no free window.
-   */
-  surfaceMeasured: boolean;
 }
 
-/**
- * Where a pane instance currently lives: always a window. `areaId` is the window's
- * own area, which the tab verbs address. Still a tagged object rather than a bare
- * window id, so a caller's `location.windowId` reads the same as it always has.
- */
-export interface PaneLocation {
-  kind: 'window';
-  windowId: string;
-  areaId: string;
-}
+/** Where a pane instance lives: its group, and what hosts the group. */
+export type PaneLocation = DockLocation;
 
 /** A pane plus its location, as returned by `listPanes`. */
 export interface LocatedPane {

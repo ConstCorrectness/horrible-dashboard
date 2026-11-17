@@ -20,17 +20,18 @@
  * anywhere to show it. Worse, so did every `dialogs.prompt()`: an editor asking
  * "Save as?" waited forever on an answer the user was never shown.
  *
- * So the floating desktop mounts it as an **overlay** (`variant="overlay"`): the
- * same component, floating just above the taskbar, rendering *nothing* when
- * idle. Idle is the difference — a permanent status strip makes sense as the
- * frame's bottom row, but stacked over a taskbar it is a second status bar
- * saying much the same thing. The taskbar's `mx` zone carries the idle half
- * (the button and the echo) instead.
+ * So the shell mounts it as an **overlay** (`variant="overlay"`): the same
+ * component, floating just above the status bar, rendering *nothing* when idle.
+ * Idle is the difference — a permanent strip makes sense as a frame's bottom
+ * row, but stacked over the status bar it is a second status bar saying much
+ * the same thing. The status bar's `mx` zone carries the idle half (the button
+ * and the echo) instead.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   backendHealth,
   dialogsStore,
+  findPaneAnywhere,
   layoutStore,
   matchCommands,
   minibuffer,
@@ -51,8 +52,9 @@ function useStatusText(): string {
   const workspaces = useSyncExternalStore(workspaceStore.subscribe, workspaceStore.getSnapshot);
   const workspace =
     workspaces.workspaces.find((w) => w.id === layout.workspaceId)?.name ?? layout.workspaceId;
-  const win = layout.frame.windows.find((w) => w.id === layout.frame.focusedWindowId);
-  const pane = win?.area.tabs[win.area.activeTab];
+  const pane = layout.frame.focusedInstanceId
+    ? findPaneAnywhere(layout.frame, layout.frame.focusedInstanceId)?.pane
+    : undefined;
   const paneTitle = pane ? (resolveView(pane.viewId)?.title ?? pane.viewId) : null;
   if (!workspace) return '';
   return paneTitle ? `${workspace} › ${paneTitle}` : workspace;

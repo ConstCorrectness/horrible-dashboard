@@ -21,17 +21,26 @@ manifest object:
 - **Commands** — named actions invokable from the command palette (`id`, `title`,
   `run()`). Every user-facing capability must be a command first; UI buttons call
   commands, never the other way around.
-- **Panels** — React components the desktop hosts as windows (`id`,
-  `title`, `component`, `role` — `document`, `tool` or `widget`). Set `singleton: true` if only one
-  window of the panel should exist (opening again focuses it, e.g. the
-  dashboard); omit it for panels you open many of (terminals, editor buffers).
+- **Panels** — React components the workbench hosts as panes in tab groups (`id`,
+  `title`, `component`, `role` — `document`, `tool` or `widget`). The role picks the
+  default home: a document opens in the centre, a tool or widget in a dock (`dock:
+  'left' | 'right' | 'bottom'`, default right). Set `singleton: true` if only one
+  pane of the panel should exist (opening again focuses it, e.g. the dashboard);
+  omit it for panels you open many of (terminals, editor buffers).
   Declare the component with `lazyPane(() => import('./panels/Foo'), 'Foo')`
   (`packages/core/src/lazy-pane.ts`) rather than a static import, so the pane's
   code — and any heavy library it pulls in — loads when the pane first opens, not at
   boot. Don't also import or re-export that file from `index.ts`, or it stays eager.
-  Panels render registry-side — they don't import the windowing engine. See
-  [docs/architecture/windowing.md](../../docs/architecture/windowing.md);
+  Panels render registry-side — they don't import the windowing engine and never
+  read layout geometry; open and reveal through `registry.openPanel`,
+  `revealSection`, `revealRegionView`. See
+  [docs/architecture/windowing.mdx](../../docs/architecture/windowing.mdx);
   `scratch` is the reference panel.
+- **Pop-out** (optional) — `popout: true` lets a panel's group pop out into its own
+  OS window on desktop. Only opt in after checking the pane works in another
+  window: listeners, viewport sizes and portal targets come from
+  `usePaneWindow()` (never the global `window`/`document`), the active element
+  from `focusedDocument()`, and element checks use `nodeType`, not `instanceof`.
 - **Keybindings** — default bindings that map keys to command ids. Never hardcode
   key handlers inside components.
 - **Backend routes** (optional) — a FastAPI router (`prefix="/<name>"`) added with
@@ -65,7 +74,7 @@ half joins the workspace.
    and the user handles the service being absent. Missing a kernel export? Add it
    to `packages/core/src/kernel-surface.ts` and `packages/kernel/src/index.ts`.
    Never reach into core.
-2. Works in both layouts: no `window.__TAURI__` checks inside feature code — use
+2. Works in both layouts: no `window.horribleDesktop` checks inside feature code — use
    the platform capability service in `packages/core` and degrade gracefully in
    the browser.
 3. Agent tools are named `<group>.<tool>` for a group declared in `toolGroups` (load

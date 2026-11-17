@@ -88,22 +88,26 @@ Open, close, and inspect panes (panels and widgets) on the desktop.
 
 ### `dash.layout`
 
-Arrange the desktop — the same layout verbs the agent drives. Targets are
-**instance ids** (from `dash.panes.open_list()`).
+Arrange the workbench — the same layout verbs the agent drives. Targets are
+**instance ids** (from `dash.panes.open_list()`); group ids come from `describe()`.
 
 | Method | Relayed tool | Notes |
 | --- | --- | --- |
-| `dash.layout.describe()` | `get_layout` | every window (rect, mode, snap, z, tabs with their regions), the focused window and presented pane, plus `desktop` (backdrop, and the backdrop/theme catalogs) |
+| `dash.layout.describe()` | `get_layout` | the centre tree of groups (ids, split sizes, tabs with their regions), the docks, the maximized group, focused and presented pane, plus `desktop` (backdrop, and the backdrop/theme catalogs) |
 | `dash.layout.toggle_region(instance_id, position, open=None)` | `toggle_region` | flip a pane's `left`/`right`/`bottom` region strip |
 | `dash.layout.set_region_view(instance_id, view_id)` | `set_region_view` | show a specific region view on its host pane |
-| `dash.layout.window(instance_id, snap=None, rect=None)` | `open_window` | give the pane a window of its own (tearing it out of a tabbed one), optionally snapped or at an exact rect |
-| `dash.layout.window_state(instance_id, state, snap=None)` | `window_state` | `minimize` / `maximize` / `restore` / `snap` / `present` / `unpresent` |
-| `dash.layout.arrange(style='grid')` | `arrange_windows` | lay every open window out (`grid`/`cascade`/`columns`/`rows`) |
+| `dash.layout.place(instance_id, to, group=None)` | `place_pane` | `center`, `dock-left`/`dock-right`/`dock-bottom`, `split-left`/`split-right`/`split-above`/`split-below` (beside `group`, else the pane's own group), or `group` (a tab of `group`) |
+| `dash.layout.state(instance_id, state)` | `pane_state` | `maximize` / `restore` / `hide` / `show` / `present` / `unpresent` |
+| `dash.layout.arrange(style='columns')` | `arrange_panes` | re-lay the centre: `columns` / `rows` / `grid` / `tabs` / `even`; docks are left alone |
 | `dash.layout.backdrop(id, **params)` | `desktop.set_backdrop` | ids from `describe()["desktop"]["backdrops"]` |
 | `dash.layout.theme(id)` | `desktop.set_theme` | ids from `describe()["desktop"]["themes"]` |
 
-`window_state("…", "minimize")` **hides, it does not close** — the pane keeps running
-and comes back from the taskbar.
+`state("…", "hide")` **hides, it does not close** — only a docked pane hides, it
+keeps running, and it comes back from its dock toggle or the status bar.
+
+The floating desktop's `window(...)` and `window_state(...)` still work: the frontend
+maps them onto `place_pane` and `pane_state` (`snap="left"` is `split-left`,
+`minimize` is `hide`).
 
 ### `dash.io` (backend-local)
 
@@ -229,11 +233,12 @@ dash.panes.open("explorer.home")
 ```python
 dash.panes.open("terminal.instance")
 dash.panes.open("observability.io")
-for pane in dash.panes.open_list()["panes"]:
-    if pane["id"] == "terminal.instance":
-        dash.layout.window_state(pane["instanceId"], "snap", snap="left")
-    if pane["id"] == "observability.io":
-        dash.layout.window_state(pane["instanceId"], "snap", snap="right")
+ids = {p["id"]: p["instanceId"] for p in dash.panes.open_list()["panes"]}
+# Both open as tools, in docks. Put the first in the centre (it takes focus), then
+# split the second off to its right: a split from a dock lands beside the focused
+# centre group.
+dash.layout.place(ids["observability.io"], "center")
+dash.layout.place(ids["terminal.instance"], "split-right")
 ```
 
 ## State & lifetime

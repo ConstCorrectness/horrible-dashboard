@@ -9,17 +9,17 @@
  * See docs/architecture/desktop-shell.mdx.
  */
 import {
-  arrangeDesktop,
   closePaneGuarded,
   currentThemeId,
+  cycleGroups,
+  findPaneAnywhere,
+  focusDirection,
   paneDisplayTitle,
   resolveView,
-  cycleWindows,
-  focusWindowDirection,
-  snapFocused,
+  splitFocused,
   tearOffPane,
-  toggleWindowMaximized,
-  toggleWindowMinimized,
+  toggleDock,
+  toggleMaximizedGroup,
   getSetting,
   layoutStore,
   registry,
@@ -28,12 +28,13 @@ import {
   taskbarEntries,
   type ContextMenuItem,
   type ContextTarget,
+  type DockSide,
   type ModuleManifest,
+  type SplitSide,
 } from '@horrible/core';
 
 import { BUILTIN_BACKDROPS } from './backdrops';
 import { docsPageFor, openDocs } from './help-links';
-import { SNAP_ARROWS, SNAP_CELLS, SNAP_PREFIX, snapCommandId } from './snap-palette';
 import {
   homeUnderlayId,
   isHomeCollapsed,
@@ -45,8 +46,16 @@ import {
 
 /** The four directions. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
+const SPLITS: readonly SplitSide[] = ['left', 'right', 'above', 'below'];
+const SPLIT_WORDS: Record<SplitSide, string> = {
+  left: 'to the left',
+  right: 'to the right',
+  above: 'above',
+  below: 'below',
+};
+const DOCKS: readonly DockSide[] = ['left', 'right', 'bottom'];
 import { OOBE_COMPLETE_KEY } from './constants';
-import { ANIMATIONS_SETTING_KEY } from './window-motion';
+import { ANIMATIONS_SETTING_KEY } from '../workbench/motion';
 import {
   DEFAULT_TASKBAR,
   mergeTaskbarConfig,
@@ -71,7 +80,7 @@ export const desktopModule: ModuleManifest = {
       /**
        * The app's documentation. A full Docusaurus site is built from `docs/` and
        * published on every push to `main`; linking it beats writing a second copy
-       * inside the app. A window's titlebar menu links the pane's own page — see
+       * inside the app. A group's tab-strip menu links the pane's own page — see
        * `titlebarHelpItems` and `help-links.ts`.
        */
       id: 'shell.help',
@@ -79,9 +88,7 @@ export const desktopModule: ModuleManifest = {
       run: () => openDocs(),
     },
     {
-      // The home screen is a backdrop, so `window.minimize` cannot see it: that
-      // command walks the window list, and the one surface people most want out
-      // of the way is not in it.
+      // The home screen is a backdrop, not a pane, so no group verb reaches it.
       id: 'desktop.toggleHome',
       title: 'Desktop: Minimize / restore the home screen',
       run: () => void toggleHomeCollapsed(),
@@ -120,46 +127,20 @@ export const desktopModule: ModuleManifest = {
         }
       },
     },
-    {
-      id: 'desktop.cascade',
-      title: 'Desktop: Cascade windows',
-      run: () => void arrangeDesktop('cascade'),
-    },
-    {
-      id: 'desktop.grid',
-      title: 'Desktop: Tile windows in a grid',
-      run: () => void arrangeDesktop('grid'),
-    },
-    {
-      id: 'desktop.columns',
-      title: 'Desktop: Tile windows in columns',
-      run: () => void arrangeDesktop('columns'),
-    },
-    {
-      id: 'desktop.rows',
-      title: 'Desktop: Tile windows in rows',
-      run: () => void arrangeDesktop('rows'),
-    },
-    // --- window management ---------------------------------------------------
-    {
-      id: 'window.next',
-      title: 'Window: Next',
-      run: () => void cycleWindows(1),
-    },
-    { id: 'window.prev', title: 'Window: Previous', run: () => void cycleWindows(-1) },
-    {
-      id: 'window.minimize',
-      title: 'Window: Minimize / restore',
-      run: () => void toggleWindowMinimized(),
-    },
+    // --- the workbench ------------------------------------------------------
+    // Ids keep their `window.` prefix where the verb survived the move from
+    // floating windows to docked groups: saved keymap overrides and the agent's
+    // `run_command` name them.
+    { id: 'window.next', title: 'Group: Focus the next group', run: () => void cycleGroups(1) },
+    { id: 'window.prev', title: 'Group: Focus the previous group', run: () => void cycleGroups(-1) },
     {
       id: 'window.maximize',
-      title: 'Window: Maximize / restore',
-      run: () => void toggleWindowMaximized(),
+      title: 'Group: Maximize / restore the focused group',
+      run: () => void toggleMaximizedGroup(),
     },
     {
       id: 'window.tearOff',
-      title: 'Window: Move the focused tab into a window of its own',
+      title: 'Group: Move the focused tab into a group of its own',
       run: () => {
         const id = layoutStore.getSnapshot().frame.focusedInstanceId;
         if (id) tearOffPane(id);
@@ -167,46 +148,39 @@ export const desktopModule: ModuleManifest = {
     },
     ...NAVS.map((dir) => ({
       id: `window.focus:${dir}`,
-      title: `Window: Focus ${dir}`,
-      run: () => void focusWindowDirection(dir),
+      title: `Group: Focus ${dir}`,
+      run: () => void focusDirection(dir),
     })),
-    // Every zone in `snap-palette.ts` gets a command, so the palette, the chords
-    // and the command palette can never list different sets.
-    ...SNAP_CELLS.map((cell) => ({
-      id: snapCommandId(cell.zone),
-      title: `Window: Snap ${cell.label}`,
-      // `fill: true` — a keyboard snap is the same request as a drag to the edge,
-      // so it produces the same split rather than a window over a maximized one.
-      run: () => void snapFocused(cell.zone, true),
+    ...SPLITS.map((side) => ({
+      id: `workbench.split:${side}`,
+      title: `Group: Move the focused tab to a new group ${SPLIT_WORDS[side]}`,
+      run: () => void splitFocused(side),
+    })),
+    ...DOCKS.map((side) => ({
+      id: `workbench.toggleDock:${side}`,
+      title: `Dock: Show / hide the ${side} dock`,
+      run: () => void toggleDock(side),
     })),
   ],
   keybindings: [
     // Every chord here was checked against `keymap/reserved.ts`. The conventional
     // ones are unavailable: `alt+tab` never reaches the page on Windows or Linux,
-    // `meta+m` is macOS minimize, `meta+space`/`ctrl+space` are Spotlight and the
-    // IME toggle. A binding that silently never fires is worse than a less
-    // familiar one that does.
+    // `meta+space`/`ctrl+space` are Spotlight and the IME toggle. A binding that
+    // silently never fires is worse than a less familiar one that does.
     { key: 'alt+grave', command: 'window.next' },
     { key: 'alt+shift+grave', command: 'window.prev' },
-    { key: 'mod+alt+down', command: 'window.minimize' },
     { key: 'mod+alt+up', command: 'window.maximize' },
-    // The four halves are the fast path and stay bare.
-    { key: 'mod+shift+left', command: 'window.snap:left' },
-    { key: 'mod+shift+right', command: 'window.snap:right' },
-    { key: 'mod+shift+up', command: 'window.snap:top' },
-    { key: 'mod+shift+down', command: 'window.snap:bottom' },
-    // The other nine zones (corners, centre, thirds) go behind the `mod+alt+s`
-    // prefix. There is no free third-modifier arrow family left, and thirteen
-    // zones want a palette anyway — `SnapAssist` renders this same table as a
-    // grid while the prefix is pending.
-    ...SNAP_CELLS.map((cell) => ({
-      key: `${SNAP_PREFIX} ${cell.key}`,
-      command: snapCommandId(cell.zone),
-    })),
-    ...SNAP_ARROWS.map((arrow) => ({
-      key: `${SNAP_PREFIX} ${arrow.key}`,
-      command: snapCommandId(arrow.zone),
-    })),
+    // Where the floating desktop snapped halves, the workbench splits: the same
+    // keys put the focused tab on that side of its group.
+    { key: 'mod+shift+left', command: 'workbench.split:left' },
+    { key: 'mod+shift+right', command: 'workbench.split:right' },
+    { key: 'mod+shift+up', command: 'workbench.split:above' },
+    { key: 'mod+shift+down', command: 'workbench.split:below' },
+    // Docks. Not `t`/`n`/`b` — those are a pane's own region strips — and not
+    // `mod+b`/`mod+j`, which panes already bind.
+    { key: 'mod+alt+[', command: 'workbench.toggleDock:left' },
+    { key: 'mod+alt+]', command: 'workbench.toggleDock:right' },
+    { key: 'mod+alt+j', command: 'workbench.toggleDock:bottom' },
     ...NAVS.map((dir) => ({ key: `alt+${dir}`, command: `window.focus:${dir}` })),
   ],
   settings: [
@@ -220,9 +194,9 @@ export const desktopModule: ModuleManifest = {
     },
     {
       key: ANIMATIONS_SETTING_KEY,
-      title: 'Animate windows',
+      title: 'Animate the workbench',
       description:
-        'Windows open, close, minimize to the taskbar and slide into maximized or snapped positions instead of jumping there, and a pane fades in when its tab is picked. Off makes every change instant. Also off whenever the system asks for reduced motion.',
+        'A newly opened pane slides in, and a pane fades in when its tab is picked. Off makes every change instant. Also off whenever the system asks for reduced motion.',
       type: 'boolean',
       default: true,
     },
@@ -247,13 +221,11 @@ export const desktopModule: ModuleManifest = {
   ],
 };
 
-/** The pane a titlebar right-click was about, if it is still open. */
+/** The pane a tab-strip right-click was about, if it is still open. */
 function titlebarPane(target: ContextTarget) {
-  const windowId = typeof target.windowId === 'string' ? target.windowId : null;
   const instanceId = typeof target.instanceId === 'string' ? target.instanceId : null;
-  const win = layoutStore.getSnapshot().frame.windows.find((w) => w.id === windowId);
-  const pane = win?.area.tabs.find((t) => t.instanceId === instanceId);
-  return win && pane ? { win, pane } : null;
+  const found = instanceId ? findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId) : null;
+  return found ? { pane: found.pane, location: found.location } : null;
 }
 
 /**
@@ -282,34 +254,28 @@ function titlebarHelpItems(target: ContextTarget): ContextMenuItem[] {
   ];
 }
 
-/** The window verbs, named by the window's current state. */
+/** The group verbs, named by the group's current state. */
 function titlebarWindowItems(target: ContextTarget): ContextMenuItem[] {
   const hit = titlebarPane(target);
   if (!hit) return [];
-  const { win, pane } = hit;
-  const maximized = win.mode === 'maximized' || win.snap === 'max';
+  const { pane, location } = hit;
+  const frame = layoutStore.getSnapshot().frame;
+  const maximized = frame.maximizedAreaId === location.areaId;
+  const dock = location.kind === 'dock' ? location.side : null;
   return [
-    {
-      id: 'window.minimize',
-      label: 'Minimize',
-      run: () => void toggleWindowMinimized(win.id),
-    },
+    ...(dock
+      ? [{ id: 'window.hideDock', label: `Hide the ${dock} dock`, run: () => void toggleDock(dock, false) }]
+      : []),
     {
       id: 'window.maximize',
       label: maximized ? 'Restore' : 'Maximize',
-      run: () => void toggleWindowMaximized(win.id),
+      run: () => void toggleMaximizedGroup(location.areaId),
     },
-    // Only where there is a tab to pull out; on a one-pane window it would
-    // close the window and open an identical one.
-    ...(win.area.tabs.length > 1
-      ? [
-          {
-            id: 'window.tearOff',
-            label: 'Move to its own window',
-            run: () => void tearOffPane(pane.instanceId),
-          },
-        ]
-      : []),
+    {
+      id: 'window.tearOff',
+      label: location.kind === 'center' ? 'Split into its own group' : 'Move to the centre',
+      run: () => void tearOffPane(pane.instanceId),
+    },
     {
       id: 'window.close',
       label: 'Close',
@@ -454,7 +420,6 @@ function taskbarWindowMenu(target: ContextTarget): ContextMenuItem[] {
 
 function desktopMenuItems(): ContextMenuItem[] {
   const { frame } = layoutStore.getSnapshot();
-  const hasWindows = frame.windows.length > 0;
   return [
     { id: 'desktop.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
     // Only on a desktop actually showing the home screen. On any other backdrop
@@ -480,33 +445,6 @@ function desktopMenuItems(): ContextMenuItem[] {
             label: 'Wallpaper behind home',
             run: () => {},
             submenu: homeUnderlayMenuItems(),
-          },
-        ]
-      : []),
-    // The whole item is dropped, not disabled and not left as an empty submenu,
-    // when there are no windows: there is no state in which "arrange nothing"
-    // becomes meaningful from here, and a parent whose submenu is dropped is a
-    // row that opens nothing and does nothing when clicked.
-    ...(hasWindows
-      ? [
-          {
-            id: 'desktop.arrange',
-            label: 'Arrange windows',
-            run: () => {},
-            submenu: [
-              {
-                id: 'desktop.cascade',
-                label: 'Cascade',
-                run: () => void arrangeDesktop('cascade'),
-              },
-              { id: 'desktop.grid', label: 'Grid', run: () => void arrangeDesktop('grid') },
-              {
-                id: 'desktop.columns',
-                label: 'Columns',
-                run: () => void arrangeDesktop('columns'),
-              },
-              { id: 'desktop.rows', label: 'Rows', run: () => void arrangeDesktop('rows') },
-            ],
           },
         ]
       : []),
