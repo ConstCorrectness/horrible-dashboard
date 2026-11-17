@@ -34,10 +34,36 @@ export function AgentButton({ showLabels }: { showLabels: boolean }) {
         else registry.openPanel(AGENT_VIEW);
       }}
     >
-      <span className="os-taskbar-agent-icon" aria-hidden="true">
-        🤖
-      </span>
+      <AgentGlyph />
       {showLabels && <span>Agent</span>}
     </button>
+  );
+}
+
+/**
+ * A robot head in strokes on `currentColor`, so it takes the button's text colour
+ * and its hover state. It replaced a 🤖 emoji, which drew in the OS's colour font
+ * at whatever size that font picked and ignored the theme entirely.
+ */
+function AgentGlyph() {
+  return (
+    <svg
+      className="os-taskbar-agent-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M7 1.6v2" />
+      <rect x="2.2" y="3.6" width="9.6" height="7.4" rx="2" />
+      <path d="M5.6 9h2.8M1 6.6v2M13 6.6v2" />
+      <circle cx="5.1" cy="6.6" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="8.9" cy="6.6" r="0.75" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
