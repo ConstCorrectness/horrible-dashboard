@@ -196,7 +196,6 @@ export function deserialize(
             id: aid,
             tabs,
             activeTab: Math.min(Math.max(num(areaSrc?.activeTab, 0), 0), tabs.length - 1),
-            ...(areaSrc?.headerCollapsed === true ? { headerCollapsed: true } : {}),
           },
           rect: readRect(entry.rect, legacy ? LEGACY_RECT : DEFAULT_WINDOW_RECT),
           ...(entry.restoreRect

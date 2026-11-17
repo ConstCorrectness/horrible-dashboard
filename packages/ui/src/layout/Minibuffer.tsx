@@ -20,12 +20,12 @@
  * anywhere to show it. Worse, so did every `dialogs.prompt()`: an editor asking
  * "Save as?" waited forever on an answer the user was never shown.
  *
- * So the floating desktop mounts it as an **overlay** (`variant="overlay"`): the
- * same component, floating just above the taskbar, rendering *nothing* when
- * idle. Idle is the difference — a permanent status strip makes sense as the
- * frame's bottom row, but stacked over a taskbar it is a second status bar
- * saying much the same thing. The taskbar's `mx` zone carries the idle half
- * (the button and the echo) instead.
+ * So the shell mounts it as an **overlay** (`variant="overlay"`): the same
+ * component, floating just above the status bar, rendering *nothing* when idle.
+ * Idle is the difference — a permanent strip makes sense as a frame's bottom
+ * row, but stacked over the status bar it is a second status bar saying much
+ * the same thing. The status bar's `mx` zone carries the idle half (the button
+ * and the echo) instead.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {

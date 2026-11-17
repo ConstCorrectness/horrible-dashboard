@@ -40,7 +40,7 @@
 }
 
 /* The click-catcher over a decorative backdrop. Transparent, full-bleed, and
-   the only thing between the backdrop and the window layer. */
+   the only thing between the backdrop and the workbench. */
 .os-desktop-surface {
   position: absolute;
   inset: 0;

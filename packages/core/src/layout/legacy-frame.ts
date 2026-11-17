@@ -83,7 +83,6 @@ const DOCK_DEFAULTS: Record<(typeof DOCK_SIDES)[number], number> = {
 interface LegacyArea {
   tabs: PaneState[];
   activeTab: number;
-  headerCollapsed: boolean;
   /**
    * Every surviving tab carried the old per-pane `minimized` flag, so the area was
    * showing nothing. Read off the raw tabs: `PaneState` no longer has the field.
@@ -112,7 +111,6 @@ function collect(node: unknown, unit: WindowRect, readPane: (v: unknown) => Pane
       out.push({
         tabs,
         activeTab: Math.min(Math.max(active, 0), tabs.length - 1),
-        headerCollapsed: n.headerCollapsed === true,
         minimized,
         unit: rect,
       });
@@ -236,7 +234,6 @@ export function windowsFromLegacyFrame(
     activeTab: number,
     rect: WindowRect,
     shown: boolean,
-    headerCollapsed = false,
   ): void => {
     windows.push({
       id: windowId(seq),
@@ -245,7 +242,6 @@ export function windowsFromLegacyFrame(
         id: areaId(seq + 1),
         tabs,
         activeTab,
-        ...(headerCollapsed ? { headerCollapsed: true } : {}),
       },
       rect: shown ? rect : hiddenRect(windows.length, surface),
       mode: shown ? 'normal' : 'minimized',
@@ -285,7 +281,7 @@ export function windowsFromLegacyFrame(
     // An area whose panes the user had all minimized stays put away.
     const shown = tiling && !area.minimized;
     const rect = onSurface(inGrid(area.unit, insets), surface);
-    add(area.tabs, area.activeTab, rect, shown, area.headerCollapsed);
+    add(area.tabs, area.activeTab, rect, shown);
   }
 
   for (const { side, tools } of sides) {

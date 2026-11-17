@@ -1,10 +1,9 @@
 /**
  * Resources that belong to a **pane**, not to a mounted component.
  *
- * A pane unmounts far more often than it closes. Only the active tab of an area
- * renders, and switching workspace replaces the whole frame — so looking at
- * another workspace for four seconds unmounts every pane in the one you left.
- * Components could not tell those apart from a real close, so their cleanups
+ * A pane unmounts far more often than it closes: only the active tab of a group
+ * renders, so looking at another tab for four seconds unmounts the one you left.
+ * Components could not tell that apart from a real close, so their cleanups
  * assumed the destructive reading: `TerminalPane` killed its PTY, the browser
  * released the last reference to its Chromium engine. Switching tabs destroyed
  * running processes.
@@ -16,13 +15,12 @@
  * reason ("closing a pane leaves the kernel running; reopening reattaches"); this
  * generalizes it to the frontend.
  *
- * **Keys are workspace-scoped**, and that is load-bearing. `paneSeq` lives on
- * `FrameState`, so instance ids are only unique *within* a frame — two workspaces
- * can each hold a `terminal.instance#1`. A globally keyed store would hand the
- * second one the first one's shell.
+ * **Keys are workspace-scoped.** `paneSeq` lives on `FrameState`, so instance ids
+ * are only unique *within* a frame. There is one workspace now, but the key still
+ * says which layout a resource belongs to.
  *
  * Disposal is driven by explicit close paths (`closePaneGuarded`,
- * `changePaneType`, workspace delete, layout reset), never by a timer. If a path
+ * `changePaneType`), never by a timer. If a path
  * is ever missed the resource leaks until the page closes — at which point the
  * backend reaps it anyway, since PTYs die with their `/ws` connection. That is a
  * strictly better failure than killing a live shell on every tab switch.
@@ -114,63 +112,6 @@ export function closePaneSession(key: string): void {
     if (!entry) continue;
     live.delete(k);
     entry.dispose();
-  }
-}
-
-/**
- * Re-key a live resource when its pane changes workspace — moving a window to
- * another desktop.
- *
- * A session key is `(workspaceId, instanceId)`, so without this the pane arrives on
- * the far desktop looking like one that has never been opened: it creates a *second*
- * PTY or browser engine, and the original is orphaned under a key nothing will ever
- * mount again. The user's shell, with its history and running process, silently
- * disappears — the exact failure this module exists to prevent, reached by a path it
- * did not originally have.
- *
- * Nothing is disposed and nothing is created: the same resource answers to a new key.
- * A no-op when the pane has no live resource, which is the common case.
- */
-export function movePaneSession(fromKey: string, toKey: string): void {
-  if (fromKey === toKey) return;
-  for (const child of familyOf(fromKey).slice(1)) {
-    moveOne(child, toKey + child.slice(fromKey.length));
-  }
-  moveOne(fromKey, toKey);
-}
-
-function moveOne(fromKey: string, toKey: string): void {
-  const bag = uiState.get(fromKey);
-  if (bag && !uiState.has(toKey)) {
-    uiState.delete(fromKey);
-    uiState.set(toKey, bag);
-  }
-  const entry = live.get(fromKey);
-  if (!entry) return;
-  // Refuse to overwrite: a resource already at the destination would be dropped
-  // without being disposed, leaking it for the life of the page.
-  if (live.has(toKey)) return;
-  live.delete(fromKey);
-  live.set(toKey, entry);
-}
-
-/**
- * Dispose every resource of a workspace except the panes in `keep`.
- *
- * For workspace delete (`keep` empty) and layout reset, where panes disappear
- * without passing through the single-pane close path.
- */
-export function closeWorkspaceSessions(
-  workspaceId: string | null,
-  keep: ReadonlySet<string> = new Set(),
-): void {
-  const prefix = `${workspaceId ?? '-'}::`;
-  for (const key of [...new Set([...live.keys(), ...uiState.keys()])]) {
-    if (!key.startsWith(prefix)) continue;
-    // A region view is kept with its host pane.
-    if (keep.has(regionHost(key.slice(prefix.length)))) continue;
-    if (!live.has(key) && !uiState.has(key)) continue; // gone with its host already
-    closePaneSession(key);
   }
 }
 

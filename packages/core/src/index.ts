@@ -308,12 +308,6 @@ export {
   type CloseGuard,
 } from './layout/close-guards';
 export {
-  PANE_EXIT_MAX_MS,
-  runPaneExit,
-  setPaneExitAnimator,
-  type PaneExitAnimator,
-} from './layout/pane-exit';
-export {
   usePaneSection,
   sectionOfInstance,
   SectionScopeContext,

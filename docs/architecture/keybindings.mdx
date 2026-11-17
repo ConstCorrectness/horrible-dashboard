@@ -79,8 +79,8 @@ invent a key that silently never matches.
 | `captureView` | string | View id holding capture |
 | `textInput` | boolean | An input/textarea/contenteditable holds DOM focus |
 | `dialogOpen` | boolean | A modal dialog is open |
-| `fullscreenArea` | boolean | A pane is presented over the whole shell (the name predates the window-only desktop) |
-| `windowFocused` | boolean | A desktop window holds focus |
+| `fullscreenArea` | boolean | A pane is presented over the whole shell (the name predates the workbench) |
+| `windowFocused` | boolean | A tab group holds focus (the name is the floating desktop's) |
 | `shellView` | string | `boot`, `oobe` or `desktop` |
 | `platform` | string | `mac` / `win` / `linux` |
 | `host` | string | `browser` or `desktop` |
@@ -115,11 +115,10 @@ one that does**, which is the whole reason that table exists.
 | Action | Binding | Why not the convention |
 | --- | --- | --- |
 | Spotlight (ask / run / open) | `mod+k` | `mod+space` is macOS Spotlight and the Windows IME switch |
-| Cycle windows | ``alt+` `` / ``alt+shift+` `` | `alt+tab` is OS-level; only Keyboard Lock can take it, and only in a fullscreen capturing pane |
-| Directional window focus | `alt+←↑↓→` | — |
+| Cycle groups | ``alt+` `` / ``alt+shift+` `` | `alt+tab` is OS-level; only Keyboard Lock can take it, and only in a fullscreen capturing pane |
+| Directional group focus | `alt+←↑↓→` | — |
 | Split the focused tab to a side / maximize the group | `mod+shift+←↑↓→` / `mod+alt+↑` | the keys that snapped halves on the floating desktop |
 | Show / hide the left, right, bottom dock | `mod+alt+[` / `mod+alt+]` / `mod+alt+j` | not `t`/`n`/`b` (a pane's region strips) and not `mod+b`/`mod+j` (bound by panes) |
-| Minimize / maximize | `mod+alt+↓` / `mod+alt+↑` | `meta+m` is macOS minimize |
 
 ## Presets
 

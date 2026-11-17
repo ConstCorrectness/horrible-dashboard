@@ -1,22 +1,24 @@
 ---
 title: Desktop shell
-description: The OS-style desktop — windows, snapping, backdrops and the taskbar.
+description: The shell around the workbench — backdrops, the status bar, boot, Spotlight and fullscreen.
 ---
 
 # The desktop shell
 
-The shell presents itself like an operating system: you arrive at a **desktop** with a
-backdrop, open things as free-floating **windows**, snap them to edges, and find them
-again on the taskbar. There is one desktop, and every pane on it is a window.
+You arrive at a **desktop**: a backdrop (by default the home screen), the docked
+**workbench** over it, and a **status bar** along the bottom with the Start menu,
+the open panes, the tray and the agent. An empty workbench shows the backdrop
+through its centre, so Home is what an empty workbench looks like.
 
-This page covers the desktop as an interaction model: windows, the backdrop, the
-taskbar. The _data_ those windows live in is `FrameState`, documented in
+This page covers that surface: backdrops, the status bar, boot and first run,
+Spotlight, the group chrome, presenting and fullscreen. The _data_ panes live in —
+groups, docks, pop-outs — is `FrameState`, documented in
 [windowing.mdx](windowing.mdx).
 
 :::info Status
-All of it has landed: the window model and its migrations, the window layer, the
-backdrop providers, the taskbar and start menu, the boot splash and first-run flow,
-the spotlight, the themes, the wallpaper routes, and the agent verbs.
+All of it has landed: the backdrop providers, the status bar and Start menu, the
+boot splash and first-run flow, Spotlight, the themes, the wallpaper routes, the
+workbench chrome, and the agent verbs.
 :::
 
 ## There is one shell view
@@ -27,7 +29,7 @@ ShellView = 'boot' | 'oobe' | 'desktop'
 
 `home` — the avatar and ask bar — was once a second landing screen competing with the
 desktop for the same job; it survives as the `splash` **backdrop**, which is strictly
-more useful, because windows can float over it. Nothing in the shell "navigates".
+more useful, because the workbench sits over it. Nothing in the shell "navigates".
 
 Installing the engine is the **shell's** job, not any one component's. The controller
 the agent tools drive, the debounced autosave, the `frame` module's commands and
@@ -37,15 +39,20 @@ frame was the only place you could be: once the desktop became the landing surfa
 fresh boot installed none of it — no layout agent tools, no region or backdrop
 commands, no hydrated layout. Every one of those failures is silent.
 
-## One desktop, no tiling
+## One desktop, one paradigm
 
 Until 2026-10 a desktop could be **floating** or **tiling** — a Blender-style centre
 grid with tool docks, activity rails and a workspace tab strip — and there could be
 many of them: a dozen pre-arranged `frames:` presets (AI Research, Training, Lab…)
-plus any the user made, each of which could open in its own OS window. All of it was
-removed rather than hidden. Two paradigms meant a lossy convert between them, a mode
-menu to choose, a setting for which kind a new desktop was, and every feature built
-twice — and the floating desktop was the one actually in use.
+plus any the user made. Tiling was removed rather than hidden. Two paradigms meant a
+lossy convert between them, a mode menu to choose, a setting for which kind a new
+desktop was, and every feature built twice.
+
+For a month after that every pane was a free-floating window with snapping,
+minimize and a taskbar. In 2026-11 that was replaced in turn by the docked
+workbench, for reasons that came from free windows themselves — see the history
+at the top of [windowing.mdx](windowing.mdx). The floating layer
+was deleted, not kept as a mode, for the same one-paradigm reason.
 
 What that leaves:
 
@@ -53,12 +60,13 @@ What that leaves:
   still hold are neither loaded nor deleted.
 - **No mode.** The `desktop.defaultMode`, `desktop.workspaces` and
   `desktop.bootWorkspace` settings are gone; a stale value in the settings store is
-  simply never read.
-- **Saved layouts carry over.** A tiling-era blob's grid and docks become windows on
-  load — see [windowing.mdx](windowing.mdx#persistence).
+  simply never read. So is `frame.windowPlacement`.
+- **Saved layouts carry over.** Tiling-era and floating-era blobs migrate in order
+  — see [windowing.mdx](windowing.mdx#persistence).
 - **SDK v3.** `defaultDock`, `defaultDockSize`, `dockable`, `DockSide` and
   `ModuleManifest.frames` are gone; a plugin built against v2 is skipped by the loader
-  until it is rebuilt.
+  until it is rebuilt. The workbench's `dock` and `popout` pane fields are optional
+  additions.
 
 ### What boots
 
@@ -95,7 +103,7 @@ the same kind of thing to the desktop, and a plugin should be able to add one.
 | `aurora` | Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                                   |
 | `grid`   | Canvas: a drifting grid with a scanline sweep. Pairs with `hud`.                                                    |
 | `image`  | A wallpaper the user uploaded. `params: { url, fit, dim }`.                                                         |
-| `splash` | **The default.** The home screen — avatar, ask bar, connector tiles — with windows over the top, and a wallpaper of its own behind. Collapses to a docked ask bar over that wallpaper; see below. |
+| `splash` | **The default.** The home screen — avatar, ask bar, connector tiles — under the workbench, and a wallpaper of its own behind. Collapses to a docked ask bar over that wallpaper; see below. |
 | `pulse`  | Canvas: one ripple per request through this node, read from the same `telemetryStore` the observability panel uses. |
 | `board`  | Widgets laid straight onto the desktop.                                                                             |
 
@@ -125,7 +133,7 @@ It is the reachability invariant the panes already have, applied to a *surface*.
 
 **An unregistered backdrop id falls back rather than blanking the desktop.** A
 plugin can be uninstalled while a saved workspace still names its backdrop; losing a
-wallpaper is not a reason to lose the windows on top of it.
+wallpaper is not a reason to lose the panes on top of it.
 
 The switch commands (`desktop.backdrop:<id>`) are **synthesized by the registry**,
 one per registered provider, exactly as the pane openers are — so a plugin's
@@ -134,8 +142,8 @@ backdrop gets its command without a second list that can fall out of step.
 ### The home screen minimizes
 
 `splash` was the one surface in the app with no way to get it out of the way. It
-is a backdrop, so it has no title bar to hang a control on and no taskbar button
-to restore it from, and it is `interactive`, so it takes pointer events across the
+is a backdrop, so it has no title bar to hang a control on and no status-bar
+button to restore it from, and it is `interactive`, so it takes pointer events across the
 whole desktop. The only escape was knowing that the desktop's right-click menu can
 swap the backdrop entirely — which is also the wrong verb: swapping throws the ask
 bar away in order to hide the greeting.
@@ -168,15 +176,15 @@ for the keyboard and the menu, where the current state is visible.
 Collapsing had nowhere to collapse *to*. A desktop has exactly one backdrop slot
 and `splash` is in it, so minimizing the home screen revealed a flat
 theme-coloured void — the wallpaper that would have been there is precisely what
-`splash` displaced. The floating desktop the collapse is supposed to land on did
-not exist.
+`splash` displaced. The desktop the collapse is supposed to land on did not
+exist.
 
 So the home surface paints a second, decorative backdrop **behind** itself:
 `resolveHomeUnderlay` (`packages/core/src/layout/home-surface.ts`) reads
 `params.under`, defaulting to `aurora` — the id that was `DEFAULT_BACKDROP` before
 the home screen took the slot, so a desktop still looks like the one people know.
-Collapsing now lands on a genuine floating desktop: wallpaper, taskbar, and the ask
-bar docked at the bottom.
+Collapsing now lands on a genuine desktop: wallpaper, status bar, and the ask bar
+docked at the bottom.
 
 The underlay is painted in **both** states, not swapped in on collapse. The landing
 screen has always been translucent over whatever is behind it, and a wallpaper that
@@ -211,7 +219,7 @@ is an **entrance on whichever form arrived** rather than a cross-fade: the outgo
 DOM is gone by the time React commits, and keeping both mounted to animate an exit
 would mean two live agent request states — a question asked in the strip would be
 lost on expand. The landing screen lifts away to the wallpaper; the strip rises
-from the taskbar. Under `prefers-reduced-motion` both keep the fade and drop the
+from the status bar. Under `prefers-reduced-motion` both keep the fade and drop the
 travel. Nothing animates the wallpaper itself: it is present in both states, and
 flashing it would make one desktop look like two.
 
@@ -267,10 +275,14 @@ Four rules there are load-bearing:
   only, and getting that wrong fails **silently**, because a `background-image` that
   404s simply paints nothing and the desktop looks like the wallpaper was never set.
 
-## The taskbar
+## The status bar
 
-`layout/taskbar.ts` derives the buttons, pure over `FrameState` + the registry — the
-taskbar has no opinion of its own about what is open. The strip itself is a zone
+The strip along the bottom. It was the floating desktop's taskbar, which is why the
+code still says `Taskbar`, the setting `desktop.taskbar` and the theme tokens
+`--taskbar-*`; renaming any of those would drop users' saved configs and themes.
+
+`layout/taskbar.ts` derives the pane buttons, pure over `FrameState` + the
+registry — the status bar has no opinion of its own about what is open. The strip itself is a zone
 container driven by the `desktop.taskbar` setting (`start`, `windows`, `mx`, `tray`,
 `clock`, `agent`, `spacer`); a stored config is **merged** over the defaults so a
 config written by an older build does not silently lose a zone the user never
@@ -301,11 +313,11 @@ The default zones are `start`, `windows`, `spacer`, `mx`, `tray`, `clock`, `agen
 **`agent` is last, past the clock.** `agent.chat` is the pane you reach for
 constantly, and without a button of its own it was available only through the palette
 or the Start menu. The button **toggles** rather than reopening: an
-already-open chat goes through `activateTaskbarEntry`, the same verb a window button
-runs, so a second click hides it. Calling `openPanel` unconditionally would look like
-nothing happened.
+already-open chat goes through `activateTaskbarEntry`, the same verb a pane button
+runs, so a second click hides its dock. Calling `openPanel` unconditionally would
+look like nothing happened.
 
-**Window buttons are a fixed width** (`--taskbar-btn-w`, 168px), not shrink-wrapped
+**Pane buttons are a fixed width** (`--taskbar-btn-w`, 168px), not shrink-wrapped
 around their label. Width used to track the text, so the strip was a ragged run of
 boxes whose click targets moved whenever a pane retitled itself — an editor button
 resizing as you switched buffers. Shrink is still allowed, so a crowded strip tightens
@@ -313,7 +325,7 @@ before it starts scrolling, but nothing grows to fit its text; the label ellipsi
 inside the fixed box, and with labels off (`is-iconic`) the button collapses to a
 square rather than leaving most of a text-width box empty.
 
-The strip must scroll, which is why the window buttons run `useHorizontalWheel`, so
+The strip must scroll, which is why the pane buttons run `useHorizontalWheel`, so
 a plain vertical wheel moves them sideways. They are `overflow-x: auto` with the
 scrollbar hidden, so before that the overflow was reachable only by trackpad or
 shift+wheel — on a mouse, the later buttons simply did not exist. The hook also stamps
@@ -323,51 +335,50 @@ rendering fault.
 
 ### The `mx` zone, and where the minibuffer went
 
-The minibuffer used to be the tiling frame's bottom row, so on a floating desktop it
-was not merely hidden but absent: `alt+x` flipped a store that nothing rendered, and —
+The minibuffer used to be the tiling frame's bottom row, so on the floating desktop
+it was not merely hidden but absent: `alt+x` flipped a store that nothing rendered, and —
 the part that was actually broken — every `dialogs.prompt()` waited forever on an
 answer the user was never shown, since the minibuffer is what serves prompts inline.
 
 So the shell mounts it as `<Minibuffer variant="overlay" />`, floating just above the
-taskbar and rendering **nothing when idle**. Idle is the whole difference: a permanent
-status strip stacked over a taskbar is a second status bar saying much the same
-thing. The taskbar's `mx` zone carries the
+status bar and rendering **nothing when idle**. Idle is the whole difference: a
+permanent strip stacked over the status bar is a second status bar saying much the
+same thing. The status bar's `mx` zone carries the
 idle half instead — the M-x button and the echo area — which is also the answer to
 "where is M-x?": a keystroke with no visible presence is one nobody finds, the same
 argument the tray's fullscreen button already makes.
 
 Two decisions in the derivation matter:
 
-**A button is per pane instance, not per window.** A window merged into three tabs
-is three things the user can switch to, and one button for it would make two of them
+**A button is per pane instance, not per group.** A group of three tabs is three
+things the user can switch to, and one button for it would make two of them
 unreachable from here.
 
 **The order is stable** — by the numeric suffix of the instance id, i.e. by the
-order panes were opened. Nothing about focus, z-order or minimizing may reorder it,
-because a taskbar that reshuffles on focus moves the button out from under a pointer
-already travelling toward it. (Comparing the ids as plain strings would put `#10`
-before `#2`, so panes would visibly reshuffle the tenth time you opened one.)
+order panes were opened. Nothing about focus, moving a tab or hiding a dock may
+reorder it, because a strip that reshuffles on focus moves the button out from under
+a pointer already travelling toward it. (Comparing the ids as plain strings would
+put `#10` before `#2`, so panes would visibly reshuffle the tenth time you opened
+one.)
 
-Clicking follows the universal convention, in one verb (`activateTaskbarEntry`):
-clicking the thing you are already looking at **minimizes** it, clicking anything
-else brings it forward. A taskbar whose focused button does nothing silently
-swallows every second click. **Double-clicking always minimizes** (`minimizePane`),
-whatever the first click did — a direct "put this away" that does not depend on
-what state the button happened to be in.
-
-The taskbar is also what makes minimize usable at all — a minimized window is off
-screen, and this is the only route back to it. `minimizePane` minimizes the pane's
-whole window, tabs and all.
+Clicking runs one verb, `activateTaskbarEntry`: clicking the focused pane when it
+is in a dock **hides that dock** — the toggle every IDE panel button has — and
+clicking anything else brings it forward and focuses it, showing its dock or
+switching its group's tab as needed. **Double-clicking** a docked pane always hides
+its dock, whatever the first click did. A button's state is `focused`, `open`,
+`minimized` (in a hidden dock) or `hidden` (a background tab, or behind a maximized
+group).
 
 ### Attention: a pane that finished while you were elsewhere
 
-Minimizing is non-destructive, and panes keep working while put away — a deep-research
-run, a training job, an ingest, a compile. `requestPaneAttention(instanceId)` sets
-`PaneState.attention`, and the pane's taskbar button pulses until the user looks at it.
+Panes keep working out of sight — in a background tab or a hidden dock: a
+deep-research run, a training job, an ingest, a compile.
+`requestPaneAttention(instanceId)` sets `PaneState.attention`; the pane's status-bar
+button pulses and its tab shows a small accent marker until the user looks at it.
 
-- **Cleared by `activateTaskbarEntry`, nowhere else.** Looking at the pane is what
-  acknowledges it; clearing on a timer or on any focus change would let a button keep
-  pulsing after the user had plainly dealt with it.
+- **Cleared when the pane is focused**, by any route (`focusPane` in
+  `dock/frame.ts`): a click on its tab, its status-bar button, Spotlight, a key.
+  Looking at the pane is what acknowledges it, and no timer clears it.
 - **Refused for the focused pane.** Flashing a button for the thing on screen is noise,
   so `requestPaneAttention` returns `false` and changes nothing.
 - **A boolean, not a count.** The button is a flash, not an inbox; "three things
@@ -409,7 +420,7 @@ is hidden while searching, where it would compete with the results.
 The grouping used to be by **`PaneRole`**: Documents / Tools / Widgets. Sixty-odd
 entries in one alphabetical run did say nothing, but the role answers a question
 nobody browsing a launcher is asking — it describes what kind of pane something is,
-and everything in this menu opens in a window either way. The feature a pane belongs to is
+not what it is for. The feature a pane belongs to is
 what someone is actually hunting for, and it was already the axis the search box
 matched on: a view's title says what the pane is, the module's says what feature it
 is part of, and those are frequently different words — the Observability module's pane
@@ -508,256 +519,96 @@ nothing reached by typing moved, and `Enter` and the arrows do nothing while the
 shows. The `briefing.showInSpotlight` setting restores the plain list. See
 [briefing.mdx](../modules/briefing.mdx).
 
-## Windows
+## The workbench
 
-A window's content is an `AreaNode` — a tab list — so a plain window is an area with
-one tab and a merged window is an area with several. See
-[windowing.mdx](windowing.mdx#model).
+Panes live in tab groups: the centre split tree, three edge docks, and on desktop
+pop-out windows. The model, the verbs and the rules that keep a pane mounted are in
+[windowing.mdx](windowing.mdx); this section covers what a group looks like and
+does.
 
-The active tab is rendered through **`PaneWithRegions`**, so a pane keeps its
-[region strips](panel-groups.mdx#where-a-region-host-may-live). Windows used to render
-a bare `PaneHost`, which dropped every strip a region host declared with nothing to
-say one had gone. That wrapper brings a constraint with it — `.os-window-body` must be
-`display: flex`, because `PaneWithRegions`'s root carries `flex: 1` and no height —
-and getting it wrong empties **every** window (`region-host-is-flex.test.ts`).
+A group's active tab is rendered through **`PaneWithRegions`**, so a pane keeps its
+[region strips](panel-groups.mdx#where-a-region-host-may-live). That wrapper brings
+a constraint with it — the pane box (`.wb-pane`) must be `display: flex`, because
+`PaneWithRegions`'s root carries `flex: 1` and no height — and getting it wrong
+empties **every** pane (`region-host-is-flex.test.ts`).
 
-### Geometry
+### The group header
 
-Rects are **pixels**, against `FrameState.windowViewport`. The window layer measures
-itself and owns the single `SET_WINDOW_VIEWPORT` dispatch, because every rect in the
-store is relative to that number and exactly one element may be its authority.
+`GroupHeader.tsx` is the tab strip plus a cluster of stroke-icon buttons:
 
-Two rules that are bugs if forgotten:
+| Button                        | Shown when                                          |
+| ----------------------------- | --------------------------------------------------- |
+| Fullscreen / Leave fullscreen | the active view declares `fullscreen: true`         |
+| Pop out into its own window   | `window.multi` and the view declares `popout: true` |
+| Dock back into the workbench  | the group is a pop-out                              |
+| Hide the dock                 | the group is a dock                                 |
+| Maximize / Restore            | not a pop-out (the OS maximizes those)              |
+| Close                         | a pane is showing                                   |
 
-- **The viewport must be re-reported after every layout load.** `LOAD_WORKSPACE`
-  replaces the whole frame with the deserialized one, whose `windowViewport` is
-  whatever was stored — null for a fresh or migrated blob. The element has not
-  resized, so a `ResizeObserver` alone stays silent, and a migrated v1 window (saved
-  on a 1×1 basis) would never scale up into pixels: it would render a few pixels wide.
-- **`SET_WINDOW_VIEWPORT` must not bump `revision`.** It is a projection, not an edit.
-  Marking it dirty makes every browser resize dirty the layout and drives the 600 ms
-  autosave debounce into a continuous write loop.
+The focused group carries a 2px accent top border. A double-click on the empty
+strip maximizes the group; on a tab it is just two clicks. Middle-click closes a
+tab, guarded.
 
-Geometry is committed to the store on pointer-**up**; the in-flight rect is local
-component state. Dispatching per frame would bump `revision` a hundred times per drag.
+### The header's right-click menu
 
-Clamping lives in the **reducer**, not the drag handler, so a rect arriving from an
-agent tool obeys the same rules as one dragged by hand. `clampRect` keeps a strip of
-titlebar on the surface and never allows a negative `y` — a window above the surface
-hides its own titlebar behind the app's title strip, where dragging moves the OS
-window and the user cannot get it back.
-
-### Snapping
-
-`layout/snap.ts` is pure geometry, shared by the drag preview and the agent's snap
-verb so the two cannot disagree — a preview promising one rect while the drop delivers
-another is a bug nobody reports precisely.
-
-- Corners are tested **before** edges: inside a corner box the pointer is within the
-  edge threshold of two sides at once, and whichever edge test ran first would win
-  arbitrarily.
-- The **top edge maximizes** rather than snapping to a top half — the near-universal
-  convention, and a "top half" is the one snap nobody reaches for.
-- Halves, quarters and thirds tile the surface exactly; the far cell absorbs the odd
-  pixel of an odd width, so they always sum to the full extent instead of overlapping
-  or leaving a seam.
-- The zones are `left`/`right`/`top`/`bottom`, the four corners, `center` (a centred
-  two-thirds box), the three full-height `third-*`, and `max`. `center` and the thirds
-  are **keyboard and palette only** — `snapZoneAt` never returns them. There is no
-  unambiguous pointer gesture for "the middle third" that does not also redefine what
-  dragging near an edge means, and the edge gesture is tuned.
-- `SNAP_ZONES` in `snap.ts` is the **one** list. It used to be spelled out three more
-  times — a `Set` in `serialize.ts`, an array in `window-placement.ts`, another in the
-  agent's `tool-exec.ts` — and each is a *filter* that drops what it does not
-  recognize. A zone added to the type and to `rectForZone` but missed in one of them
-  fails silently: the snap works, and the window comes back somewhere else after a
-  reload.
-- A snapped or maximized window **re-derives** its rect from the zone when the surface
-  resizes, rather than being scaled: half of the new surface is exactly half, where a
-  scaled rect would carry the rounding of the old one.
-
-The drop decision is resolved **synchronously** during the drag and kept in a ref.
-Reading it back from React state at pointerup loses the last frame's zone whenever the
-move and the release land in the same frame — an intermittent failure to snap that
-only shows up when moving fast.
-
-#### Snap assist: the other half fills itself
-
-Snapping a window to a half over a **maximized** window used to leave the maximized one
-full-width underneath, so the result was one window on top of another rather than the
-split the gesture asks for. `SET_WINDOW_MODE` now takes a `fill` flag: when the action
-lands on a half, whatever was covering the other half is snapped into it.
-
-- `complementZone` is **halves only**. A quarter leaves an L-shaped remainder that no
-  single zone describes, a third leaves two, `center` leaves a frame and `max` leaves
-  nothing. Picking a "closest" zone for those would move a second window somewhere the
-  user did not point, which is worse than not moving it — the value of the fill is that
-  the result is the split they were already looking at.
-- The candidate is the topmost window that is maximized, snapped to the *same* zone, or
-  overlapping the newly-taken half by half its own area. A window already sitting in
-  the complement is skipped: re-snapping it would overwrite the `restoreRect` it holds
-  for its own un-snap.
-- **One** window moves, never several. Filling every overlapping window into the same
-  zone would stack them, and the second one to arrive would be a window the user never
-  touched appearing from behind the first.
-- `fillTarget` lives in `snap.ts` beside `rectForZone` for the same reason everything
-  else there does: `SnapOverlay` draws the complement rect **only when a fill will
-  actually happen**, and a second copy of "is there a candidate" would drift into a
-  preview promising a split and a drop delivering an overlap.
-- `fill` is **opt-in**. The drag handler and the snap chords pass it, because a person
-  snapping is arranging a screen. The `window_state` agent tool does not: it is moving
-  one named window, and a second one shifting under it would be an effect with no
-  visible cause.
-
-### The snap palette
-
-The four halves are bare chords (`mod+shift+<arrow>`). The other nine zones sit behind
-a **two-stroke prefix**, `mod+alt+s`, laid out as the 3x3 block under the left hand:
-
-```
-q w e    top-left    top half     top-right
-a s d    left half   centred      right half
-z x c    bottom-left bottom half  bottom-right
-1 2 3    left third  middle third right third
-f        maximized       arrows   the four halves
-```
-
-`mod+shift+<arrow>` was already the halves family and `mod+alt+up`/`down` are maximize
-and minimize, so a third modifier on either risks a collision that shows up on one
-platform only. A prefix has room for all thirteen zones and gives the palette
-something to draw.
-
-`SnapAssist.tsx` renders that grid while the prefix is pending. It owns **no keyboard
-handling**: the two-stroke bindings are the only listener, and the component is a pure
-renderer of the dispatcher's pending-chord state — so it cannot fall out of step with
-what the keys do, and the Escape ladder's first rung (abandon a half-typed chord) keeps
-working. Each cell's thumbnail is drawn from `rectForZone` on a unit surface, the same
-trick `SnapOverlay` uses, so a cell pictures the rect it will actually produce.
-
-The commands run `snapFocused`, which snaps the focused window — or, when no window
-holds focus, the window of the focused pane.
-
-### Merging and tearing
-
-Dropping a window on another window's titlebar merges them into tabs
-(`MERGE_INTO_WINDOW`). The titlebar is marked with `data-window-titlebar` for the
-hit-test — and **never** with `data-app-drag-region`, which belongs to the app's own
-titlebar. On a window, that attribute would drag the whole OS window instead of the
-window under the pointer.
-
-A tab torn out of a merged window gets a window of its own (`WINDOW_FROM_PANE`, the
-`window.tearOff` command).
-
-### The titlebar's right-click menu
-
-Right-clicking a window's titlebar opens the `window.titlebar` context menu, which the
-`desktop` module contributes as two groups:
+The `window.titlebar` context menu (the kind keeps its floating-desktop name: the
+help items and any plugin that adds to the menu are keyed on it), contributed by the
+`desktop` module as two groups:
 
 - **Help.** `Help: <pane>` opens that pane's module page on the published docs, and
   `All documentation` opens the docs home. The page is found by module id
   (`registry.viewOwnerId`) in `ui/desktop/help-links.ts`; a module with no page gets
   no per-pane item rather than a guessed URL, and `help-links.test.ts` checks every
   listed page exists in `docs/`.
-- **Window verbs.** Minimize, Maximize or Restore (named by the window's state),
-  `Move to its own window` when the window holds more than one tab, and Close.
+- **Group verbs.** Hide the dock (in a dock), Maximize or Restore, **Split into its
+  own group** (centre) or **Move to the centre** (dock), and Close.
 
-A right-click on a tab is about **that** tab, not the active one: the tab buttons
-carry `data-instance-id` and the handler reads the target from the tab under the
-pointer.
+A right-click on a tab is about **that** tab, not the active one: tabs carry
+`data-wb-tab` and the handler reads the target from the tab under the pointer.
 
-Dragging a window also **releases keyboard/pointer capture** first. A captured pane —
-a game, a terminal, the server-rendered browser — otherwise keeps the pointer and the
-drag never reaches the handler.
+### Close
 
-### Minimize, maximize, close
-
-- **Minimize keeps the pane mounted.** A minimized terminal keeps running and a
-  minimized game keeps its socket. See
-  [windowing.mdx](windowing.mdx#pane-lifetime-unmount-is-not-close) for the two ways
-  this is easy to break.
-- **Maximize** stores the rect it came from and restores to it. Capturing a restore
-  rect only happens when leaving a _free-floating_ state, so maximizing an
-  already-snapped window does not overwrite the rect it was originally dragged to.
-- **Minimize remembers the mode, not just the rect.** `WindowMode` is a single enum, so
-  `'minimized'` overwrites `'maximized'` — and the restore path *consumes* `restoreRect`,
-  which meant a maximized window came back at whatever small size it had before it was
-  maximized. The rect was never lost; losing the mode is what discarded it.
-  `WindowState.minimizedFrom` records `{ mode, snap }` on the way down, and un-minimizing
-  resumes exactly that, leaving `restoreRect` intact for the un-maximize that comes
-  later. It carries a zone and never a rect, so the rect is **re-derived** and a window
-  minimized before the app was resized comes back filling the new surface.
-  `minimizedFrom` is cleared by anything that redefines where the window belongs — an
-  explicit `SET_WINDOW_RECT` (which drops `restoreRect` with it), a maximize, a snap —
-  and it is persisted, so the round trip survives a reload.
-- **Close** runs the existing `closePaneGuarded`, so a dirty pane still prompts.
+Close runs `closePaneGuarded`, so a dirty pane still prompts. It is every close's
+path — the header button, middle-click, keybindings, the status bar and agent tools.
+A close has no exit animation: the floating desktop's window exit was the only
+one, and its hook went with it.
 
 ### Motion
 
-Windows move the way a native window manager's do: short, decisive, decelerating
-(`desktop/window-motion.ts`, timings mirrored by `--dur-enter`, `--dur-exit`,
-`--dur-move`, `--ease-out` and `--ease-in` in `themes.css`).
+A pane fades and lifts in when it opens or its tab is picked (`.wb-pane-enter`,
+180ms). Moving, splitting, maximizing and dock toggles do not animate: they move a
+box, and animating a box that holds a canvas, a terminal or a browser engine every
+frame costs far more than it shows. All motion is **off** with the
+`desktop.animations` setting (mirrored onto `<html data-motion>` by
+`workbench/motion.ts`) and whenever the system asks for reduced motion.
 
-| Change | What plays |
-| --- | --- |
-| A window opens | Fades in from 97% scale and 8px low, 180ms, expo-out |
-| A window closes | Fades to 96%, 130ms, accelerating; then it is removed |
-| Minimize / restore | Shrinks into its taskbar button (`data-taskbar-instance`) and grows back out; straight down when the taskbar is hidden |
-| Maximize, restore-down, a snap, the neighbour snap assist moves | Slides from the old box to the new one, 220ms |
-| A tab is picked, a pane opens | The pane's content fades in, 180ms (`.frame-pane-host`) |
-
-- **All of it is the Web Animations API on the window's own element**, so there is
-  no animation state in React and nothing to clean up. `DesktopWindow` measures its
-  layout box after every render and animates any difference it did not cause
-  itself. A drag needs no special case: its last frame and its committed rect are
-  the same box.
-- **Geometry slides by transform (FLIP), never by left/top/width/height.** A window
-  can hold a canvas, a terminal or a browser engine, and resizing those every frame
-  costs far more than one composited transform. The content is briefly scaled
-  during the slide, as on macOS.
-- **Closing waits for the exit** through `setPaneExitAnimator`
-  (`core/layout/pane-exit.ts`). `closePaneGuarded` is every close's path, so the ✕,
-  keybindings, the taskbar and agent tools all get it. It plays only after the close
-  guard has agreed, and a close never waits more than `PANE_EXIT_MAX_MS` (200ms).
-  Only a window whose last pane is closing animates; closing one tab of several does
-  not.
-- **Restored windows do not animate in.** The windows a desktop arrives with at
-  startup appear at once. Only windows opened after that
-  play an entrance.
-- **Resizing the app does not animate.** Snapped and maximized windows are
-  re-derived on every frame of a resize, and free windows are re-clamped as they
-  draw, so geometry changes within 300ms of one are applied as they come.
-- **The pane fade is opacity only.** A transform on `.frame-pane-host`, even
-  mid-animation, would make it the containing block of every `position: fixed` menu
-  inside the pane. (The window body's `contain: strict` already does that at the
-  window level — see [below](#a-popover-inside-a-pane-must-portal-out).)
-- **Off** with the `desktop.animations` setting (mirrored onto
-  `<html data-motion>` for the stylesheet) and whenever the system asks for reduced
-  motion. Every change is then instant, closes included.
+## Presenting and fullscreen
 
 ### Presenting a pane
 
-Maximize fills the window layer, which is inset below the titlebar and above the
-taskbar. **Presenting** goes past both: `FrameState.presentedInstanceId` names a
-pane, and the stylesheet promotes its window to `position: fixed; inset: 0` at
-z-index 48 — over the taskbar and the titlebar, still under the spotlight, so `mod+k`
-reaches the user while a game fills the screen.
+Maximizing a group fills the workbench, which is inset below the titlebar and above
+the status bar. **Presenting** goes past both: `FrameState.presentedInstanceId`
+names a pane, and its box (`.wb-pane.is-presented`) is drawn `position: fixed;
+inset: 0` at z-index 48 — over the status bar and the titlebar, still under the
+spotlight, so `mod+k` reaches the user while a game fills the screen.
 
 Four things here are load-bearing.
 
-**The window is promoted in place, never re-rendered somewhere else.** Rendering the
+**The pane is promoted in place, never re-rendered somewhere else.** Rendering the
 pane into a separate full-screen layer reconciles as a different element and remounts
 it — killing a live PTY, socket or browser engine, the exact failure
 [pane-lifetime](windowing.mdx#pane-lifetime-unmount-is-not-close) exists to prevent.
-The window keeps its position in the React tree and only its CSS changes.
+The pane keeps its host element and only its box's CSS changes.
 
-**The keybinding presents the focused window's showing pane** (`presentFocusedPane`,
+**The keybinding presents the focused group's showing pane** (`presentFocusedPane`,
 behind the `area.fullscreen` command, which keeps its old id so saved keymap
 overrides still name it).
 
-**The reducer refuses an id that names no pane**, and `sanitizeFocus` clears the id
-the moment it stops naming one. Both matter more than the focus equivalents: a stale
-id here is not a mis-aimed keybinding but a screen with the chrome hidden and no
-visible way out. Closing the pane or its window orphans it — one sweep covers both.
+**The reducer refuses an id that names no pane**, and sanitizing the frame clears
+the id the moment it stops naming one. Both matter more than the focus equivalents:
+a stale id here is not a mis-aimed keybinding but a screen with the chrome hidden
+and no visible way out. Closing the pane or its group orphans it — one sweep covers
+both.
 
 **It is never serialized.** `serialize` deletes the field and `deserialize` forces it
 null. It is a momentary way of looking at a pane, not a property of the workspace, and
@@ -767,9 +618,8 @@ guess their way out of.
 A view opts in with **`fullscreen: true`** (`PanelDecl`/`WidgetDecl`) — `karaoke.stage`,
 `games.arcade`, `browser.view`, `visualizer.pane`. (`hassault.play` was one until it
 became a launcher: the match is played in the native window, which owns its own
-fullscreen.) Only those get the
-fullscreen titlebar button (ahead of minimize), and only those escalate to **OS-window fullscreen** on a native
-shell. Escalating every presented pane would turn an ordinary "show me this bigger"
+fullscreen.) Only those get the Fullscreen button in the group header, and only
+those escalate to **OS-window fullscreen** on a native shell. Escalating every presented pane would turn an ordinary "show me this bigger"
 into something that swallows the display; and the escalation remembers whether the app
 was *already* fullscreen, so leaving a presented game does not drop an app the user had
 fullscreened themselves back into a window.
@@ -817,9 +667,6 @@ it is. Three routes reached it, and all three are now closed:
 The frontend half is not belt-and-braces: the drag region is the one route with no
 shell side to guard, so the attribute has to go.
 
-`mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
-several, so `restoreRect` is written and consumed in a single place.
-
 ### Page zoom
 
 Ctrl+= (or Ctrl++), Ctrl+- and Ctrl+0 zoom the whole dashboard the way a browser zooms
@@ -837,8 +684,11 @@ Rules that are quiet if wrong:
   under browser zoom, so none of them has to know.
 - **Native browser panes are separate views** placed in *window* pixels, while a
   pane measures itself in CSS pixels, which zoom makes bigger. `desktopWindow.ts` scales
-  their bounds by the zoom factor on the way to the shell; the panes' bounds polling
-  re-syncs them after a zoom change.
+  their bounds by the zoom factor on the way to the shell, and the panes' bounds
+  tracking re-syncs them after a zoom change.
+- **Pop-outs do not inherit the zoom.** A child window starts at 1.0, so the shell
+  copies the main window's factor to each pop-out when it opens and on every
+  change.
 - **Ctrl+wheel yields** to anything that handled the event first: a canvas that zooms
   itself (the model graph) calls `preventDefault` and keeps its gesture. The listener is
   in the bubble phase on `window` for exactly that reason.
@@ -847,7 +697,7 @@ Rules that are quiet if wrong:
 
 ## Where it mounts
 
-The window layer is a **sibling of the shell's views**, inside `.shell-content`:
+The workbench is a **sibling of the shell's views**, inside `.shell-content`:
 
 ```
 .shell
@@ -855,30 +705,27 @@ The window layer is a **sibling of the shell's views**, inside `.shell-content`:
 ├── .shell-content         (position: relative)
 │   ├── Oobe               first run
 │   ├── .shell-view        the desktop (backdrop)
-│   └── .os-window-layer   ← windows, over both
+│   └── Workbench          ← groups, docks and panes, over the backdrop
 ├── Minibuffer (overlay)
-└── Taskbar
+└── Taskbar                the status bar
 ```
 
-Sibling rather than child because `.shell-view[hidden]` is `display: none` — a window
-layer nested inside the view would vanish with it. Inside `.shell-content` rather than
-`.shell` because that bounds the coordinate space below the titlebar, which is what
-stops a window titlebar sliding under the drag region.
-
-The layer is `pointer-events: none` with `auto` on each window, so the backdrop
-underneath stays clickable.
+Sibling rather than child because `.shell-view[hidden]` is `display: none` — panes
+nested inside the view would unmount (and lose their sessions) whenever the wizard
+showed. Inside `.shell-content` rather than `.shell` because that bounds it below the
+titlebar and above the status bar. Pop-out windows render through portals from the
+same tree, so they too stay mounted with it.
 
 ## Z-index scale
 
-Windows sit above the shell's views and below every overlay that can appear over them.
 Declared once, in `packages/ui/src/desktop/desktop.css`:
 
 | Layer          | z-index |
 | -------------- | ------- |
 | backdrop       | 0       |
 | shell views    | 1       |
-| window layer   | 30      |
-| taskbar        | 40      |
+| workbench      | 30 (groups, dividers and panes are offsets inside this band) |
+| status bar     | 40      |
 | start menu     | 45      |
 | clock panel    | 45      |
 | presented pane | 48      |
@@ -886,34 +733,40 @@ Declared once, in `packages/ui/src/desktop/desktop.css`:
 | toasts         | 9999    |
 | dialogs        | 10000   |
 
-A presented pane sits above the taskbar and the titlebar — that is the point of it — but deliberately **below** the spotlight, so `mod+k` still reaches the user while
-a game fills the screen. The window layer also drops its `overflow: hidden` while
-something is presented, since the promoted window has to escape the layer's box.
+A presented pane sits above the status bar and the titlebar — that is the point of
+it — but deliberately **below** the spotlight, so `mod+k` still reaches the user
+while a game fills the screen.
 
 On desktop the browser pane's **native child webview composites above all HTML**, so
 any overlay that must appear over it calls `suppressNativeOverlays()` — the treatment
-the command palette already uses.
+the command palette already uses, and a tab drag claims it too.
 
 ### A popover inside a pane must portal out
 
-`.os-window-body` has `contain: strict`, and layout/paint containment makes it the
+`.wb-pane` has `contain: strict`, and layout/paint containment makes it the
 **containing block of every `position: fixed` descendant, and clips them** — so a
-`fixed` dropdown inside a pane is laid out relative to the window, not the viewport,
-and cut off at the window's edge, whatever z-index it carries. A panel that is meant
-to extend past its window (the Agent pane's `ModelPicker`, the settings page's
-`ModelCombobox`, the shared `ContextMenu`) renders through
-`createPortal(…, document.body)` and measures its trigger with
-`getBoundingClientRect()`, which is already in viewport coordinates.
+`fixed` dropdown inside a pane is laid out relative to the pane, not the viewport,
+and cut off at the pane's edge, whatever z-index it carries. A panel that is meant
+to extend past its pane (the Agent pane's `ModelPicker`, the settings page's
+`ModelCombobox`, the shared `ContextMenu`) renders through a portal and measures its
+trigger with `getBoundingClientRect()`, which is already in viewport coordinates.
+
+The portal target is the **pane's own window's** body, `usePaneWindow().document.body`,
+not the global `document.body`: a pane can be in a pop-out, and a popover portaled to
+the main window would open on the wrong screen. The same hook gives the viewport size
+to clamp against. See [windowing.mdx](windowing.mdx#pop-out-windows).
 
 ## Agent verbs
 
 Split across two groups, deliberately.
 
-**Arranging** lives in the existing `layout` group: `open_window` (give a pane a
-window of its own, with `snap` or an exact `rect`), `window_state`
-(`minimize`/`maximize`/`restore`/`snap`/`present`/`unpresent` in one schema rather
-than six), and `arrange_windows`. Two panes side by side is two snaps, `left` and
-`right`.
+**Arranging** lives in the existing `layout` group: `place_pane` (the centre, a dock,
+a split beside a group, or into a group), `pane_state` (maximize/restore a group,
+hide/show a dock, present/unpresent) and `arrange_panes` (`columns`, `rows`, `grid`,
+`tabs`, `even` over the centre). Two panes side by side is one `place_pane` with a
+split. The floating desktop's `open_window`, `window_state` and `arrange_windows`
+are still answered, mapped onto these, and cost no schema. See
+[agent-tools.mdx](agent-tools.mdx).
 
 **Appearance** is its own lazily-loaded `desktop` group: `desktop.set_backdrop`,
 `desktop.set_theme`, `desktop.configure_taskbar`. It is not in
@@ -923,26 +776,22 @@ cut 34 → 11 tools for a measured reason (see
 every turn by every agent — including the ones that never touch it. The group loads
 on demand, or when the prompt mentions a theme, wallpaper, backdrop or taskbar.
 
-`get_layout` reports the open `windows`, `desktop.backdrop`, and the
-**catalogs** (`desktop.backdrops`, `desktop.themes`) — so the appearance verbs have
-ids the model cannot guess without two more always-on `list_*` schemas.
+`get_layout` reports the `center` tree, the non-empty `docks`, any `popouts`, the
+focused and maximized group, and `desktop.backdrop` with the **catalogs**
+(`desktop.backdrops`, `desktop.themes`) — so the appearance verbs have ids the model
+cannot guess without two more always-on `list_*` schemas.
 
-Every one of these refuses bad input **with the valid options** rather than guessing:
-an unknown backdrop returns the registered ids, an unknown snap zone returns every
-zone in `SNAP_ZONES`.
+Every one of these refuses bad input **with the valid options** rather than
+guessing: an unknown backdrop returns the registered ids, and an unknown `to`,
+`state` or `style` returns the valid words.
 
 ## Theming
 
-All window and taskbar chrome reads a `--win-*` / `--taskbar-*` token group, so a
-theme restyles the whole desktop by redefining tokens and touching no component. The
-bevel is why `--win-border-light` and `--win-border-dark` exist as a pair: a retro
-theme sets them to contrasting values and gets a raised edge; every other theme sets
-them equal and the bevel disappears, with no branching anywhere.
-
-That pair is also why **nothing may set `border-color` on a window**: the shorthand
-overrides all four sides and flattens the bevel. Focus is carried by the titlebar
-(`--win-titlebar-bg-active`) and the shadow instead. Control placement is not
-themeable: minimize, maximize and close sit at the right end of the titlebar in every
-theme.
+Group and status-bar chrome reads the `--win-*` / `--taskbar-*` token groups (the
+names are the floating desktop's, kept so existing themes still apply), so a theme
+restyles the shell by redefining tokens and touching no component. A group header's
+background is `--win-titlebar-bg`, and `--win-titlebar-bg-active` when it is the
+focused group, which also gets the 2px `--accent` top border. Control placement is
+not themeable: the header buttons sit at the right end of the strip in every theme.
 
 See [theming.mdx](theming.mdx).

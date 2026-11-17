@@ -337,8 +337,8 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         <Workbench appTitle={appTitle} />
       </div>
       {/* Outside `.shell-content`, so it takes its own strip of the shell rather
-          than overlapping the desktop — the window layer's coordinate space
-          then stops at the taskbar, and a maximized window cannot cover it. */}
+          than overlapping the desktop — the workbench then stops at the status
+          bar, and a maximized group cannot cover it. */}
       {/* The minibuffer prompt. Without it `alt+x` flipped a store nothing
           rendered, and — worse — a `dialogs.prompt()` waited forever on an
           answer the user was never shown. It renders nothing when idle; the

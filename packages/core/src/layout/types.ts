@@ -74,8 +74,6 @@ export interface AreaNode {
   id: string;
   tabs: PaneState[];
   activeTab: number;
-  /** Legacy: read from old blobs, never set. */
-  headerCollapsed?: boolean;
 }
 
 /** Legacy (frame v3): a window's position and size, in pixels. */

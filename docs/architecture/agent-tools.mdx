@@ -305,8 +305,8 @@ schema in `orchestrator.py`, a `case` in `executeTool` (`tool-exec.ts`), and the
 verb list in `tool-names.ts` that feeds "did you mean". The `case` calls a
 controller export (`layout/controller.ts`) rather than dispatching itself, so the
 agent, the keyboard and the pointer share one rule. Argument **validation** belongs
-at the `tool-exec.ts` boundary, not in the controller: an unknown snap zone or
-arrange style is refused there with the valid options, so the model can correct
+at the `tool-exec.ts` boundary, not in the controller: an unknown `place_pane`
+target or arrange style is refused there with the valid options, so the model can correct
 itself in one round.
 
 ## Reading widget state: `getAgentContext()`

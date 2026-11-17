@@ -7,8 +7,8 @@
  * no floating layer and no mode switch; the escape hatches are maximizing a group,
  * presenting a pane, and popping a group out.
  *
- * Nothing renders this yet. It lives beside the v3 model so the engine can be
- * built and tested before the shell is switched over; `migrate.ts` is the bridge.
+ * `FrameState` is an alias for `DockFrame`. The v3 window model stays in
+ * `../types.ts` only so older blobs can be read; `migrate.ts` is the bridge.
  * See docs/architecture/windowing.mdx.
  */
 import type { AreaNode, BackdropRef } from '../types';

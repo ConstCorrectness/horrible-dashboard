@@ -5203,7 +5203,7 @@ kbd {
    bar sits inside a pane that clips its overflow, so an absolutely positioned
    panel is cut off after a row or two. Rendered through a portal on `body`, since
    `.wb-pane`'s `contain: strict` would otherwise capture and clip even a
-   fixed panel. Above the window layer (30) and the taskbar (40) for the same
+   fixed panel. Above the workbench (30) and the status bar (40) for the same
    reason the minibuffer is. */
 .agent-model-menu {
   position: fixed;

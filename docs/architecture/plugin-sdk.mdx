@@ -117,7 +117,7 @@ A view may also declare a **`category`** (`PaneCategory`: `research`, `agents`,
 `build`, `data`, `play`, `people`, `system`), the Start-menu band it is filed
 under. A plugin that declares none lands under **Plugins**; built-in modules set it
 once on their manifest. See
-[desktop-shell.mdx](desktop-shell.mdx#the-taskbar) for how the launcher groups.
+[desktop-shell.mdx](desktop-shell.mdx#the-status-bar) for how the launcher groups.
 
 A view that only ever renders **inside** another pane — as a region strip or a
 section body — declares `embedded: true`. It stays registered and reachable, but
@@ -146,7 +146,10 @@ the `settings` contribution in SDK `0.2.0` and the `collab` pane field) do
 views may declare `regions`. The later `sections` and `embedded` fields are
 additive and optional, so they did not bump it. Version `3` removed the tiling frame:
 `defaultDock`, `defaultDockSize`, `dockable`, `DockSide` and `ModuleManifest.frames`
-are gone, and every pane opens in a window.
+are gone. The docked workbench that followed added two optional pane fields without a
+bump: `dock` (`'left' | 'right' | 'bottom'`, where a tool or widget opens by default)
+and `popout` (the view may pop out into an OS window on desktop; see
+[windowing.mdx](windowing.mdx#pop-out-windows)).
 
 ## Package format
 

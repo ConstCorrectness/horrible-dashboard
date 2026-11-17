@@ -3,56 +3,69 @@ sidebar_position: 2
 sidebar_label: Windowing
 ---
 
-# Windowing: the desktop model
+# Windowing: the docked workbench
 
-:::warning The shell now renders the docked workbench
-Since the switch to frame schema v4 the app no longer shows floating windows. Panes
-live in tab groups: a centre split tree and three edge docks. See
-[The docked workbench](#the-docked-workbench) at the end of this page. The sections
-in between still describe the floating desktop where they talk about window rects,
-snapping, minimizing and window placement; they are kept until the rest of this
-page is rewritten, because the pane, region, section and controller rules they
-also cover are unchanged.
-:::
+There is one workbench, IDE-style. Panes live in **tab groups**: a **centre** split
+tree of groups, three **edge docks** (`left`, `right`, `bottom`), and on the
+desktop shell, groups **popped out** into OS windows of their own. Inside a pane,
+**region strips** (the successor of panel groups — see
+[panel-groups.mdx](panel-groups.mdx)) run down its own sides. That is the whole
+model. The surface around it — the backdrop, the status bar, boot — belongs to
+[desktop-shell.mdx](desktop-shell.mdx); this page covers the data panes live in and
+the verbs that change it.
 
-There is one desktop, and every pane on it lives in a **window**. A window can hold
-several panes as **tabs**; inside a pane, **region strips** (the successor of panel
-groups — see [panel-groups.mdx](panel-groups.mdx)) run down its own sides. That is
-the whole model. How windows are _presented_ — the backdrop, the taskbar, snapping,
-motion — belongs to [desktop-shell.mdx](desktop-shell.mdx); this page covers the
-data they live in and the verbs that change it.
+:::info History, and why it is a workbench
+- **Until 2026-10** a desktop could be **floating** or **tiling** (a Blender-style
+  centre grid with tool docks, rails and a dozen `frames:` presets). Tiling was
+  removed: two paradigms meant a lossy convert between them, a mode menu, and every
+  feature built twice.
+- **2026-10 to 2026-11** the app was floating-only: every pane in a free window
+  with snapping, minimize and a taskbar.
+- **Since 2026-11 (frame schema v4)** it is this workbench. The floating desktop was
+  replaced, not kept as a mode, for the same one-paradigm reason, because of four
+  problems that came from free windows themselves: window geometry bugs (pixel
+  rects, viewport rescaling, snap and restore state), overlap the user had to
+  manage by hand, drag/resize/maximize jank, and the native browser view drawing
+  over windows stacked above it. A workbench has no rects to get wrong and nothing
+  in the main window overlaps a pane. The escape hatches are maximizing a group,
+  presenting a pane, and popping a group out.
 
-:::info History
-Until 2026-10 a desktop could also be **tiling**: a Blender-style centre grid of
-split areas, three tool docks with an activity rail per side, a workspace tab strip
-across the top, and a dozen pre-arranged `frames:` presets (AI Research, Training,
-Lab…). It was removed outright rather than hidden: two paradigms meant a lossy
-convert between them, a mode menu to choose, and every feature built twice. Saved
-layouts from that era are turned into windows on load — see
-[Persistence](#persistence).
+Saved layouts from every earlier era load — see [Persistence](#persistence).
 :::
 
 ## Decisions
 
 - **Custom engine, no dockview.** A pure data layer plus a handful of React
   components. Modules never import the engine — the **module registry stays the
-  public API**.
+  public API**. dockview was tried once (`8fe54e01`, dropped in `68cec8e9`): panes had
+  to re-implement their companions inside it, which is why regions and sections
+  exist, and it would take the layout tree away from the pure reducer that
+  autosave, migrations, share and the DOM-free tests depend on.
 - **Two layers.** `packages/core/src/layout/` is the React-free source of truth:
-  `types.ts` (data model), `model.ts` (pure window and tab ops), `store.ts` (one
-  reducer store), `serialize.ts` (versioned schema) with `legacy-frame.ts` (the
-  migration from tiling-era blobs), `controller.ts` (opening, window verbs, regions,
-  the `LayoutController` seam), `persistence.ts` (autosave and hydration) — all
-  unit-tested (`pnpm --filter @horrible/core test`). `packages/ui/src/desktop/`
-  renders the window layer, the backdrops and the taskbar; `packages/ui/src/layout/`
-  holds what a window draws inside itself (`PaneHost`, `Region`, `SectionTabs`), the
-  native `TitleBar`, and `install.ts`, which installs the engine from the shell.
-- **One desktop.** The layout is stored as the `desktop` workspace row. The backend
-  still models a list of workspaces — it predates this — and rows other than
-  `desktop` are left alone: nothing loads them and nothing deletes them.
-- **Roles describe a pane; they do not place it.** Every view declares
-  `role: 'document' | 'tool' | 'widget'`, and every one of them opens in a window.
-  The role is how a view describes itself to the agent (`list_available_panes`) and
-  to anything that groups panes:
+  `dock/` (the v4 model, tree ops, reducer, geometry, drop targets, migration and
+  schema — see [The engine](#the-engine)), `model.ts` (pure tab and pane ops),
+  `store.ts` (one reducer store), `controller.ts` (opening, placement, group verbs,
+  regions, pop-out, the `LayoutController` seam), `persistence.ts` (autosave and
+  hydration), and `serialize.ts` / `legacy-frame.ts`, which now only read older
+  blobs — all unit-tested (`pnpm --filter @horrible/core test`).
+  `packages/ui/src/workbench/` renders the groups, docks and pop-outs;
+  `packages/ui/src/desktop/` the backdrops and the status bar;
+  `packages/ui/src/layout/` what a pane draws inside itself (`PaneHost`, `Region`,
+  `SectionTabs`), the native `TitleBar`, and `install.ts`, which installs the
+  engine from the shell.
+- **One workbench.** The layout is stored as the `desktop` workspace row. The
+  backend still models a list of workspaces — it predates this — and rows other than
+  `desktop` (and its `desktop-v3-backup`) are left alone: nothing loads them and
+  nothing deletes them.
+- **A pane never places itself.** Modules open panes through `registry.openPanel`,
+  `revealSection` and `revealRegionView`; where the pane lands is the controller's
+  decision ([Where a pane opens](#where-a-pane-opens)), and no module reads layout
+  geometry.
+- **Roles describe a pane, and give it a default home.** Every view declares
+  `role: 'document' | 'tool' | 'widget'`. A document opens in the centre, a tool or
+  widget in a dock, until the user moves it somewhere else. The role is also how a
+  view describes itself to the agent (`list_available_panes`) and to anything that
+  groups panes:
   - a **document** is a surface you work _in_ — one per subject, several open at
     once, and it benefits from tabs;
   - a **tool** is a _companion_ to whatever you are working on — narrow,
@@ -73,53 +86,50 @@ layouts from that era are turned into windows on load — see
 
 ```mermaid
 flowchart TD
-    F["FrameState (the desktop)"] --> W["windows: WindowState[]"]
-    W --> A["area: AreaNode — tabs: PaneState[], activeTab"]
+    F["FrameState (DockFrame, v4)"] --> C["center: LayoutNode — split tree"]
+    F --> D["docks.left / right / bottom — visible, size, area"]
+    F --> PO["popouts[] — id, area, bounds, maximized"]
+    C --> S["SplitNode — orientation, children, sizes (fractions)"]
+    C --> A["AreaNode — tabs: PaneState[], activeTab"]
+    D --> A
+    PO --> A
     A --> P["PaneState — instanceId, viewId, params, regions, activeSection"]
     P --> R["RegionState per position — open/size/collapsed/views/activeView"]
     P --> SEC["activeSection — the in-pane tab, resolved against SectionDecl[]"]
 ```
 
-- **WindowState** — one OS-style window. Its **content is an `AreaNode`**, a tab
-  list: a plain window is an area with one tab, a merged window is an area with
-  several, and the tab verbs (`SET_ACTIVE_TAB`, `REORDER_TAB`, `INSERT_PANE`) address
-  a window by its area id. `findAreaAnywhere`/`updateAreaAnywhere`
-  (`layout/model.ts`) resolve that id.
+The types are `DockFrame` and friends in `packages/core/src/layout/dock/types.ts`;
+`FrameState` is an alias for `DockFrame`.
 
-  Its **geometry is pixels**, measured against `FrameState.windowViewport` — the
-  surface size the rects were last measured on. Fractions cannot express a minimum
-  size, and would reflow a window's contents on every drag of the app's edge. On
-  load, if the surface turns out to be a different size than when the layout was
-  saved, every rect is rescaled proportionally — **once**, at the load or at the
-  first measurement after it (`projectViewport` in `store.ts`; the store's
-  `surfaceMeasured` flag tells the two apart). After that a change of surface is the
-  user's own: the app edge dragged, the page zoomed. `SET_WINDOW_VIEWPORT` then
-  re-derives snapped and maximized windows from their zone and **leaves every free
-  window's rect alone**. Rescaling them on each resize is lossy (the rounding
-  compounds), and it made the whole desktop shift whenever the surface changed by a
-  few pixels. The stored rect stays the one the user chose; `DesktopWindow` clamps
-  it into view when it draws, so shrinking the app and widening it again puts each
-  window back exactly. Neither case **bumps `revision`**: it is a projection of the
-  same layout, not a user edit, and marking it dirty would make every browser
-  resize drive the 600 ms autosave debounce into a continuous write loop.
-
-  `mode` is `normal | minimized | maximized`, and `snap` records the zone a window
-  occupies. `snap` is **stored rather than re-derived** from the rect, because a
-  window the user happened to drag to exactly half-width is not snapped and must
-  not spring back to a restore rect when nudged. A minimized window keeps its pane
-  **mounted** — see [Pane lifetime](#pane-lifetime-unmount-is-not-close).
-
+- **AreaNode** — a tab group, the one node type for every place a pane can be. The
+  centre's leaves, each dock and each pop-out hold one, so `SET_ACTIVE_TAB`,
+  `REORDER_TAB`, `INSERT_PANE` and a drop work the same everywhere.
+  `findAreaAnywhere` / `findPaneAnywhere` resolve an id to its group and host
+  (`AreaHost`: centre, a dock side, or a pop-out).
+- **center** — a split tree. A `SplitNode` lays `children` side by side (`row`) or
+  stacked (`column`) with **fractional** `sizes`; `normalize` keeps every split at
+  two or more children and the tree never empty — with nothing open it is one empty
+  area, which shows the backdrop (Home).
+- **docks** — `left`, `right`, `bottom`, each `{ visible, size, area }`. `size` is
+  pixels and is clamped to the surface when drawn. There is no top dock: the title
+  bar is there. A hidden dock keeps its panes open.
+- **popouts** — groups in their own OS window (desktop only), with the bounds the
+  shell last reported. See [Pop-out windows](#pop-out-windows).
+- **No stored rects.** Pixel geometry is derived from the frame and the measured
+  surface every time (`dock/geometry.ts`), so a layout cannot hold a rect that lands
+  off-screen, and resizing the app changes no stored state.
+- **maximizedAreaId** and **presentedInstanceId** — a group drawn over the whole
+  workbench, and a pane drawn over the whole shell. Neither is serialized: they are
+  ways of looking, not layout, and restoring into a chrome-less presented pane is a
+  state the user would have to guess their way out of.
+- **focusedInstanceId** and **focusedAreaId** — both, because an empty centre group
+  can hold focus (it is where the next document opens) and has no instance.
 - **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params,
   its **persisted per-instance region strips**, and its **`activeSection`** (see
   [Embedded views and sections](#embedded-views-and-sections)).
-- **windowViewport** — the surface size `windows[].rect` was last measured
-  against, or `null` before anything measured it. A migrated v1 layout arrives as
-  `{w:1,h:1}` so its old fractions become pixels through the ordinary rescale path,
-  with no migration-only arithmetic to get wrong.
-- **paneSeq** — one monotonic counter for pane instances, windows (`w<n>`) and their
-  areas (`a<n>`), so a dispatcher holding a snapshot can precompute the ids an
-  action will mint: `OPEN_WINDOW` takes the pane at `paneSeq` and the window and
-  area at the two after it.
+- **paneSeq** — one monotonic counter for pane instances, groups, splits and
+  pop-outs, never reset, so a dispatcher holding a snapshot can precompute the ids
+  an action will mint.
 
 ### Embedded views and sections
 
@@ -142,12 +152,12 @@ resolve an embedded view to _where it lives_: `show("Outline")` reveals it in it
 host's region strip or section rather than failing to open it standalone. An
 embedded view that **nothing hosts** is a declaration error, and fails loudly
 (`ok: false`, and `openPane` returns null with a warning) rather than quietly opening
-a window the flag said shouldn't exist.
+a pane the flag said shouldn't exist.
 
 `openPane` / `registry.openPanel` make the same resolution: opening an embedded id
 reveals it in its host's strip or section (`hostOfEmbedded`) instead of opening it
-bare in a window. A button labelled "Radar" and the agent's `show("Radar")` must land
-in the same place — and the pane consolidation turned many former windows
+bare as a pane of its own. A button labelled "Radar" and the agent's `show("Radar")`
+must land in the same place — and the pane consolidation turned many former panes
 (hAssault's companions, karaoke's queue, arXiv, the Python reference) into embedded
 views, so every existing `openPanel('<old id>')` keeps working unchanged.
 
@@ -230,7 +240,7 @@ tab through `ModuleManifest.explorerSources`. `ExplorerSourceDecl` **is** a
 canonical case is [share](../modules/share.mdx#knowing-you-are-live)'s "your screen
 is being broadcast". A module declares `ModuleManifest.shellIndicators`
 (`{id, component}`), and `packages/ui/src/layout/ShellIndicators.tsx` renders every one
-in the taskbar `Tray` and, on the native shell, in the `TitleBar` too. The **module**
+in the status bar's `Tray` and, on the native shell, in the `TitleBar` too. The **module**
 decides visibility: each component renders `null` when it has nothing to say, and the
 slot is `display: contents`, so an empty one adds no gap. Keep them rare; the tray's
 own rule applies — a strip that grows one icon per module is a strip nobody reads.
@@ -274,57 +284,62 @@ The `alt+x` binding is declared `override: true` so a focused editor pane can't
 shadow it — the minibuffer is the escape hatch and has to be reachable anywhere.
 
 The shell mounts it as `<Minibuffer variant="overlay" />`, which floats above the
-taskbar and renders nothing in the **status** state, because the taskbar's `mx` zone
-is the desktop's status line. (It once wasn't mounted on a floating desktop at all:
+status bar and renders nothing in the **status** state, because the status bar's
+`mx` zone is the status line. (It once wasn't mounted on the floating desktop at all:
 `alt+x` flipped a store nothing rendered, and every prompt waited forever on an
 answer the user was never shown.) See
 [desktop-shell.mdx](desktop-shell.mdx#the-mx-zone-and-where-the-minibuffer-went).
 
-### Where a window opens
+### Where a pane opens
 
-A window opens **where that view's window was last left** — its rect, and the snap
-zone if it had one (`core/layout/window-placement.ts`). Only when a view has no
-memory does it fall back to the diagonal cascade.
+`placeFor(viewId, explicit?)` in the controller decides, in order:
 
-The placement cannot live in the layout blob: a closed pane has no `WindowState` to
-hold one, and "reopen the agent where I snapped it" is precisely a question asked
-after it was closed. So it rides the settings store under `frame.windowPlacement`,
-**globally and keyed by view id**. Keying by pane instance would be useless:
-instance ids are minted per open, so the key could never be looked up again.
+1. **An explicit target**, when the caller gave one (`PlaceTarget`: a group, the
+   centre, a dock, a split beside a group, or a pop-out).
+2. **Where that view was last left** — a dock side or the centre
+   (`layout/pane-placement.ts`).
+3. **Its role.** A document opens in the focused centre group; a tool or widget in
+   the dock its declaration names (`PanelDecl.dock`), else the right dock.
 
-Two details are load-bearing:
-
-- **The snap zone is stored alongside the rect, not derived from it.** A snapped
-  window keeps a `restoreRect` to un-snap back to and re-derives its geometry when
-  the desktop resizes. Replaying only the pixels produces a window that looks
-  identical until either of those matters — and it re-snaps to the right half of
-  _today's_ desktop rather than to stale pixels from a differently sized one.
-- **Only single-pane windows are recorded.** A window holding three merged tabs has
-  one rect and three views; filing that rect under each would teach every pane in
-  the group a placement that belonged to the group.
+The memory cannot live in the layout blob: a closed pane is not in the frame to
+remember anything with, and "reopen the terminal where I put it" is precisely a
+question asked after it was closed. So it rides the settings store under
+`frame.panePlacement`, **globally and keyed by view id**. Keying by pane instance
+would be useless: instance ids are minted per open, so the key could never be
+looked up again. It records a side, not a rect. (The floating desktop kept a rect
+and snap zone under `frame.windowPlacement`; that setting is no longer read.)
 
 Recording is a **store subscriber**, not a hook in the reducer or the drag handler.
-A window takes its geometry from six places (drag, resize, snap, un-snap, maximize,
-an agent tool), and remembering from each means the seventh silently does not;
-reading the result catches them all by construction.
+A pane changes place by a tab drag, a split command, an agent verb or a dock-back,
+and remembering from each means the next one silently does not; reading the result
+catches them all by construction.
 
 View types vs pane instances work as before: widgets are singleton-by-view-id,
 panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.
 A caller-supplied `instanceId` (e.g. `editor.buffer:<source>`) focuses the
 existing instance instead of duplicating.
 
-### Tabs
+### Tabs and groups
 
-A window's titlebar is its tab strip once it holds more than one pane. Dragging one
-window's titlebar onto another's merges it in as a tab (`MERGE_INTO_WINDOW`); a tab
-torn out lands in a window of its own (`WINDOW_FROM_PANE`, `tearOffPane`, the
-`window.tearOff` command). Middle-click closes a tab, guarded, so a dirty buffer can
-still prompt.
+Every group has a tab strip (`GroupHeader.tsx`). Dragging a tab onto another
+group's strip joins that group; dropping it on a group's body splits beside it on
+the side under the pointer (`resolveDrop` in `dock/drop.ts`). Both commit one
+`MOVE_PANE` on pointer-up. `mod+shift+<arrow>` moves the focused tab into a new
+group on that side; `tearOffPane` (the `window.tearOff` command, **Split into its
+own group**) does the same to the right, and from a dock it moves the tab to the
+centre. Middle-click closes a tab, guarded, so a dirty buffer can still prompt.
+Nothing is left framing nothing: an emptied centre group is removed (unless it is
+the last), an emptied dock hides, and an emptied pop-out closes.
 
 `REORDER_TAB` carries `activeTab` **by identity, not by index**. Every naive reorder
 bug is the same one: the user drags a background tab past the active one and the
-window silently switches to a different pane. Rearranging the strip must not change
+group silently switches to a different pane. Rearranging the strip must not change
 what is on screen.
+
+**Maximize** (`mod+alt+up`, the header button, a double-click on the strip) draws
+one group over the whole workbench; the others stay mounted underneath.
+**Presenting** a pane (`area.fullscreen`) goes further, over the status bar and
+title bar — see [desktop-shell.mdx](desktop-shell.mdx#presenting-a-pane).
 
 ### Opening a pane that is already open
 
@@ -356,18 +371,19 @@ All mutations are dispatches into the layout store, exposed two ways from
 - the **`LayoutController` seam** (`registry.setLayoutController`) for the
   engine-agnostic basics (close, focus, list, tear off, `changePaneType`), and
 - **plain controller exports** for everything else — `openPane`, `openDocument`,
-  `retargetPane`, `tearOffPane`, the window verbs (`snapWindow`, `snapFocused`,
-  `setWindowMode`, `focusWindow`, `cycleWindows`, `focusWindowDirection`,
-  `arrangeDesktop`, `minimizePane`, `activateTaskbarEntry`), `presentPane`, the region
-  verbs (`toggleRegion`, `setRegionView`, `revealRegionView`), `setPaneSection`,
+  `retargetPane`, `placeFor`, the group verbs (`movePaneTo`, `splitFocused`,
+  `tearOffPane`, `toggleDock`, `arrangePanes`, `toggleMaximizedGroup`, `focusGroup`,
+  `cycleGroups`, `focusDirection`, `activateTaskbarEntry`), the pop-out verbs
+  (`canPopOut`, `popOutPane`, `dockPopoutBack`), `presentPane`, the region verbs
+  (`toggleRegion`, `setRegionView`, `revealRegionView`), `setPaneSection`,
   `revealSection`, and `showTarget`.
 
-**`openPane(viewId, opts)`** opens a view in a window of its own, or focuses it.
-Identity: a caller-supplied `instanceId` is focus-or-create; a singleton (every
-widget, and any panel that says so) is found by view id, so a second open focuses
-the first rather than adding a twin; anything else opens a fresh window each time —
-a second terminal is a second shell. A new window opens where that view was last
-left ([Where a window opens](#where-a-window-opens)).
+**`openPane(viewId, opts)`** opens a view, or focuses it. Identity: a
+caller-supplied `instanceId` is focus-or-create; a singleton (every widget, and any
+panel that says so) is found by view id, so a second open focuses the first rather
+than adding a twin; anything else opens a fresh pane each time — a second terminal
+is a second shell. A new pane opens where `placeFor` says
+([Where a pane opens](#where-a-pane-opens)).
 
 `showTarget(target)` is the **intent** verb sitting above all of them: it takes loose
 text (a pane title, a view id, a **section** label, a region label), resolves it with
@@ -382,7 +398,7 @@ the agent's vocabulary).
 
 `retargetPane(instanceId, newInstanceId, params)` is the **reuse** counterpart to
 `openPane`: it re-points an already-open pane at a new identity in place, keeping its
-window, tab position, viewId, and region strips, and refuses when the new id is
+group, tab position, viewId, and region strips, and refuses when the new id is
 already taken (the caller then falls back to a normal focus-or-create open). It
 exists so a caller that knows a pane holds nothing worth preserving can land in it
 rather than accumulate placeholders — the editor uses it so opening a note from a
@@ -399,7 +415,7 @@ one way a module opens "a thing" (a notebook, a project, a URL) in a
    the same notebook twice yields two panes.
 2. **Reusable pane open** — a pane of the same view that isn't dirty
    (`setPaneDirty` / `isPaneDirty`) and that the caller's `canReuse` accepts →
-   `retargetPane` into it, so the window, tab position and region strips survive.
+   `retargetPane` into it, so the group, tab position and region strips survive.
    Only the module can judge reuse, so the predicate is its call; a module whose
    panes autosave (notebook, training notebook, browser) passes `() => true`,
    meaning "any clean pane of mine".
@@ -411,9 +427,10 @@ calls `openPanel` directly.
 
 Such an opener should also pass a **`title` param** naming the thing it opened.
 A view's declared title names a *kind* of pane, so without it every open notebook
-is a window and a taskbar button reading "Notebook Editor". `paneDisplayTitle(pane)`
+is a tab reading "Notebook Editor". `paneDisplayTitle(pane)`
 (`layout/controller.ts`) is the one rule — `title` → `name` → `path` → the view's
-declared title — and the window titlebar, its tabs and the taskbar all resolve
+declared title — and the group's tabs, a pop-out's OS title and the status bar's
+open-panes zone all resolve
 through it, so a pane is never labelled two different ways at once.
 
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
@@ -424,7 +441,7 @@ one code path, and every mutation rides the store's autosave. Layout verbs stay
 
 ## Pane lifetime: unmount is not close
 
-Only a window's **active tab** renders, so a pane unmounts constantly, for reasons
+Only a group's **active tab** renders, so a pane unmounts constantly, for reasons
 that have nothing to do with the user closing anything. A React cleanup cannot tell
 those apart, and the panes that owned something expensive assumed the destructive
 reading: `TerminalPane` killed its PTY on unmount, and the browser released the last
@@ -450,12 +467,15 @@ Two details are load-bearing:
   between mounts preserves the rendered scrollback exactly; rebuilding the terminal
   around a surviving PTY would not.
 
-**Minimizing must not unmount either.** A minimized window is moved off screen with
-a transform, not `display: none` and not by rendering different JSX: an early return
-with a different tree makes React reconcile the body to a different position and
-rebuild the subtree, which is exactly this failure with a new trigger. `display:none`
-is also wrong here for a second reason — it collapses a canvas or an xterm to zero
-size, and many of them never recover their measurement when shown again.
+**Moving or covering a pane must not unmount it either.** Moving a tab to another
+group, splitting, maximizing, hiding a dock and popping out all leave the pane
+mounted (see [The workbench UI](#the-workbench-ui)). A covered pane is hidden with
+`visibility`, never `display: none` and never by rendering different JSX: an early
+return with a different tree makes React reconcile the body to a different position
+and rebuild the subtree, which is exactly this failure with a new trigger.
+`display:none` is also wrong here for a second reason — it collapses a canvas or an
+xterm to zero size, and many of them never recover their measurement when shown
+again.
 
 If a close path is ever missed the resource leaks until the page closes, where the
 backend reaps it anyway (PTYs die with their `/ws` connection). That is deliberately
@@ -502,7 +522,7 @@ layout under the wrong id — this retired the old engine's race-guard refs.
 
 ### Losing an edit: the four ways, and why none of them are open
 
-A layout edit is invisible until it is written, and a window that is still on screen
+A layout edit is invisible until it is written, and a pane that is still on screen
 looks saved whether or not it is. Every one of these presented as "refreshing reset
 my desktop", so each is closed deliberately rather than by luck:
 
@@ -528,12 +548,37 @@ my desktop", so each is closed deliberately rather than by luck:
   was erased.
 
 Layouts serialize as a **versioned envelope**
-`{ schema: 'horrible.frame', version: 3, frame }` to `PUT /api/workspaces/desktop`;
+`{ schema: 'horrible.frame', version: 4, frame }` to `PUT /api/workspaces/desktop`;
 the backend (`backend/modules/workspace/`) stores each `layout` **opaquely**.
-`deserialize` validates defensively, prunes panes whose views no longer exist (e.g.
-an uninstalled plugin), renames views that were merged away (`RENAMED_VIEWS`), and
-returns `null` for anything that isn't a frame blob — a pre-frame legacy layout is
-discarded by design and the desktop starts empty.
+`deserializeDock` (`dock/serialize.ts`) validates defensively, prunes panes whose
+views no longer exist (e.g. an uninstalled plugin), renames views that were merged
+away (`RENAMED_VIEWS`), and returns `null` for anything that isn't a frame blob — a
+pre-frame legacy layout is discarded by design and the workbench starts empty.
+
+An older blob loads by running the migrations in order: v1 and v2 to floating
+windows (`legacy-frame.ts` and `serialize.ts`, below), then windows to the
+workbench.
+
+**v3 → v4** replaced the floating desktop (`dock/migrate.ts`). No pane is closed:
+
+- documents become tabs in the centre; a window snapped to the left or right
+  (half, third or quarter) was a deliberate side-by-side, so it seeds a column;
+- tools and widgets go to the dock the view asks for, else the one the window's
+  shape and position suggest (wide and short was a bottom panel);
+- minimized windows become background tabs, and a dock that held only minimized
+  windows starts hidden.
+
+Geometry cannot survive — a workbench has no free rects — so what is kept is the
+intent the geometry expressed.
+
+**Before the first v4 write** the untouched v3 blob is copied to a
+`desktop-v3-backup` workspace row (`persistence.ts`). It is the only rollback: an
+older build rejects a newer schema version, so a v3 build reading the v4 row would
+start empty.
+
+A loaded layout can name pop-outs the build cannot open — the browser build, or a
+desktop build without `window.multi`. Their groups are docked back on load rather
+than dropped.
 
 **v2 → v3** removed the tiling frame. A v2 blob still carries `center` (the split
 tree) and `docks`, and on a floating desktop those held panes too — the grid was
@@ -566,16 +611,17 @@ landing screen for a feature they never turned off, so a migrated desktop gets
 `DEFAULT_BACKDROP`.
 
 The version guard rejects a blob whose version is **higher** than this build's, so
-an older build reading a v3 blob starts empty — **downgrading discards the layout
-rather than corrupting it**. That is the intended trade: a v2 build would find no
-`center` and could only show its own empty grid.
+an older build reading a newer blob starts empty — **downgrading discards the
+layout rather than corrupting it**. That is the intended trade, and the reason the
+v3 backup row exists.
 
 ## Browser vs desktop
 
 The engine is web-only and shared verbatim by the browser and the desktop shell
-(no per-platform fork). The window layer and pane presentation are in-window; the
+(no per-platform fork). The workbench and pane presentation are in-window; the
 native shell claims the OS-level versions through capabilities, all via the
-`WindowControl` seam: **`window.fullscreen`** — on desktop `F11`
+`WindowControl` seam: **`window.multi`** — pop-out OS windows
+([Pop-out windows](#pop-out-windows)); **`window.fullscreen`** — on desktop `F11`
 (`shell.toggleFullscreen`) toggles native OS-window fullscreen, orthogonal to
 presenting a pane in-window (`area.fullscreen`); and **`chrome.workspaceTabs`** — the
 desktop window is undecorated and the app draws its titlebar (`TitleBar.tsx`: drag,
@@ -585,8 +631,9 @@ used to be that titlebar. (`window.perWorkspace` — a workspace in its own OS w
 went with the workspaces.) See the capability table in
 [layout-shell.mdx](layout-shell.mdx).
 
-**External links.** The app page never opens windows of its own — the shell refuses
-`window.open` and `target="_blank"` (a new window would inherit the shell bridge) and
+**External links.** The app page never opens windows of its own, pop-outs aside
+(`about:blank` with a `horrible-popout:` frame name, and nothing else) — the shell
+refuses every other `window.open` and `target="_blank"` and
 sends http(s) ones to the system browser — and it exposes an **`open_external`**
 command (`apps/desktop/src/window.ts`, http/https only) that hands a URL to the
 user's default browser via `shell.openExternal`. The shared helper
@@ -626,58 +673,45 @@ would (`await __horribleFrame.exec('get_layout', {})`). Not set in production.
 
 ## Status
 
-Implemented: the window model (windows with tabs, merge and tear-off, snapping,
-minimize/maximize, presentation), engine-native **persisted regions** and sections,
-remembered window placement, the minibuffer, the versioned serialization schema with
-its migrations from v1 and from the tiling frame, the agent layout tools, and the
-native shell's two capabilities (`window.fullscreen`, `chrome.workspaceTabs`). Not
-yet: region view cycling on repeat-press.
+Implemented: the docked workbench (centre split tree, three edge docks, tab drag
+and drop, maximize, presentation), pop-out windows on desktop, engine-native
+**persisted regions** and sections, remembered pane placement, the minibuffer, the
+versioned serialization schema with its migrations from v1, from the tiling frame
+and from the floating desktop, the agent layout tools, and the native shell's
+capabilities (`window.multi`, `window.fullscreen`, `chrome.workspaceTabs`). Not yet:
+region view cycling on repeat-press, and dragging a tab into or out of a pop-out.
 
-### The docked workbench
+## The engine
 
-The floating desktop has been replaced by an IDE-style docked workbench: a centre
-split tree of tab groups, three edge docks (`left`, `right`, `bottom`), and, still
-to come on desktop, groups popped out into real OS windows. It is one paradigm, like
-the desktop it replaces. There is no floating layer and no mode switch; the escape
-hatches are maximizing a group and presenting a pane. The reasons for reversing the
-floating-only decision were window geometry bugs, overlap that had to be managed by
-hand, drag and maximize jank, and the native browser view drawing over other
-windows.
-
-**The engine** is in `packages/core/src/layout/dock/`:
+`packages/core/src/layout/dock/`:
 
 - `tree.ts`: the centre split tree, revived from the tiling frame removed in
   `9738e4f5`.
 - `frame.ts`: verbs that address a pane or group wherever it lives (centre, dock
-  or popout). Closing a popout docks its panes back; it never closes them.
+  or pop-out). Closing a pop-out docks its panes back; it never closes them.
 - `geometry.ts` and `drop.ts`: pixel layout and drop targets, derived from the
   frame and the surface size every time, so no rect is stored and none can land
   off-screen.
+- `arrange.ts`: the centre presets behind `arrange_panes`.
 - `reducer.ts`: the action set. `layout/store.ts` delegates to it; maximizing and
   presenting re-render without bumping `revision`.
-- `migrate.ts` and `serialize.ts`: frame schema **v4**. Older blobs load by
-  running the migrations in order (v1/v2 to windows in `legacy-frame.ts`, then
-  windows to docks). Documents become centre tabs, left/right snapped windows seed
-  columns, tools go to a dock chosen by the view or the window's shape, and
-  minimized windows become background tabs. No pane is closed.
+- `migrate.ts` and `serialize.ts`: frame schema **v4** and the step from v3 — see
+  [Persistence](#persistence).
 
-**Where a pane opens** is decided by `placeFor` in the controller: an explicit
-target first, then the view's remembered placement (`frame.panePlacement`, a dock
-side or the centre, recorded whenever the user moves a pane), then its role. A
-document opens in the focused centre group; a tool or widget opens in the dock its
-declaration names (`PanelDecl.dock`), else the right dock.
+## The workbench UI
 
-**The UI** is in `packages/ui/src/workbench/`. `Workbench.tsx` measures the surface,
-lays it out with `computeWorkbench`, and draws three layers: the groups' tab strips
-(`GroupHeader.tsx`), the dividers, and the panes. Three rules there are
+`packages/ui/src/workbench/`. `Workbench.tsx` measures the surface, lays it out
+with `computeWorkbench`, and draws three layers: the groups' tab strips
+(`GroupHeader.tsx`), the dividers, and the panes. Four rules there are
 load-bearing:
 
-- **Panes live in one flat layer keyed by instance id**, placed over their group's
-  body rather than inside the group. Moving a tab to another group, splitting,
-  maximizing, presenting or hiding a dock moves a box on screen; it never remounts
-  the pane, so an iframe keeps its page and a terminal its shell. The layer renders
-  in first-seen order, never layout order, because React moves a keyed node to
-  match a new order and a moved iframe reloads.
+- **Panes render into host elements, not into their boxes.** Each mounted pane is
+  portaled into its own host `div` (`pane-hosts.tsx`), and a `PaneSlot` positioned
+  over the pane's group appends that host. Moving a tab to another group,
+  splitting, maximizing, presenting, hiding a dock or popping out moves one DOM
+  node; it never remounts the pane, so an iframe keeps its page and a terminal its
+  shell. The portals render in first-seen order, never layout order, because React
+  moves a keyed node to match a new order and a moved iframe reloads.
 - **Nothing is hidden with `display: none`.** A group behind a maximized one, or a
   hidden dock, keeps its pane mounted at its last size and hides it with
   `visibility`.
@@ -695,10 +729,6 @@ geometry (docks included), `mod+alt+up` maximizes the focused group,
 `mod+alt+[`, `mod+alt+]` and `mod+alt+j` show or hide the left, right and bottom
 docks. The pane region keys `t`, `n` and `b` are unchanged.
 
-**The first v4 save** is preceded by a copy of the untouched v3 blob in a
-`desktop-v3-backup` workspace row. It is the only rollback: an older build rejects
-a newer schema version.
-
 **The agent's verbs** are `place_pane` (centre, a dock, a split beside a group, or
 into a group), `pane_state` (maximize/restore, hide/show a dock, present) and
 `arrange_panes` (`columns`, `rows`, `grid`, `tabs`, `even`, rebuilding the centre
@@ -712,7 +742,7 @@ nothing overlaps a pane except overlays that already claim
 `suppressNativeOverlays()`, and a tab drag now claims it too. Its bounds follow a
 `ResizeObserver` plus a layout-store subscription instead of a per-frame sampler.
 
-### Pop-out windows
+## Pop-out windows
 
 On the desktop shell (`window.multi`), a tab group can leave the main window for an
 OS window of its own: the **Pop out** button in its header, `popOutPane(instanceId)`

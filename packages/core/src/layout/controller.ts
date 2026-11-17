@@ -33,7 +33,6 @@ import {
   listPanes,
   visiblePanes,
 } from './model';
-import { runPaneExit } from './pane-exit';
 import { allDocuments, popoutWindow } from './pane-window';
 import { closePaneSession, paneSessionKey } from './pane-lifetime';
 import { lastPlacement, rememberPlacement, type PanePlacement } from './pane-placement';
@@ -247,9 +246,6 @@ export async function closePaneGuarded(idOrInstance: string): Promise<boolean> {
   const instanceId = located.pane.instanceId;
   if (!(await runCloseGuard(instanceId))) return false;
   // Re-check existence: the guard's dialog is async and the pane could have gone.
-  if (!findPaneAnywhere(frame(), instanceId)) return false;
-  // Its exit, now that the guard has agreed to the close (capped; see pane-exit).
-  await runPaneExit(instanceId);
   if (!findPaneAnywhere(frame(), instanceId)) return false;
   layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId });
   // The one place a pane genuinely goes away, so the one place its long-lived

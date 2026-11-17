@@ -178,13 +178,14 @@ already flex containers; `.os-window-body` was not, and the result was a floatin
 window drawn as **a titlebar with nothing under it** — measured at 44px of pane
 header where there should have been 648px, with the pane's canvas at zero.
 
-It is worth knowing how that hid, because the shape recurs: floating windows are
+It is worth knowing how that hid, because the shape recurs: floating windows were
 the *desktop* layout's ordinary way of showing a pane, while the browser layout of
 the time put panes in areas and docks. So the browser build looked completely healthy
 while every pane in the desktop build was empty. `region-host-is-flex.test.ts`
-pins the rule, and also asserts its own premises — that windows still render
-regions, and that `.frame-pane-regions` still has no height — so it fails loudly
-rather than passing vacuously if either changes.
+pins the rule — today for the workbench's `.wb-pane` box — and also asserts its own
+premises, that the pane box still renders regions and that `.frame-pane-regions`
+still has no height, so it fails loudly rather than passing vacuously if either
+changes.
 
 ## Compared to panel groups
 

@@ -11,7 +11,7 @@
  *
  * So the home surface carries its **own underlay**: a second, decorative backdrop
  * painted behind it, stored in splash's own params. Collapsing the home screen
- * then reveals a real floating desktop — wallpaper, taskbar, and the ask bar
+ * then reveals a real desktop — wallpaper, status bar, and the ask bar
  * docked at the bottom — and expanding it brings the landing screen back over the
  * top of the same wallpaper. Nothing is swapped and nothing is lost.
  *

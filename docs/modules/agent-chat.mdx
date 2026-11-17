@@ -157,8 +157,9 @@ a substring match over the provider label and the model id **together**, word by
 and ANDed, so `free` narrows to the free tier, `lm studio` to one provider, and
 `free qwen` to the intersection. Arrow keys and Enter pick; the panel is
 `position: fixed` and measured off the trigger, because the session bar sits inside a
-pane that clips its overflow — and portaled to `document.body`, because inside a
-desktop window `fixed` alone is not enough (see
+pane that clips its overflow — and portaled to its pane window's body
+(`usePaneWindow()`, so it opens in a pop-out too), because inside a pane box `fixed`
+alone is not enough (see
 [the desktop shell](../architecture/desktop-shell.mdx#a-popover-inside-a-pane-must-portal-out)). The settings
 page's `ModelCombobox` does the same. It writes the _provider and the model together_: they are two settings
 (`agent.<id>.provider`, `agent.<id>.model`), and the settings page edits them as two

@@ -72,14 +72,14 @@ flowchart TB
   token, and the `data-theme` switch that selects a block of them. Read before
   adding a colour to a component: a hardcoded literal is invisible to the switcher
   and survives into a theme it was never designed for.
-- [Windowing](architecture/windowing.mdx) — the frame: how views (panels and
-  widgets) open as tabbed/split panes and windows, views vs pane instances, the
-  `FrameState` model, and layout persistence.
-- [Desktop shell](architecture/desktop-shell.mdx) — the OS-style desktop on top of
-  that frame: the single shell view, windows as an interaction model, edge snapping,
-  tab merging, the pluggable backdrops and wallpaper routes, the taskbar and start
-  menu, the boot splash and first-run flow, the spotlight, and the per-desktop
-  tiling/floating mode switch.
+- [Windowing](architecture/windowing.mdx) — the docked workbench: tab groups in a
+  centre split tree, edge docks and pop-out OS windows, where a pane opens, views vs
+  pane instances, the `FrameState` model, layout persistence and its migrations, and
+  why the floating desktop was replaced.
+- [Desktop shell](architecture/desktop-shell.mdx) — the surface around the
+  workbench: the single shell view, the pluggable backdrops and wallpaper routes,
+  the status bar and Start menu, the boot splash and first-run flow, Spotlight, the
+  group header, presenting a pane and app fullscreen.
 - [Keybindings](architecture/keybindings.mdx) — the keyboard authority: key specs,
   `when` conditions, precedence, which pane has focus, **input capture** (a game
   or terminal taking the keyboard and giving it back), the Escape ladder, and the
@@ -320,8 +320,9 @@ them **in the same change**:
 - Changes to the workspace/docking system, spotlight, keybindings, platform
   capability service, or either app entry → update
   `docs/architecture/layout-shell.mdx`.
-- Changes to the desktop surface — backdrops, the taskbar, boot/first-run, windows,
-  snapping — → update `docs/architecture/desktop-shell.mdx`.
+- Changes to the desktop surface — backdrops, the status bar, boot/first-run, group
+  chrome, presenting — → update `docs/architecture/desktop-shell.mdx`; changes to
+  groups, docks, pop-outs or pane placement → `docs/architecture/windowing.mdx`.
 - Renaming or removing any of the above → same rule, including deleting docs for
   removed features.
 - Adding, renaming, or changing a script in the repo-root `package.json` (or the
