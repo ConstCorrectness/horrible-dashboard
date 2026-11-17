@@ -161,7 +161,7 @@ SYSTEM_PROMPT = (
     "- When the user asks ABOUT what is on screen, answer from the workspace snapshot "
     "you were given; use show or get_pane_context to read a pane it does not cover. "
     "Do not guess.\n"
-    "- To REARRANGE the screen (snap, minimize, maximize, fullscreen, tile windows), "
+    "- To REARRANGE the screen (split, dock, maximize, fullscreen, tile panes), "
     "first load_tools(['layout']) — those verbs are not loaded by default — and follow "
     "the guide it returns.\n"
     "- If the user refers to a file via a path prefixed with '@' (e.g. "
@@ -198,8 +198,10 @@ def _tool(
 
 # App-level layout verbs. Generic over ids (no enums beyond zones/positions) — the
 # model discovers valid ids through the read tools, keeping the catalog
-# frontend-owned. Vocabulary: every pane lives in a WINDOW (merged panes are its
-# tabs), and REGIONS are per-pane strips.
+# frontend-owned. Vocabulary: every pane is a tab in a GROUP — in the centre split,
+# an edge DOCK (left/right/bottom), or a popout — and REGIONS are per-pane strips.
+# The floating desktop's open_window / window_state / arrange_windows are still
+# answered by the frontend relay, mapped onto these; only the new names cost schema.
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "show",
@@ -208,8 +210,8 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "a view id, or a side-strip name ('Outline'). It opens it, or just focuses "
         "it if it is already on screen, and returns that pane's current contents, "
         "so you do NOT need list_available_panes, open_pane or get_pane_context to "
-        "reach something. Use this for any 'show/open/go to X' request; the window "
-        "verbs are only for moving things around.",
+        "reach something. Use this for any 'show/open/go to X' request; the "
+        "arrangement verbs are only for moving things around.",
         {
             "target": {
                 "type": "string",
@@ -228,15 +230,17 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_open_panes",
         "List the panes currently open, with each pane's view ID, live instanceId, "
-        "title, role, the window it is in, and whether it exposes agent-readable "
+        "title, role, where it lives (centre, a dock, or a popout, and its group), and "
+        "whether it exposes agent-readable "
         "context.",
     ),
     _tool(
         "get_layout",
-        "Read the whole desktop: every window with its rect, mode (normal/"
-        "minimized/maximized), snap zone, stacking order and tabs (with their "
-        "region strips), which window is focused, and the backdrop. The "
-        "orientation read — call it before arranging anything.",
+        "Read the whole workbench: the centre split tree of tab groups (with "
+        "group ids, split sizes and each tab's region strips), the left/right/"
+        "bottom docks and whether each is showing, which group is maximized, the "
+        "focused pane, and the backdrop. The orientation read — call it before "
+        "arranging anything.",
     ),
     _tool(
         "get_pane_context",
@@ -254,8 +258,8 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "open_pane",
-        "Open a view in a new window (or focus it, if it is a single-instance view "
-        "that is already open). Some panes take params — e.g. the training "
+        "Open a view (or focus it, if it is a single-instance view that is already "
+        "open). Documents open as a tab in the centre, tools in an edge dock. Some panes take params — e.g. the training "
         "notebook needs `params: {projectId, notebook}` to know which project to "
         "open.",
         {
@@ -283,8 +287,7 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "focus_pane",
-        "Bring an open pane forward: raise its window, restore it if minimized, "
-        "and show its tab. instanceId from list_open_panes.",
+        "Bring an open pane forward: show its tab, and its dock if that is hidden. instanceId from list_open_panes.",
         {"instanceId": {"type": "string"}},
         ["instanceId"],
     ),
@@ -311,85 +314,64 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         ["instanceId", "viewId"],
     ),
     _tool(
-        "open_window",
-        "Give a pane a window of its own — tearing it out of a tabbed window if it "
-        "shares one — and optionally place it: snap puts it in a screen region, "
-        "or rect gives exact pixels. instanceId from list_open_panes.",
+        "place_pane",
+        "Move an open pane. `center` puts it in the focused centre group as a tab; "
+        "`dock-left`/`dock-right`/`dock-bottom` put it in that edge dock (and show "
+        "it); `split-left`/`split-right`/`split-above`/`split-below` give it a new "
+        "centre group on that side of `group` (default: the group it is in); "
+        "`group` adds it as a tab of `group`. Two panes side by side: place the "
+        "second one `split-right`. instanceId from list_open_panes, group ids from "
+        "get_layout.",
         {
             "instanceId": {"type": "string"},
-            "snap": {
+            "to": {
                 "type": "string",
                 "enum": [
-                    "left",
-                    "right",
-                    "top",
-                    "bottom",
-                    "tl",
-                    "tr",
-                    "bl",
-                    "br",
-                    "max",
+                    "center",
+                    "dock-left",
+                    "dock-right",
+                    "dock-bottom",
+                    "split-left",
+                    "split-right",
+                    "split-above",
+                    "split-below",
+                    "group",
                 ],
-                "description": "Screen region to snap to. `max` maximizes.",
             },
-            "rect": {
-                "type": "object",
-                "description": "Exact pixel rect. Ignored when snap is given.",
-                "properties": {
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                    "w": {"type": "number"},
-                    "h": {"type": "number"},
-                },
+            "group": {
+                "type": "string",
+                "description": "A group id from get_layout: required for `group`, "
+                "optional for the splits.",
             },
         },
-        ["instanceId"],
+        ["instanceId", "to"],
     ),
     _tool(
-        "window_state",
-        "Minimize, maximize, restore or snap a pane's window, or present the pane "
-        "over the whole screen (past the taskbar) and back. One verb rather than "
-        "six, so the whole vocabulary costs one schema. A minimized window keeps "
-        "running — it is hidden, not closed. Two panes side by side: snap one "
-        "`left` and the other `right`.",
+        "pane_state",
+        "Change how a pane is shown without moving it. `maximize` draws its group "
+        "over the whole workbench and `restore` undoes that; `hide` puts its edge "
+        "dock away (only docks hide; the pane keeps running) and `show` brings it "
+        "forward; `present` fills the entire screen with the pane, past the status "
+        "bar, and `unpresent` ends that.",
         {
-            "instanceId": {"type": "string", "description": "A pane in the window"},
+            "instanceId": {"type": "string"},
             "state": {
                 "type": "string",
-                "enum": [
-                    "minimize",
-                    "maximize",
-                    "restore",
-                    "snap",
-                    "present",
-                    "unpresent",
-                ],
-            },
-            "snap": {
-                "type": "string",
-                "enum": [
-                    "left",
-                    "right",
-                    "top",
-                    "bottom",
-                    "tl",
-                    "tr",
-                    "bl",
-                    "br",
-                    "max",
-                ],
-                "description": "Required when state is `snap`.",
+                "enum": ["maximize", "restore", "hide", "show", "present", "unpresent"],
             },
         },
         ["instanceId", "state"],
     ),
     _tool(
-        "arrange_windows",
-        "Lay every open window out at once. Minimized windows are left alone.",
+        "arrange_panes",
+        "Re-lay every pane in the centre at once (docks are left alone): `columns` "
+        "or `rows` give each pane its own group side by side or stacked, `grid` "
+        "tiles them, `tabs` gathers them into one tabbed group, and `even` keeps "
+        "the layout but makes every split equal.",
         {
             "style": {
                 "type": "string",
-                "enum": ["grid", "cascade", "columns", "rows"],
+                "enum": ["columns", "rows", "grid", "tabs", "even"],
             }
         },
         ["style"],
@@ -810,8 +792,9 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "why. Read-mostly — it does not author cases."
     ),
     "layout": (
-        "Arrange the desktop: open/close/focus panes, snap, minimize, maximize and "
-        "tile their windows, and toggle the region strips inside a pane. "
+        "Arrange the workbench: open/close/focus panes, split them side by side, "
+        "move them to a dock, maximize or tile them, and toggle the region strips "
+        "inside a pane. "
         "(Reading the layout needs no load — those verbs are always present.)"
     ),
     "desktop": (
@@ -985,6 +968,8 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "pane",
         "window",
         "snap",
+        "split",
+        "dock",
         "side by side",
         "minimize",
         "maximize",

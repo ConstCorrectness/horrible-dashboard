@@ -287,6 +287,15 @@ export interface PanelDecl {
    * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
+  /**
+   * This view may be **popped out** into its own OS window (desktop only,
+   * `window.multi`). Opt-in because a pop-out is the same page drawing into a
+   * second document: a view that portals to `document.body`, sizes itself from
+   * `window.innerWidth` or listens on `window` for keys must use
+   * `usePaneWindow()` instead, or it does those things in the wrong window.
+   * Set it once the view has been checked for that. See docs/architecture/windowing.mdx.
+   */
+  popout?: boolean;
 }
 
 /**
@@ -380,6 +389,15 @@ export interface WidgetDecl {
    * terminal captures keys and should stay in its window; a game wants both.
    */
   fullscreen?: boolean;
+  /**
+   * This view may be **popped out** into its own OS window (desktop only,
+   * `window.multi`). Opt-in because a pop-out is the same page drawing into a
+   * second document: a view that portals to `document.body`, sizes itself from
+   * `window.innerWidth` or listens on `window` for keys must use
+   * `usePaneWindow()` instead, or it does those things in the wrong window.
+   * Set it once the view has been checked for that. See docs/architecture/windowing.mdx.
+   */
+  popout?: boolean;
 }
 
 /**

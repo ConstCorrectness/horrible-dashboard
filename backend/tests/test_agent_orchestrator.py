@@ -541,7 +541,7 @@ def test_tools_for_merges_manifest_with_layout_tools() -> None:
     # a terminal-flavoured prompt has no reason to preload them.
     for layout in orchestrator.LAYOUT_READ_TOOLS:
         assert layout["function"]["name"] in names
-    assert "window_state" not in names
+    assert "pane_state" not in names
     # ...plus the runtime-registered tool.
     assert "terminal.exec" in names
     # The schema crossed the wire; the handler never appears in the tool def.

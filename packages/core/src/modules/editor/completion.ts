@@ -30,6 +30,7 @@ import { EditorView, keymap, type Command } from '@codemirror/view';
 import { importCompletionSource, importContextAt } from './importContext';
 import { frameworkImportSource } from './pythonImports';
 import { dbSymbolSource } from './symbolCompletion';
+import { focusedDocument } from '../../layout/pane-window';
 
 /** How the popup opens: as you type (plus Tab/Ctrl-Space), or only on Tab/Ctrl-Space. */
 export type CompletionTrigger = 'auto' | 'manual';
@@ -183,6 +184,9 @@ export function toggleCompletionIn(view: EditorView): boolean {
  * one.
  */
 export function focusedEditorView(): EditorView | null {
-  const el = document.activeElement;
-  return el instanceof HTMLElement ? EditorView.findFromDOM(el) : null;
+  // The focused *document*, and `nodeType` rather than `instanceof HTMLElement`:
+  // a popped-out editor's element belongs to its pop-out window, whose
+  // `HTMLElement` is not this one's.
+  const el = focusedDocument().activeElement;
+  return el && el.nodeType === 1 ? EditorView.findFromDOM(el as HTMLElement) : null;
 }

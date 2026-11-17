@@ -178,8 +178,10 @@ export { computeWorkbench, dockExtent, areaAt } from './layout/dock/geometry';
 export type { Surface, WorkbenchLayout } from './layout/dock/geometry';
 export { resolveDrop, dropToPlace } from './layout/dock/drop';
 export type { DropTarget, DropZone } from './layout/dock/drop';
-export { DEFAULT_DOCK_SIZES, MIN_DOCK_SIZE } from './layout/dock/frame';
+export { DEFAULT_DOCK_SIZES, MIN_DOCK_SIZE, isPaneShowing } from './layout/dock/frame';
 export { MIN_FRACTION } from './layout/dock/tree';
+export { ARRANGE_STYLES } from './layout/dock/arrange';
+export type { ArrangeStyle } from './layout/dock/arrange';
 export { DOCK_SIDES } from './layout/dock/types';
 export type {
   AreaHost,
@@ -189,6 +191,7 @@ export type {
   DockState,
   LayoutNode,
   PlaceTarget,
+  PopoutBounds,
   PopoutState,
   SplitNode,
   SplitSide,
@@ -276,7 +279,26 @@ export {
   setRegionView,
   toggleRegion,
   toggleRegionView,
+  canPopOut,
+  dockPopoutBack,
+  popOutPane,
 } from './layout/controller';
+export {
+  PaneWindowContext,
+  allDocuments,
+  focusedDocument,
+  popoutWindow,
+  registerPopoutWindow,
+  usePanePopoutId,
+  usePaneWindow,
+  windowOf,
+  type PaneWindow,
+} from './layout/pane-window';
+export {
+  forwardPointerEvents,
+  installCrossWindowObservers,
+  rehomeObservers,
+} from './layout/cross-window';
 export {
   anyPaneDirty,
   isPaneDirty,

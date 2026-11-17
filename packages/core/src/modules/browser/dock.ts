@@ -11,6 +11,10 @@
  * `browser.open` hands the dock a URL through {@link sendToDock}. The panel takes it
  * and navigates as if the person had typed it, so the same path serves the native
  * webview, the headless engine and the iframe.
+ *
+ * "Dock" here predates the workbench and means this chat strip, not the shell's
+ * edge docks (`DockSide`, `toggleDock`). A `browser.view` the user drags into the
+ * right dock is an ordinary pane and none of this applies to it.
  */
 import { focusInstance, setRegionView } from '../../layout/controller';
 import { findPaneAnywhere, listPanes } from '../../layout/model';

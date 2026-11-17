@@ -7,6 +7,8 @@
  * packages/ui/src/layout/install.ts).
  */
 import { hasAgentContext, readAgentContext } from '../agent-context';
+import { hasCapability } from '../capabilities';
+import { desktopBridge } from '../desktop';
 import { isAppFullscreen, setAppFullscreen } from '../fullscreen';
 import { currentThemeId, THEMES } from '../theme';
 import { windowControl } from '../window';
@@ -19,6 +21,7 @@ import {
   type WidgetDecl,
 } from '../registry';
 import { isPaneDirty, runCloseGuard } from './close-guards';
+import type { ArrangeStyle } from './dock/arrange';
 import { computeWorkbench, type Surface } from './dock/geometry';
 import type { DockSide, PlaceTarget, SplitSide } from './dock/types';
 import { setFrameCommandHandler } from './frame-bus';
@@ -31,6 +34,7 @@ import {
   visiblePanes,
 } from './model';
 import { runPaneExit } from './pane-exit';
+import { allDocuments, popoutWindow } from './pane-window';
 import { closePaneSession, paneSessionKey } from './pane-lifetime';
 import { lastPlacement, rememberPlacement, type PanePlacement } from './pane-placement';
 import { taskbarEntries } from './taskbar';
@@ -209,9 +213,11 @@ export function focusedViewId(): string | null {
  */
 export function focusPaneDom(instanceId: string): void {
   if (typeof document === 'undefined') return;
-  const host = document.querySelector<HTMLElement>(
-    `[data-pane-instance="${CSS.escape(instanceId)}"]`,
-  );
+  // A popped-out pane's container is in its pop-out's document, not this one.
+  const selector = `[data-pane-instance="${CSS.escape(instanceId)}"]`;
+  const host = allDocuments()
+    .map((doc) => doc.querySelector<HTMLElement>(selector))
+    .find((el) => el !== null);
   if (!host) return;
   const target = host.querySelector<HTMLElement>('[data-autofocus]') ?? host;
   target.focus({ preventScroll: true });
@@ -220,6 +226,8 @@ export function focusPaneDom(instanceId: string): void {
 /** Bring an already-open pane forward — show its tab, show its dock — and focus it. */
 export function focusInstance(located: LocatedPane): void {
   layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: located.pane.instanceId });
+  // A pane in a pop-out is brought forward with its window.
+  if (located.location.kind === 'popout') popoutWindow(located.location.popoutId)?.focus();
   // After React has committed the tab/dock change, so the container exists.
   queueMicrotask(() => focusPaneDom(located.pane.instanceId));
 }
@@ -990,6 +998,12 @@ export function toggleDock(side: DockSide, visible?: boolean): boolean {
   return true;
 }
 
+/** Rebuild the centre in one move: equal shares, one tab group, or a group per pane. */
+export function arrangePanes(style: ArrangeStyle): boolean {
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: "ARRANGE_CENTER", style }) !== before;
+}
+
 /** Maximize a group over the workbench, or restore it (the tab strip double-click). */
 export function toggleMaximizedGroup(idOrInstance?: string): boolean {
   const areaId = targetAreaId(idOrInstance);
@@ -1301,6 +1315,89 @@ export function tearOffPane(instanceId: string): boolean {
   return movePaneTo(instanceId, target);
 }
 
+// ---------------------------------------------------------------------------
+// Pop-outs
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a view may go into its own OS window: the shell can open one
+ * (`window.multi`, desktop only) and the view has opted in (`PanelDecl.popout`).
+ */
+export function canPopOut(viewId: string): boolean {
+  return hasCapability('window.multi') && resolveView(viewId)?.popout === true;
+}
+
+/** Move a pane into a new pop-out window. A pane already in one is brought forward. */
+export function popOutPane(instanceId: string): boolean {
+  const located = findPaneAnywhere(frame(), instanceId);
+  if (!located || !canPopOut(located.pane.viewId)) return false;
+  if (located.location.kind === 'popout') {
+    popoutWindow(located.location.popoutId)?.focus();
+    return true;
+  }
+  return movePaneTo(instanceId, { kind: 'popout' });
+}
+
+/**
+ * Put a pop-out's panes back in the workbench and close its window — the OS close
+ * button, and the strip's "Dock back". Each pane goes where it would open
+ * (`placeFor`: where it was last docked, else by role). Never closes a pane.
+ */
+export function dockPopoutBack(popoutId: string): boolean {
+  const popout = frame().popouts.find((p) => p.id === popoutId);
+  if (!popout) return false;
+  const targets = Object.fromEntries(
+    popout.area.tabs.map((pane) => [pane.instanceId, placeFor(pane.viewId)]),
+  );
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: 'DOCK_POPOUT', popoutId, targets }) !== before;
+}
+
+/** Shell → page, on the desktop `popout` channel (apps/desktop/src/popouts.ts). */
+type PopoutShellEvent =
+  | {
+      kind: 'bounds';
+      id: string;
+      bounds: { x: number; y: number; w: number; h: number };
+      maximized: boolean;
+      displayId: number;
+    }
+  | { kind: 'closed'; id: string };
+
+let popoutBridgeBound = false;
+
+/**
+ * Follow the pop-out windows the shell reports: a move or resize is remembered, a
+ * close docks the panes back. And where there are no pop-outs (the browser, a
+ * hosted build) a layout saved on the desktop still names some — their panes
+ * would be invisible, so they are docked back on load.
+ */
+function installPopoutBridge(): void {
+  if (popoutBridgeBound) return;
+  popoutBridgeBound = true;
+  desktopBridge()?.listen('popout', (payload) => {
+    const e = payload as PopoutShellEvent;
+    if (e.kind === 'closed') {
+      dockPopoutBack(e.id);
+    } else if (e.kind === 'bounds') {
+      layoutStore.dispatch({
+        type: 'SET_POPOUT_BOUNDS',
+        popoutId: e.id,
+        bounds: e.bounds,
+        maximized: e.maximized,
+        displayId: e.displayId,
+      });
+    }
+  });
+  const dockStranded = () => {
+    if (hasCapability('window.multi')) return;
+    const ids = layoutStore.getSnapshot().frame.popouts.map((p) => p.id);
+    if (ids.length > 0) queueMicrotask(() => ids.forEach(dockPopoutBack));
+  };
+  layoutStore.subscribe(dockStranded);
+  dockStranded();
+}
+
 /** Serialize a snapshot, clipping any oversized string field rather than the whole
  * object — a truncated JSON blob is unparseable, a clipped field still reads. */
 function truncateSnapshot(
@@ -1378,6 +1475,7 @@ let placementRecorderBound = false;
  * the shell; also wires the region command bus and the placement recorder. */
 export function installFrameController(): void {
   installPlacementRecorder();
+  installPopoutBridge();
   setFrameCommandHandler({
     togglePosition: (hostViewId, position) => {
       const instance = hostInstanceOf(hostViewId);

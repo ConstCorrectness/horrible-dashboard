@@ -10,6 +10,7 @@ import { useSyncExternalStore } from 'react';
 
 import { dialogsStore } from '../dialogs';
 import { activeSectionOf } from '../layout/controller';
+import { focusedDocument, onEachPopoutWindow } from '../layout/pane-window';
 import { layoutStore } from '../layout/store';
 import { findPaneAnywhere } from '../layout/model';
 import { registry, type KeybindingDecl } from '../registry';
@@ -92,7 +93,9 @@ export function readKeyContext(): KeyContext {
     paneSection: focused ? (activeSectionOf(focused.pane) ?? null) : null,
     capture: capture?.mode ?? null,
     captureView: capture?.viewId ?? null,
-    textInput: typeof document !== 'undefined' && isEditableTarget(document.activeElement),
+    // The focused *document*: typing in a pop-out leaves this one's activeElement
+    // on <body>, and bare-letter shortcuts would fire into the text field.
+    textInput: typeof document !== 'undefined' && isEditableTarget(focusedDocument().activeElement),
     dialogOpen: dialogsStore.getActive() !== null,
     fullscreenArea: frame.presentedInstanceId !== null,
     // Not "did a pane ask for it" — whether the lock is actually in force right
@@ -165,6 +168,17 @@ function startWatching(): void {
       document.removeEventListener('focusout', emitContext);
       document.removeEventListener('fullscreenchange', emitContext);
     });
+    // Focus moving inside a pop-out is just as invisible to a store.
+    unwatch.push(
+      onEachPopoutWindow((win) => {
+        win.document.addEventListener('focusin', emitContext);
+        win.document.addEventListener('focusout', emitContext);
+        return () => {
+          win.document.removeEventListener('focusin', emitContext);
+          win.document.removeEventListener('focusout', emitContext);
+        };
+      }),
+    );
   }
 }
 

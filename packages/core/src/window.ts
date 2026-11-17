@@ -86,8 +86,18 @@ export interface BrowserCdpControl {
 }
 
 export interface BrowserWebviewControl {
-  /** Create (or re-point and show) the overlay owned by pane `id`. Idempotent. */
-  create(id: string, url: string, bounds: WebviewBounds): Promise<void>;
+  /**
+   * Create (or re-point and show) the overlay owned by pane `id`. Idempotent.
+   * `popoutId` names the pop-out window the pane is in; omitted or null, the
+   * main window.
+   */
+  create(id: string, url: string, bounds: WebviewBounds, popoutId?: string | null): Promise<void>;
+  /**
+   * Move the overlay into pop-out `popoutId`'s window, or back to the main one
+   * (null). The page keeps running; bounds are the new window's. Absent on shells
+   * without pop-outs.
+   */
+  attach?(id: string, popoutId: string | null): Promise<void>;
   /** Follow the pane as it moves or resizes. */
   updateBounds(id: string, bounds: WebviewBounds): Promise<void>;
   /** Show/hide without destroying — preserves the page, its scroll and its JS state. */

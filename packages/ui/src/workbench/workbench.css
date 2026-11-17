@@ -17,6 +17,14 @@
   contain: strict;
 }
 
+/* A pane's own element, moved between boxes and windows (pane-hosts.tsx). */
+.wb-pane-host {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
 .wb-pane.is-presented {
   contain: none;
 }
@@ -66,7 +74,7 @@
 
 .wb-strip-btn.is-danger:hover {
   color: #fff !important;
-  background: var(--danger, #c42b1c) !important;
+  background: var(--danger) !important;
 }
 
 /* --- dividers ------------------------------------------------------------ */

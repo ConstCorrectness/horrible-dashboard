@@ -5,11 +5,12 @@
  * calls over the `/ws` socket and execute them here, so any verb one can run, the
  * other can too — one source of truth. The vocabulary is the workbench's: every
  * pane is a tab in a **group** (in the centre, an edge dock, or a popout), and
- * **regions** are the strips inside a pane. The `*_window` tool names predate the
- * workbench and are answered in its terms. See docs/modules/agent-chat.md and
- * docs/modules/repl.md.
+ * **regions** are the strips inside a pane. The floating desktop's `*_window` names
+ * are still answered, mapped onto `place_pane` / `pane_state` / `arrange_panes`. See
+ * docs/modules/agent-chat.md and docs/modules/repl.md.
  */
 import {
+  arrangePanes,
   describeLayout,
   listOpenPanesDetailed,
   presentPane,
@@ -26,8 +27,9 @@ import {
   resolveView,
   toggleRegion,
 } from '../../layout/controller';
+import { ARRANGE_STYLES, type ArrangeStyle } from '../../layout/dock/arrange';
 import type { PlaceTarget, SplitSide } from '../../layout/dock/types';
-import { findPaneAnywhere } from '../../layout/model';
+import { findAreaAnywhere, findPaneAnywhere } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import type { RegionPosition } from '../../layout/types';
 import { applyTheme, isKnownTheme, THEME_SETTING_KEY } from '../../theme';
@@ -47,40 +49,129 @@ const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
  */
 const TASKBAR_SETTING_KEY = 'desktop.taskbar';
 
-/** The floating desktop's snap zones the workbench can still honour, as splits. */
-const SNAP_AS_SPLIT: Record<string, SplitSide> = {
-  left: 'left',
-  'third-l': 'left',
-  right: 'right',
-  'third-r': 'right',
-  top: 'above',
-  bottom: 'below',
+/** `place_pane`'s destinations, one flat word each: a small model picks from a list
+ * far more reliably than it composes a kind and a side. */
+const PLACES: Record<string, PlaceTarget | 'split' | 'group'> = {
+  center: { kind: 'center' },
+  'dock-left': { kind: 'dock', side: 'left' },
+  'dock-right': { kind: 'dock', side: 'right' },
+  'dock-bottom': { kind: 'dock', side: 'bottom' },
+  'split-left': 'split',
+  'split-right': 'split',
+  'split-above': 'split',
+  'split-below': 'split',
+  group: 'group',
 };
-const SNAP_NAMES = [...Object.keys(SNAP_AS_SPLIT), 'max'];
+export const PLACE_WORDS = Object.keys(PLACES);
+
+const PANE_STATES = ['maximize', 'restore', 'hide', 'show', 'present', 'unpresent'] as const;
 
 /**
- * Place a pane the way a snap zone used to: a half becomes a split of the centre
- * group beside it, `max` maximizes its group. Null for a zone that has no
- * workbench meaning — never a guess.
+ * The floating desktop's snap zones, as `place_pane` words. Corners and thirds had
+ * no workbench meaning beyond their side, so they keep that much; `max` is a state.
  */
-function snapToWorkbench(instanceId: string, snap: unknown): boolean | null {
+const SNAP_AS_PLACE: Record<string, string> = {
+  left: 'split-left',
+  'third-l': 'split-left',
+  tl: 'split-left',
+  bl: 'split-left',
+  right: 'split-right',
+  'third-r': 'split-right',
+  tr: 'split-right',
+  br: 'split-right',
+  top: 'split-above',
+  bottom: 'split-below',
+};
+
+type Reply = Record<string, unknown>;
+
+/**
+ * Move an open pane. A split is made beside `group` when given, else beside the
+ * pane's own centre group, else beside the focused centre group — so a docked tool
+ * sent `split-left` lands in the centre's left half rather than nowhere.
+ */
+function placePane(instanceId: string, to: string, group?: string): Reply {
   const frame = layoutStore.getSnapshot().frame;
   const located = findPaneAnywhere(frame, instanceId);
-  if (!located) return false;
-  if (snap === 'max') {
-    if (frame.maximizedAreaId === located.location.areaId) return true;
-    return toggleMaximizedGroup(instanceId);
+  if (!located) return { error: `unknown instanceId: ${instanceId}` };
+  const place = PLACES[to];
+  if (!place) return { error: `to must be one of ${PLACE_WORDS.join(', ')}` };
+
+  let target: PlaceTarget;
+  if (place === 'group') {
+    if (!group || !findAreaAnywhere(frame, group)) {
+      return { error: 'group must be a group id from get_layout' };
+    }
+    target = { kind: 'area', areaId: group };
+  } else if (place === 'split') {
+    const side = to.slice('split-'.length) as SplitSide;
+    const beside =
+      group ??
+      (located.location.kind === 'center' ? located.location.areaId : (frame.focusedAreaId ?? ''));
+    if (!findAreaAnywhere(frame, beside)) {
+      return { error: 'group must be a group id from get_layout' };
+    }
+    target = { kind: 'split', areaId: beside, side };
+  } else {
+    target = place;
   }
-  const side = typeof snap === 'string' ? SNAP_AS_SPLIT[snap] : undefined;
-  if (!side) return null;
-  // Split the group it is in when that is a centre group with company; otherwise
-  // split the focused centre group, so a docked tool snapped left lands in the
-  // centre's left half rather than nowhere.
-  const area =
-    located.location.kind === 'center' ? located.location.areaId : frame.focusedAreaId ?? '';
-  const target: PlaceTarget = { kind: 'split', areaId: area, side };
-  movePaneTo(instanceId, target);
-  return true;
+  const moved = movePaneTo(instanceId, target);
+  const after = findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId);
+  return {
+    ok: true,
+    moved,
+    ...(after ? { location: after.location } : {}),
+    // A no-op is not a failure, but the model should know why nothing changed,
+    // and the commonest one has a next step.
+    ...(moved
+      ? {}
+      : {
+          note:
+            place === 'split' && !group
+              ? 'it is alone in its group, so there is nothing to split off; pass `group` to split beside another group'
+              : 'already there',
+        }),
+  };
+}
+
+function setPaneState(instanceId: string, state: string): Reply {
+  const frame = layoutStore.getSnapshot().frame;
+  if (state === 'unpresent') return { ok: presentPane(null) };
+  const located = findPaneAnywhere(frame, instanceId);
+  if (!located) return { error: `unknown instanceId: ${instanceId}` };
+  const { location } = located;
+  switch (state) {
+    case 'maximize':
+      return {
+        ok: frame.maximizedAreaId === location.areaId || toggleMaximizedGroup(instanceId),
+      };
+    case 'restore':
+      if (frame.maximizedAreaId === location.areaId) {
+        return { ok: toggleMaximizedGroup(instanceId) };
+      }
+      return { ok: true, note: 'its group was not maximized' };
+    case 'hide':
+      // Only a dock can be put away; a centre tab is a document in front of the user.
+      if (location.kind !== 'dock') {
+        return { ok: false, error: 'only a pane in an edge dock can be hidden' };
+      }
+      return {
+        ok: !frame.docks[location.side].visible || toggleDock(location.side, false),
+      };
+    case 'show':
+      return { ok: registry.layoutController?.focusPane(instanceId) ?? false };
+    case 'present':
+      return { ok: presentPane(instanceId) };
+    default:
+      return { error: `state must be one of ${PANE_STATES.join(', ')}` };
+  }
+}
+
+function arrange(style: string): Reply {
+  if (!(ARRANGE_STYLES as readonly string[]).includes(style)) {
+    return { error: `style must be one of ${ARRANGE_STYLES.join(', ')}` };
+  }
+  return { ok: true, changed: arrangePanes(style as ArrangeStyle) };
 }
 
 /** Display title for a pane id (panel or widget), falling back to the id. */
@@ -157,71 +248,54 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { closed: lc?.closePane(String(args.id)) ?? false };
     case 'focus_pane':
       return { focused: lc?.focusPane(String(args.instanceId)) ?? false };
-    // ----------------------------------------------------------- windows
-    // Floating-desktop names, answered in workbench terms.
+    // ------------------------------------------------------- arrangement
+    case 'place_pane':
+      return placePane(
+        String(args.instanceId),
+        String(args.to),
+        typeof args.group === 'string' ? args.group : undefined,
+      );
+    case 'pane_state':
+      return setPaneState(String(args.instanceId), String(args.state));
+    case 'arrange_panes':
+      return arrange(String(args.style));
+
+    // The floating desktop's names. Kept because transcripts, saved prompts and
+    // older REPL code call them, and a case here costs no schema: the model is
+    // only ever shown the names above.
     case 'open_window': {
-      // Give a pane a group of its own, and optionally place it.
       const instanceId = String(args.instanceId);
+      if (args.snap === 'max') return setPaneState(instanceId, 'maximize');
+      const word = typeof args.snap === 'string' ? SNAP_AS_PLACE[args.snap] : undefined;
+      if (word) return placePane(instanceId, word);
       if (!findPaneAnywhere(layoutStore.getSnapshot().frame, instanceId)) {
         return { error: `unknown instanceId: ${instanceId}` };
       }
-      if (args.snap != null) {
-        const ok = snapToWorkbench(instanceId, args.snap);
-        if (ok === null) {
-          tearOffPane(instanceId);
-          return { ok: true, warning: `snap must be one of ${SNAP_NAMES.join(', ')}` };
-        }
-        return { ok };
-      }
+      // "A window of its own": a group of its own beside the one it was in.
       tearOffPane(instanceId);
-      return args.rect != null
-        ? { ok: true, warning: 'the workbench has no free windows; rect is ignored' }
-        : { ok: true };
+      return { ok: true };
     }
     case 'window_state': {
       const instanceId = String(args.instanceId);
-      const frame = layoutStore.getSnapshot().frame;
-      const located = findPaneAnywhere(frame, instanceId);
-      switch (String(args.state)) {
-        case 'minimize':
-          // Only a docked pane can be put away; a centre tab is a document in front.
-          if (located?.location.kind !== 'dock') {
-            return { ok: false, error: 'only a pane in an edge dock can be hidden' };
-          }
-          return { ok: toggleDock(located.location.side, false) };
-        case 'maximize':
-          if (!located) return { ok: false };
-          return {
-            ok:
-              frame.maximizedAreaId === located.location.areaId ||
-              toggleMaximizedGroup(instanceId),
-          };
-        case 'restore':
-          if (!located) return { ok: false };
-          if (frame.maximizedAreaId === located.location.areaId) {
-            return { ok: toggleMaximizedGroup(instanceId) };
-          }
-          return { ok: lc?.focusPane(instanceId) ?? false };
-        case 'snap': {
-          const ok = snapToWorkbench(instanceId, args.snap);
-          if (ok === null) return { error: `snap must be one of ${SNAP_NAMES.join(', ')}` };
-          return { ok };
-        }
-        case 'present':
-          return { ok: presentPane(instanceId) };
-        case 'unpresent':
-          return { ok: presentPane(null) };
-        default:
-          return {
-            error: 'state must be minimize, maximize, restore, snap, present or unpresent',
-          };
+      const state = String(args.state);
+      if (state === 'minimize') return setPaneState(instanceId, 'hide');
+      if (state === 'snap') {
+        if (args.snap === 'max') return setPaneState(instanceId, 'maximize');
+        const word = typeof args.snap === 'string' ? SNAP_AS_PLACE[args.snap] : undefined;
+        return word ? placePane(instanceId, word) : { error: 'unknown snap zone' };
       }
+      if (state === 'restore') {
+        // The desktop's restore also un-minimized; here that is showing the pane.
+        const res = setPaneState(instanceId, 'restore');
+        return res.note ? setPaneState(instanceId, 'show') : res;
+      }
+      return setPaneState(instanceId, state);
     }
-    case 'arrange_windows':
-      return {
-        error:
-          'the workbench lays panes out in groups and docks, so there are no free windows to arrange; use window_state snap to split',
-      };
+    case 'arrange_windows': {
+      // Cascade overlapped windows so each title showed: tabs are that, here.
+      const style = String(args.style);
+      return arrange(style === 'cascade' ? 'tabs' : style);
+    }
 
     // ------------------------------------------------------- appearance
     case 'desktop.set_backdrop': {

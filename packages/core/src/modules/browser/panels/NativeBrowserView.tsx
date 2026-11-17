@@ -8,32 +8,39 @@
  * selection at native speed.
  *
  * The price is that the overlay sits **above** the HTML layer and cannot be
- * z-indexed under anything. Three things follow, and all three are handled here:
+ * z-indexed under anything. Four things follow, and all four are handled here:
  *
- * 1. **Geometry has to be pushed, not inherited**, and *position* is the half that
- *    has no event. `ResizeObserver` fires on size; `resize`/`scroll` fire on the
- *    viewport. Dragging a desktop window moves this element without any of them —
- *    the rect changes every frame and nothing announces it, so the overlay stayed
- *    parked where the window used to be while the pane slid out from under it.
- *    The watcher below therefore *samples* the rect: an animation frame loop while
- *    anything is moving, backing off to a slow poll once it settles.
+ * 1. **Geometry has to be pushed, not inherited.** The workbench moves panes in
+ *    two ways: a size change (a divider drag, a dock resize, a window resize),
+ *    which `ResizeObserver` reports, and a committed layout change (a tab moved to
+ *    another group, a split, a maximize), which the layout store announces. The
+ *    watcher below measures on both, on the next frame. The floating desktop also
+ *    moved panes with nothing announcing it (a window drag), which needed a
+ *    per-frame sampler; the workbench has no such gesture, so a slow backstop poll
+ *    is all that is left of it.
  * 2. **Anything drawing over this region must hide it.** The overlay subscribes to
- *    `suppressNativeOverlays()` (see ../overlay.ts), which the palette and modals
- *    claim while they're up. Hiding used to leave a black hole where the page was;
- *    with the CDP bridge the tab is photographed first and the photo stands in for
- *    it, so a menu opening over the browser looks like a menu opening over a page.
+ *    `suppressNativeOverlays()` (see ../overlay.ts), which the palette, modals and
+ *    a workbench tab drag claim while they're up. Hiding used to leave a black
+ *    hole where the page was; with the CDP bridge the tab is photographed first
+ *    and the photo stands in for it, so a menu opening over the browser looks like
+ *    a menu opening over a page.
  * 3. **Invisible is not the same as unmounted.** A pane on a non-visible workspace
  *    still holds its native surface, which would otherwise float over whatever
  *    replaced it — so an `IntersectionObserver` and `visibilitychange` hide it too,
  *    and so does this component unmounting (hide, never close — see below). That
  *    last one covers the pane outliving the component: switching to reader mode or
  *    another engine leaves a live surface over its own replacement.
- * 4. **Another window on top is invisible to every event above.** On a floating
- *    desktop, raising or dragging a window over the browser changes nothing about
- *    this element, and the page kept painting over the window in front of it. So
- *    the region is hit-tested on a short poll: when something else is topmost
- *    inside it, the page's photo (plain HTML, so it obeys z-order) takes its place
- *    until the pane is uncovered.
+ * 4. **A covered pane is still laid out.** The workbench hides a tab behind its
+ *    group's showing tab, a group behind a maximized one, and a hidden dock with
+ *    `visibility`, never by unmounting — and no DOM observer reports visibility.
+ *    So the layout is asked directly (`isPaneShowing`). This replaced hit-testing
+ *    the region on a poll, which the floating desktop needed because any window
+ *    could be raised over any other; in the workbench nothing overlaps a pane
+ *    except the overlays note 2 covers.
+ * 5. **The surface lives in one OS window at a time.** A popped-out pane is
+ *    drawn in its pop-out's document, so the surface must be parented to that
+ *    window's content and measured against that window — `attach` moves it, and
+ *    the listeners here are on the pane's window (`usePaneWindow`), not `window`.
  *
  * The surface's lifetime is the **tab's**, owned by `BrowserPanel` through its pane
  * session — not this component's. A workspace switch unmounts panes (see
@@ -42,24 +49,22 @@
  * the same reason a remount re-attaches to the live surface instead of re-creating
  * it: `create` on an existing webview navigates it, which is a reload.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+
+import { PaneInstanceContext } from '../../../agent-context';
+import { usePanePopoutId, usePaneWindow } from '../../../layout/pane-window';
+import { isPaneShowing } from '../../../layout/dock/frame';
+import { layoutStore } from '../../../layout/store';
 
 import { windowControl, type WebviewBounds } from '../../../window';
 import { captureFrame } from '../native-engine';
 import { subscribeNativeOverlaySuppression, nativeOverlaysSuppressed } from '../overlay';
 
 /**
- * Frames of stillness before the geometry watcher stops sampling every frame. A
- * window drag pauses mid-gesture, so this has to outlast a hesitation; ~0.3s does.
+ * How often the geometry is re-measured with no event to prompt it. The
+ * backstop for a move nothing announces; one `getBoundingClientRect` per tick.
  */
-const STILL_FRAMES = 20;
-
-/**
- * How often the parked watcher re-measures. The backstop for movement that fires
- * none of the events below (a layout written straight to the store, a pane moved by
- * an agent tool), so it trades a quarter second of lag for an idle cost of nothing.
- */
-const IDLE_MS = 250;
+const BACKSTOP_MS = 1000;
 
 /**
  * The longest a menu waits for the stand-in photo before the surface is hidden
@@ -67,9 +72,6 @@ const IDLE_MS = 250;
  * would be worse than a moment of blank.
  */
 const FREEZE_BUDGET_MS = 150;
-
-/** How often to check whether another window has been raised over the pane. */
-const OCCLUSION_POLL_MS = 250;
 
 /** Bounds are only pushed when they actually move — sub-pixel jitter is noise. */
 function sameBounds(a: WebviewBounds | null, b: WebviewBounds): boolean {
@@ -117,6 +119,16 @@ export function NativeBrowserView({
   const seqRef = useRef(created ? navSeq : -1);
   const [visible, setVisible] = useState(true);
   const [frozen, setFrozen] = useState<string | null>(null);
+  // Note 4. Outside a workbench pane (no instance) there is no layout to ask.
+  const paneInstanceId = useContext(PaneInstanceContext);
+  // Note 5: the OS window this pane is in, and the shell's name for it.
+  const win = usePaneWindow();
+  const popoutId = usePanePopoutId();
+  const popoutRef = useRef(popoutId);
+  popoutRef.current = popoutId;
+  const showing = useSyncExternalStore(layoutStore.subscribe, () =>
+    paneInstanceId ? isPaneShowing(layoutStore.getSnapshot().frame, paneInstanceId) : true,
+  );
 
   const measure = useCallback((): WebviewBounds | null => {
     const el = hostRef.current;
@@ -135,7 +147,7 @@ export function NativeBrowserView({
       lastBounds.current = bounds;
       createdRef.current = true;
       control
-        .create(id, url, bounds)
+        .create(id, url, bounds, popoutRef.current)
         .then(() => onCreated(id))
         .catch((e: Error) => {
           createdRef.current = false;
@@ -147,84 +159,63 @@ export function NativeBrowserView({
     control.navigate(id, url).catch((e: Error) => onError(e.message));
   }, [control, url, navSeq, id, measure, onCreated, onError]);
 
+  // --- window --------------------------------------------------------------
+  // Popped out or docked back: the surface follows into that window's content
+  // (note 5). Declared before the geometry effect, so the move reaches the shell
+  // before the first bounds measured in the new window.
+  const attachedTo = useRef(popoutId);
+  useEffect(() => {
+    if (!control?.attach || !createdRef.current || attachedTo.current === popoutId) return;
+    attachedTo.current = popoutId;
+    lastBounds.current = null;
+    control.attach(id, popoutId).catch((e: Error) => onError(e.message));
+  }, [control, id, popoutId, onError]);
+
   // --- geometry ------------------------------------------------------------
-  // Sampled, not event-driven — see note 1. `push` is cheap (one
-  // `getBoundingClientRect` plus a compare) and only crosses to the shell when the
-  // rect actually moved, so the parked poll costs effectively nothing.
+  // Event-driven (note 1). `push` is cheap (one `getBoundingClientRect` plus a
+  // compare) and only crosses to the shell when the rect actually moved.
   useEffect(() => {
     const el = hostRef.current;
     if (!control || !el) return;
     let raf = 0;
-    let timer = 0;
-    let still = 0;
-    let stopped = false;
 
-    const push = (): boolean => {
-      if (!createdRef.current) return false;
+    const push = () => {
+      raf = 0;
+      if (!createdRef.current) return;
       const bounds = measure();
-      if (!bounds || sameBounds(lastBounds.current, bounds)) return false;
+      if (!bounds || sameBounds(lastBounds.current, bounds)) return;
       lastBounds.current = bounds;
       control.updateBounds(id, bounds).catch(() => {
         // A bounds push racing a close is expected; the next one re-syncs.
       });
-      return true;
+    };
+    // Coalesce: a store change and a resize in the same frame push once, after
+    // React has committed the new layout.
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(push);
     };
 
-    // Parked: the layout is at rest, so poll slowly. Anything that moves the pane
-    // without firing an event we listen for is picked up within IDLE_MS.
-    const park = () => {
-      if (stopped) return;
-      timer = window.setTimeout(() => {
-        timer = 0;
-        if (push()) wake();
-        else park();
-      }, IDLE_MS);
-    };
-
-    const frame = () => {
-      raf = 0;
-      still = push() ? 0 : still + 1;
-      if (still < STILL_FRAMES) raf = requestAnimationFrame(frame);
-      else park();
-    };
-
-    // Anything that might be the start of movement drops us into frame-rate
-    // tracking; the loop decides for itself when the motion is over.
-    const wake = () => {
-      if (stopped || raf) return;
-      if (timer) {
-        clearTimeout(timer);
-        timer = 0;
-      }
-      still = 0;
-      raf = requestAnimationFrame(frame);
-    };
-
-    const observer = new ResizeObserver(wake);
+    const observer = new ResizeObserver(schedule);
     observer.observe(el);
-    window.addEventListener('resize', wake);
-    window.addEventListener('scroll', wake, true);
-    // A window/sash drag is a pointer gesture: waking on the pointer means the
-    // overlay is already tracking by the first frame of the move.
-    window.addEventListener('pointerdown', wake, true);
-    window.addEventListener('pointermove', wake, true);
-    window.addEventListener('transitionend', wake, true);
-    window.addEventListener('animationend', wake, true);
-    wake();
+    const unsubscribe = layoutStore.subscribe(schedule);
+    win.addEventListener('resize', schedule);
+    // The pane entrance animation moves the box without resizing it.
+    win.addEventListener('animationend', schedule, true);
+    win.addEventListener('transitionend', schedule, true);
+    // Backstop for movement nothing announces (the status bar moving to the top).
+    const backstop = window.setInterval(push, BACKSTOP_MS);
+    schedule();
 
     return () => {
-      stopped = true;
       if (raf) cancelAnimationFrame(raf);
-      if (timer) clearTimeout(timer);
+      clearInterval(backstop);
       observer.disconnect();
-      window.removeEventListener('resize', wake);
-      window.removeEventListener('scroll', wake, true);
-      window.removeEventListener('pointerdown', wake, true);
-      window.removeEventListener('pointermove', wake, true);
-      window.removeEventListener('transitionend', wake, true);
-      window.removeEventListener('animationend', wake, true);
+      unsubscribe();
+      win.removeEventListener('resize', schedule);
+      win.removeEventListener('animationend', schedule, true);
+      win.removeEventListener('transitionend', schedule, true);
     };
-  }, [control, id, measure]);
+  }, [control, id, measure, win]);
 
   // --- visibility ----------------------------------------------------------
   // Five independent reasons to yield the region, combined into one flag.
@@ -233,10 +224,9 @@ export function NativeBrowserView({
     if (!el) return;
     let onScreen = true;
     let suppressed = nativeOverlaysSuppressed();
-    let occluded = false;
     let freezing = false;
     let alive = true;
-    const wanted = () => active && onScreen && !suppressed && !occluded && !document.hidden;
+    const wanted = () => active && showing && onScreen && !suppressed && !win.document.hidden;
     const apply = () => setVisible(wanted());
 
     /**
@@ -264,49 +254,6 @@ export function NativeBrowserView({
       });
     };
 
-    /**
-     * Note 4 — another HTML window on top of this pane. The native surface paints
-     * above *everything*, so a floating window dragged over the browser, or brought
-     * in front of it, would otherwise sit underneath the page. Sample a grid of
-     * points inside the rect: if the topmost element at any of them is not ours,
-     * something is covering us, and the photo (which *is* HTML, so it obeys
-     * z-order) stands in until it moves away. Inset from the edges so a sibling's
-     * resize grip or a 1px border never reads as cover.
-     */
-    const coveredNow = (): boolean => {
-      const r = el.getBoundingClientRect();
-      if (r.width < 40 || r.height < 40) return false;
-      const inset = 12;
-      const xs = [r.left + inset, r.left + r.width / 2, r.right - inset];
-      const ys = [r.top + inset, r.top + r.height / 2, r.bottom - inset];
-      for (const x of xs) {
-        for (const y of ys) {
-          const hit = document.elementFromPoint(x, y);
-          if (hit && !el.contains(hit)) return true;
-        }
-      }
-      return false;
-    };
-    const checkCover = () => {
-      if (!active || !onScreen || document.hidden) return;
-      const now = coveredNow();
-      if (now === occluded) return;
-      if (!now) {
-        occluded = false;
-        apply();
-        return;
-      }
-      hideBehindPhoto(() => {
-        occluded = coveredNow();
-      });
-    };
-    // A window raised or dragged over the pane fires nothing on *this* element, so
-    // poll — cheaply, nine hit tests — and also check on every pointer release,
-    // which is when a click raises a window or a drag drops one.
-    const coverTimer = window.setInterval(checkCover, OCCLUSION_POLL_MS);
-    const onPointerUp = () => requestAnimationFrame(checkCover);
-    window.addEventListener('pointerup', onPointerUp, true);
-
     const io = new IntersectionObserver((entries) => {
       onScreen = entries.some((e) => e.isIntersecting);
       apply();
@@ -322,17 +269,15 @@ export function NativeBrowserView({
         suppressed = nativeOverlaysSuppressed();
       });
     });
-    document.addEventListener('visibilitychange', apply);
+    win.document.addEventListener('visibilitychange', apply);
     apply();
     return () => {
       alive = false;
-      clearInterval(coverTimer);
-      window.removeEventListener('pointerup', onPointerUp, true);
       io.disconnect();
       unsub();
-      document.removeEventListener('visibilitychange', apply);
+      win.document.removeEventListener('visibilitychange', apply);
     };
-  }, [active, id]);
+  }, [active, showing, id, win]);
 
   useEffect(() => {
     if (!control || !createdRef.current) return;

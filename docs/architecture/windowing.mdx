@@ -417,7 +417,7 @@ declared title — and the window titlebar, its tabs and the taskbar all resolve
 through it, so a pane is never labelled two different ways at once.
 
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
-tools** (`show`, `open_window`, `window_state`, `arrange_windows`, `toggle_region`,
+tools** (`show`, `place_pane`, `pane_state`, `arrange_panes`, `toggle_region`,
 `get_layout`, … relayed through `tool-exec.ts`) all converge on these same functions —
 one code path, and every mutation rides the store's autosave. Layout verbs stay
 **ungated**. See [agent-tools.mdx](agent-tools.mdx).
@@ -699,7 +699,61 @@ docks. The pane region keys `t`, `n` and `b` are unchanged.
 `desktop-v3-backup` workspace row. It is the only rollback: an older build rejects
 a newer schema version.
 
-Still to come: the agent tool vocabulary (`place_pane`, `pane_state`,
-`arrange_panes`, with the old names kept as aliases; today the old tools are
-answered in workbench terms), the native browser view's simpler occlusion check,
-and pop-out windows behind the `window.multi` capability.
+**The agent's verbs** are `place_pane` (centre, a dock, a split beside a group, or
+into a group), `pane_state` (maximize/restore, hide/show a dock, present) and
+`arrange_panes` (`columns`, `rows`, `grid`, `tabs`, `even`, rebuilding the centre
+tree through `ARRANGE_CENTER` and leaving docks alone). The floating desktop's
+`open_window`, `window_state` and `arrange_windows` are still answered in
+`tool-exec.ts`, mapped onto these, and cost no schema.
+
+**The native browser view** yields its OS surface by asking the layout
+(`isPaneShowing`) rather than hit-testing its region on a poll: in the workbench
+nothing overlaps a pane except overlays that already claim
+`suppressNativeOverlays()`, and a tab drag now claims it too. Its bounds follow a
+`ResizeObserver` plus a layout-store subscription instead of a per-frame sampler.
+
+### Pop-out windows
+
+On the desktop shell (`window.multi`), a tab group can leave the main window for an
+OS window of its own: the **Pop out** button in its header, `popOutPane(instanceId)`
+from code. Closing that window, or its **Dock back** button, returns the group to
+the slot `placeFor` picks. It never closes the panes. A build without `window.multi`
+that loads a layout with pop-outs docks them back on load.
+
+A view opts in with `popout: true` on its `PanelDecl` or `WidgetDecl`; a view
+without it shows no button. Today that is the terminal, the editor buffer and the
+browser view. Opting in means the view was checked for the things below.
+
+**One realm, not a second app.** The page opens
+`window.open('', 'horrible-popout:<id>')` and React portals the group into that
+blank document. Every store, the backend socket and the `AudioContext` stay in the
+main page; the backend never learns a pop-out exists. `apps/desktop/src/popouts.ts`
+allows exactly that URL and frame-name prefix, clamps the window to a display's
+work area, copies the main window's zoom, and reports moves and closes on the
+`popout` event channel. The pop-out document has no `horribleDesktop` bridge.
+
+**Panes move; they do not remount.** Every pane renders into its own host element
+(`pane-hosts.tsx`), and a `PaneSlot` appends that element wherever the pane is
+shown now. Popping out moves one DOM node into the child document, so a shell,
+an editor's undo history and an iframe's state carry over.
+
+**What a popped-out view must not assume**, and what the shell does about it:
+
+- **`ResizeObserver` does not cross windows.** One built in the main page never
+  fires for an element in a pop-out. `installCrossWindowObservers()` replaces the
+  global at boot with a router that observes each element through its own
+  window's observer; `rehomeObservers()` re-routes after a move.
+- **`window` and `document` mean the main window.** Use `usePaneWindow()` for
+  listeners, viewport sizes and portal targets (`win.document.body`), and
+  `focusedDocument()` for the active element.
+- **`instanceof` fails across windows.** `el instanceof HTMLElement` is false for
+  a pop-out's element; check `nodeType` instead.
+- **Drag listeners on `window`** get `pointermove`/`pointerup` from the pop-out
+  through `forwardPointerEvents`, so a splitter mid-drag still sees its release.
+
+Keymaps listen in every pop-out. Context menus open in the window they were
+requested from. Toasts, dialogs and Spotlight stay in the main window. A tab
+cannot yet be dragged into or out of a pop-out.
+
+The native browser view moves its `WebContentsView` to the pop-out's
+`BrowserWindow` with `attach_browser_webview`.

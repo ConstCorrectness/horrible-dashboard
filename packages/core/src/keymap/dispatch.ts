@@ -9,6 +9,7 @@
  *
  * See docs/architecture/keybindings.mdx.
  */
+import { onEachPopoutWindow } from '../layout/pane-window';
 import { getCapture, releaseCapture } from './capture';
 import { followCaptureWithEscapeLock, hostTakesEscape } from './keyboard-lock';
 import { getKeymap, readKeyContext } from './state';
@@ -146,18 +147,29 @@ function onKeyDown(e: KeyboardEvent): void {
   if (pending.length > 0) clearPending();
 }
 
+/** Listen on one window; returns the removal. */
+function listenOn(win: Window): () => void {
+  win.addEventListener('keydown', onKeyDown, true);
+  win.addEventListener('keyup', onKeyUp, true);
+  return () => {
+    win.removeEventListener('keydown', onKeyDown, true);
+    win.removeEventListener('keyup', onKeyUp, true);
+  };
+}
+
 /**
  * Install the shell's key handling. Capture phase, so the ladder outranks any
- * component-level Escape handler still in the tree.
+ * component-level Escape handler still in the tree. Every pop-out window gets
+ * the same listener: keys pressed there fire on that window, not this one.
  */
 export function installKeymap(next: KeymapHooks): () => void {
   hooks = next;
-  window.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('keyup', onKeyUp, true);
+  const stopMain = listenOn(window);
+  const stopPopouts = onEachPopoutWindow(listenOn);
   const stopEscapeLock = followCaptureWithEscapeLock();
   return () => {
-    window.removeEventListener('keydown', onKeyDown, true);
-    window.removeEventListener('keyup', onKeyUp, true);
+    stopMain();
+    stopPopouts();
     stopEscapeLock();
     clearPending();
     hooks = null;

@@ -56,6 +56,8 @@ export interface CdpEvent {
 
 interface Pane {
   view: WebContentsView;
+  /** The window whose content the view is parked in: main, or a pop-out. */
+  host: BrowserWindow;
   /** CDP events forwarded for this view (`Page.loadEventFired`, …). */
   cdpEvents: Set<string>;
 }
@@ -67,7 +69,8 @@ export class BrowserViews {
   private downloadsHooked = false;
 
   constructor(
-    private readonly window: BrowserWindow,
+    /** The main window for null, a pop-out's window for its id (null if closed). */
+    private readonly windowFor: (popoutId: string | null) => BrowserWindow | null,
     private readonly emit: (channel: 'browser-webview' | 'browser-cdp', payload: unknown) => void,
   ) {}
 
@@ -84,10 +87,12 @@ export class BrowserViews {
    * mount — must not spawn a second surface. An existing view is repositioned and
    * navigated instead.
    */
-  create(id: string, url: string, bounds: Bounds): void {
+  create(id: string, url: string, bounds: Bounds, popoutId: string | null = null): void {
     const target = parseWebUrl(url).toString();
+    const host = this.hostWindow(popoutId);
     const existing = this.panes.get(id);
     if (existing) {
+      this.moveTo(existing, host);
       existing.view.setBounds(sanitizeBounds(bounds));
       existing.view.setVisible(true);
       this.load(existing.view, target);
@@ -99,8 +104,8 @@ export class BrowserViews {
     });
     view.setBackgroundColor('#ffffff');
     view.setBounds(sanitizeBounds(bounds));
-    this.window.contentView.addChildView(view);
-    this.panes.set(id, { view, cdpEvents: new Set() });
+    host.contentView.addChildView(view);
+    this.panes.set(id, { view, host, cdpEvents: new Set() });
     this.owners.set(view.webContents.id, id);
     this.hook(id, view);
     this.hookDownloads();
@@ -208,6 +213,35 @@ export class BrowserViews {
     });
   }
 
+  private hostWindow(popoutId: string | null): BrowserWindow {
+    const host = this.windowFor(popoutId);
+    if (!host || host.isDestroyed()) {
+      throw new Error(popoutId === null ? 'the window is gone' : `no pop-out \`${popoutId}\``);
+    }
+    return host;
+  }
+
+  /**
+   * Re-parent a view into another window's content. The view (its page, its
+   * session, its CDP attachment) is the same object; only its compositor parent
+   * changes, so a docked-back browser pane keeps the page it had.
+   */
+  private moveTo(pane: Pane, host: BrowserWindow): void {
+    if (pane.host === host) return;
+    try {
+      if (!pane.host.isDestroyed()) pane.host.contentView.removeChildView(pane.view);
+    } catch {
+      // The old window is closing; it no longer holds the view anyway.
+    }
+    host.contentView.addChildView(pane.view);
+    pane.host = host;
+  }
+
+  /** Move pane `id`'s view to a pop-out's window, or back to the main one (null). */
+  attachTo(id: string, popoutId: string | null): void {
+    this.moveTo(this.get(id), this.hostWindow(popoutId));
+  }
+
   /** Follow the pane: every resize, split drag, scroll and dock change. */
   updateBounds(id: string, bounds: Bounds): void {
     this.get(id).view.setBounds(sanitizeBounds(bounds));
@@ -232,7 +266,7 @@ export class BrowserViews {
     this.panes.delete(id);
     this.owners.delete(pane.view.webContents.id);
     try {
-      if (!this.window.isDestroyed()) this.window.contentView.removeChildView(pane.view);
+      if (!pane.host.isDestroyed()) pane.host.contentView.removeChildView(pane.view);
     } catch {
       // The window is going away; the view goes with it.
     }

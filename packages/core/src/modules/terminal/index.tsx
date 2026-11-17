@@ -57,6 +57,9 @@ export const terminalModule: ModuleManifest = {
       component: TerminalPane,
       role: 'tool',
       editor: true,
+      // Checked for the pop-out rules (sdk `PanelDecl.popout`): xterm draws into
+      // its own element and sizes through ResizeObserver, which is routed.
+      popout: true,
       icon: '❯',
       // A guest sees that a terminal is open and where. Scrollback needs
       // the `terminal` grant and a content protocol, both of which land

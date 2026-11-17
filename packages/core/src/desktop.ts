@@ -19,6 +19,8 @@ export interface DesktopBridge {
 
 /** The shell bridge, or null in the browser layout. */
 export function desktopBridge(): DesktopBridge | null {
+  // No `window` at all under Node (tests, tooling): no shell either.
+  if (typeof window === 'undefined') return null;
   return (window as { horribleDesktop?: DesktopBridge }).horribleDesktop ?? null;
 }
 

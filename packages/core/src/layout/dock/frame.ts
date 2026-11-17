@@ -133,6 +133,21 @@ export function visiblePanes(frame: DockFrame): LocatedDockPane[] {
   });
 }
 
+/**
+ * Whether a pane is on screen, by the frame alone: it is its group's showing tab,
+ * the group is not behind a maximized one or in a hidden dock, and no other pane
+ * is presented over everything.
+ *
+ * The workbench hides covered panes with `visibility`, which no DOM observer
+ * reports (an `IntersectionObserver` still sees a hidden element intersecting).
+ * A surface composited above the page, like the native browser view, needs this
+ * answer from the layout instead.
+ */
+export function isPaneShowing(frame: DockFrame, instanceId: string): boolean {
+  if (frame.presentedInstanceId) return frame.presentedInstanceId === instanceId;
+  return visiblePanes(frame).some((p) => p.pane.instanceId === instanceId);
+}
+
 // ---------------------------------------------------------------------------
 // Edits
 // ---------------------------------------------------------------------------

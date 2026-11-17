@@ -7,9 +7,9 @@
  * reference so subscribers do not re-render; and every result is `sanitize`d so
  * no action can leave focus, a maximize or a presentation naming something gone.
  *
- * Not wired into the live store yet — see the phase plan in windowing.mdx.
  */
 import { reorderTab, setActiveTab } from '../model';
+import { arrangeCenter, type ArrangeStyle } from './arrange';
 import type { BackdropRef, PaneState, RegionPosition, RegionState } from '../types';
 import {
   dockPopout,
@@ -70,6 +70,8 @@ export type DockAction =
   /** `visible` omitted toggles. */
   | { type: 'SET_DOCK_VISIBLE'; side: DockSide; visible?: boolean }
   | { type: 'SET_DOCK_SIZE'; side: DockSide; size: number }
+  /** Rebuild the centre tree in one move; docks and popouts are untouched. */
+  | { type: 'ARRANGE_CENTER'; style: ArrangeStyle }
   // Popouts
   | {
       type: 'SET_POPOUT_BOUNDS';
@@ -227,6 +229,9 @@ function reduceOnce(frame: DockFrame, action: DockAction): DockFrame {
 
     case 'SET_DOCK_SIZE':
       return setDockSize(frame, action.side, action.size);
+
+    case 'ARRANGE_CENTER':
+      return arrangeCenter(frame, action.style);
 
     case 'SET_POPOUT_BOUNDS': {
       const popout = frame.popouts.find((p) => p.id === action.popoutId);

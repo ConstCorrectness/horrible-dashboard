@@ -40,12 +40,12 @@ class _Panes:
         return self._call("list_available_panes", {})
 
     def open_list(self) -> Any:
-        """Pane instances currently open (view id, instanceId, role, and the window
-        each one is in)."""
+        """Pane instances currently open (view id, instanceId, role, and where
+        each one lives)."""
         return self._call("list_open_panes", {})
 
     def open(self, view_id: str) -> Any:
-        """Open a view by its view ID (from `available()`) in a new window."""
+        """Open a view by its view ID (from `available()`) where its role puts it."""
         return self._call("open_pane", {"id": view_id})
 
     def close(self, instance_id: str) -> Any:
@@ -53,21 +53,22 @@ class _Panes:
         return self._call("close_pane", {"id": instance_id})
 
     def focus(self, instance_id: str) -> Any:
-        """Bring a pane forward: raise its window and show its tab."""
+        """Bring a pane forward: show its tab, and its dock if hidden."""
         return self._call("focus_pane", {"instanceId": instance_id})
 
 
 class _Layout:
-    """Arrange the desktop — snap, minimize, maximize and tile windows, toggle a
-    pane's regions — the same verbs the agent's layout control uses. Pane targets are
-    **instance ids** (from `dash.panes.open_list()`)."""
+    """Arrange the workbench — split panes side by side, dock them, maximize or
+    tile them, toggle a pane's regions — the same verbs the agent's layout control
+    uses. Pane targets are **instance ids** (from `dash.panes.open_list()`); group
+    ids come from `describe()`."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
     def describe(self) -> Any:
-        """The whole desktop: every window (rect, mode, snap, tabs with their
-        regions), which one is focused, and the backdrop."""
+        """The whole workbench: the centre tree of tab groups, the docks, what is
+        maximized and focused, and the backdrop."""
         return self._call("get_layout", {})
 
     def toggle_region(
@@ -85,17 +86,37 @@ class _Layout:
             "set_region_view", {"instanceId": instance_id, "viewId": view_id}
         )
 
+    def place(self, instance_id: str, to: str, group: str | None = None) -> Any:
+        """Move a pane: `center`, `dock-left`/`dock-right`/`dock-bottom`,
+        `split-left`/`split-right`/`split-above`/`split-below` (beside `group`, or
+        the group it is in), or `group` (as a tab of `group`)."""
+        args: dict[str, Any] = {"instanceId": instance_id, "to": to}
+        if group is not None:
+            args["group"] = group
+        return self._call("place_pane", args)
+
+    def state(self, instance_id: str, state: str) -> Any:
+        """`maximize`, `restore`, `hide`, `show`, `present` or `unpresent`.
+
+        Only a docked pane hides, and a hidden one keeps running.
+        """
+        return self._call("pane_state", {"instanceId": instance_id, "state": state})
+
+    def arrange(self, style: str = "columns") -> Any:
+        """Re-lay the centre: `columns`, `rows`, `grid`, `tabs` or `even`."""
+        return self._call("arrange_panes", {"style": style})
+
+    # The floating desktop's methods. Kept so existing scripts still run; the
+    # frontend maps them onto the verbs above.
+
     def window(
         self,
         instance_id: str,
         snap: str | None = None,
         rect: dict[str, float] | None = None,
     ) -> Any:
-        """Give a pane a window of its own (tearing it out of a tabbed window).
-
-        `snap` places it in a screen region (`left`/`right`/`top`/`bottom`, a
-        corner, or `max`); `rect` gives exact pixels.
-        """
+        """Deprecated: use `place()`. Gives the pane a group of its own; `snap`
+        maps to a split on that side, `max` to maximize; `rect` is ignored."""
         args: dict[str, Any] = {"instanceId": instance_id}
         if snap is not None:
             args["snap"] = snap
@@ -109,18 +130,11 @@ class _Layout:
         state: str,
         snap: str | None = None,
     ) -> Any:
-        """`minimize`, `maximize`, `restore`, `snap`, `present` or `unpresent`.
-
-        A minimized window keeps running — it is hidden, not closed.
-        """
+        """Deprecated: use `state()` / `place()`. `minimize` hides the pane's dock."""
         args: dict[str, Any] = {"instanceId": instance_id, "state": state}
         if snap is not None:
             args["snap"] = snap
         return self._call("window_state", args)
-
-    def arrange(self, style: str = "grid") -> Any:
-        """Lay every open window out: `grid`, `cascade`, `columns` or `rows`."""
-        return self._call("arrange_windows", {"style": style})
 
     def backdrop(self, backdrop_id: str, **params: Any) -> Any:
         """Set the desktop backdrop. Ids are in `describe()["desktop"]["backdrops"]`."""

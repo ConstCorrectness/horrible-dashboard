@@ -6,8 +6,10 @@
  * now the frame engine's **bottom region** of `games.lobby`, which the engine
  * already renders, resizes, collapses and **persists per pane instance** — the
  * three things the hand-rolled version didn't do. `games.log` and `games.episodes`
- * stay registered as ordinary panes, so a power user can still pull either out into
- * an area of its own; the region is where they live by default.
+ * stay registered as ordinary panes, so a power user can still open either as a tab
+ * of its own (a centre group, or the bottom dock beside a terminal); the region is
+ * where they live by default. The region is the pane's own strip, not the shell's
+ * bottom dock: it follows the Games pane wherever that pane is placed.
  *
  * The function shapes are unchanged so every hand-off (`revealBoard`, the board's
  * "watch the log" button, the builder's run output) kept working untouched.

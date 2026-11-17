@@ -7,10 +7,13 @@
  */
 import { memo } from 'react';
 import {
+  canPopOut,
   closePaneGuarded,
+  dockPopoutBack,
   layoutStore,
   openContextMenu,
   paneDisplayTitle,
+  popOutPane,
   presentPane,
   resolveView,
   toggleDock,
@@ -22,10 +25,12 @@ import {
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import {
   CloseIcon,
+  DockBackIcon,
   FullscreenIcon,
   LeaveFullscreenIcon,
   MaximizeIcon,
   MinimizeIcon,
+  PopOutIcon,
   RestoreIcon,
 } from '../layout/WindowChrome';
 import { TAB_H } from './layout';
@@ -57,6 +62,7 @@ export const GroupHeader = memo(function GroupHeader({
   const decl = active ? resolveView(active.viewId) : undefined;
   const presented = !!active && presentedInstanceId === active.instanceId;
   const dockSide = host.kind === 'dock' ? host.side : null;
+  const popoutId = host.kind === 'popout' ? host.popoutId : null;
 
   return (
     <div
@@ -76,6 +82,7 @@ export const GroupHeader = memo(function GroupHeader({
       onDoubleClick={(e) => {
         // On the empty strip only: a double-click on a tab is two clicks on it.
         if ((e.target as HTMLElement).closest('[data-wb-tab]')) return;
+        if (popoutId) return;
         toggleMaximizedGroup(area.id);
       }}
       onContextMenu={(e) => {
@@ -169,6 +176,16 @@ export const GroupHeader = memo(function GroupHeader({
             {presented ? <LeaveFullscreenIcon /> : <FullscreenIcon />}
           </StripButton>
         )}
+        {!popoutId && active && canPopOut(active.viewId) && (
+          <StripButton label="Pop out into its own window" onClick={() => popOutPane(active.instanceId)}>
+            <PopOutIcon />
+          </StripButton>
+        )}
+        {popoutId && (
+          <StripButton label="Dock back into the workbench" onClick={() => dockPopoutBack(popoutId)}>
+            <DockBackIcon />
+          </StripButton>
+        )}
         {dockSide && (
           <StripButton
             label={`Hide the ${dockSide} dock`}
@@ -177,13 +194,16 @@ export const GroupHeader = memo(function GroupHeader({
             <MinimizeIcon />
           </StripButton>
         )}
-        <StripButton
-          label={maximized ? 'Restore' : 'Maximize'}
-          pressed={maximized}
-          onClick={() => toggleMaximizedGroup(area.id)}
-        >
-          {maximized ? <RestoreIcon /> : <MaximizeIcon />}
-        </StripButton>
+        {/* A pop-out is its own window: the OS maximizes it. */}
+        {!popoutId && (
+          <StripButton
+            label={maximized ? 'Restore' : 'Maximize'}
+            pressed={maximized}
+            onClick={() => toggleMaximizedGroup(area.id)}
+          >
+            {maximized ? <RestoreIcon /> : <MaximizeIcon />}
+          </StripButton>
+        )}
         {active && (
           <StripButton
             label="Close"

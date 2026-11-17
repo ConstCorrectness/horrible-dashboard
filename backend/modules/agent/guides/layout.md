@@ -1,31 +1,35 @@
-# Arranging the desktop
+# Arranging the workbench
 
-The screen is a **desktop**: free-floating **windows** over a backdrop, with a taskbar. Every pane lives in a window; a window can hold several panes as **tabs**. Inside a pane, **region** strips run down its own sides.
+The screen is a **workbench**. Every pane is a tab in a **group**. Groups live in the **centre** (a split layout of side-by-side and stacked groups, where documents go) or in one of three edge **docks** (`left`, `right`, `bottom`, where tools go). A dock can be hidden and shown; the panes in it keep running. Inside a pane, **region** strips run down its own sides.
 
-You only need these verbs to _rearrange_ things. To simply put something on screen, use `show` — it opens or focuses by name and returns the pane's contents in one call.
+You only need these verbs to _rearrange_ things. To simply put something on screen, use `show`: it opens or focuses by name and returns the pane's contents in one call.
 
 ## Ids: the mistake to avoid
 
-There are two kinds and they are not interchangeable.
+There are three kinds and they are not interchangeable.
 
 - A **view id** (`editor.buffer`, `terminal.instance`) names a _kind_ of pane. `open_pane` takes one.
-- An **instanceId** (`editor.buffer#3`) names one _live_ pane. Every window verb takes one of these.
+- An **instanceId** (`editor.buffer#3`) names one _live_ pane. Every arrangement verb takes one.
+- A **group id** (`a12`) names one tab group. `place_pane` takes one for `group` and the splits.
 
-Ids are **not guessable**. Call `get_layout` (every window with its rect, mode and tabs, plus the desktop's backdrop) or `list_open_panes` first and use the ids it returns. If the user names a pane by title or filename ("pane:main.py"), match it against `list_open_panes` to find its instanceId.
+Ids are **not guessable**. Call `get_layout` (the centre tree with group ids and tabs, the docks, what is maximized and focused) or `list_open_panes` first and use the ids it returns. If the user names a pane by title or filename ("pane:main.py"), match it against `list_open_panes` to find its instanceId.
 
-## Placing a window
+## Placing a pane
 
-`open_pane` opens a view in a new window — where that view was last left, or on a cascade. Then place it:
+`open_pane` opens a view where it belongs: a document as a tab of the focused centre group, a tool in its edge dock (or wherever the user last put that view). Then move it:
 
-- `window_state` with `snap` puts it in a screen region: `left`/`right`/`top`/`bottom` halves, `tl`/`tr`/`bl`/`br` quarters, or `max`. To put two panes **side by side**, snap one `left` and the other `right`.
-- `window_state` also handles `minimize` / `maximize` / `restore`, and `present` / `unpresent` (fill the whole screen, past the taskbar). **Minimizing is not closing** — the pane keeps running and the user gets it back from the taskbar.
-- `open_window` gives a pane a window of its own — tearing it out of a tabbed window if it shares one — and takes the same `snap`, or `rect` for exact pixels.
-- `arrange_windows` lays every window out at once: `grid`, `cascade`, `columns` or `rows`.
+- `place_pane` with `to`:
+  - `split-left` / `split-right` / `split-above` / `split-below`: a new centre group on that side. To put two panes **side by side**, place the second one `split-right`.
+  - `dock-left` / `dock-right` / `dock-bottom`: into that dock, which is then shown.
+  - `center`: back into the focused centre group as a tab.
+  - `group` with `group: <id>`: as a tab of that group.
+- `pane_state` with `state`: `maximize` / `restore` (one group over the whole workbench), `hide` / `show` (put a dock away and bring it back; **hiding is not closing**, and only docks hide), and `present` / `unpresent` (fill the entire screen, past the status bar).
+- `arrange_panes` re-lays the whole centre: `columns`, `rows`, `grid` (a group per pane), `tabs` (all in one group) or `even` (keep the layout, equalise the splits).
 
-Changing how it **looks** — the backdrop, the theme, the taskbar — lives in the separate `desktop` tool group. Call `load_tools("desktop")` first; those verbs aren't loaded by default because restyling is rare and every always-on tool costs schema space on every turn.
+Changing how it **looks** (the backdrop, the theme, the taskbar) lives in the separate `desktop` tool group. Call `load_tools("desktop")` first; those verbs aren't loaded by default because restyling is rare and every always-on tool costs schema space on every turn.
 
 ## Regions
 
 Regions are the toggleable strips _inside_ a pane (the editor's Outline on its right strip). `toggle_region {instanceId, position}` opens or closes a position; `set_region_view {instanceId, viewId}` chooses which strip view is showing. `list_available_panes` reports which regions each view hosts.
 
-A region is usually the right home for a narrow companion — it follows its host rather than competing with it for space.
+A region is usually the right home for a narrow companion: it follows its host rather than competing with it for space.

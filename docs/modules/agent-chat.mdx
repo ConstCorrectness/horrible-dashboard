@@ -117,8 +117,8 @@ agent id; `ChatWidget` reads it through `useSyncExternalStore` and owns none of 
 That is not tidiness, it is the fix for "the chat resets when I prompt". The shell
 unmounts this pane routinely — an inactive tab is unmounted rather than hidden
 ([Unmount is not close](../architecture/windowing.mdx#pane-lifetime-unmount-is-not-close)),
-and the agent's **own layout tools** (`open_window` tearing it out of a tabbed window,
-say) re-parent it. With the conversation in `useState`, each of those blanked it: the
+and the agent's **own layout tools** (`place_pane` moving it to another group,
+say) move it. With the conversation in `useState`, each of those blanked it: the
 pane came back showing the starter prompts, re-read the node, and got the last
 _saved_ state — which for a turn still streaming is the conversation as it was before
 the question. So the most reliable way to lose a conversation was to ask the agent to
@@ -726,21 +726,26 @@ lives in `packages/core/src/modules/agent/tool-exec.ts` (`executeTool`) — the
 **shared relay surface** the [Python REPL](./repl.mdx)'s `dash` SDK drives too, so
 they all stay in lockstep.
 
-**`LAYOUT_TOOLS`** (app-level verbs over the desktop — every pane lives in a
-**window**, merged panes are its tabs, and **regions** are per-pane strips; the model
-discovers ids via the read tools, so the catalog stays frontend-owned). Reads:
-`list_available_panes` (views with role, sections + regions), `list_open_panes`
-(instances with their window), **`get_layout`** (every window — the orientation
-read), `get_pane_context(instanceId)`. Panes: `open_pane(id)` (a new window, or
-focus a single-instance view), `close_pane(id)`, `focus_pane(instanceId)`. Windows:
-`open_window(instanceId, snap?, rect?)` (a window of its own, torn out of a tabbed
-one), `window_state(instanceId, state, …)` (`minimize`/`maximize`/`restore`/`snap`/
-`present`/`unpresent`), `arrange_windows(style)`. Regions:
-`toggle_region(instanceId, position, open?)`, `set_region_view(instanceId, viewId)`.
-Two panes side by side is two snaps, `left` and `right`. (The tiling verbs —
-`split_area`, `join_area`, `resize_area`, `move_pane`, `fullscreen_area`,
-`open_tool_in_dock`, `toggle_dock`, `dock_window` — and the workspace verbs went with
-the tiling frame.)
+**`LAYOUT_TOOLS`** (app-level verbs over the workbench — every pane is a tab in a
+**group**, in the centre split, an edge **dock** or a popout, and **regions** are
+per-pane strips; the model discovers ids via the read tools, so the catalog stays
+frontend-owned). Reads: `list_available_panes` (views with role, sections +
+regions), `list_open_panes` (instances with where each lives), **`get_layout`** (the
+centre tree with group ids, the docks — the orientation read),
+`get_pane_context(instanceId)`. Panes: `open_pane(id)` (where its role puts it, or
+focus a single-instance view), `close_pane(id)`, `focus_pane(instanceId)`.
+Arrangement: `place_pane(instanceId, to, group?)` (`center`, `dock-left`/`-right`/
+`-bottom`, `split-left`/`-right`/`-above`/`-below`, or `group`),
+`pane_state(instanceId, state)` (`maximize`/`restore`/`hide`/`show`/`present`/
+`unpresent`), `arrange_panes(style)` (`columns`/`rows`/`grid`/`tabs`/`even`).
+Regions: `toggle_region(instanceId, position, open?)`,
+`set_region_view(instanceId, viewId)`. Two panes side by side: place the second one
+`split-right`. The floating desktop's `open_window`, `window_state` and
+`arrange_windows` are still answered by the relay, mapped onto these, so old
+transcripts and REPL scripts keep working; they are no longer in the schema. (The
+tiling verbs — `split_area`, `join_area`, `resize_area`, `move_pane`,
+`fullscreen_area`, `open_tool_in_dock`, `toggle_dock`, `dock_window` — and the
+workspace verbs went with the tiling frame.)
 
 **Appearance verbs are a separate, lazily-loaded `desktop` group**
 (`desktop.set_backdrop`, `desktop.set_theme`, `desktop.configure_taskbar`) rather

@@ -26,6 +26,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { usePaneWindow } from '../../layout/pane-window';
 import { matchesModelQuery } from './model-filter';
 
 interface Row {
@@ -66,6 +67,8 @@ export function ModelCombobox({
 }) {
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
+  // The window this pane is in: a pop-out draws its panel in its own document.
+  const win = usePaneWindow();
   const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -107,20 +110,20 @@ export function ModelCombobox({
       if (!r) return;
       // Wide enough for an OpenRouter id; a narrow settings column would otherwise
       // ellipsise every row down to its vendor prefix.
-      const width = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
-      const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
-      const below = window.innerHeight - r.bottom - 12;
+      const width = Math.min(Math.max(r.width, 340), win.innerWidth - 16);
+      const left = Math.max(8, Math.min(r.left, win.innerWidth - width - 8));
+      const below = win.innerHeight - r.bottom - 12;
       const above = r.top - 12;
       const flip = below < 200 && above > below;
       const maxHeight = Math.max(140, Math.min(352, flip ? above : below));
       setAnchor({ left, top: flip ? r.top - 4 - maxHeight : r.bottom + 4, width, maxHeight });
     };
     place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    win.addEventListener('resize', place);
+    win.addEventListener('scroll', place, true);
     return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      win.removeEventListener('resize', place);
+      win.removeEventListener('scroll', place, true);
     };
   }, [open]);
 
@@ -132,8 +135,8 @@ export function ModelCombobox({
       if (panelRef.current?.contains(t) || inputRef.current?.contains(t)) return;
       setOpen(false);
     };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
+    win.document.addEventListener('pointerdown', onDown, true);
+    return () => win.document.removeEventListener('pointerdown', onDown, true);
   }, [open]);
 
   useEffect(() => {
@@ -256,7 +259,7 @@ export function ModelCombobox({
               {shownCount} of {modelCount}
             </p>
           </div>,
-          document.body,
+          win.document.body,
         )}
     </>
   );

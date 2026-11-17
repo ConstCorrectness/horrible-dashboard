@@ -3,7 +3,7 @@
  * and the dividers between them. Mounted over the desktop backdrop, which shows
  * through an empty centre — Home is what an empty workbench looks like.
  *
- * Three things here are load-bearing:
+ * Four things here are load-bearing:
  *
  * 1. **Panes live in one flat layer, keyed by instance id**, absolutely placed
  *    over their group's body. They are not children of the group. React keeps a
@@ -20,11 +20,17 @@
  *    frame and commits one `SET_SPLIT_SIZES` / `SET_DOCK_SIZE` at the end; a tab
  *    drag commits one `MOVE_PANE`. Dispatching per frame would bump `revision`
  *    a hundred times a drag and drive autosave into a write loop.
+ * 4. **Panes render into host elements, not into their boxes.** Each mounted pane
+ *    is portaled into a host element of its own (./pane-hosts.tsx), and the
+ *    positioned box in the layer — or a pop-out window's body (PopoutHost.tsx) —
+ *    holds that host. Popping a pane out moves one DOM node into another
+ *    document; React's tree for the pane does not change, so nothing remounts.
  *
  * Geometry is pure and lives in core (`computeWorkbench`, `resolveDrop`) and in
  * ./layout.ts; this file measures, draws and handles pointers.
  */
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -33,8 +39,11 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   computeWorkbench,
+  hasCapability,
+  PaneWindowContext,
   dropToPlace,
   findPaneAnywhere,
   focusGroup,
@@ -44,11 +53,14 @@ import {
   releaseCapture,
   resolveDrop,
   setWorkbenchMeasurer,
+  suppressNativeOverlays,
   type AreaHost,
   type AreaNode,
   type DockFrame,
   type DropTarget,
   type LayoutNode,
+  type PaneState,
+  type PaneWindow,
   type Surface,
 } from '@horrible/core';
 
@@ -66,6 +78,8 @@ import {
   type Sash,
 } from './layout';
 import { syncMotionAttribute } from './motion';
+import { paneHost, PaneSlot, prunePaneHosts } from './pane-hosts';
+import { PopoutHost } from './PopoutHost';
 import './workbench.css';
 
 /** Pointer travel before a press on a tab becomes a drag. */
@@ -98,6 +112,14 @@ function groupsOf(frame: DockFrame): GroupEntry[] {
   return out;
 }
 
+/** Every group, pop-outs included: where each pane is mounted. */
+function allGroupsOf(frame: DockFrame): GroupEntry[] {
+  return [
+    ...groupsOf(frame),
+    ...frame.popouts.map((p) => ({ area: p.area, host: { kind: 'popout', popoutId: p.id } as AreaHost })),
+  ];
+}
+
 interface TabDrag {
   instanceId: string;
   fromAreaId: string;
@@ -108,7 +130,7 @@ interface TabDrag {
   index: number | null;
 }
 
-export function Workbench() {
+export function Workbench({ appTitle = 'horrible-dashboard' }: { appTitle?: string } = {}) {
   const { frame, workspaceId, hydrated } = useSyncExternalStore(
     layoutStore.subscribe,
     layoutStore.getSnapshot,
@@ -117,6 +139,21 @@ export function Workbench() {
   const [surface, setSurface] = useState<Surface>({ w: 0, h: 0 });
   const [live, setLive] = useState<LiveSizes | null>(null);
   const [drag, setDrag] = useState<TabDrag | null>(null);
+  // Which window each open pop-out is, as its PopoutHost reports it.
+  const [popoutWindows, setPopoutWindows] = useState<ReadonlyMap<string, PaneWindow>>(
+    () => new Map(),
+  );
+  const onPopoutWindow = useCallback((id: string, pw: PaneWindow | null) => {
+    setPopoutWindows((m) => {
+      if ((m.get(id) ?? null) === pw) return m;
+      const next = new Map(m);
+      if (pw) next.set(id, pw);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const mainWindow = useMemo<PaneWindow>(() => ({ win: window, popoutId: null }), []);
+  const multiWindow = hasCapability('window.multi');
 
   // Measure, and keep measuring.
   useLayoutEffect(() => {
@@ -225,6 +262,9 @@ export function Workbench() {
       const start = { x: e.clientX, y: e.clientY };
       let started = false;
       let current: TabDrag | null = null;
+      // The drop preview draws over panes, and a native browser surface paints
+      // above all HTML: it would hide the preview and swallow the pointer.
+      let release: (() => void) | null = null;
       const located = findPaneAnywhere(live$.current.frame, instanceId);
       const title = located ? paneDisplayTitle(located.pane) : instanceId;
 
@@ -234,6 +274,7 @@ export function Workbench() {
           started = true;
           // A captured pane (a game, a terminal) would otherwise keep the pointer.
           releaseCapture();
+          release = suppressNativeOverlays();
           document.body.classList.add('is-workbench-dragging');
         }
         const { frame: f, layout: l, surface: s } = live$.current;
@@ -263,6 +304,7 @@ export function Workbench() {
         window.removeEventListener('pointerup', up);
         window.removeEventListener('pointercancel', up);
         if (!started) return;
+        release?.();
         document.body.classList.remove('is-workbench-dragging');
         justDragged.current = true;
         // Cleared on the next tick in case no click follows (released off the tab).
@@ -299,7 +341,7 @@ export function Workbench() {
   if (arrival.current?.key !== arrivalKey) {
     arrival.current = {
       key: arrivalKey,
-      ids: new Set(groupsOf(frame).flatMap((g) => g.area.tabs.map((t) => t.instanceId))),
+      ids: new Set(allGroupsOf(frame).flatMap((g) => g.area.tabs.map((t) => t.instanceId))),
     };
     enter.current.clear();
   }
@@ -312,10 +354,14 @@ export function Workbench() {
   // never changes the relative order of the panes that stay.
   const order = useRef<string[]>([]);
   const mounted = new Map<string, { group: GroupEntry }>();
-  for (const g of groups) {
+  for (const g of multiWindow ? allGroupsOf(drawn) : groups) {
     const active = g.area.tabs[g.area.activeTab];
     if (active) mounted.set(active.instanceId, { group: g });
   }
+  const mountedKey = [...mounted.keys()].join('\n');
+  useEffect(() => {
+    prunePaneHosts(new Set(mountedKey ? mountedKey.split('\n') : []));
+  }, [mountedKey]);
   order.current = [
     ...order.current.filter((id) => mounted.has(id)),
     ...[...mounted.keys()].filter((id) => !order.current.includes(id)),
@@ -394,7 +440,8 @@ export function Workbench() {
       {surface.w > 0 &&
         order.current.map((instanceId) => {
           const { group } = mounted.get(instanceId)!;
-          const pane = group.area.tabs[group.area.activeTab];
+          // A popped-out pane's box is its pop-out window (PopoutHost).
+          if (group.host.kind === 'popout') return null;
           const shown = layout.areas.get(group.area.id);
           const rect = shown ?? shadow.areas.get(group.area.id);
           const visible = !!shown && !layout.covered.has(group.area.id);
@@ -411,12 +458,12 @@ export function Workbench() {
           const isNew = !!entry;
           const delay = entry?.delay ?? 0;
           return (
-            <div
+            <PaneSlot
               key={instanceId}
+              instanceId={instanceId}
               className={`wb-pane${isNew ? ' wb-pane-enter' : ''}${presented ? ' is-presented' : ''}`}
               data-wb-pane={instanceId}
               aria-hidden={visible || presented ? undefined : true}
-              onPointerDownCapture={() => focusPane(instanceId)}
               style={
                 presented
                   ? {
@@ -438,16 +485,67 @@ export function Workbench() {
                       animationDelay: delay ? `${delay}ms` : undefined,
                     }
               }
-            >
-              <PaneWithRegions pane={pane} />
-            </div>
+            />
           );
         })}
+
+      {/* The panes themselves, each into its own host element (note 4). One keyed
+          list wherever the pane is shown, so a move between windows is a prop
+          change here, never a remount. */}
+      {surface.w > 0 &&
+        order.current.map((instanceId) => {
+          const { group } = mounted.get(instanceId)!;
+          const pane = group.area.tabs[group.area.activeTab];
+          const pw =
+            group.host.kind === 'popout'
+              ? (popoutWindows.get(group.host.popoutId) ?? mainWindow)
+              : mainWindow;
+          return createPortal(
+            <PaneContent pane={pane} paneWindow={pw} onFocus={focusPane} />,
+            paneHost(instanceId),
+            instanceId,
+          );
+        })}
+
+      {multiWindow &&
+        drawn.popouts.map((p) => (
+          <PopoutHost
+            key={p.id}
+            popout={p}
+            focused={drawn.focusedAreaId === p.area.id}
+            presentedInstanceId={drawn.presentedInstanceId}
+            appTitle={appTitle}
+            onWindow={onPopoutWindow}
+          />
+        ))}
 
       {drag && <DropPreview drag={drag} />}
     </div>
   );
 }
+
+/** A pane's content, rendered into its host element. */
+const PaneContent = memo(function PaneContent({
+  pane,
+  paneWindow,
+  onFocus,
+}: {
+  pane: PaneState;
+  paneWindow: PaneWindow;
+  onFocus: (instanceId: string) => void;
+}) {
+  return (
+    <PaneWindowContext.Provider value={paneWindow}>
+      <div
+        className="wb-pane-body"
+        onPointerDownCapture={() => onFocus(pane.instanceId)}
+        style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}
+      >
+        <PaneWithRegions pane={pane} />
+      </div>
+    </PaneWindowContext.Provider>
+  );
+});
 
 /** Turn a finished tab drag into one store action. */
 function commitTabDrop(d: TabDrag): void {

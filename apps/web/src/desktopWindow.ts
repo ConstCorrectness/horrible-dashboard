@@ -63,8 +63,14 @@ export function createDesktopWindowControl(): WindowControl {
       invoke<void>('window_start_resize_dragging', { direction: edge }),
     openBrowserWindow: (url) => invoke<void>('browser_open_url', { url }),
     browserWebview: {
-      create: (id, url, bounds) =>
-        invoke<void>('create_browser_webview', { id, url, bounds: scaled(bounds) }),
+      create: (id, url, bounds, popoutId) =>
+        invoke<void>('create_browser_webview', {
+          id,
+          url,
+          bounds: scaled(bounds),
+          popoutId: popoutId ?? null,
+        }),
+      attach: (id, popoutId) => invoke<void>('attach_browser_webview', { id, popoutId }),
       updateBounds: (id, bounds) =>
         invoke<void>('update_browser_webview_bounds', { id, bounds: scaled(bounds) }),
       setVisible: (id, visible) => invoke<void>('set_browser_webview_visible', { id, visible }),

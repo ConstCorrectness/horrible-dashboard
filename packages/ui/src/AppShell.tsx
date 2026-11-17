@@ -334,7 +334,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
             would unmount (and lose their sessions) whenever the wizard showed.
             Inside `.shell-content`, so it stops below the titlebar and above the
             taskbar. */}
-        <Workbench />
+        <Workbench appTitle={appTitle} />
       </div>
       {/* Outside `.shell-content`, so it takes its own strip of the shell rather
           than overlapping the desktop — the window layer's coordinate space
