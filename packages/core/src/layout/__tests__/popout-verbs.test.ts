@@ -37,6 +37,10 @@ beforeAll(() => {
         singleton: true,
         popout: true,
       },
+      // No `dock`: by role it would land on the right, so a dock-back that lands
+      // anywhere else must have come from where the pane was.
+      { id: 'po.loaded', title: 'Loaded', component: Stub, role: 'tool', popout: true },
+      { id: 'po.targeted', title: 'Targeted', component: Stub, role: 'tool', popout: true },
     ],
   });
   installFrameController();
@@ -92,6 +96,25 @@ describe('popOutPane / dockPopoutBack', () => {
     popOutPane(t);
     dockPopoutBack(current().popouts[0].id);
     expect(where(t)).toMatchObject({ kind: 'dock', side: 'bottom' });
+  });
+
+  // A load is not a move, so the recorder never saw this pane placed: a saved or
+  // v3-migrated layout. It must still dock back to the dock it was popped out of.
+  it('docks a pane back where it was loaded, not where its role would put it', () => {
+    const t = loadFrame(groupsFrame([], { bottom: 'po.loaded' }), 'test').docks.bottom.area.tabs[0]
+      .instanceId;
+    expect(where(t)).toMatchObject({ kind: 'dock', side: 'bottom' });
+    popOutPane(t);
+    dockPopoutBack(current().popouts[0].id);
+    expect(where(t)).toMatchObject({ kind: 'dock', side: 'bottom' });
+  });
+
+  it('docks a pane back where an explicit target opened it', () => {
+    const t = openPane('po.targeted', { target: { kind: 'dock', side: 'left' } })!;
+    expect(where(t)).toMatchObject({ kind: 'dock', side: 'left' });
+    popOutPane(t);
+    dockPopoutBack(current().popouts[0].id);
+    expect(where(t)).toMatchObject({ kind: 'dock', side: 'left' });
   });
 
   it('is a no-op for a pop-out that is already gone', () => {

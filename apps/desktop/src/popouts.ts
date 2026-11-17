@@ -12,7 +12,8 @@
  *
  * ## What the spike measured (Electron 44, 2026-11-16)
  *
- * - A child window does **not** inherit the opener's zoom: it is synced here.
+ * - A child window does **not** inherit the opener's zoom: it is synced here,
+ *   after its `about:blank` has loaded (see `adopt`).
  * - Each child's webContents throttles on its own, so a pop-out behind the main
  *   window stops painting unless it gets `backgroundThrottling: false` too.
  * - Children **outlive a reload** of the main page. Their content belonged to the
@@ -80,12 +81,26 @@ export class PopoutWindows {
     this.windows.set(id, win);
 
     win.setBounds(clampToWorkArea(win.getBounds(), workAreas()));
-    win.webContents.setZoomFactor(this.main.webContents.getZoomFactor());
+
+    const wc = win.webContents;
+    // Twice, and the second one is what holds. `did-create-window` runs before the
+    // child's `about:blank` commits, and the commit replaces whatever zoom was set
+    // with Chromium's saved per-host zoom for `about:blank` — persisted in the
+    // profile, so a pop-out came up at 1.0 (or at whatever a past session left)
+    // beside a main window at 1.1. Measured 2026-11-17: a zoom set at
+    // `did-finish-load` sticks. The first call covers a window adopted after its
+    // load already finished.
+    const syncZoom = () => {
+      if (!wc.isDestroyed() && !this.main.isDestroyed()) {
+        wc.setZoomFactor(this.main.webContents.getZoomFactor());
+      }
+    };
+    syncZoom();
+    wc.once('did-finish-load', syncZoom);
 
     // The pop-out's document is the page's to fill; it never navigates or opens
     // windows of its own. Links clicked in it leave for the user's browser, as
     // they do from the main window.
-    const wc = win.webContents;
     wc.setWindowOpenHandler(({ url }) => {
       if (isWebUrl(url)) void shell.openExternal(url);
       return { action: 'deny' };

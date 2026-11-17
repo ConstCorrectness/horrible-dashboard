@@ -314,6 +314,14 @@ A pane changes place by a tab drag, a split command, an agent verb or a dock-bac
 and remembering from each means the next one silently does not; reading the result
 catches them all by construction.
 
+Only a **move** is recorded. A pane appearing for the first time (an open, a load,
+a v3 migration) was placed by these same rules, so recording it would only re-file
+the default. The one exception is a move **into a pop-out**: there the place the
+pane is *leaving* is recorded, because Dock back asks `placeFor` where to put it
+and the answer has to be where it came from. Without that, a terminal that arrived
+in the bottom dock from a saved layout, and was never dragged, came back on the
+right.
+
 View types vs pane instances work as before: widgets are singleton-by-view-id,
 panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.
 A caller-supplied `instanceId` (e.g. `editor.buffer:<source>`) focuses the
@@ -746,8 +754,9 @@ nothing overlaps a pane except overlays that already claim
 
 On the desktop shell (`window.multi`), a tab group can leave the main window for an
 OS window of its own: the **Pop out** button in its header, `popOutPane(instanceId)`
-from code. Closing that window, or its **Dock back** button, returns the group to
-the slot `placeFor` picks. It never closes the panes. A build without `window.multi`
+from code. Closing that window, or its **Dock back** button, returns each pane to
+the slot `placeFor` picks, which is where it was popped out from (see
+[Where a pane opens](#where-a-pane-opens)). It never closes the panes. A build without `window.multi`
 that loads a layout with pop-outs docks them back on load.
 
 A view opts in with `popout: true` on its `PanelDecl` or `WidgetDecl`; a view
@@ -760,7 +769,10 @@ blank document. Every store, the backend socket and the `AudioContext` stay in t
 main page; the backend never learns a pop-out exists. `apps/desktop/src/popouts.ts`
 allows exactly that URL and frame-name prefix, clamps the window to a display's
 work area, copies the main window's zoom, and reports moves and closes on the
-`popout` event channel. The pop-out document has no `horribleDesktop` bridge.
+`popout` event channel. The zoom is copied again once the child's `about:blank`
+has loaded: that commit replaces any earlier zoom with Chromium's saved per-host
+zoom for `about:blank`, which lives in the profile, so a copy made only at
+`did-create-window` left the pop-out at 1.0 beside a main window at 1.1. The pop-out document has no `horribleDesktop` bridge.
 
 **Panes move; they do not remount.** Every pane renders into its own host element
 (`pane-hosts.tsx`), and a `PaneSlot` appends that element wherever the pane is

@@ -956,7 +956,7 @@ function targetAreaId(idOrInstance?: string): string | null {
 /** Move an open pane somewhere else. False when nothing moved. */
 export function movePaneTo(instanceId: string, target: PlaceTarget): boolean {
   const before = layoutStore.getSnapshot();
-  const after = layoutStore.dispatch({ type: "MOVE_PANE", instanceId, target });
+  const after = layoutStore.dispatch({ type: 'MOVE_PANE', instanceId, target });
   if (after === before) return false;
   queueMicrotask(() => focusPaneDom(instanceId));
   return true;
@@ -972,14 +972,14 @@ export function splitFocused(side: SplitSide): boolean {
   const area = areaId ? findAreaAnywhere(f, areaId)?.area : null;
   const pane = area?.tabs[area.activeTab];
   if (!area || !pane || area.tabs.length < 2) return false;
-  return movePaneTo(pane.instanceId, { kind: "split", areaId: area.id, side });
+  return movePaneTo(pane.instanceId, { kind: 'split', areaId: area.id, side });
 }
 
 /** Show, hide or (omitting `visible`) toggle an edge dock. */
 export function toggleDock(side: DockSide, visible?: boolean): boolean {
   const before = layoutStore.getSnapshot();
   const after = layoutStore.dispatch({
-    type: "SET_DOCK_VISIBLE",
+    type: 'SET_DOCK_VISIBLE',
     side,
     visible,
   });
@@ -989,7 +989,7 @@ export function toggleDock(side: DockSide, visible?: boolean): boolean {
   if (pane)
     focusInstance({
       pane,
-      location: { kind: "dock", side, areaId: dock.area.id },
+      location: { kind: 'dock', side, areaId: dock.area.id },
     });
   return true;
 }
@@ -997,7 +997,7 @@ export function toggleDock(side: DockSide, visible?: boolean): boolean {
 /** Rebuild the centre in one move: equal shares, one tab group, or a group per pane. */
 export function arrangePanes(style: ArrangeStyle): boolean {
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: "ARRANGE_CENTER", style }) !== before;
+  return layoutStore.dispatch({ type: 'ARRANGE_CENTER', style }) !== before;
 }
 
 /** Maximize a group over the workbench, or restore it (the tab strip double-click). */
@@ -1005,14 +1005,14 @@ export function toggleMaximizedGroup(idOrInstance?: string): boolean {
   const areaId = targetAreaId(idOrInstance);
   if (!areaId) return false;
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: "TOGGLE_MAXIMIZED", areaId }) !== before;
+  return layoutStore.dispatch({ type: 'TOGGLE_MAXIMIZED', areaId }) !== before;
 }
 
 export function focusGroup(idOrInstance?: string): boolean {
   const areaId = targetAreaId(idOrInstance);
   if (!areaId) return false;
   const before = layoutStore.getSnapshot();
-  const after = layoutStore.dispatch({ type: "FOCUS_AREA", areaId });
+  const after = layoutStore.dispatch({ type: 'FOCUS_AREA', areaId });
   const pane = after.frame.focusedInstanceId;
   if (pane) queueMicrotask(() => focusPaneDom(pane));
   return after !== before || after.frame.focusedAreaId === areaId;
@@ -1032,7 +1032,7 @@ function visibleGroups(): string[] {
 export function cycleGroups(direction: 1 | -1 = 1): boolean {
   const ids = visibleGroups();
   if (ids.length === 0) return false;
-  const current = ids.indexOf(frame().focusedAreaId ?? "");
+  const current = ids.indexOf(frame().focusedAreaId ?? '');
   return focusGroup(ids[(current + direction + ids.length) % ids.length]);
 }
 
@@ -1045,8 +1045,8 @@ export function focusDirection(direction: NavDirection): boolean {
   const layout = computeWorkbench(f, workbenchSurface());
   const from = f.focusedAreaId ? layout.areas.get(f.focusedAreaId) : undefined;
   if (!from) return false;
-  const horizontal = direction === "left" || direction === "right";
-  const sign = direction === "left" || direction === "up" ? -1 : 1;
+  const horizontal = direction === 'left' || direction === 'right';
+  const sign = direction === 'left' || direction === 'up' ? -1 : 1;
   const centre = (r: { x: number; y: number; w: number; h: number }) => ({
     x: r.x + r.w / 2,
     y: r.y + r.h / 2,
@@ -1058,9 +1058,7 @@ export function focusDirection(direction: NavDirection): boolean {
     // Only groups genuinely on that side, that overlap on the other axis, then the
     // nearest — raw distance alone would jump to a group mostly perpendicular.
     .filter(({ c, r }) => {
-      const ahead = horizontal
-        ? (c.x - origin.x) * sign > 1
-        : (c.y - origin.y) * sign > 1;
+      const ahead = horizontal ? (c.x - origin.x) * sign > 1 : (c.y - origin.y) * sign > 1;
       const overlaps = horizontal
         ? r.y < from.y + from.h && r.y + r.h > from.y
         : r.x < from.x + from.w && r.x + r.w > from.x;
@@ -1081,21 +1079,18 @@ export function focusDirection(direction: NavDirection): boolean {
  * No-op when the pane is the one on screen and focused — flashing something the
  * user is looking at is noise.
  */
-export function requestPaneAttention(
-  instanceId: string,
-  attention = true,
-): boolean {
+export function requestPaneAttention(instanceId: string, attention = true): boolean {
   const f = frame();
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
   if (attention) {
     const entry = taskbarEntries(f).find((e) => e.instanceId === instanceId);
-    if (entry?.state === "focused") return false;
+    if (entry?.state === 'focused') return false;
   }
   const before = layoutStore.getSnapshot();
   return (
     layoutStore.dispatch({
-      type: "SET_PANE_ATTENTION",
+      type: 'SET_PANE_ATTENTION',
       instanceId,
       attention,
     }) !== before
@@ -1113,7 +1108,7 @@ export function activateTaskbarEntry(instanceId: string): boolean {
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
   const entry = taskbarEntries(f).find((e) => e.instanceId === instanceId);
-  if (entry?.state === "focused" && located.location.kind === "dock") {
+  if (entry?.state === 'focused' && located.location.kind === 'dock') {
     return toggleDock(located.location.side, false);
   }
   focusInstance(located);
@@ -1122,7 +1117,7 @@ export function activateTaskbarEntry(instanceId: string): boolean {
 
 export function setBackdrop(backdrop: BackdropRef): boolean {
   const before = layoutStore.getSnapshot();
-  return layoutStore.dispatch({ type: "SET_BACKDROP", backdrop }) !== before;
+  return layoutStore.dispatch({ type: 'SET_BACKDROP', backdrop }) !== before;
 }
 
 /**
@@ -1139,14 +1134,14 @@ export function presentPane(instanceId: string | null): boolean {
   const f = frame();
   if (instanceId === null) {
     if (f.presentedInstanceId) {
-      layoutStore.dispatch({ type: "SET_PRESENTED", instanceId: null });
+      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: null });
       void restoreAppFullscreen();
     }
     return true;
   }
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
-  layoutStore.dispatch({ type: "SET_PRESENTED", instanceId });
+  layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId });
   void escalateAppFullscreen(located.pane.viewId);
   return true;
 }
@@ -1241,7 +1236,11 @@ export function describeLayout(): Record<string, unknown> {
     docks: Object.fromEntries(
       DOCK_SIDES.filter((side) => f.docks[side].area.tabs.length > 0).map((side) => [
         side,
-        { visible: f.docks[side].visible, size: f.docks[side].size, ...describeGroup(f.docks[side].area) },
+        {
+          visible: f.docks[side].visible,
+          size: f.docks[side].size,
+          ...describeGroup(f.docks[side].area),
+        },
       ]),
     ),
     ...(f.popouts.length
@@ -1440,6 +1439,13 @@ export function listOpenPanesDetailed(): Array<Record<string, unknown>> {
  * A pane appearing for the first time was placed by `placeFor`, so recording that
  * would only re-file the default; and a popout is a window, not a place a view
  * belongs.
+ *
+ * Except on the way **into** a pop-out: then the place it is leaving is recorded,
+ * because "Dock back" asks `placeFor` where the pane goes, and the answer must be
+ * where it came from. Without this, a pane that never moved by hand — loaded from
+ * a saved layout, migrated from v3, opened at an explicit target — had nothing on
+ * record and docked back by role: a terminal popped out of the bottom dock came
+ * back on the right.
  */
 function installPlacementRecorder(): void {
   if (placementRecorderBound) return;
@@ -1460,7 +1466,9 @@ function installPlacementRecorder(): void {
     for (const p of listPanes(snap.frame)) {
       const now = seen.get(p.pane.instanceId) ?? null;
       const was = before.get(p.pane.instanceId);
-      if (now && was !== undefined && was !== now) rememberPlacement(p.pane.viewId, now);
+      if (was === undefined || was === now) continue;
+      if (now) rememberPlacement(p.pane.viewId, now);
+      else if (was) rememberPlacement(p.pane.viewId, was); // into a pop-out
     }
   });
 }
