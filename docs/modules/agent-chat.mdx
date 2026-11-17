@@ -30,10 +30,16 @@ exists today:
   model's reply. Each turn replays prior user/assistant turns to the backend as
   `history` (the backend stays stateless per turn). It drives the same
   orchestrator, so it reasons about the live layout and widget contents (via the
-  read tools) and acts on them. See `ChatWidget.tsx`. The pane shows the 3D
-  [avatar](../architecture/layout-shell.mdx) (`Avatar3D`, now in `packages/core`)
-  cycling through its mood animations; the **`agent.avatarAnimation`** setting
-  (default on) turns it off for a plain text pane. The transcript persists as named
+  read tools) and acts on them. See `ChatWidget.tsx`. The pane is laid out as a
+  **sessions rail** on the left (see [Sessions](#sessions-persistence)), a slim
+  header (rail toggle, the conversation's title, the trace toggle), the transcript
+  as **one centred column** of at most 760px (assistant replies are flat prose, not
+  bubbles; the user's turns keep a soft tinted bubble), and a **composer card**: the
+  input, and under it the mode chip, the model picker and Send. An empty
+  transcript greets with the 3D [avatar](../architecture/layout-shell.mdx)
+  (`Avatar3D`, now in `packages/core`) cycling through its mood animations, above
+  the starter prompts; it is not drawn once a conversation has turns. The
+  **`agent.avatarAnimation`** setting (default on) turns it off. The transcript persists as named
   **sessions** and supports **slash commands** (both below). A running turn draws
   an **activity timeline** and each chat has a **mode** — Plan, Agent or Auto (see
   [Activity timeline & modes](#activity-timeline--modes)).
@@ -86,13 +92,33 @@ Chat transcripts persist server-side as named **sessions** — a small `chat` ba
 module (`backend/modules/chat/`) that mirrors the workspace store: file-backed JSON
 at `$HORRIBLE_DATA_DIR/chat-sessions.json`, CRUD under `/api/chat/sessions` (list
 returns metadata only; `GET /{id}` returns the full transcript; `PUT /{id}` is a
-partial upsert of `title`/`messages`; plus `/active` and `DELETE`). The chat widget
+partial upsert of `title`/`messages`/`mode`; plus `/active` and `DELETE`). Only a
+save that carries `messages` bumps `updated`: it means conversation activity, and
+the sessions rail orders and buckets by it, so a rename or a mode switch must not
+move an old chat to the top. The chat widget
 reads the active session the **first** time it talks to an agent, lazily creates a
-session titled from the first prompt, and **auto-saves each completed turn**. The session bar (a `<select>` + new/delete) switches between them,
-and an **agent picker** beside it (populated from `GET /api/agent/roster`) selects
-which roster agent the pane talks to — sessions are **per agent** (`agent_id` on
-the session, `?agent=` on the list endpoint), so each agent keeps its own
-conversations and active pointer. See
+session titled from the first prompt, and **auto-saves each completed turn**.
+
+The **sessions rail** (`SessionsRail.tsx`) lists them. Its head holds the **agent
+picker** (populated from `GET /api/agent/roster`; just the agent's name when the
+roster has one agent or the chat is pinned to one) and **New chat**; under that, a
+title search, then the conversations newest first, bucketed **Today / Yesterday /
+Previous 7 days / Previous 30 days / Older** by local calendar day
+(`session-groups.ts` — `updated` is epoch seconds). Each row shows its age (`3h`,
+`2d`); hovering or focusing it reveals **rename** (inline; Enter saves through
+`PUT /{id}` with a `title`, Escape cancels) and **delete** (always confirmed,
+naming the conversation, since there is no undo). The running conversation carries
+a pulsing marker and cannot be deleted mid-turn.
+
+The rail sits inline when the chat is at least **720px** wide; the header's toggle
+then shows or hides it, and that choice is remembered per viewer
+(localStorage `agent.sessionsRail`). Narrower — the agent docks on the right at
+420px by default — it starts hidden and the toggle slides it **over** the chat with
+a scrim; picking or starting a conversation closes it. A `compact` chat (the interp
+Ask strip) has no rail; `/clear` and `/agent` still work there.
+
+Sessions are **per agent** (`agent_id` on the session, `?agent=` on the list
+endpoint), so each agent keeps its own conversations and active pointer. See
 [Specialized agents & delegation](#specialized-agents--delegation).
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
 
@@ -156,7 +182,8 @@ walked: its type-ahead matches a *prefix*, so the queries people actually have �
 a substring match over the provider label and the model id **together**, word by word
 and ANDed, so `free` narrows to the free tier, `lm studio` to one provider, and
 `free qwen` to the intersection. Arrow keys and Enter pick; the panel is
-`position: fixed` and measured off the trigger, because the session bar sits inside a
+`position: fixed` and measured off the trigger (flipping above it when, as in the
+composer, there is no room below), because the composer sits inside a
 pane that clips its overflow — and portaled to its pane window's body
 (`usePaneWindow()`, so it opens in a pop-out too), because inside a pane box `fixed`
 alone is not enough (see

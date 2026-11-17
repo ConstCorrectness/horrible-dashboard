@@ -138,11 +138,14 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
             existing.title = body.title
         if "messages" in body.model_fields_set and body.messages is not None:
             existing.messages = body.messages
+            # `updated` is conversation activity: the sessions rail buckets and
+            # orders by it, so a rename or a mode switch must not move a week-old
+            # chat to the top of Today.
+            existing.updated = now
         # `None` is a real value here ("follow the Settings default"), so presence
         # alone decides — unlike title/messages, where None means "not sent".
         if "mode" in body.model_fields_set:
             existing.mode = body.mode
-        existing.updated = now
         session = existing
     else:
         session = ChatSession(

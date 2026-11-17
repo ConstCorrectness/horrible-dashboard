@@ -17,6 +17,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,7 +27,7 @@ import {
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { dialogs } from '../../dialogs';
-import { IconArrowDown, IconBranch, IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
+import { IconArrowDown, IconBranch, IconSend, IconSidebar, IconStop } from '../../glyphs';
 import { renderMarkdown } from '../../notebook/markdown';
 import { useSetting } from '../../settings';
 import { ActivityTimeline, LiveLine, WorkedFor } from './ActivityTimeline';
@@ -35,8 +36,10 @@ import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } fr
 import {
   chatState,
   setFollowTarget,
+  setSessionsRail,
   setTraceDrawer,
   traceDrawer,
+  useSessionsRail,
   useTraceDrawer,
   updateChat,
   useAgentChat,
@@ -49,6 +52,7 @@ import { asAgentMode, modeInfo, nextMode, parseModeCommand, type AgentMode } fro
 import { answerAgentQuestion, askAgent, newTurnId } from './orchestrator-client';
 import { createPatchBatcher } from './patch-batcher';
 import { PlanCard } from './PlanCard';
+import { SessionsRail } from './SessionsRail';
 import { TurnTodos } from './TurnTodos';
 import {
   answerQuestion,
@@ -155,6 +159,12 @@ const FollowDrawer = lazy(() =>
     default: () => <m.FollowSection mode="drawer" />,
   })),
 );
+
+/** Below this pane width the sessions rail overlays the chat (`.agent-rail[data-overlay]`
+ *  in styles.css) instead of sitting beside it. The agent docks on the right at
+ *  420px by default, and a 240px rail beside that would leave the transcript a
+ *  column of single words. */
+const RAIL_INLINE_MIN = 720;
 
 /** Drawer width bounds, px. The upper bound is also capped by the pane in CSS. */
 const DRAWER_MIN = 320;
@@ -362,6 +372,31 @@ export function ChatWidget({
   // unmounts it, and the agent's own layout tools are one of the things that do.
   const { sessions, activeId, turns, prompt, busy, restore, mode } = useAgentChat(agentId);
   const drawer = useTraceDrawer();
+  const rail = useSessionsRail();
+  // Whether the pane is too narrow for an inline rail. Measured rather than left to
+  // CSS alone because the two widths behave differently, not just look different:
+  // inline, the toggle is a remembered preference; as an overlay it is a transient
+  // sheet that a pick dismisses.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    // Measured once synchronously, before paint: the observer's first callback
+    // lands a frame later, and a 420px dock would flash the inline rail first.
+    setNarrow(el.getBoundingClientRect().width < RAIL_INLINE_MIN);
+    const ro = new ResizeObserver(([entry]) => {
+      const isNarrow = entry.contentRect.width < RAIL_INLINE_MIN;
+      setNarrow(isNarrow);
+      if (!isNarrow) setOverlayOpen(false);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const showRail = !compact && (narrow ? overlayOpen : rail.open);
+  const toggleRail = () =>
+    narrow ? setOverlayOpen((o) => !o) : setSessionsRail({ open: !rail.open });
   // A chat with no mode of its own shows — and the backend applies — the Settings
   // default. `acceptEdits` there reads as Agent (see modes.ts).
   const globalMode = asAgentMode(useSetting<string>('agent.permissions.mode')) ?? 'default';
@@ -629,9 +664,7 @@ export function ChatWidget({
    * The dialog names the conversation rather than saying "this chat", because
    * the whole risk is having the wrong one selected.
    */
-  const confirmRemoveSession = async () => {
-    const id = liveActiveId();
-    if (!id) return;
+  const confirmRemoveSession = async (id: string) => {
     const title = sessions.find((s) => s.id === id)?.title;
     const ok = await dialogs.confirm({
       title: title ? `Delete “${title}”?` : 'Delete this chat?',
@@ -640,6 +673,17 @@ export function ChatWidget({
       danger: true,
     });
     if (ok) await removeSession(id);
+  };
+
+  /** Retitle a conversation from the rail. The list is re-read rather than patched
+   *  so the order (by `updated`, which a save bumps) matches the node's. */
+  const renameSession = async (id: string, title: string) => {
+    try {
+      await saveSession(id, { title });
+    } catch {
+      /* keep the old title */
+    }
+    await refreshSessions();
   };
 
   // Lazily create a session on the first real message, titled from the prompt.
@@ -989,47 +1033,65 @@ export function ChatWidget({
   }, [ready, busy, sendTick, agentId, pinnedAgent]);
 
   const canSend = !busy && prompt.trim().length > 0 && (ready || prompt.startsWith('/'));
+  const activeTitle = sessions.find((s) => s.id === activeId)?.title ?? 'New chat';
 
   return (
-    <div className="agent-chat-shell" data-trace={drawer.open || undefined}>
+    <div
+      ref={shellRef}
+      className="agent-chat-shell"
+      data-trace={drawer.open || undefined}
+      data-compact={compact || undefined}
+    >
+      {showRail && narrow ? (
+        // A click outside the sheet dismisses it, like any overlay. A div rather
+        // than a button: it is a pointer affordance; the rail's own close button
+        // is the keyboard path.
+        <div
+          className="agent-rail-scrim"
+          aria-hidden="true"
+          onClick={() => setOverlayOpen(false)}
+        />
+      ) : null}
+      {showRail ? (
+        <SessionsRail
+          sessions={sessions}
+          activeId={activeId}
+          roster={roster}
+          agentId={agentId}
+          pinned={Boolean(pinnedAgent)}
+          busy={busy}
+          overlay={narrow}
+          onPick={(id) => {
+            void switchSession(id);
+            if (narrow) setOverlayOpen(false);
+          }}
+          onNew={() => {
+            void newSession();
+            if (narrow) setOverlayOpen(false);
+          }}
+          onDelete={(id) => void confirmRemoveSession(id)}
+          onRename={(id, title) => void renameSession(id, title)}
+          onPickAgent={pickAgent}
+          onClose={() => setOverlayOpen(false)}
+        />
+      ) : null}
       <div className="agent-chat" onPointerDownCapture={() => setFollowTarget(agentId)}>
-        <div className="agent-session-bar">
-          {roster.length > 1 && !pinnedAgent && (
-            <select
-              value={agentId}
-              onChange={(e) => pickAgent(e.target.value)}
-              aria-label="Agent"
-              title={roster.find((a) => a.id === agentId)?.description ?? ''}
-              disabled={busy}
+        <header className="agent-header">
+          {!compact ? (
+            <button
+              type="button"
+              className="agent-icon-btn"
+              title={showRail ? 'Hide conversations' : 'Show conversations'}
+              aria-label="Conversations"
+              aria-pressed={showRail}
+              onClick={toggleRail}
             >
-              {roster.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <select
-            value={activeId ?? ''}
-            onChange={(e) => void switchSession(e.target.value)}
-            aria-label="Chat session"
-          >
-            {(sessions.length === 0 || !activeId) && <option value="">New chat</option>}
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title}
-              </option>
-            ))}
-          </select>
-          {/* Both were unlabelled emoji (＋ and 🗑) sitting 24px apart, and the
-            destructive one fired immediately. Now they are drawn glyphs with
-            accessible names, and deleting names the conversation it is about to
-            destroy — there is no undo behind it. */}
-          <ModelPicker
-            agentId={agentId}
-            status={typeof status === 'object' ? status : null}
-            disabled={busy}
-          />
+              <IconSidebar />
+            </button>
+          ) : null}
+          <h2 className="agent-header-title" title={activeTitle}>
+            {activeTitle}
+          </h2>
           <button
             type="button"
             title={
@@ -1037,7 +1099,7 @@ export function ChatWidget({
             }
             aria-label="Trace"
             aria-pressed={drawer.open}
-            className="agent-trace-toggle"
+            className="agent-icon-btn agent-trace-toggle"
             onClick={() => {
               setFollowTarget(agentId);
               setTraceDrawer({ open: !drawer.open });
@@ -1045,25 +1107,7 @@ export function ChatWidget({
           >
             <IconBranch />
           </button>
-          <button
-            type="button"
-            title="New chat"
-            aria-label="New chat"
-            onClick={() => void newSession()}
-          >
-            <IconPlus />
-          </button>
-          <button
-            type="button"
-            title="Delete this chat"
-            aria-label="Delete this chat"
-            className="agent-session-delete"
-            disabled={!activeId}
-            onClick={() => void confirmRemoveSession()}
-          >
-            <IconTrash />
-          </button>
-        </div>
+        </header>
         {restore === 'failed' && (
           <div className="agent-restore-failed" role="alert">
             <span>
@@ -1075,19 +1119,20 @@ export function ChatWidget({
             </button>
           </div>
         )}
-        {animateAvatar && !compact && (
-          <div className="agent-chat-avatar">
-            <Avatar3D size={120} mood={mood} />
-          </div>
-        )}
         <div className="agent-chat-log-wrap">
           <div className="agent-chat-log" ref={scrollRef} onScroll={onLogScroll}>
             {turns.length === 0 && (
               // An empty transcript says what this agent can do that a chat box can't
               // — it drives the layout and reads the panes. Three real prompts do that
               // faster than a sentence describing it, and they are clickable, so the
-              // first turn costs no typing.
+              // first turn costs no typing. The avatar greets here only: above a
+              // running conversation it was 120px of the log spent on decoration.
               <div className="agent-chat-starters">
+                {animateAvatar && !compact && (
+                  <div className="agent-chat-avatar">
+                    <Avatar3D size={120} mood={mood} />
+                  </div>
+                )}
                 <p className="agent-chat-starters-lead">
                   I can see your open panes and rearrange them, read what a widget is showing, and
                   edit an open buffer.
@@ -1187,33 +1232,48 @@ export function ChatWidget({
         {busy && (turns.at(-1)?.todos?.length ?? 0) > 0 && (
           <TurnTodos items={turns.at(-1)!.todos!} compact />
         )}
+        {/* One card: the line you type on, and under it the settings that shape
+          what it does (mode, model) beside the button that sends it. */}
         <form className="agent-chat-input" data-mode={shownMode} onSubmit={(e) => void send(e)}>
-          <ModePicker mode={shownMode} inherited={mode === null} onChange={setMode} />
-          <input
-            ref={inputRef}
-            type="text"
-            value={prompt}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`${modeInfo(shownMode).placeholder}  (/ for commands)`}
-            disabled={busy}
-          />
-          {busy ? (
-            // A turn waiting on a slow (or never-answering) model used to leave only a
-            // disabled "…" here — the pane had no way out. Stop cancels it server-side.
-            <button
-              type="button"
-              title="Stop"
-              aria-label="Stop"
-              onClick={() => inflight.get(agentIdRef.current)?.abort()}
-            >
-              <IconStop />
-            </button>
-          ) : (
-            <button type="submit" disabled={!canSend} aria-label="Send">
-              <IconSend />
-            </button>
-          )}
+          <div className="agent-composer">
+            <input
+              ref={inputRef}
+              type="text"
+              value={prompt}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={`${modeInfo(shownMode).placeholder}  (/ for commands)`}
+              disabled={busy}
+            />
+            <div className="agent-composer-bar">
+              <ModePicker mode={shownMode} inherited={mode === null} onChange={setMode} />
+              <ModelPicker
+                agentId={agentId}
+                status={typeof status === 'object' ? status : null}
+                disabled={busy}
+              />
+              <span className="agent-composer-gap" />
+              {busy ? (
+                // A turn waiting on a slow (or never-answering) model used to leave
+                // only a disabled "…" here — the pane had no way out. Stop cancels
+                // it server-side.
+                <button
+                  type="button"
+                  className="agent-send"
+                  data-stop
+                  title="Stop"
+                  aria-label="Stop"
+                  onClick={() => inflight.get(agentIdRef.current)?.abort()}
+                >
+                  <IconStop />
+                </button>
+              ) : (
+                <button type="submit" className="agent-send" disabled={!canSend} aria-label="Send">
+                  <IconSend />
+                </button>
+              )}
+            </div>
+          </div>
         </form>
       </div>
       {drawer.open && (

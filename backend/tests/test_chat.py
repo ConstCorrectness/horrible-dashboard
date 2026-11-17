@@ -54,6 +54,26 @@ def test_get_session_returns_full_transcript(client: TestClient) -> None:
     assert got["messages"][1]["reasoning"] == "be nice"
 
 
+def test_only_messages_bump_updated(client: TestClient) -> None:
+    """`updated` orders the sessions rail; a rename or mode switch is not activity."""
+    session = client.post("/api/chat/sessions", json={}).json()
+    sid = session["id"]
+    before = session["updated"]
+
+    renamed = client.put(f"/api/chat/sessions/{sid}", json={"title": "Renamed"}).json()
+    assert renamed["title"] == "Renamed"
+    assert renamed["updated"] == before
+    moded = client.put(f"/api/chat/sessions/{sid}", json={"mode": "plan"}).json()
+    assert moded["updated"] == before
+
+    saved = client.put(
+        f"/api/chat/sessions/{sid}",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    ).json()
+    assert saved["updated"] >= before
+    assert saved["title"] == "Renamed"
+
+
 def test_get_unknown_is_404(client: TestClient) -> None:
     assert client.get("/api/chat/sessions/nope").status_code == 404
 
