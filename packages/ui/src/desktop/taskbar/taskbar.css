@@ -834,8 +834,8 @@
 }
 
 .os-taskbar-agent-icon {
-  font-size: 14px;
-  line-height: 1;
+  flex: none;
+  display: block;
 }
 
 /* The M-x zone. The minibuffer is the frame's bottom row, so on a floating
