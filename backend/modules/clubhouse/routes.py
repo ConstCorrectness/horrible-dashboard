@@ -139,7 +139,7 @@ def _adopt_device_id(device_id: str) -> None:
     jsonstore.write_text(_data_dir() / "clubhouse-device-id", device_id)
 
 
-def _get_helper_path() -> Path:
+def _get_helper_path() -> Path | None:
     import platform
     import subprocess
 
@@ -157,7 +157,12 @@ def _get_helper_path() -> Path:
         bin_name = "ch-auth-helper"
 
     bin_path = base_dir / "bin" / bin_name
-    if not bin_path.is_file():
+    src_path = base_dir / "Program.cs"
+    needs_build = not bin_path.is_file() or (
+        src_path.is_file() and bin_path.stat().st_mtime < src_path.stat().st_mtime
+    )
+    if needs_build:
+        bin_path.unlink(missing_ok=True)
         logger.info("Compiling Clubhouse auth helper for %s...", rid)
         base_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -178,12 +183,18 @@ def _get_helper_path() -> Path:
                 check=True,
                 capture_output=True,
             )
+        except FileNotFoundError:
+            logger.info(
+                "dotnet not found on PATH; using direct httpx Clubhouse auth flow"
+            )
+            return None
         except subprocess.CalledProcessError as err:
-            logger.error(f"Failed to compile ch-auth-helper: {err.stderr.decode()}")
-            raise RuntimeError(
-                f"Failed to compile ch-auth-helper: {err.stderr.decode()}"
-            ) from err
-    return bin_path
+            logger.warning(
+                "Failed to compile ch-auth-helper (%s); falling back to httpx",
+                err.stderr.decode(errors="replace").strip(),
+            )
+            return None
+    return bin_path if bin_path.is_file() else None
 
 
 # ch-auth-helper exits 1 on every non-2xx and wraps Clubhouse's reply in its own
@@ -207,17 +218,83 @@ def _upstream_reply(err_msg: object) -> dict[str, Any] | None:
     return reply if isinstance(reply, dict) else None
 
 
+async def _ch_auth_flow_post(
+    action: str, phone_number: str, extra_arg: str, device_id: str
+) -> dict[str, Any]:
+    """Direct httpx path for ``start`` / ``complete`` when ``ch-auth-helper`` is absent."""
+    if action == "start":
+        path = "/start_phone_number_auth"
+        payload: dict[str, Any] = {"phone_number": phone_number}
+    elif action == "complete":
+        path = "/complete_phone_number_auth"
+        payload = {
+            "phone_number": phone_number,
+            "verification_code": extra_arg,
+        }
+    else:
+        raise HTTPException(
+            status_code=400, detail=f"Authentication failed: Unknown action: {action}"
+        )
+
+    try:
+        # Plain httpx.AsyncClient (not instrumented_client) so the response to
+        # `/complete_phone_number_auth`, which carries the minted `auth_token`
+        # and `refresh_token`, never enters the telemetry ring buffer.
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(
+                f"{_api_base()}{path}",
+                json=payload,
+                headers=_auth_flow_headers(device_id),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Clubhouse unreachable: {exc}"
+        ) from exc
+
+    raw_text = res.text.strip()
+    logger.info(
+        "ch-auth-http [%s] status=%d body=%s",
+        action,
+        res.status_code,
+        _SECRET_FIELDS.sub(r'"\1":"<redacted>"', raw_text),
+    )
+
+    try:
+        data = res.json()
+    except ValueError as err:
+        if not res.is_success:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Authentication failed: Clubhouse returned status "
+                    f"{res.status_code}: {raw_text[:300]}"
+                ),
+            ) from err
+        raise HTTPException(
+            status_code=500, detail="Invalid response from auth helper"
+        ) from err
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="Invalid response from auth helper")
+    logger.info("ch-auth-http [%s] response keys: %s", action, sorted(data))
+    return data
+
+
 async def _run_helper(
     action: str, phone_number: str, extra_arg: str = ""
 ) -> dict[str, Any]:
+    device_id = _device_id()
     bin_path = _get_helper_path()
+    if bin_path is None:
+        return await _ch_auth_flow_post(action, phone_number, extra_arg, device_id)
+
     cmd = [str(bin_path), action, phone_number]
     if action == "start":
         cmd.append("")
     elif extra_arg:
         cmd.append(extra_arg)
 
-    cmd.append(_device_id())
+    cmd.append(device_id)
 
     # Use subprocess.run in a thread instead of asyncio.create_subprocess_exec
     # because uvicorn's event loop on Windows does not support subprocess transports.
@@ -265,12 +342,41 @@ def _api_base() -> str:
     return os.environ.get("HORRIBLE_CLUBHOUSE_API", "https://www.clubhouseapi.com/api")
 
 
+def _auth_flow_headers(device_id: str | None = None) -> dict[str, str]:
+    """Headers for ``/start_phone_number_auth`` and ``/complete_phone_number_auth``.
+
+    Clubdeck keeps two profiles in memory: its regular ``profile`` for normal API
+    calls, and ``clubdeckProfile`` used *only* on ``requestMobileAuth`` and
+    ``completeMobileAuth``.  That auth profile sends ``User-Agent:
+    clubhouse/android/clubdeck/2578`` (decrypted at startup from Clubdeck's
+    ``release/version.json`` and scrubbed before writing ``profile.json``), which
+    Clubhouse exempts from the Android Play Integrity / reCAPTCHA
+    ``AttestationRequest`` gate on ``/start_phone_number_auth``.
+
+    Room and authenticated routes must still use ``_headers`` (the current Android
+    client version/build), because Clubhouse gates in-room actions on a current
+    mobile build.
+    """
+    return {
+        "Accept": "application/json",
+        "Accept-Language": "en-US;q=1",
+        "CH-Languages": "en-US",
+        "CH-Locale": "en_US",
+        "CH-AppVersion": "24.01.02",
+        "CH-AppBuild": "3375",
+        "CH-DeviceId": device_id or _device_id(),
+        "CH-UserID": "(null)",
+        "User-Agent": "clubhouse/android/clubdeck/2578",
+    }
+
+
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # The 26.11.12 client's own values. ``CH-AppBuild`` is the numeric build, not
-    # the version string: sending "26.07.07" in both was tolerated until
-    # 2026-09-10, when Clubhouse began answering "Please upgrade your app".  Keep
-    # in sync with the auth helper's Program.cs, and read both off the new APK when
-    # bumping.
+    # The 26.11.12 client's own values for authenticated/room calls. ``CH-AppBuild``
+    # is the numeric build, not the version string: sending "26.07.07" in both was
+    # tolerated until 2026-09-10, when Clubhouse began answering "Please upgrade your
+    # app". Read both off the new APK when bumping; note that `/start_phone_number_auth`
+    # and `/complete_phone_number_auth` use `_auth_flow_headers` (and the matching
+    # constants in `Program.cs`) instead so they take Clubdeck's attestation exemption.
     #
     # Bumped from 26.08.30/1038152 on 2026-09-20, which by then was refusing
     # `/mute_speaker`, `/become_speaker` and `/audience_reply` outright (161, 46 and
@@ -475,18 +581,23 @@ def status() -> ClubhouseStatus:
 @router.post("/auth/start", response_model=StartAuthResult)
 async def start_auth(body: StartAuthRequest) -> StartAuthResult:
     data = await _run_helper("start", body.phone_number)
-    if not data.get("success"):
+    if not data.get("success") or data.get("is_blocked"):
         error_msg = (
-            data.get("error_message") or data.get("error") or "verification gate block"
+            data.get("error_message")
+            or data.get("error")
+            or (
+                "This phone number has been blocked by Clubhouse."
+                if data.get("is_blocked")
+                else "verification gate block"
+            )
         )
         # ``login did not pass token validation`` is Clubhouse's attestation gate:
-        # the 26.08.30 client attaches a ``tokens`` -> AttestationRequest
+        # the 26.08.30+ client attaches a ``tokens`` -> AttestationRequest
         # (``rc_token`` reCAPTCHA + ``integrity_response`` Play Integrity) to
-        # ``start_phone_number_auth``, and the server now rejects a request that
-        # carries none.  Those tokens can only be minted by the signed app on a
-        # Play-certified device, so no header or TLS trick from here produces
-        # one -- SMS sign-in is not recoverable on this path.  Point the user at
-        # token-connect, which needs no attestation.
+        # ``start_phone_number_auth``.  ``_auth_flow_headers`` and ``Program.cs``
+        # bypass this using Clubdeck's exempted ``clubhouse/android/clubdeck/2578``
+        # User-Agent; if Clubhouse ever revokes that exemption and answers with the
+        # attestation error again, steer the user to token-connect.
         if "token validation" in error_msg.lower():
             raise HTTPException(
                 status_code=400,

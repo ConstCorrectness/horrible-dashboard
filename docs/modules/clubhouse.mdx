@@ -29,21 +29,66 @@ included (`_device_id`), falling back to a stable per-install id only when nothi
 is connected. A real client never changes device mid-session; Clubdeck sends the
 `deviceId` saved beside its token.
 
-### 1. Client-Version Headers
+### 1. Client-Version Headers (Room Actions vs. SMS Auth)
 
-Clubhouse validates two version headers — `CH-AppVersion` (`26.11.12`) and the **numeric** `CH-AppBuild` (`1039311`, also the `User-Agent`). A stale pair earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds.
+Clubhouse enforces **two distinct header profiles** depending on whether the call is an **in-room / authenticated action** or the **SMS login handshake**:
 
-**Where to read the pair.** `aapt dump badging <apk>` gives `versionName` and `versionCode`, and those are the two values — established rather than assumed: run it on the 26.08.30 APK and it returns exactly `versionCode='1038152' versionName='26.08.30'`, the pair that had been read out of `defpackage/cb1.java` by hand. Cross-check in the dex before trusting a new one: the build literal should occur the same number of times the old one did — three so far, one of them in the dex that also holds `CH-AppBuild` — and the superseded build should appear nowhere. Expect the *files* to move: R8 repacks between releases, so 26.09.16 had `classes3.dex` ×2 + `classes4.dex` ×1 while 26.11.12 (bumped 2026-11-17) has `classes.dex` ×2 + `classes2.dex` ×1.
+| Profile | Where used | `User-Agent` | `CH-AppVersion` | `CH-AppBuild` | `CH-UserID` | Why |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Room / Authed** (`_headers`) | Every authenticated & room endpoint (`/get_feed_v3`, `/join_channel`, `/mute_speaker`, `/become_speaker`, `/audience_reply`, …) | `clubhouse/android/1039311` | `26.11.12` | `1039311` | `<user_id>` | Clubhouse gates room features on a current Android APK build; a stale pair gets *"Please upgrade your app"* / *"they need to update their app"*. |
+| **SMS Auth Flow** (`_auth_flow_headers` & `Program.cs`) | `/start_phone_number_auth` and `/complete_phone_number_auth` **only** | `clubhouse/android/clubdeck/2578` | `24.01.02` | `3375` | `(null)` | Takes Clubdeck's server-side exemption from the Android Play Integrity / reCAPTCHA `AttestationRequest` gate (`login did not pass token validation!`). |
+
+**Where to read the Android APK pair (`_headers`).** `aapt dump badging <apk>` gives `versionName` and `versionCode`, and those are the two values — established rather than assumed: run it on the 26.08.30 APK and it returns exactly `versionCode='1038152' versionName='26.08.30'`, the pair that had been read out of `defpackage/cb1.java` by hand. Cross-check in the dex before trusting a new one: the build literal should occur the same number of times the old one did — three so far, one of them in the dex that also holds `CH-AppBuild` — and the superseded build should appear nowhere. Expect the *files* to move: R8 repacks between releases, so 26.09.16 had `classes3.dex` ×2 + `classes4.dex` ×1 while 26.11.12 (bumped 2026-11-17) has `classes.dex` ×2 + `classes2.dex` ×1.
 
 **`check_for_update` does not confirm a bump** — measured 2026-09-20, it answers `{"success": true, "has_update": false}` for the *stale* pair as readily as the current one, so it discriminates nothing. Neither does poking a gated route from outside a room: `/audience_reply` answers `Invalid channel ID` for both pairs, because the channel check runs first. **The gate is only observable from inside a room**, which is also the only place it does any harm.
 
-### 2. The attestation gate — why SMS sign-in no longer works
+### 2. The attestation gate & Clubdeck's exempted `User-Agent`
 
-`start_phone_number_auth` in the 26.08.30 client attaches a `tokens` → **`AttestationRequest`** (`rc_token` reCAPTCHA, `integrity_response` Play Integrity, plus the legacy `safety_net_*`). Clubhouse now **rejects a code request that carries none**, answering `{"success": false, "error_message": "login did not pass token validation!"}`.
+`start_phone_number_auth` in the 26.08.30+ Android client attaches a `tokens` → **`AttestationRequest`** (`rc_token` reCAPTCHA, `integrity_response` Play Integrity, plus the legacy `safety_net_*`). When a request presents the standard Android `User-Agent` (`clubhouse/android/<build>`) without those tokens, Clubhouse rejects it with `400 {"success": false, "error_message": "login did not pass token validation!"}`.
 
-These tokens can only be minted by the signed Clubhouse app running on a Google-Play-certified device. **No TLS fingerprint or header trick from a desktop helper can produce one**, so the `ch-auth-helper` WinHTTP bypass (which defeated an earlier, softer Cloudflare/JA3 gate) no longer gets an SMS dispatched. `/auth/start` detects this message and steers the user to token-connect rather than surfacing the raw error. That depends on `_run_helper` handing Clubhouse's reply back: the helper exits 1 on **every** non-2xx and wraps the reply as `{"error": "Clubhouse returned status 400: {…}"}`, and raising on the exit code alone once hid the steer behind a generic "Authentication failed" (a test with a mocked `_run_helper` could not see it — `test_start_auth_attestation_gate_survives_the_real_helper_exit` fakes the subprocess instead).
+Why **Clubdeck** can still dispatch SMS codes from a desktop app without Play Integrity was found by unpacking `Clubdeck 2.6.5`'s `app.asar` (`main.prod.js`) via HTTP range requests and decrypting its live startup configuration (`https://www.clubdeck.app/release/version.json`, encrypted with `ncrypt-js`). See [docs/security/clubhouse-sms-auth-bypass.md](../security/clubhouse-sms-auth-bypass.md) for the full reverse-engineering write-up.
 
-The C# helper still exists and still sends the current version headers; the WinHTTP-vs-`HttpClientHandler` platform split remains (Windows uses the trust-listed WinHTTP stack, other OSes fall back). But this is now moot for `start`: attestation gates every platform equally.
+1. **Exempted auth `User-Agent`:** Clubhouse's backend explicitly exempts `User-Agent: clubhouse/android/clubdeck/2578` (paired with `CH-AppVersion: 24.01.02`, `CH-AppBuild: 3375`, `CH-UserID: (null)`) from the Android `AttestationRequest` requirement on `/start_phone_number_auth` and `/complete_phone_number_auth`.
+2. **Why it never showed up in `profile.json` or proxy captures (4-layer obfuscation):**
+   - **Layer 1 — Encrypted remote config:** The string `clubhouse/android/clubdeck/2578` does not appear anywhere in `main.prod.js`. At launch, Clubdeck fetches `https://www.clubdeck.app/release/version.json` and decrypts `data.version` using `ncrypt-js` (AES-256-CBC with `scryptSync("please provide a KEY in your .env file or config", "salt", 32)` followed by a 1-byte XOR), yielding:
+     ```json
+     {
+       "profile": {
+         "userAgent": "clubhouse/android/2576",
+         "userAgentAuth": "clubhouse/android/clubdeck/2578",
+         "appVersion": "1.0.46",
+         "appBuild": "1145",
+         "v2": {
+           "userAgent": "clubhouse/3375 (iPhone; iOS 17.1.2; Scale/3.00)",
+           "userAgentAuth": "clubhouse/android/clubdeck/2578",
+           "appVersion": "24.01.02",
+           "appBuild": "3375"
+         }
+       },
+       "sslCheck": "Google Trust Services",
+       "followClub": true
+     }
+     ```
+   - **Layer 2 — Anti-MITM TLS certificate trap (`sslCheck`):** Before populating its profile headers, Clubdeck runs `get-ssl-certificate` against `clubhouseapi.com` and checks `cert.issuer.O.includes("Google Trust Services")`. If a debugging proxy (Charles, mitmproxy, Fiddler) terminates TLS with a custom CA, the check fails and Clubdeck silently swaps `userAgent` to the dead decoy `"clubhouse/android/2576"`, so a proxy capture never sees `userAgentAuth`.
+   - **Layer 3 — Split in-memory profiles (`clubdeckProfile` vs. `profile`):** Clubdeck's API client keeps two profile objects in memory. `this.clubdeckProfile` (`User-Agent: clubhouse/android/clubdeck/2578`) is passed **only** to `requestMobileAuth` (`/start_phone_number_auth`) and `completeMobileAuth` (`/complete_phone_number_auth`); every other API method receives `this.profile` (`userAgentStatic`).
+   - **Layer 4 — Disk scrubbing (`profile.json`):** Inside `completeMobileAuth`, right before `fs.writeFileSync(profilePath, ...)`, Clubdeck clones the profile object and overwrites `userAgent` with `'clubhouse/android'`, ensuring `clubhouse/android/clubdeck/2578` is never persisted to disk.
+
+```mermaid
+flowchart TD
+    A["Clubdeck Startup (main.prod.js)"] --> B["GET https://www.clubdeck.app/release/version.json"]
+    B --> C["ncrypt-js Decrypt (AES-256-CBC + Byte XOR)"]
+    C --> D["TLS Leaf Cert Check: get-ssl-certificate(clubhouseapi.com)"]
+    D -->|"issuer.O includes 'Google Trust Services'"| E["Real Config (v2): userAgentAuth = 'clubhouse/android/clubdeck/2578'"]
+    D -->|"MITM Proxy CA Detected"| F["Decoy Config: userAgent = 'clubhouse/android/2576' (Fails Gate)"]
+    E --> G["Split In-Memory Client Profiles"]
+    G -->|"requestMobileAuth & completeMobileAuth"| H["clubdeckProfile: UA 'clubhouse/android/clubdeck/2578', Build 3375"]
+    G -->|"All Other Clubhouse Endpoints"| I["profile: UA 'clubhouse/3375 (iPhone; iOS 17.1.2)', Build 3375"]
+    H --> J["Scrub copy.userAgent = 'clubhouse/android' before writing profile.json"]
+```
+
+`_auth_flow_headers` in [routes.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/routes.py) and `auth_helper/Program.cs` send Clubdeck's auth headers (`User-Agent: clubhouse/android/clubdeck/2578`, `CH-AppVersion: 24.01.02`, `CH-AppBuild: 3375`, `CH-UserID: (null)`) on `/start_phone_number_auth` and `/complete_phone_number_auth`, while `_headers` keeps the current Android APK version/build (`26.11.12` / `1039311`) for all room and authenticated calls so in-room actions (`/mute_speaker`, `/become_speaker`, `/audience_reply`) pass the per-feature version gate.
+
+When `dotnet` is not installed on the host (or `ch-auth-helper` fails to build), `_get_helper_path` returns `None` instead of crashing with an unhandled `FileNotFoundError` / 500, and `_run_helper` falls back directly to `httpx` (`_ch_auth_flow_post`) with `_auth_flow_headers` (verified live end-to-end on Linux 2026-11-17: SMS dispatched and verified via plain `httpx`). If `Program.cs` is newer than an existing `ch-auth-helper` binary on disk, `_get_helper_path` also triggers a rebuild automatically so a stale binary cannot shadow header updates.
 
 ### 3. Token-Connect — the working path
 
@@ -57,17 +102,25 @@ Cloudflare intermittently serves a **503 "Application temporarily unavailable"**
 
 ### 4. Headers & Endpoints Reference
 
-To communicate with Clubhouse, the backend passes specific metadata headers to authenticate and pass validation checks. If Clubhouse updates its mobile apps and starts rejecting requests, these headers and build versions must be updated in the backend config:
+To communicate with Clubhouse, the backend passes two distinct header sets — `_auth_flow_headers` for the SMS handshake (`/start_phone_number_auth` and `/complete_phone_number_auth`) and `_headers` / `_auth_headers` for all room and authenticated requests:
 
 - **Base API URL:** `https://www.clubhouseapi.com/api`
-- **Common Request Headers:**
+- **SMS Auth-Flow Request Headers (`_auth_flow_headers` & `Program.cs`):**
+  - `CH-Languages`: `en-US`
+  - `CH-Locale`: `en_US`
+  - `CH-AppBuild`: `3375`
+  - `CH-AppVersion`: `24.01.02`
+  - `CH-DeviceId`: the connected session's `device_id`; otherwise the per-install uppercase UUID in `.data/clubhouse-device-id`
+  - `CH-UserID`: `(null)`
+  - `User-Agent`: `clubhouse/android/clubdeck/2578` (exempted from Android Play Integrity `AttestationRequest`)
+- **Room / Common Request Headers (`_headers`):**
   - `CH-Languages`: `en-US`
   - `CH-Locale`: `en_US`
   - `CH-AppBuild`: `1039311` (numeric build)
   - `CH-AppVersion`: `26.11.12` (app version)
   - `CH-DeviceId`: the connected session's `device_id`; otherwise the per-install uppercase UUID in `.data/clubhouse-device-id` (which token-connect overwrites with the device it was given).
   - `User-Agent`: `clubhouse/android/1039311`
-- **Authenticated Request Headers:**
+- **Authenticated Request Headers (`_auth_headers`):**
   - `Authorization`: `Token <auth_token>`
   - `CH-UserID`: The numeric user ID linked to the session.
 
@@ -328,74 +381,68 @@ Its refusal is shown as a toast.
 
 ### SMS Phone Authentication Flow
 
-This diagram illustrates the phone verification flow, highlighting how the C# auth helper subprocess matches a trusted TLS signature to bypass Clubhouse's reCAPTCHA gate.
+This diagram illustrates the end-to-end SMS verification flow: `_run_helper` uses `ch-auth-helper` when `dotnet` is available or falls back directly to `httpx` (`_ch_auth_flow_post`), sending Clubdeck's exempted `User-Agent: clubhouse/android/clubdeck/2578` (`CH-AppVersion: 24.01.02`, `CH-AppBuild: 3375`, `CH-UserID: (null)`) for the handshake and switching to the current Android APK headers (`26.11.12` / `1039311`) once authenticated.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
     participant Frontend as ClubhouseWidget (React)
-    participant Backend as FastAPI Backend
-    participant Helper as ch-auth-helper (C# Subprocess)
+    participant Backend as FastAPI Backend (routes.py)
+    participant Transport as ch-auth-helper OR httpx (_ch_auth_flow_post)
     participant Clubhouse as Clubhouse API (clubhouseapi.com)
 
-    User->>Frontend: Enter phone number & click "Send code"
-    Frontend->>Backend: POST /api/clubhouse/auth/start (phone_number)
-    Backend->>Helper: Run ch-auth-helper start (phone_number, device_id)
-    Helper->>Clubhouse: POST /start_phone_number_auth (.NET HttpClient TLS)
+    User->>Frontend: Enter E.164 phone number & click "Send code"
+    Frontend->>Backend: POST /api/clubhouse/auth/start {phone_number}
+    Backend->>Transport: _run_helper("start", phone_number, device_id)
+    Note over Transport,Clubhouse: Auth-Flow Headers: User-Agent: clubhouse/android/clubdeck/2578, CH-AppVersion: 24.01.02, CH-AppBuild: 3375, CH-UserID: (null)
+    Transport->>Clubhouse: POST /start_phone_number_auth {phone_number}
 
-    alt Clubhouse returns API failure (e.g., bad build version)
-        Clubhouse-->>Helper: 200 OK {"success": false, "error_message": "..."}
-        Helper-->>Backend: Print JSON response
+    alt Clubhouse rejects phone or blocks number
+        Clubhouse-->>Transport: 400 / 200 {"success": false, "error_message": "..."}
+        Transport-->>Backend: Return parsed JSON dict
         Backend-->>Frontend: 400 Bad Request (detail: error_message)
         Frontend-->>User: Display verification error
-    else SMS Sent Successfully (Bypassed Path)
-        Clubhouse-->>Helper: 200 OK {"success": true, "send_rc_token": true/false}
-        Helper-->>Backend: Print JSON response
+    else SMS Dispatched (Exempted from AttestationRequest)
+        Clubhouse-->>Transport: 200 OK {"success": true, "num_digits": 6, ...}
+        Transport-->>Backend: Return parsed JSON dict
         Backend-->>Frontend: 200 OK {"success": true}
         Frontend-->>User: Transition to "Verify code" screen
-        User->>Frontend: Enter verification code & click "Verify"
-        Frontend->>Backend: POST /api/clubhouse/auth/complete (phone_number, verification_code)
-        Backend->>Helper: Run ch-auth-helper complete (phone_number, code, device_id)
-        Helper->>Clubhouse: POST /complete_phone_number_auth (.NET HttpClient TLS)
-        Clubhouse-->>Helper: 200 OK {"auth_token": "...", "user_profile": {...}}
-        Helper-->>Backend: Print JSON response
-        Backend-->>Frontend: 200 OK {"success": true}
-        Frontend-->>User: Transition to "Verify code" screen
-        User->>Frontend: Enter verification code & click "Verify"
-        Frontend->>Backend: POST /api/clubhouse/auth/complete (phone_number, verification_code)
-        Backend->>Helper: Run ch-auth-helper complete (phone_number, code, device_id)
-        Helper->>Clubhouse: POST /complete_phone_number_auth (.NET HttpClient TLS)
-        Clubhouse-->>Helper: 200 OK {"auth_token": "...", "user_profile": {...}}
-        Helper-->>Backend: Print JSON response
-        Backend->>Backend: Save session to clubhouse-auth.json
-        Backend-->>Frontend: 200 OK (status)
-        Frontend-->>User: Show connected status
+        User->>Frontend: Enter 6-digit SMS code & click "Verify"
+        Frontend->>Backend: POST /api/clubhouse/auth/complete {phone_number, verification_code}
+        Backend->>Transport: _run_helper("complete", phone_number, code, device_id)
+        Note over Transport,Clubhouse: Same Auth-Flow Headers + same CH-DeviceId
+        Transport->>Clubhouse: POST /complete_phone_number_auth {phone_number, verification_code}
+        Clubhouse-->>Transport: 200 OK {"is_verified": true, "auth_token": "...", "user_profile": {...}}
+        Transport-->>Backend: Return parsed JSON (tokens redacted in logs)
+        Backend->>Backend: Persist session + device_id to .data/clubhouse-auth.json
+        Backend-->>Frontend: 200 OK (ClubhouseStatus)
+        Frontend-->>User: Render connected profile & live rooms (using 26.11.12 / 1039311 headers)
     end
 ```
 
-### Token Connection Flow
+### Token & Clubdeck Import Connection Flow
 
-This diagram shows how users connect an existing session token (bypass path).
+This diagram shows how users connect an existing session token (via the **"Auth token"** tab or one-click **"Import"** from a local Clubdeck `profile.json`), validating via `/get_profile` rather than the Cloudflare-throttled `/me` route.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
     participant Frontend as ClubhouseWidget (React)
-    participant Backend as FastAPI Backend
+    participant Backend as FastAPI Backend (routes.py)
     participant Clubhouse as Clubhouse API (clubhouseapi.com)
 
-    User->>Frontend: Select "Connect with an existing token"
-    User->>Frontend: Enter auth token, user ID & device ID (optional)
-    Frontend->>Backend: POST /api/clubhouse/auth/token (auth_token, user_id, device_id)
-    Backend->>Clubhouse: POST /me (Authorization: Token <token>, custom headers)
+    User->>Frontend: Click "Import" (Clubdeck) or submit "Auth token" form
+    Frontend->>Backend: POST /api/clubhouse/auth/import-clubdeck OR /api/clubhouse/auth/token
+    Note over Backend,Clubhouse: Room/Authed Headers: User-Agent: clubhouse/android/1039311, Authorization: Token <token>
+    Backend->>Clubhouse: POST /get_profile {user_id}
 
     alt Token is valid
         Clubhouse-->>Backend: 200 OK {"user_profile": {...}}
-        Backend->>Backend: Save session to clubhouse-auth.json
-        Backend-->>Frontend: 200 OK (status)
-        Frontend-->>User: Show connected status
+        Backend->>Backend: Adopt device_id (.data/clubhouse-device-id) & save .data/clubhouse-auth.json
+        Backend-->>Frontend: 200 OK (ClubhouseStatus)
+        Frontend-->>User: Show connected status & live rooms
     else Token is invalid / unauthorized
         Clubhouse-->>Backend: 401 Unauthorized
         Backend-->>Frontend: 401 Unauthorized (detail: Clubhouse: unauthorized)

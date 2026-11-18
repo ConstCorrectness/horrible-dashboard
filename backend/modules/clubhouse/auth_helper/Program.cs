@@ -11,14 +11,17 @@ class Program
 {
     private static readonly string ApiBase = "https://www.clubhouseapi.com/api";
 
-    // The 26.11.12 client's own header values. Keep in sync with routes.py
-    // `_headers` — a stale pair here makes SMS codes come back is_verified:false
-    // while the rest of the app looks fine.
-    // CH-AppBuild is the numeric build, NOT the version string: sending
-    // "26.07.07" in both was tolerated until 2026-09-10, when Clubhouse began
-    // answering "Please upgrade your app". Keep in sync with routes._headers.
-    private static readonly string AppVersion = "26.11.12";
-    private static readonly string AppBuild = "1039311";
+    // Clubdeck's dedicated auth-flow headers, decrypted from its startup config
+    // (`https://www.clubdeck.app/release/version.json` -> `profile.v2`).
+    // Clubhouse exempts `User-Agent: clubhouse/android/clubdeck/2578` from the
+    // Android Play Integrity / reCAPTCHA `AttestationRequest` gate on
+    // `/start_phone_number_auth`; sending `clubhouse/android/<build>` without an
+    // `AttestationRequest` is rejected with "login did not pass token validation!".
+    // Room and authenticated calls in `routes.py` still use the current Android
+    // APK version/build in `_headers`.
+    private static readonly string AuthUserAgent = "clubhouse/android/clubdeck/2578";
+    private static readonly string AppVersion = "24.01.02";
+    private static readonly string AppBuild = "3375";
 
     static async Task<int> Main(string[] args)
     {
@@ -59,10 +62,10 @@ class Program
         client.DefaultRequestHeaders.Add("CH-AppBuild", AppBuild);
         client.DefaultRequestHeaders.Add("CH-AppVersion", AppVersion);
         client.DefaultRequestHeaders.Add("CH-DeviceId", deviceId);
-        client.DefaultRequestHeaders.Add("Accept-Language", "en-US");
+        client.DefaultRequestHeaders.Add("CH-UserID", "(null)");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US;q=1");
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
-            $"clubhouse/android/{AppBuild}");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", AuthUserAgent);
         client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
         client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
 

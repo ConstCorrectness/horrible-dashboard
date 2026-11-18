@@ -1362,3 +1362,77 @@ def test_update_bio(client, tmp_path, monkeypatch) -> None:
     res = client.post("/api/clubhouse/me/bio", json={"bio": "New bio here"})
     assert res.status_code == 200
     assert res.json() == {"success": True}
+
+
+def test_auth_flow_headers_use_clubdeck_exemption() -> None:
+    headers = routes._auth_flow_headers("DEV-X")
+    assert headers["User-Agent"] == "clubhouse/android/clubdeck/2578"
+    assert headers["CH-AppVersion"] == "24.01.02"
+    assert headers["CH-AppBuild"] == "3375"
+    assert headers["CH-UserID"] == "(null)"
+    assert headers["CH-DeviceId"] == "DEV-X"
+
+
+def test_get_helper_path_returns_none_when_dotnet_missing(monkeypatch) -> None:
+    def missing_dotnet(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "dotnet")
+
+    monkeypatch.setattr(routes.subprocess, "run", missing_dotnet)
+    assert routes._get_helper_path() is None
+
+
+def test_run_helper_httpx_fallback_uses_clubdeck_headers_and_redacts_token(
+    client, tmp_path, monkeypatch, caplog
+) -> None:
+    (tmp_path / "clubhouse-device-id").write_text("INSTALL-DEV")
+    monkeypatch.setattr(routes, "_get_helper_path", lambda: None)
+    seen: list[tuple[str, dict, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        seen.append((request.url.path, dict(request.headers), body))
+        if request.url.path.endswith("/start_phone_number_auth"):
+            return httpx.Response(
+                200,
+                json={"success": True, "send_rc_token": True, "num_digits": 6},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "is_verified": True,
+                "auth_token": "SECRET-FALLBACK-TOKEN",
+                "refresh_token": "SECRET-FALLBACK-REFRESH",
+                "user_profile": FAKE_PROFILE,
+            },
+        )
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        routes.httpx,
+        "AsyncClient",
+        lambda **kw: real_async_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    with caplog.at_level(logging.INFO, logger=routes.logger.name):
+        start_res = client.post(
+            "/api/clubhouse/auth/start", json={"phone_number": "+15551234567"}
+        )
+        assert start_res.status_code == 200
+        assert start_res.json() == {"success": True}
+
+        comp_res = client.post(
+            "/api/clubhouse/auth/complete",
+            json={"phone_number": "+15551234567", "verification_code": "123456"},
+        )
+        assert comp_res.status_code == 200
+        assert comp_res.json()["connected"] is True
+
+    assert len(seen) == 2
+    for _path, hdrs, _body in seen:
+        assert hdrs["user-agent"] == "clubhouse/android/clubdeck/2578"
+        assert hdrs["ch-appversion"] == "24.01.02"
+        assert hdrs["ch-appbuild"] == "3375"
+        assert hdrs["ch-userid"] == "(null)"
+        assert hdrs["ch-deviceid"] == "INSTALL-DEV"
+    assert "SECRET-FALLBACK" not in caplog.text
