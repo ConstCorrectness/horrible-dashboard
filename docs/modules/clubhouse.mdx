@@ -1397,6 +1397,33 @@ client, and it borrows the chat provider's endpoint and key.
   improves the clone), confirm the voice is yours or its owner agreed, save. The
   backend proxies `/api/agent/voices/unsloth` (list, create, delete, and
   `/{id}/audio` to play the original clip), because the Unsloth key never reaches the browser.
+- **Cloning a room speaker** happens in this pane: a speaker's profile card has
+  **Clone voice** (shown while you are in the room, enabled while that person is
+  sending audio — moderator or not). `CloneSpeakerVoice.tsx` asks first: the Record
+  button stays disabled until you tick "I asked _name_, and they agreed to be recorded
+  and to have their voice cloned". It then records through
+  `speakerVoiceSample.ts`:
+  - **Their track only.** Agora gives every speaker their own remote track, keyed by
+    the Clubhouse user id (`speakerAudioTrack`), so the clip has no crosstalk, no room
+    mix and none of the agent's voice. The capture is the same AudioWorklet PCM tap as
+    the ears (`startPcmCapture`), resampled to **24 kHz** rather than Whisper's 16 kHz,
+    on the shared AudioContext. It never stops the track: the room keeps playing it.
+  - **Speech, not wall time.** In a room a speaker is mostly silent, so
+    `VoiceSampleCollector` judges 20 ms frames by RMS (threshold 0.012; remote tracks
+    arrive noise-suppressed), keeps speech plus a 300 ms tail and 160 ms lead-in, and
+    drops longer pauses. It stops by itself at **15 s of speech**, or after 3 minutes
+    of waiting, or when the track ends (they left, or you did). The clip is
+    peak-normalised to about −1 dBFS with the gain capped at 8×. A meter shows their
+    live level with the threshold tick, so "nothing is counting" is visibly "they are
+    quiet" rather than a broken recorder.
+  - **Auto-transcribed.** The clip goes to `/api/agent/stt` (downsampled to the 16 kHz
+    WAV it reads directly) and fills "What was said" only if it is still empty. Without
+    the `voice` extra that route answers 503 and the field just stays blank.
+  - **Saved** with the same `createUnslothVoice` call Settings uses, as a 24 kHz WAV,
+    named after the speaker by default. A toast names the new `unsloth:<id>`.
+
+  Your own voice is not offered here (it is your mic, not a remote track): use
+  Settings → Cloned voices.
 - **Which speech model** is `agent.unslothTtsModel`. Empty uses whatever speech
   model Unsloth has loaded.
 - **Unsloth off** is a state, not an error: the voice list just omits cloned
