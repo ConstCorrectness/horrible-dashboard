@@ -266,7 +266,7 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # The 26.09.16 client's own values. ``CH-AppBuild`` is the numeric build, not
+    # The 26.11.12 client's own values. ``CH-AppBuild`` is the numeric build, not
     # the version string: sending "26.07.07" in both was tolerated until
     # 2026-09-10, when Clubhouse began answering "Please upgrade your app".  Keep
     # in sync with the auth helper's Program.cs, and read both off the new APK when
@@ -277,14 +277,18 @@ def _headers(device_id: str | None = None) -> dict[str, str]:
     # 21 times in one session) while leaving sign-in and chat working — the gate is
     # per feature, so a stale pair reads as a pane with dead buttons.
     #
-    # Read off `Clubhouse_26.09.16_APKPure.xapk`. `aapt dump badging` on the *old*
-    # APK returns exactly `versionCode='1038152' versionName='26.08.30'` — the pair
-    # already in use here — which is what establishes that the manifest is the same
-    # two values the interceptor sends, rather than an assumption about it. In the
-    # new APK the literal `1038456` occupies the same dex slots `1038152` did
-    # (classes3 ×2, classes4 ×1, beside `CH-AppBuild`) and the old build appears
-    # nowhere in it.
-    app_version, app_build = "26.09.16", "1038456"
+    # Bumped again from 26.09.16/1038456 on 2026-11-17, read off
+    # `Clubhouse_26.11.12_APKPure.xapk`: `aapt dump badging` gives
+    # `versionCode='1039311' versionName='26.11.12'`. `aapt` on the 26.08.30 APK
+    # returns exactly `versionCode='1038152' versionName='26.08.30'` — the pair that
+    # had been read out of the interceptor by hand — which is what establishes that
+    # the manifest is the same two values the interceptor sends, rather than an
+    # assumption about it. Dex cross-check: the build literal occurs three times,
+    # as each predecessor's did, one of them in the dex holding `CH-AppBuild`
+    # (R8 repacks between releases: classes ×2 + classes2 ×1 here, classes3 ×2 +
+    # classes4 ×1 in 26.09.16), and `1038456` appears nowhere. The `CH-*` header
+    # name set is unchanged.
+    app_version, app_build = "26.11.12", "1039311"
     return {
         "Accept": "application/json",
         "Accept-Language": "en-US",
