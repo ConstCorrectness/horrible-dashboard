@@ -12,6 +12,7 @@ import { MAX_FLOATERS, parseRoomReaction } from './reactions';
 import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
 import { splitForSpeech } from './speechChunks';
 import { displayVolumes, sameVolumes } from './volumes';
+import { installWebRtcBundleFix } from './webrtcBundleFix';
 import {
   clubhouseSession,
   leaveClubhouseRoom,
@@ -379,6 +380,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.sttBus = sttBus;
 
       // b. Initialize Agora Client
+      installWebRtcBundleFix();
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       session.rtcClient = client;
 

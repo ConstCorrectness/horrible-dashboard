@@ -304,6 +304,33 @@ chat backlog) and sat on "Connecting…" with no error. Two causes, both fixed:
   negotiation internally for minutes, so an unbounded await was indistinguishable
   from a slow room; the timeout turns it into a "Voice Error" naming the step.
 
+### Agora's Opus BUNDLE collision in Chromium 130+ / Electron 44
+
+`agora-rtc-sdk-ng@4.24.4` builds a single `a=group:BUNDLE 0 1 2 …` SDP across all
+`m=audio` sections on an `RTCPeerConnection`, but mutates payload type `111`
+(`audio/opus`) inconsistently across them:
+
+- On `mid:1` (`m=audio`), `updateRemoteRTPCapabilities` either keeps
+  `a=fmtp:111 minptime=10;useinbandfec=1` (when `_isUseLocalCodecs` is true) or runs
+  its internal `Lee()` helper, which injects `sprop-stereo=1;stereo=1`.
+- When a second `m=audio` section (`mid:2`) is added — either by
+  `createOrRecycleSendMedia` (subscribing to a speaker, which runs `Lee()` and injects
+  `sprop-stereo=1;stereo=1`) or `createOrRecycleRecvMedia` (publishing our mixed mic
+  track, which omits `sprop-stereo=1;stereo=1` and strips `a=rtcp-fb:111 transport-cc`
+  when `twcc === false`) — `mid:1` and `mid:2` disagree on `a=fmtp:111` and
+  `a=rtcp-fb:111` inside the same BUNDLE group.
+- Chromium's `ValidateBundleSettings` (`third_party/webrtc/pc/sdp_offer_answer.cc:578`)
+  now rejects that SDP with `INVALID_PARAMETER: A BUNDLE group contains a codec
+  collision between {payload_type: 111, …}` and logs `Warning: Inconsistent congestion
+  control feedback types, ignoring all.`
+
+[`webrtcBundleFix.ts`](file:///home/horrible/horrible-dashboard/packages/core/src/modules/clubhouse/webrtcBundleFix.ts)
+(`installWebRtcBundleFix` / `harmonizeBundledSdp`) intercepts
+`RTCPeerConnection.prototype.setRemoteDescription` and `setLocalDescription` and
+harmonizes `a=fmtp:<pt>` (intersecting parameters so every bundled `m=` section shares
+the identical parameter set for a given payload type) and `a=rtcp-fb:<pt>` across all
+`m=` sections in a BUNDLE group.
+
 ### The network inspector opens from anywhere
 
 The pane returns from **two places** — the room view (`if (joined && activeChannel)`)
