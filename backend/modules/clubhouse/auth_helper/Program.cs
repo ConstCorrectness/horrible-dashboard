@@ -11,14 +11,14 @@ class Program
 {
     private static readonly string ApiBase = "https://www.clubhouseapi.com/api";
 
-    // The 26.09.16 client's own header values. Keep in sync with routes.py
+    // The 26.11.12 client's own header values. Keep in sync with routes.py
     // `_headers` — a stale pair here makes SMS codes come back is_verified:false
     // while the rest of the app looks fine.
     // CH-AppBuild is the numeric build, NOT the version string: sending
     // "26.07.07" in both was tolerated until 2026-09-10, when Clubhouse began
     // answering "Please upgrade your app". Keep in sync with routes._headers.
-    private static readonly string AppVersion = "26.09.16";
-    private static readonly string AppBuild = "1038456";
+    private static readonly string AppVersion = "26.11.12";
+    private static readonly string AppBuild = "1039311";
 
     static async Task<int> Main(string[] args)
     {

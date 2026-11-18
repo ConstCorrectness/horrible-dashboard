@@ -31,9 +31,9 @@ is connected. A real client never changes device mid-session; Clubdeck sends the
 
 ### 1. Client-Version Headers
 
-Clubhouse validates two version headers — `CH-AppVersion` (`26.09.16`) and the **numeric** `CH-AppBuild` (`1038456`, also the `User-Agent`). A stale pair earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds.
+Clubhouse validates two version headers — `CH-AppVersion` (`26.11.12`) and the **numeric** `CH-AppBuild` (`1039311`, also the `User-Agent`). A stale pair earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds.
 
-**Where to read the pair.** `aapt dump badging <apk>` gives `versionName` and `versionCode`, and those are the two values — established rather than assumed: run it on the 26.08.30 APK and it returns exactly `versionCode='1038152' versionName='26.08.30'`, the pair that had been read out of `defpackage/cb1.java` by hand. Cross-check in the dex before trusting a new one: the build literal should occupy the same slots the old one did (for 26.08.30 → 26.09.16, `classes3.dex` ×2 and `classes4.dex` ×1, in the dex that also holds `CH-AppBuild`), and the superseded build should appear nowhere.
+**Where to read the pair.** `aapt dump badging <apk>` gives `versionName` and `versionCode`, and those are the two values — established rather than assumed: run it on the 26.08.30 APK and it returns exactly `versionCode='1038152' versionName='26.08.30'`, the pair that had been read out of `defpackage/cb1.java` by hand. Cross-check in the dex before trusting a new one: the build literal should occur the same number of times the old one did — three so far, one of them in the dex that also holds `CH-AppBuild` — and the superseded build should appear nowhere. Expect the *files* to move: R8 repacks between releases, so 26.09.16 had `classes3.dex` ×2 + `classes4.dex` ×1 while 26.11.12 (bumped 2026-11-17) has `classes.dex` ×2 + `classes2.dex` ×1.
 
 **`check_for_update` does not confirm a bump** — measured 2026-09-20, it answers `{"success": true, "has_update": false}` for the *stale* pair as readily as the current one, so it discriminates nothing. Neither does poking a gated route from outside a room: `/audience_reply` answers `Invalid channel ID` for both pairs, because the channel check runs first. **The gate is only observable from inside a room**, which is also the only place it does any harm.
 
@@ -63,10 +63,10 @@ To communicate with Clubhouse, the backend passes specific metadata headers to a
 - **Common Request Headers:**
   - `CH-Languages`: `en-US`
   - `CH-Locale`: `en_US`
-  - `CH-AppBuild`: `1038456` (numeric build)
-  - `CH-AppVersion`: `26.09.16` (app version)
+  - `CH-AppBuild`: `1039311` (numeric build)
+  - `CH-AppVersion`: `26.11.12` (app version)
   - `CH-DeviceId`: the connected session's `device_id`; otherwise the per-install uppercase UUID in `.data/clubhouse-device-id` (which token-connect overwrites with the device it was given).
-  - `User-Agent`: `clubhouse/android/1038456`
+  - `User-Agent`: `clubhouse/android/1039311`
 - **Authenticated Request Headers:**
   - `Authorization`: `Token <auth_token>`
   - `CH-UserID`: The numeric user ID linked to the session.
