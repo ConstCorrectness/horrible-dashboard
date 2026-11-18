@@ -44,7 +44,9 @@ import {
   toBadgeLettersInRange,
 } from './badgeLetters';
 import { ClubhouseName } from './ClubhouseName';
+import { CloneSpeakerVoice } from './CloneSpeakerVoice';
 import { MediaInsightsModal } from './MediaInsightsModal';
+import { speakerAudioTrack } from './speakerVoiceSample';
 import { FANCY_STYLES, stylize, type FancyStyle } from './fancyText';
 import {
   CUSTOM_REACTION_STYLE_KEY,
@@ -140,6 +142,8 @@ export function RoomsPanel() {
   };
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
+  /** The speaker whose voice is being recorded for cloning (see `CloneSpeakerVoice`). */
+  const [cloneTarget, setCloneTarget] = useState<{ userId: number; name: string } | null>(null);
   // Editing your own display name from your profile card; null while not editing.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
@@ -632,6 +636,17 @@ export function RoomsPanel() {
   };
 
   const renderProfileOverlay = () => {
+    // Over the profile it was opened from, which is still there when it closes.
+    if (cloneTarget) {
+      return (
+        <CloneSpeakerVoice
+          session={clubhouseSession()}
+          userId={cloneTarget.userId}
+          name={cloneTarget.name}
+          onClose={() => setCloneTarget(null)}
+        />
+      );
+    }
     if (!selectedUser) return null;
     const isCurrentUser = selectedUser.user_id === myUserId;
     const isFollowing =
@@ -674,6 +689,27 @@ export function RoomsPanel() {
             className="ch-profile-actions"
             style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}
           >
+            {/* Anyone in the room who is sending audio, moderator or not: it records
+                their own Agora track. Your own voice is Settings → Cloned voices. */}
+            {!isCurrentUser && joined && (
+              <button
+                className="ch-btn-action"
+                disabled={!speakerAudioTrack(clubhouseSession(), selectedUser.user_id)}
+                title={
+                  speakerAudioTrack(clubhouseSession(), selectedUser.user_id)
+                    ? 'Record their voice (with their permission) and clone it in Unsloth'
+                    : 'They are not sending audio right now'
+                }
+                onClick={() =>
+                  setCloneTarget({
+                    userId: selectedUser.user_id,
+                    name: firstName(selectedUser.name ?? '') || selectedUser.username || 'them',
+                  })
+                }
+              >
+                Clone voice
+              </button>
+            )}
             {!isCurrentUser &&
               activeChannel &&
               (() => {
