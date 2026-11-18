@@ -771,7 +771,10 @@ The layout has three regions:
 - **Turn rail.** The conversation's turns, newest first. Each turn's delegated
   sub-turns sit indented under it. The view moves to the newest turn as it starts.
   Clicking a turn holds the view there until the next turn starts. The pin holds it
-  indefinitely.
+  indefinitely. It is styled to match the agent chat's sessions rail (same surface,
+  text rows, a 2px accent rule on the current one), so in the drawer the two rails
+  read as one family; the columns sit on the plain pane surface, with no backdrop
+  pattern.
 - **Request** (`panels/RequestInspector.tsx`). The selected call's JSON, one block
   per message. A message the wire joined, such as the leading system message, carries
   a tag for each part it was joined from. A message whose role changed on the way out

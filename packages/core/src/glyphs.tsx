@@ -107,6 +107,16 @@ export function IconCheck(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Show or hide a side list (the agent chat's sessions rail). */
+export function IconSidebar(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <path d="M6.5 3v10" />
+    </Glyph>
+  );
+}
+
 /** Find. */
 export function IconSearch(props: SVGProps<SVGSVGElement>) {
   return (

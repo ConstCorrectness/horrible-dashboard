@@ -55,44 +55,54 @@
   --src: var(--traj-src-loop);
 }
 
+/* Ghost header buttons: no frame until hovered, so the header reads as a title
+   with tools rather than a row of boxes. Pressed (pinned) keeps the accent. */
 .traj-follow-pin {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 22px;
+  height: 24px;
   padding: 0 var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
   cursor: pointer;
+  transition:
+    color var(--dur-fast, 120ms) ease,
+    background var(--dur-fast, 120ms) ease;
+}
+.traj-follow-pin:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 .traj-follow-pin[aria-pressed='true'] {
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-/* Rail | main. The faint grid is the backdrop the columns sit on. */
+/* Rail | main, on the plain pane surface. (It used to sit on a 24px grid, which
+   under a page of request text read as noise rather than structure.) */
 .traj-follow-grid {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(150px, 22%) 1fr;
-  background-color: var(--bg-primary);
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background: var(--bg-primary);
 }
 
+/* The turn rail matches the chat's sessions rail (styles.css `.agent-rail`):
+   same surface, rows as text with a 2px accent rule on the current one. */
 .traj-follow-rail {
   overflow: auto;
   border-right: 1px solid var(--border);
   background: var(--bg-secondary);
   display: flex;
   flex-direction: column;
+  gap: 1px;
+  padding: var(--space-2) var(--space-2) var(--space-4) 0;
 }
 
 .traj-follow-turn {
@@ -100,18 +110,17 @@
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border: 0;
-  border-bottom: 1px solid var(--border);
   border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: none;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
 }
 .traj-follow-turn[data-depth='1'] {
   padding-left: calc(var(--space-4) + var(--space-5));
-  color: var(--text-secondary);
 }
 .traj-follow-turn:hover {
   background: var(--bg-hover);
@@ -119,6 +128,7 @@
 .traj-follow-turn[aria-current='true'] {
   border-left-color: var(--accent);
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .traj-follow-turn-title {
   display: flex;

@@ -4005,11 +4005,16 @@ kbd {
    chat and takes its width from the handle; in a pane too narrow for both it
    slides over the chat instead. Only transform and opacity animate. */
 .agent-chat-shell {
+  /* Inline padding that centres a 760px column in whatever width the chat has;
+     the log and the composer both use it, so they line up. Container units: the
+     shell is the size container. */
+  --agent-col-pad: max(0.85rem, calc((100cqw - 760px) / 2));
   position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
   container-type: inline-size;
+  background: var(--bg-primary);
 }
 .agent-chat-shell > .agent-chat {
   flex: 1 1 auto;
@@ -4021,6 +4026,331 @@ kbd {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* Its own size container, so the column padding is measured on the chat alone,
+     not on chat + rail + drawer: `cqw` in `--agent-col-pad` resolves where the
+     variable is used, against the nearest container — this one. */
+  container-type: inline-size;
+}
+
+/* Header: rail toggle, the conversation's title, the trace toggle. */
+.agent-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 40px;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.agent-header-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-label, 0.72rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong, var(--text));
+}
+
+/* Ghost icon button: header, rail head and rail rows. Classed, so the 30px
+   action-button rule leaves it alone. */
+.agent-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast, 120ms) ease,
+    background var(--dur-fast, 120ms) ease;
+}
+.agent-icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.agent-icon-btn[aria-pressed='true'] {
+  color: var(--accent);
+}
+.agent-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.agent-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.agent-icon-btn-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------- sessions rail --
+ * SessionsRail.tsx. A flat column on the secondary surface; rows are text, not
+ * cards, the active one marked by a 2px accent rule. In a pane too narrow to
+ * share (ChatWidget measures, RAIL_INLINE_MIN) it slides over the chat instead. */
+@keyframes agent-rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes agent-rail-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agent-rail {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  padding: 0.5rem 0.45rem 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+.agent-rail[data-overlay] {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(280px, 85%);
+  box-shadow: var(--shadow-overlay, 0 8px 24px rgb(0 0 0 / 0.35));
+  animation: agent-rail-in var(--dur-base, 200ms) var(--ease-entrance, ease-out) both;
+}
+.agent-rail-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: color-mix(in srgb, #000 30%, transparent);
+}
+
+.agent-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 30px;
+}
+.agent-rail-agent {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.5rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+.agent-rail-agent-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.3rem;
+  font-size: var(--fs-label, 0.72rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong, var(--text));
+}
+
+.agent-rail-new {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 30px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--dur-fast, 120ms) ease;
+}
+.agent-rail-new:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.agent-rail-new:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-rail-search {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+}
+.agent-rail-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.agent-rail-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+}
+
+.agent-rail-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -0.45rem;
+  padding: 0 0.45rem 0.75rem;
+}
+.agent-rail-empty {
+  margin: 0.75rem 0.35rem;
+  font-size: var(--fs-meta, 0.75rem);
+  color: var(--text-dim);
+}
+.agent-rail-group + .agent-rail-group {
+  margin-top: 0.6rem;
+}
+.agent-rail-group-label {
+  margin: 0.4rem 0.4rem 0.2rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-micro, 0.65rem);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.agent-rail-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agent-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  animation: agent-rail-row-in var(--dur-base, 200ms) var(--ease-entrance, ease-out) both;
+  animation-delay: calc(var(--i, 0) * 25ms);
+}
+.agent-rail-item:hover {
+  background: var(--bg-hover);
+}
+.agent-rail-item[data-active] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+.agent-rail-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 30px;
+  padding: 0 0.45rem;
+  border: 0;
+  background: none;
+  color: var(--text-secondary, var(--text));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-rail-item[data-active] .agent-rail-row {
+  color: var(--text);
+}
+.agent-rail-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.agent-rail-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-rail-age {
+  flex: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-micro, 0.65rem);
+  color: var(--text-dim);
+}
+/* Rename and delete appear on hover / keyboard focus, over the age. */
+.agent-rail-actions {
+  display: none;
+  align-items: center;
+  padding-right: 0.15rem;
+}
+.agent-rail-item:hover .agent-rail-actions,
+.agent-rail-item:focus-within .agent-rail-actions {
+  display: flex;
+}
+.agent-rail-item:hover .agent-rail-age,
+.agent-rail-item:focus-within .agent-rail-age {
+  display: none;
+}
+.agent-rail-actions .agent-icon-btn {
+  width: 22px;
+  height: 22px;
+}
+.agent-rail-rename {
+  flex: 1;
+  min-width: 0;
+  margin: 0 0.15rem;
+  padding: 0 0.4rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+@keyframes agent-rail-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.agent-rail-pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  animation: agent-rail-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-rail[data-overlay],
+  .agent-rail-item,
+  .agent-rail-pulse {
+    animation: none;
+  }
 }
 
 @keyframes agent-trace-in {
@@ -4100,14 +4430,17 @@ kbd {
   flex: 0 0 auto;
 }
 
+/* The transcript is one centred column, at most 760px, whatever the pane's width.
+   Done with inline padding on the scroller rather than a max-width wrapper, so the
+   scrollbar stays at the pane's edge and the whole width still scrolls. */
 .agent-chat-log {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: 1rem var(--agent-col-pad) 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1rem;
 }
 
 .agent-msg {
@@ -4137,8 +4470,18 @@ kbd {
 }
 
 .agent-msg-user .agent-bubble {
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg-raised));
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+/* The agent's answer is prose on the page, not a speech bubble: on a long reply
+   the box was most of what you saw. The activity timeline keeps its own frame. */
+.agent-msg-assistant .agent-bubble {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  line-height: 1.55;
 }
 
 .agent-actions {
@@ -4205,40 +4548,89 @@ kbd {
   opacity: 0.85;
 }
 
+/* The composer: one card holding the line you type on and, under it, the toolbar
+   of what shapes it (mode, model) beside Send. It sits on the transcript's column
+   (same inline padding as the log) rather than as a full-width strip, so the
+   pane reads as one centred conversation. */
 .agent-chat-input {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  padding: 0.25rem var(--agent-col-pad) 0.75rem;
 }
 
-.agent-chat-input input {
-  flex: 1;
-  background: var(--bg);
+.agent-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.3rem 0.4rem 0.35rem;
+  background: var(--bg-raised);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-top: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--dur-fast, 120ms) var(--ease-standard, ease);
+}
+
+.agent-composer input {
+  width: 100%;
+  background: transparent;
+  border: 0;
   outline: none;
   color: var(--text);
   font: inherit;
   /* Horizontal only: as an `input[type='text']` its height is `--control-h`, and
      vertical padding would shrink the text box inside it (controls.css). */
-  padding: 0 0.85rem;
+  padding: 0 0.35rem;
 }
 
-.agent-chat-input button {
-  border-radius: 999px;
+.agent-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.agent-composer-gap {
+  flex: 1;
 }
 
-/* The mode tints the composer's top rule: Plan in the accent, Auto in the warning
-   colour — Auto is the one that acts without asking. */
-.agent-chat-input[data-mode='plan'] {
+/* Send: the one high-contrast control in the pane. Stop swaps in on the same
+   footprint so the button under the cursor never moves mid-turn. */
+.agent-send {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--bg-primary, #16181d);
+  cursor: pointer;
+  transition:
+    opacity var(--dur-fast, 120ms) ease,
+    transform var(--dur-fast, 120ms) ease;
+}
+.agent-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.agent-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.agent-send[data-stop] {
+  background: var(--text);
+}
+.agent-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The mode tints the composer's 2px top rule: Plan in the accent, Auto in the
+   warning colour — Auto is the one that acts without asking. */
+.agent-chat-input[data-mode='plan'] .agent-composer {
   border-top-color: var(--accent);
-  box-shadow: inset 0 1px 0 var(--accent);
 }
-.agent-chat-input[data-mode='autonomous'] {
+.agent-chat-input[data-mode='autonomous'] .agent-composer {
   border-top-color: var(--warn);
-  box-shadow: inset 0 1px 0 var(--warn);
 }
 
 /* ------------------------------------------------ agent activity timeline --
@@ -5134,53 +5526,33 @@ kbd {
   margin-top: var(--space-4);
 }
 
-.agent-session-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
+/* The model picker is an *id*, so it is monospace and ghost-styled: it sits in the
+   composer's toolbar beside the mode chip, a setting of the next message rather
+   than a control competing with the line you type on.
 
-.agent-session-bar select {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0.2rem 0.4rem;
-  font: inherit;
-}
-
-/* The model picker is an *id*, so it is monospace and sized to sit beside the
-   session title rather than compete with it: three equal controls in a narrow pane
-   leaves all three unreadable, and the session title is the one that identifies
-   the conversation you are in.
-
-   It is a button, not a select: the list is searchable (see ModelPicker.tsx), and
-   the rules below have to beat `.agent-session-bar button`, which is written for
-   the icon buttons at the end of the bar. */
-.agent-session-bar button.agent-model-picker {
+   It is a button, not a select: the list is searchable (see ModelPicker.tsx). */
+button.agent-model-picker {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  flex: 0 1 11rem;
+  flex: 0 1 13rem;
   min-width: 0;
-  height: 30px;
-  padding: 0 0.4rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  height: 26px;
+  padding: 0 0.45rem;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-family: var(--font-mono, monospace);
-  font-size: 0.78rem;
+  font-size: var(--fs-meta, 0.75rem);
   color: var(--text-dim);
+  cursor: pointer;
 }
 
-.agent-session-bar button.agent-model-picker:hover:not(:disabled),
-.agent-session-bar button.agent-model-picker[aria-expanded='true'] {
+button.agent-model-picker:hover:not(:disabled),
+button.agent-model-picker[aria-expanded='true'] {
   color: var(--text);
-  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  border-color: var(--border);
 }
 
 .agent-model-picker-value {
@@ -5302,8 +5674,6 @@ kbd {
   list-style: none;
 }
 
-/* Beats `.agent-session-bar button` for the rows, which are outside the bar but
-   share nothing with its icon buttons. */
 button.agent-model-option {
   display: flex;
   align-items: baseline;
@@ -5378,19 +5748,6 @@ button.agent-model-option.is-selected .agent-model-option-name {
   border-top: 1px solid var(--border);
   margin-top: 0.25rem;
   font-family: var(--font-mono, monospace);
-}
-
-.agent-session-bar button {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-dim);
-  cursor: pointer;
-  padding: 0.15rem 0.45rem;
-}
-
-.agent-session-bar button:hover:not(:disabled) {
-  color: var(--text);
 }
 
 /* The seam where the agent's memory of this conversation starts. Compaction that
@@ -9548,9 +9905,10 @@ button.agent-model-option.is-selected .agent-model-option-name {
  * `:focus-visible`, never `:focus`, so a mouse click does not leave a ring behind.
  */
 
-/* Bordered: the border carries it, per the house pattern. */
-.agent-chat-input input:focus-visible {
-  border-color: var(--accent);
+/* The composer's input is borderless inside its card, so the card takes the ring
+   — ringing a transparent input draws a box around nothing (same as .ask-bar). */
+.agent-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
 }
 
 /* Borderless input inside a bordered shell — the shell takes the ring, because

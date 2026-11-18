@@ -256,6 +256,53 @@ export function useTraceDrawer(): { open: boolean; width: number } {
   );
 }
 
+/**
+ * Whether the chat pane's sessions rail is out, in a pane wide enough to hold it
+ * inline. Same shape and reasons as the drawer above: module-level so a remount
+ * keeps it, localStorage because it is a per-viewer convenience. A pane too narrow
+ * for the rail ignores this and opens it as an overlay instead (ChatWidget).
+ */
+const RAIL_KEY = 'agent.sessionsRail';
+let rail: { open: boolean } = (() => {
+  try {
+    const raw = globalThis.localStorage?.getItem(RAIL_KEY);
+    if (raw) return { open: (JSON.parse(raw) as { open?: unknown }).open !== false };
+  } catch {
+    /* storage unavailable: defaults */
+  }
+  return { open: true };
+})();
+const railListeners = new Set<() => void>();
+
+export function sessionsRail(): { open: boolean } {
+  return rail;
+}
+
+export function setSessionsRail(patch: Partial<{ open: boolean }>): void {
+  const next = { ...rail, ...patch };
+  if (next.open === rail.open) return;
+  rail = next;
+  try {
+    globalThis.localStorage?.setItem(RAIL_KEY, JSON.stringify(rail));
+  } catch {
+    /* not persisted: fine */
+  }
+  for (const l of railListeners) l();
+}
+
+export function useSessionsRail(): { open: boolean } {
+  return useSyncExternalStore(
+    (l) => {
+      railListeners.add(l);
+      return () => {
+        railListeners.delete(l);
+      };
+    },
+    sessionsRail,
+    sessionsRail,
+  );
+}
+
 /** Subscribe to every agent's chat state (the trace view reads the followed one). */
 export function subscribeChats(listener: () => void): () => void {
   return subscribe(listener);
