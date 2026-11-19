@@ -81,9 +81,9 @@ export const shareModule: ModuleManifest = {
       key: 'share.relayUrl',
       title: 'Share relay URL',
       description:
-        'Address of the relay that serves public share links (e.g. https://horrible-share.fly.dev). Blank means this node can only share with friends on the fabric — no public URL. The relay key is env-only (SHARE_RELAY_KEY) and never a setting, because every setting is served to the browser.',
+        'Address of the relay that serves public share links (defaults to https://horrible-share.fly.dev, or SHARE_RELAY_URL if set). Clear to share only with friends on the fabric — no public URL. The relay key is env-only (SHARE_RELAY_KEY) and never a setting, because every setting is served to the browser.',
       type: 'string',
-      default: '',
+      default: 'https://horrible-share.fly.dev',
       advanced: true,
     },
   ],

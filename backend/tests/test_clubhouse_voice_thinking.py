@@ -64,6 +64,14 @@ def test_the_default_leaves_the_model_alone():
     assert "think" not in _send(P.PROVIDERS["ollama"], think=None)
 
 
+def test_empty_tools_are_omitted_not_sent_as_empty_array():
+    """NVIDIA NIM and strict OpenAI-dialect servers reject `"tools": []` with 400
+    ("tools array cannot be empty; omit the field entirely to disable tool use"),
+    and voice turns always pass `tools=[]`."""
+    assert "tools" not in _send(P.PROVIDERS["nim"], think=False)
+    assert "tools" not in _send(P.PROVIDERS["ollama"], think=False)
+
+
 @pytest.fixture
 def stub_provider(tmp_path, monkeypatch):
     """Point `generate_reply` at a fake provider and keep every call's kwargs."""

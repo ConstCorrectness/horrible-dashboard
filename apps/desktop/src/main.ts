@@ -51,9 +51,14 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'AudioServiceSandbox');
 }
 if (process.platform === 'linux') {
-  // Global shortcuts on Wayland go through the desktop portal; without the feature
-  // `globalShortcut.register` silently does nothing there.
-  app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal');
+  // Global shortcuts and screen capture on Wayland go through the desktop portal;
+  // without GlobalShortcutsPortal `globalShortcut.register` silently does nothing,
+  // and without WebRTCPipeWireCapturer `desktopCapturer.getSources` falls back to
+  // X11/XWayland instead of opening the PipeWire screen picker.
+  app.commandLine.appendSwitch(
+    'enable-features',
+    'GlobalShortcutsPortal,WebRTCPipeWireCapturer',
+  );
 }
 
 // --- Desktop identity: before the first window, or the shell can't match it -------

@@ -39,9 +39,17 @@ class LinkError(RuntimeError):
     """A minting or revoking failure worth showing the host verbatim."""
 
 
+#: Shipped default: the hosted share relay, overridable via `SHARE_RELAY_URL`
+#: in the environment or the `share.relayUrl` setting (which may be set to `""`
+#: to disable public links on a fabric-only node).
+DEFAULT_RELAY_URL = os.environ.get("SHARE_RELAY_URL", "https://horrible-share.fly.dev")
+
+
 def relay_base() -> str:
-    configured = str(get_value("share.relayUrl", "") or "").strip().rstrip("/")
-    return configured
+    raw = get_value("share.relayUrl", DEFAULT_RELAY_URL)
+    if raw is None:
+        raw = DEFAULT_RELAY_URL
+    return str(raw).strip().rstrip("/")
 
 
 def _key() -> str:

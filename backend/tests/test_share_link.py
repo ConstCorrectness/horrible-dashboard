@@ -178,9 +178,24 @@ def test_the_passphrase_is_passed_through_but_never_echoed(client) -> None:
     assert state.json()["hosting"]["link_protected"] is True
 
 
+def test_relay_base_defaults_to_hosted_and_honors_explicit_blank(monkeypatch) -> None:
+    # Unset setting falls back to DEFAULT_RELAY_URL, while an explicit "" opts
+    # the node out of public links (fabric-only).
+    monkeypatch.setattr(
+        link_api,
+        "get_value",
+        lambda key, default=None: default,
+    )
+    assert link_api.relay_base() == link_api.DEFAULT_RELAY_URL.rstrip("/")
+
+    monkeypatch.setattr(link_api, "get_value", lambda key, default=None: "")
+    assert link_api.relay_base() == ""
+
+
 def test_an_unconfigured_relay_reports_a_fixable_error(manager, monkeypatch) -> None:
-    # The real minting path, not the fake: no relay URL configured is the state a
-    # fresh install is in, and it must read as instructions rather than a 500.
+    # The real minting path, not the fake: when share.relayUrl is cleared (""),
+    # minting must read as instructions rather than a 500.
+    monkeypatch.setattr(link_api, "relay_base", lambda: "")
     client = TestClient(app)
     client.post("/api/share/session", json={"title": "Standup", "mode": "both"})
     res = client.post("/api/share/link", json={})

@@ -643,7 +643,12 @@ export function RoomsPanel() {
           session={clubhouseSession()}
           userId={cloneTarget.userId}
           name={cloneTarget.name}
-          onClose={() => setCloneTarget(null)}
+          onClose={() => {
+            setCloneTarget(null);
+            void getAgentTtsVoices()
+              .then(setTtsVoices)
+              .catch(() => {});
+          }}
         />
       );
     }

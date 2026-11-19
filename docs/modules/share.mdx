@@ -339,7 +339,7 @@ and in the desktop shell on every platform — Electron has no picker of its own
 the shell answers `getDisplayMedia` (`setDisplayMediaRequestHandler` in
 `apps/desktop/src/sessions.ts`) with the primary screen, plus system audio on
 Windows; macOS 15+ shows the system picker instead, and on Wayland the desktop
-portal's picker appears.
+portal's PipeWire picker appears (`WebRTCPipeWireCapturer` in `apps/desktop/src/main.ts`).
 
 System audio is a bonus, never a requirement. The Windows loopback fails when another
 app (Voicemeeter, for example) holds the default output exclusively, and Chromium then
@@ -703,10 +703,11 @@ The mapping is a pure function in its own file (`relay-status.ts`) for the reaso
 so it cannot be imported in a unit test — and this mapping is precisely the part
 that was wrong.
 
-The relay URL is a setting (`share.relayUrl`, public — it is in every link); the
-relay **key** is env-only (`SHARE_RELAY_KEY`). A node with no relay configured is
-fabric-only, which is the default and a perfectly good state; minting then reports
-what to configure rather than failing with a status code.
+The relay URL is a setting (`share.relayUrl`, public — it is in every link,
+defaulting to `https://horrible-share.fly.dev` or `SHARE_RELAY_URL`); the
+relay **key** is env-only (`SHARE_RELAY_KEY`). Clearing `share.relayUrl` makes
+a node fabric-only; minting then reports what to configure rather than failing
+with a status code.
 
 ## What a guest may actually do
 

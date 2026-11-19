@@ -1494,7 +1494,9 @@ client, and it borrows the chat provider's endpoint and key.
     WAV it reads directly) and fills "What was said" only if it is still empty. Without
     the `voice` extra that route answers 503 and the field just stays blank.
   - **Saved** with the same `createUnslothVoice` call Settings uses, as a 24 kHz WAV,
-    named after the speaker by default. A toast names the new `unsloth:<id>`.
+    named after the speaker by default. A toast names the new `unsloth:<id>`, and
+    closing the dialog refreshes the room's TTS voice list so the new voice is
+    immediately selectable in the agent's Voice card.
 
   Your own voice is not offered here (it is your mic, not a remote track): use
   Settings → Cloned voices.

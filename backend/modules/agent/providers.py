@@ -1490,9 +1490,10 @@ async def _chat_dispatch(
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "tools": tools,
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
         options: dict[str, Any] = {}
         if temperature is not None:
             options["temperature"] = temperature
@@ -1518,9 +1519,10 @@ async def _chat_dispatch(
         payload = {
             "model": model,
             "messages": sent_messages,
-            "tools": sent_tools,
             "stream": False,
         }
+        if sent_tools:  # never `[]` — NIM and others reject an empty tools array
+            payload["tools"] = sent_tools
         if temperature is not None:
             payload["temperature"] = temperature
         if max_tokens is not None:
