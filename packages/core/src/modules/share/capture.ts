@@ -82,6 +82,11 @@ export function probeCapture(): CaptureProbe {
 
 /** Frames per second requested from the capture. */
 const FRAME_RATE = 15;
+/** Cap capture resolution to 1080p so 1440p/4K displays are scaled once by the
+ *  browser's GPU compositor rather than bursting 4K frames over WHIP only to be
+ *  downscaled to 1080p in Python on the relay. */
+const MAX_CAPTURE_WIDTH = 1920;
+const MAX_CAPTURE_HEIGHT = 1080;
 
 export class CaptureError extends Error {
   /** True when the host dismissed the picker — not a failure worth shouting about. */
@@ -126,9 +131,8 @@ export async function startCapture(): Promise<MediaStream> {
     media.getDisplayMedia!({
       video: {
         frameRate: FRAME_RATE,
-        // No width/height: constraining a display capture makes the browser
-        // scale it, and a dashboard is text. Scaled text is the difference
-        // between a readable share and a pointless one.
+        width: { max: MAX_CAPTURE_WIDTH },
+        height: { max: MAX_CAPTURE_HEIGHT },
       },
       audio,
     });

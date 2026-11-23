@@ -21,6 +21,7 @@
 
 import { getSetting } from '../../settings';
 
+import { preferMaintainResolution } from './rtc';
 import { buildIceConfig } from './signal';
 
 /** How long to wait for ICE gathering before sending the offer anyway. */
@@ -183,7 +184,8 @@ export class WhipPublisher {
       ? stream.getVideoTracks()[0]
       : tracks.find((t) => t.kind === 'video');
     if (video) {
-      pc.addTransceiver(video, { direction: 'sendonly', streams: [stream] });
+      const tx = pc.addTransceiver(video, { direction: 'sendonly', streams: [stream] });
+      preferMaintainResolution(tx?.sender);
     }
     const audio = stream.getAudioTracks
       ? stream.getAudioTracks()[0]

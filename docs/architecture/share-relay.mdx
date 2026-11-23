@@ -288,11 +288,15 @@ Sharing *encoded* packets imposes rules that sharing decoded frames did not:
 - **A viewer never skips a single encoded frame.** Dropping a delta frame breaks
   every frame after it. A viewer that falls behind (`VIEWER_QUEUE_MAX`) drops its
   whole backlog and resumes at the next keyframe, which it requests.
-- **PLI goes to the room.** aiortc ignores its own force-keyframe flag on the
-  passthrough path, so `Room.subscribe` points each sender's `_send_keyframe` at
-  the room encoder. Requests coalesce to one keyframe per `MIN_KEYFRAME_GAP_S`,
-  and one is forced every `KEYFRAME_INTERVAL_S` regardless, because RTCP is lossy
-  too.
+- **PLI gates the viewer's track and goes to the room.** aiortc ignores its own
+  force-keyframe flag on the passthrough path, so `Room.subscribe` points each
+  sender's `_send_keyframe` at that viewer's `PacketTrack.request_keyframe`, which
+  flushes the viewer's queued delta frames, gates it on `_need_key = True` during
+  the coalescing window, and asks `RoomEncoder` for a keyframe. Requests coalesce
+  to one keyframe per `MIN_KEYFRAME_GAP_S` (0.4s), and one is forced every
+  `KEYFRAME_INTERVAL_S` (3.0s) regardless, because RTCP is lossy too. `Vp8._open`
+  deliberately omits `error-resilient=1` so a viewer browser never decodes delta
+  frames over a missing reference frame or suppresses PLI after packet loss.
 - **Codecs are pinned.** Each viewer is negotiated onto VP8 and Opus only. A
   viewer that preferred H.264 would otherwise get VP8 bytes split as NAL units:
   connected, and garbage.
@@ -669,7 +673,12 @@ turned a still screen into a black viewer:
 - **aiortc's jitter buffer** releases video frame N only when frame N+1 starts
   arriving, and ignores the RTP marker bit. The newest frame of a still screen
   stayed undecoded in the relay. `jitter.py` completes a frame on its marked
-  packet; that is installed by `fanout._aiortc()` before any receiver exists.
+  packet, evicts incomplete older frames when a newer frame finishes so a lost
+  packet never wedges `_origin` on a static screen, fixes `smart_remove` across
+  leading `None` gaps so decapitated half-frames are never assembled, and gates
+  output on a VP8/H.264 keyframe (`is_video_keyframe`) after any packet drop so
+  orphaned delta frames are never decoded into `FrameHolder`. That is installed
+  by `fanout._aiortc()` before any receiver exists.
 - **Per-viewer `MediaRelay` proxies** feed an encoder only on a *new* frame. A
   late joiner got nothing, and a lost keyframe was never resent, because aiortc's
   PLI response only flags the *next* encode. `frames.py` holds each room's newest

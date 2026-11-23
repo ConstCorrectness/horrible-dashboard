@@ -53,6 +53,27 @@ function send(nodeId: string, frame: SignalFrame): void {
   sendShareSignal(nodeId, frame);
 }
 
+/**
+ * Hint the browser's video RTP sender to preserve text sharpness over frame
+ * rate under bandwidth pressure. Best-effort: mocked or older senders without
+ * `getParameters`/`setParameters` are left alone.
+ */
+export function preferMaintainResolution(sender: RTCRtpSender | undefined | null): void {
+  if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
+    return;
+  }
+  try {
+    const params = sender.getParameters() as RTCRtpSendParameters & {
+      degradationPreference?: string;
+    };
+    if (!params || params.degradationPreference === 'maintain-resolution') return;
+    params.degradationPreference = 'maintain-resolution';
+    void sender.setParameters(params).catch(() => {});
+  } catch {
+    /* unsupported in this engine */
+  }
+}
+
 /** One guest's live connection on the host, and the timers watching it. */
 interface Peer {
   pc: RTCPeerConnection;
@@ -149,7 +170,10 @@ export class SharePublisher {
       if (!current()) return;
       this.onPeerState(nodeId, peer);
     };
-    for (const track of stream.getTracks()) pc.addTrack(track, stream);
+    for (const track of stream.getTracks()) {
+      const sender = pc.addTrack(track, stream);
+      if (track.kind === 'video') preferMaintainResolution(sender);
+    }
 
     try {
       const offer = await pc.createOffer();
@@ -301,6 +325,7 @@ export class ShareSubscriber {
   private pc: RTCPeerConnection | null = null;
   /** The epoch of the offer `pc` answered; null when there is no connection. */
   private epoch: number | null = null;
+  private grace: ReturnType<typeof setTimeout> | null = null;
   private hostNode = '';
   private sessionId = '';
 
@@ -354,13 +379,27 @@ export class ShareSubscriber {
         if (current()) this.onStream(e.streams[0] ?? null);
       };
       pc.onconnectionstatechange = () => {
-        if (!current() || pc.connectionState !== 'failed') return;
-        // Not `onEnded`: the host is still sharing, and is about to offer again
-        // (see SharePublisher.recover). Saying `ready` gets that offer sooner
-        // when the host has not noticed yet — its side can sit in
-        // `disconnected` for a while after ours has given up.
-        this.close();
-        this.ready();
+        if (!current()) return;
+        const state = pc.connectionState;
+        if (state === 'connected') {
+          this.clearGrace();
+        } else if (state === 'failed') {
+          // Not `onEnded`: the host is still sharing, and is about to offer again
+          // (see SharePublisher.recover). Saying `ready` gets that offer sooner
+          // when the host has not noticed yet — its side can sit in
+          // `disconnected` for a while after ours has given up.
+          this.close();
+          this.ready();
+        } else if (state === 'disconnected' && this.grace === null) {
+          this.grace = setTimeout(() => {
+            this.grace = null;
+            if (!current()) return;
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+              this.close();
+              this.ready();
+            }
+          }, DISCONNECT_GRACE_MS);
+        }
       };
       try {
         await pc.setRemoteDescription({ type: 'offer', sdp: frame.sdp });
@@ -393,10 +432,16 @@ export class ShareSubscriber {
   }
 
   close(): void {
+    this.clearGrace();
     this.pc?.close();
     this.pc = null;
     this.epoch = null;
     this.onStream(null);
+  }
+
+  private clearGrace(): void {
+    if (this.grace !== null) clearTimeout(this.grace);
+    this.grace = null;
   }
 }
 

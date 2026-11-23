@@ -59,6 +59,63 @@ def test_a_frame_with_a_gap_is_not_released_early() -> None:
     assert buf.add(packet(3, 1000, marker=True, data=b"c"))[1] is None
 
 
+def test_incomplete_older_frame_does_not_wedge_static_screen_and_gates_on_keyframe() -> None:
+    """When frame 1 loses a packet and frame 2 completes, the buffer must not
+    wedge on frame 1 forever, and must discard orphaned delta frames (requesting
+    PLI) until a keyframe arrives."""
+    vp8_key = b"\x10\x02\x00\x9d\x01\x2a" + b"K" * 20
+    vp8_delta = b"\x31\x02\x00" + b"D" * 20
+
+    buf = video_buffer()
+    # Frame 1 (ts=1000): packet 1 arrives, packet 2 is lost.
+    assert buf.add(packet(1, 1000, data=vp8_key[:10])) == (False, None)
+    # Frame 2 (ts=2000): delta frame arrives completely (seq=3, marker=True).
+    # Must evict incomplete frame 1, refuse the orphaned delta frame, and ask for PLI.
+    pli, frame = buf.add(packet(3, 2000, marker=True, data=vp8_delta))
+    assert pli is True
+    assert frame is None
+
+    # Frame 3 (ts=3000): another delta frame arrives before the host's keyframe.
+    # Still gated: rejected, and PLI requested again.
+    pli, frame = buf.add(packet(4, 3000, marker=True, data=vp8_delta))
+    assert pli is True
+    assert frame is None
+
+    # Frame 4 (ts=4000): host responds to PLI with a multi-packet VP8 keyframe.
+    assert buf.add(packet(5, 4000, data=vp8_key[:12]))[1] is None
+    pli, frame = buf.add(packet(6, 4000, marker=True, data=vp8_key[12:]))
+    assert frame is not None
+    assert frame.data == vp8_key
+    assert frame.timestamp == 4000
+
+    # Subsequent delta frames now flow normally again.
+    pli, frame = buf.add(packet(7, 5000, marker=True, data=vp8_delta))
+    assert pli is False
+    assert frame is not None
+    assert frame.data == vp8_delta
+
+
+def test_smart_remove_across_leading_gap_drops_entire_partial_frame() -> None:
+    """aiortc's `smart_remove` broke when `_origin` was `None` (a lost first
+    packet of a frame), leaving packet #2..N of that frame at `_origin` to be
+    assembled as a decapitated frame."""
+    vp8_key = b"\x10\x02\x00\x9d\x01\x2a" + b"K" * 20
+    buf = jitter.buffer_class()(capacity=8, is_video=True)
+    # Seed origin at seq=1, then lose seq=2 (first packet of ts=2000) while
+    # receiving seq=3,4 (tail of ts=2000).
+    buf.add(packet(1, 1000, marker=True, data=vp8_key))
+    buf.add(packet(3, 2000, data=b"middle"))
+    buf.add(packet(4, 2000, marker=True, data=b"tail"))
+    # Overflow capacity=8 with seq=10 (ts=3000), forcing smart_remove over the
+    # leading None at seq=2.
+    pli, frame = buf.add(packet(10, 3000, marker=True, data=vp8_key))
+    assert pli is True
+    # Must release the clean keyframe at ts=3000, never the decapitated ts=2000 tail.
+    assert frame is not None
+    assert frame.timestamp == 3000
+    assert frame.data == vp8_key
+
+
 def test_install_patches_the_name_receivers_are_built_from() -> None:
     from aiortc import rtcrtpreceiver
 

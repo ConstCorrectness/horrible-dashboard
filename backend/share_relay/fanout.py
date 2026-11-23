@@ -455,8 +455,9 @@ class Room:
                 tracks.append(video)
                 sender = pc.addTrack(video)
                 # aiortc ignores its own keyframe flag for pre-encoded packets,
-                # so a viewer's PLI has to reach the encoder that makes them.
-                sender._send_keyframe = self._encoder.request_keyframe
+                # so a viewer's PLI must flush that viewer's delta-frame queue,
+                # gate its track on the next keyframe, and ask the room encoder.
+                sender._send_keyframe = video.request_keyframe
                 _pin_codec(aiortc, pc, sender, "video/vp8")
             elif kind == "audio":
                 audio = self._audio.subscribe()

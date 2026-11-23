@@ -245,6 +245,9 @@ def test_the_page_keeps_a_diagnostic_log() -> None:
     assert "diagLine(" in script
     assert "DIAG_MAX" in script, "the log must be bounded; viewers watch for hours"
     assert "getStats" in script, "no quality sampling, so 'laggy' stays an adjective"
+    assert "video decode stalled" in script, (
+        "mid-stream freeze watchdog missing from sampleStats"
+    )
     for event in ("oniceconnectionstatechange", "onicegatheringstatechange", "ontrack"):
         assert event in script, f"{event} is not logged"
 

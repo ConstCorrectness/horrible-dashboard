@@ -256,6 +256,23 @@ describe('ShareSubscriber', () => {
     expect(sent).toEqual([{ to: 'host', frame: { kind: 'ready', sessionId: 's1' } }]);
   });
 
+  it('asks for a new offer when disconnected outlasts the grace window', async () => {
+    vi.useFakeTimers();
+    try {
+      await sub.accept('host', { kind: 'offer', sessionId: 's1', sdp: 'o', epoch: 1 });
+      sent.length = 0;
+      const pc = FakePeer.last();
+      pc.become('disconnected');
+      await vi.advanceTimersByTimeAsync(DISCONNECT_GRACE_MS - 1);
+      expect(pc.closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pc.closed).toBe(true);
+      expect(sent).toEqual([{ to: 'host', frame: { kind: 'ready', sessionId: 's1' } }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports the share ended on bye', async () => {
     await sub.accept('host', { kind: 'offer', sessionId: 's1', sdp: 'o', epoch: 1 });
     await sub.accept('host', { kind: 'bye', sessionId: 's1' });

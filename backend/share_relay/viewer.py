@@ -359,6 +359,16 @@ function countdown(seconds, note) {
 // The numbers that actually diagnose "it is laggy": frame rate, freezes, loss,
 // round trip, and which candidate pair won. Logged periodically so a report
 // from a viewer carries evidence rather than an adjective.
+//
+// Also acts as the mid-stream freeze watchdog: the relay's idle repeater pushes
+// at least 1 frame/sec even on a still screen, so `framesDecoded` must advance
+// while live. Two consecutive periodic samples with zero new decoded frames
+// (~8s) means the media path or decoder wedged after `gotFrame = true`.
+const STATS_INTERVAL_MS = 4000;
+const STALL_SAMPLES_MAX = 2;
+let lastFramesDecoded = -1;
+let stalledSamples = 0;
+
 async function sampleStats(reason) {
   if (!pc) return;
   try {
@@ -383,6 +393,19 @@ async function sampleStats(reason) {
       if (v.jitterBufferEmittedCount) {
         bits.push('buffer=' + Math.round((v.jitterBufferDelay / v.jitterBufferEmittedCount) * 1000) + 'ms');
       }
+      if (reason === 'periodic' && gotFrame && !paused && !ended && typeof v.framesDecoded === 'number') {
+        if (v.framesDecoded === lastFramesDecoded) {
+          stalledSamples += 1;
+          if (stalledSamples >= STALL_SAMPLES_MAX) {
+            diagLine('video decode stalled at ' + v.framesDecoded + '; reconnecting');
+            scheduleReconnect('The video stream froze. Reconnecting…');
+            return;
+          }
+        } else {
+          lastFramesDecoded = v.framesDecoded;
+          stalledSamples = 0;
+        }
+      }
     } else {
       bits.push('no inbound video yet');
     }
@@ -398,12 +421,16 @@ async function sampleStats(reason) {
 
 function startStats() {
   stopStats();
-  statsTimer = setInterval(() => void sampleStats('periodic'), 10000);
+  lastFramesDecoded = -1;
+  stalledSamples = 0;
+  statsTimer = setInterval(() => void sampleStats('periodic'), STATS_INTERVAL_MS);
   void sampleStats('connected');
 }
 
 function stopStats() {
   if (statsTimer !== null) { clearInterval(statsTimer); statsTimer = null; }
+  lastFramesDecoded = -1;
+  stalledSamples = 0;
 }
 
 function setStatus(text, live) {

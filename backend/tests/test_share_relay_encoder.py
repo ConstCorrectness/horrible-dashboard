@@ -126,6 +126,45 @@ async def test_a_viewer_that_falls_behind_resumes_at_a_keyframe() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_viewer_pli_gates_that_viewer_until_the_next_keyframe() -> None:
+    """When one viewer loses a packet and sends PLI, its track must flush queued
+    delta frames and discard incoming delta frames during the coalescing window
+    until the next keyframe arrives, without disrupting healthy viewers."""
+    holder = FrameHolder()
+    room = RoomEncoder(holder, encode=FakeCodec())
+    healthy = room.subscribe()
+    broken = room.subscribe()
+    asked: list[bool] = []
+    room.request_keyframe = lambda: asked.append(True)  # type: ignore[method-assign]
+    healthy._pulling = True
+    broken._pulling = True
+
+    for t in (healthy, broken):
+        t.push(Encoded("k0", key=True))
+        t.push(Encoded("d1", key=False))
+
+    # Simulate RTCP PLI arriving on `broken`'s sender (`sender._send_keyframe()`).
+    broken.request_keyframe()
+    assert asked == [True]
+    assert list(broken._queue) == [], "queued delta frames must be flushed on PLI"
+
+    # Delta frame arriving before the coalesced keyframe is ignored by `broken`,
+    # while `healthy` keeps receiving normally.
+    for t in (healthy, broken):
+        t.push(Encoded("d2", key=False))
+    assert list(broken._queue) == []
+    assert list(healthy._queue) == ["k0", "d1", "d2"]
+
+    # Next keyframe resynchronizes `broken`.
+    for t in (healthy, broken):
+        t.push(Encoded("k1", key=True))
+        t.push(Encoded("d3", key=False))
+    assert list(broken._queue) == ["k1", "d3"]
+    healthy.stop()
+    broken.stop()
+
+
+@pytest.mark.anyio
 async def test_a_pli_storm_costs_one_keyframe() -> None:
     holder = FrameHolder()
     codec = FakeCodec()

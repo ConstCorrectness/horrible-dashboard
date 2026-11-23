@@ -77,10 +77,10 @@ DEFAULT_MAX_HEIGHT = 1080
 
 #: A keyframe at least this often even if nobody asks. Bounds how long a viewer
 #: whose PLI was lost (RTCP is unreliable too) stays broken.
-KEYFRAME_INTERVAL_S = 8.0
+KEYFRAME_INTERVAL_S = 3.0
 
 #: Coalesce keyframe requests: no two forced keyframes closer than this.
-MIN_KEYFRAME_GAP_S = 1.0
+MIN_KEYFRAME_GAP_S = 0.4
 
 #: Encoded frames a viewer may have waiting before it is declared behind. At 15
 #: fps this is two seconds; a sender only packetizes, so a healthy one never
@@ -153,25 +153,27 @@ class Vp8:
         # the codec's own GOP never fires one at a moment nobody chose.
         codec.gop_size = 100_000
         codec.qmin = 2
-        codec.qmax = 50
+        codec.qmax = 36
         codec.thread_count = min(4, os.cpu_count() or 1)
         codec.options = {
             "deadline": "realtime",
-            "cpu-used": "8",
+            "cpu-used": "6",
             "lag-in-frames": "0",
-            # CBR, so a keyframe of a busy screen cannot burst past what the
-            # viewers' links were sized for. ffmpeg sets rc_buf_sz from bufsize.
+            # Controlled VBR headroom around target bitrate so a forced keyframe
+            # of a dense 1080p screen is not crushed to qmax by a 1-frame CBR bucket.
+            # Deliberately NO `error-resilient=1`: setting the VP8 error_resilient_mode
+            # header bit instructs Chrome's WebRTC decoder to keep decoding delta
+            # frames over a missing reference frame after packet loss (painting new
+            # tiles over stale macroblocks and suppressing RTCP PLI).
             "minrate": str(self.bitrate),
-            "maxrate": str(self.bitrate),
-            "bufsize": str(self.bitrate),
+            "maxrate": str(int(self.bitrate * 1.5)),
+            "bufsize": str(self.bitrate * 2),
             "undershoot-pct": "100",
-            "overshoot-pct": "15",
-            # Screen content: no denoising (it eats text), skip static blocks.
+            "overshoot-pct": "50",
+            # Screen content: no denoising (it eats text).
             "noise-sensitivity": "0",
-            "static-thresh": "1",
             "screen-content-mode": "1",
             "partitions": "0",
-            "error-resilient": "1",
         }
         return codec
 
@@ -397,16 +399,21 @@ def _packet_track_class() -> Any:
             self._pulling = False
             self.dropped = 0
 
+        def request_keyframe(self) -> None:
+            """This viewer's browser sent an RTCP PLI/FIR: drop queued delta
+            frames, gate on the next keyframe, and ask the room encoder for one."""
+            self.dropped += len(self._queue)
+            self._queue.clear()
+            self._need_key = True
+            self._encoder.request_keyframe()
+
         def push(self, encoded: Encoded) -> None:
             if self.readyState != "live" or not self._pulling:
                 return
             if len(self._queue) >= VIEWER_QUEUE_MAX:
                 # Behind. Never skip one delta frame -- the decoder downstream
                 # would break -- so drop the lot and resume at a keyframe.
-                self.dropped += len(self._queue)
-                self._queue.clear()
-                self._need_key = True
-                self._encoder.request_keyframe()
+                self.request_keyframe()
             if self._need_key:
                 if not encoded.key:
                     return
