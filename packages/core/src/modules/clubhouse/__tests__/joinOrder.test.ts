@@ -65,3 +65,26 @@ describe('joinRoom claims the channel before the media work', () => {
     }
   });
 });
+
+describe('stage promotion upgrades tokens and publishes only when speaker', () => {
+  it('gates join-time track publishing on session.isSpeaker so listeners do not publish with a listener token', () => {
+    expect(source).toContain('if (session.isSpeaker) {');
+    expect(source).toContain('await within(\n          client.publish(mixedTrack),');
+  });
+
+  it('renews Agora and PubNub tokens and publishes localAudioTrack in upgradeToSpeaker', () => {
+    const upgradeIdx = source.indexOf('const upgradeToSpeaker =');
+    expect(upgradeIdx).toBeGreaterThan(-1);
+    const upgradeSlice = source.slice(upgradeIdx);
+    expect(upgradeSlice).toContain('client.renewToken(agoraToken)');
+    expect(upgradeSlice).toContain('session.pubnub.setToken(pubnubToken)');
+    expect(upgradeSlice).toContain('client.publish(session.localAudioTrack)');
+  });
+
+  it('handles PubNub add_speaker, make_moderator, and user_profile_id', () => {
+    expect(source).toContain('msg.user_profile_id');
+    expect(source).toContain("action === 'add_speaker'");
+    expect(source).toContain("action === 'make_moderator'");
+    expect(source).toContain("action === 'remove_speaker'");
+  });
+});

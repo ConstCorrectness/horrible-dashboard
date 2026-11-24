@@ -25,7 +25,7 @@ import AgoraRTC, { type IAgoraRTCClient, type ILocalAudioTrack } from 'agora-rtc
 import type PubNub from 'pubnub';
 
 import type { StripHandle } from '../audio/types';
-import { leaveClubhouseChannel, sendChannelMessage, type Channel } from './api';
+import { leaveClubhouseChannel, sendChannelMessage, type Channel, type ChannelUser } from './api';
 import { ChatSender } from './chatSender';
 import type { PcmCapture, UtteranceBuffer } from './liveCapture';
 import { publishClubhousePresence, setClubhouseLeaver } from './presence';
@@ -35,6 +35,103 @@ export interface LiveUserState {
   handRaised: boolean;
   isSpeaker: boolean;
   isMuted: boolean;
+  isModerator?: boolean;
+  name?: string | null;
+  username?: string | null;
+  photoUrl?: string | null;
+}
+
+export interface MergedRoomRoster {
+  users: ChannelUser[];
+  isCurrentUserSpeaker: boolean;
+  moderators: ChannelUser[];
+  speakers: ChannelUser[];
+  audience: ChannelUser[];
+}
+
+/**
+ * Merge polled channel details (`baseUsers`) with real-time PubNub/action state
+ * (`liveUsers`) and the connected operator's profile (`myProfile`).
+ *
+ * `baseUsers` is refreshed every 10s by `/get_channel` (and initially seeded from
+ * the hallway feed preview, which only lists 3–5 speakers and omits audience
+ * members). `liveUsers` updates immediately on PubNub `add_speaker`,
+ * `remove_speaker`, `accept_speaker_invite`, `make_moderator`, `join_channel`,
+ * `leave_channel`, and local stage actions (`acceptSpeakerInvite`).
+ */
+export function mergeRoomRoster(
+  baseUsers: ChannelUser[] | undefined | null,
+  liveUsers: LiveUserState[],
+  myProfile?: {
+    userId: number | null;
+    name?: string | null;
+    photoUrl?: string | null;
+  } | null,
+): MergedRoomRoster {
+  const base = baseUsers ?? [];
+  const liveById = new Map<number, LiveUserState>();
+  for (const l of liveUsers) {
+    liveById.set(l.userId, l);
+  }
+
+  const seenIds = new Set<number>();
+  const merged: ChannelUser[] = [];
+
+  for (const u of base) {
+    const uid = u.user_id;
+    if (uid != null) {
+      seenIds.add(uid);
+      const live = liveById.get(uid);
+      if (live) {
+        merged.push({
+          ...u,
+          name: u.name || live.name || null,
+          username: u.username ?? live.username ?? null,
+          photo_url: u.photo_url ?? live.photoUrl ?? null,
+          is_speaker: live.isSpeaker,
+          is_moderator: live.isModerator ?? u.is_moderator ?? false,
+        });
+        continue;
+      }
+    }
+    merged.push(u);
+  }
+
+  const myId = myProfile?.userId ?? null;
+  for (const live of liveUsers) {
+    if (seenIds.has(live.userId)) continue;
+    const isMe = myId != null && live.userId === myId;
+    const name = live.name || (isMe ? myProfile?.name || 'Me' : null);
+    if (!name && !isMe && !live.isSpeaker) continue;
+    seenIds.add(live.userId);
+    merged.push({
+      user_id: live.userId,
+      name: name || 'Speaker',
+      username: live.username ?? null,
+      photo_url: live.photoUrl ?? (isMe ? (myProfile?.photoUrl ?? null) : null),
+      is_speaker: live.isSpeaker,
+      is_moderator: live.isModerator ?? false,
+    });
+  }
+
+  const isCurrentUserSpeaker =
+    myId != null
+      ? (liveById.get(myId)?.isSpeaker ??
+        merged.find((u) => u.user_id === myId)?.is_speaker ??
+        false)
+      : false;
+
+  const moderators = merged.filter((u) => Boolean(u.is_moderator && u.user_id));
+  const speakers = merged.filter((u) => Boolean(u.is_speaker));
+  const audience = merged.filter((u) => !u.is_speaker);
+
+  return {
+    users: merged,
+    isCurrentUserSpeaker,
+    moderators,
+    speakers,
+    audience,
+  };
 }
 
 export interface ChatComment {
@@ -219,6 +316,15 @@ export class ClubhouseRoomSession {
   } | null = null;
 
   myProfile: { name: string; photoUrl: string | null; userId: number | null } | null = null;
+  /** Whether the connected account is currently on stage as a speaker in this room. */
+  isSpeaker = false;
+  /** Whether `localAudioTrack` has been published on `rtcClient` under a speaker token. */
+  isTrackPublished = false;
+  /** Timestamp (`Date.now()`) when the account was last promoted to speaker, so an
+   *  in-flight `/get_channel` poll started before promotion does not overwrite it. */
+  promotedAt = 0;
+  /** Coalesces concurrent stage-upgrade calls (PubNub `add_speaker` + `/become_speaker`). */
+  speakerUpgradePromise: Promise<void> | null = null;
 
   /**
    * The room's full details as last polled (`getClubhouseChannelDetails`): every
@@ -397,6 +503,10 @@ export class ClubhouseRoomSession {
       this.state = EMPTY_ROOM_STATE;
       this.roomDetails = null;
       this.rawVolumes = {};
+      this.isSpeaker = false;
+      this.isTrackPublished = false;
+      this.promotedAt = 0;
+      this.speakerUpgradePromise = null;
       this.notify();
     }
   }

@@ -1431,6 +1431,76 @@ async def chat(
     return result
 
 
+def _is_unsloth_no_model_loaded(status_code: int, body_text: str) -> bool:
+    """Whether Unsloth Desktop rejected a chat/speech request because no model is
+    resident in memory and its ``Model auto-switch`` setting is off."""
+    text = (body_text or "").lower()
+    return status_code == 400 and (
+        "no model loaded" in text or "/inference/load" in text
+    )
+
+
+async def _load_unsloth_model(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    model: str,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """Enable Unsloth Desktop's ``Model auto-switch`` + ``multi-model: fit`` and load
+    ``model`` via ``POST /v1/load`` (falling back to ``/api/inference/load``).
+
+    When Unsloth starts cold with ``Model auto-switch`` disabled, ``/v1/chat/completions``
+    returns 400 ``No model loaded. Call POST /inference/load first.`` Turning on
+    ``openai-auto-switch`` (and ``multi-model: fit`` so a TTS model and a chat LLM can
+    stay loaded side-by-side) and loading the requested model lets the immediate retry
+    and every later turn succeed automatically.
+    """
+    base = endpoint.rstrip("/")
+    req_headers = headers or auth_headers(PROVIDERS["unsloth"])
+    for path, setting_payload in (
+        (
+            "/api/settings/openai-auto-switch",
+            {"enabled": True, "media_auto_switch_model": True},
+        ),
+        ("/api/settings/multi-model", {"enabled": True, "mode": "fit"}),
+    ):
+        try:
+            await client.put(
+                f"{base}{path}",
+                json=setting_payload,
+                headers=req_headers,
+                timeout=httpx.Timeout(5.0, connect=1.0),
+            )
+        except Exception:  # noqa: BLE001 — best-effort setting sync
+            pass
+
+    raw = (model or "").strip()
+    if not raw:
+        return
+    if "::" in raw:
+        _, _, raw = raw.partition("::")
+        raw = raw.strip()
+    model_path, _, variant = raw.partition(":")
+    load_body: dict[str, Any] = {
+        "model_path": model_path.strip(),
+        "alongside": True,
+    }
+    if variant.strip():
+        load_body["gguf_variant"] = variant.strip()
+    for load_path in ("/v1/load", "/api/inference/load"):
+        try:
+            res = await client.post(
+                f"{base}{load_path}",
+                json=load_body,
+                headers=req_headers,
+                timeout=httpx.Timeout(60.0, connect=2.0),
+            )
+            if res.status_code != 404:
+                break
+        except Exception:  # noqa: BLE001 — let the caller's retry surface any real error
+            break
+
+
 async def _chat_dispatch(
     client: httpx.AsyncClient,
     info: ProviderInfo,
@@ -1541,11 +1611,21 @@ async def _chat_dispatch(
                 # (studio/backend/routes/inference.py, `enable_thinking`).
                 payload["enable_thinking"] = False
         _note_payload(payload)
+        req_headers = auth_headers(info)
         res = await client.post(
             f"{endpoint}/v1/chat/completions",
             json=payload,
-            headers=auth_headers(info),
+            headers=req_headers,
         )
+        if info.kind == "unsloth" and _is_unsloth_no_model_loaded(
+            res.status_code, res.text
+        ):
+            await _load_unsloth_model(client, endpoint, model, req_headers)
+            res = await client.post(
+                f"{endpoint}/v1/chat/completions",
+                json=payload,
+                headers=req_headers,
+            )
         raise_for_status_with_body(res, res.text)
         body = res.json()
         choices = body.get("choices") or [{}]
@@ -1905,6 +1985,7 @@ async def _openai_chat_stream(
     #: Translate dotted tool names for a provider that rejects them outright. See
     #: `sanitize_tool_names`.
     strict_tool_names: bool = False,
+    _retried_load: bool = False,
 ) -> ChatResult:
     url = f"{endpoint}/v1/chat/completions"
     sent_tools, sent_messages, restore = (
@@ -1942,33 +2023,49 @@ async def _openai_chat_stream(
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
     tool_acc: dict[int, dict[str, Any]] = {}
     async with client.stream("POST", url, json=payload, headers=headers or None) as res:
-        if res.status_code == 400 and "stream_options" in payload:
-            # An older or stricter server rejecting the unknown field. Remember it
-            # and retry plainly, the same shape as the `think=True` retry above —
-            # one 400 per endpoint per process, not one per turn.
-            await res.aread()
-            _disable_stream_usage(url)
-            payload.pop("stream_options", None)
-            return await _openai_chat_stream(
-                client,
-                endpoint,
-                model,
-                messages,
-                tools,
-                on_delta,
-                temperature,
-                tool_choice,
-                max_tokens,
-                top_p,
-                headers,
-                strict_tool_names,
-            )
         if res.status_code >= 400:
-            # The body has not been streamed yet — read it before it is discarded,
-            # or the error is a bare status line.
-            raise_for_status_with_body(
-                res, (await res.aread()).decode(errors="replace")
-            )
+            err_text = (await res.aread()).decode(errors="replace")
+            if not _retried_load and _is_unsloth_no_model_loaded(
+                res.status_code, err_text
+            ):
+                await _load_unsloth_model(client, endpoint, model, headers)
+                return await _openai_chat_stream(
+                    client,
+                    endpoint,
+                    model,
+                    messages,
+                    tools,
+                    on_delta,
+                    temperature,
+                    tool_choice,
+                    max_tokens,
+                    top_p,
+                    headers,
+                    strict_tool_names,
+                    _retried_load=True,
+                )
+            if res.status_code == 400 and "stream_options" in payload:
+                # An older or stricter server rejecting the unknown field. Remember it
+                # and retry plainly, the same shape as the `think=True` retry above —
+                # one 400 per endpoint per process, not one per turn.
+                _disable_stream_usage(url)
+                payload.pop("stream_options", None)
+                return await _openai_chat_stream(
+                    client,
+                    endpoint,
+                    model,
+                    messages,
+                    tools,
+                    on_delta,
+                    temperature,
+                    tool_choice,
+                    max_tokens,
+                    top_p,
+                    headers,
+                    strict_tool_names,
+                    _retried_load=_retried_load,
+                )
+            raise_for_status_with_body(res, err_text)
         async for line in tee_stream(res, res.aiter_lines()):
             if not line or not line.startswith("data:"):
                 continue

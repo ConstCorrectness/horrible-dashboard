@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
-import { getAgentStatus, type AgentStatus } from '../agent/api';
+import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
 import {
   getClubhouseChannels,
   getClubhouseStatus,
@@ -63,7 +63,7 @@ import {
   type AgentRailState,
   type HeardLine,
 } from './AgentSidebar';
-import { clubhouseSession } from './roomSession';
+import { clubhouseSession, mergeRoomRoster } from './roomSession';
 import { useClubhouseVoice } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
@@ -718,15 +718,17 @@ export function RoomsPanel() {
             {!isCurrentUser &&
               activeChannel &&
               (() => {
-                const amIMod = activeRoomInfo?.users.find(
-                  (u) => u.user_id === myUserId,
-                )?.is_moderator;
+                const effectiveMyId = myUserId ?? clubhouseSession().myProfile?.userId ?? null;
+                const amIMod =
+                  liveUsers.find((u) => u.userId === effectiveMyId)?.isModerator ??
+                  activeRoomInfo?.users.find((u) => u.user_id === effectiveMyId)?.is_moderator;
                 const isTheySpeaker =
                   liveUsers.find((u) => u.userId === selectedUser.user_id)?.isSpeaker ??
                   activeRoomInfo?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
-                const isTheyMod = activeRoomInfo?.users.find(
-                  (u) => u.user_id === selectedUser.user_id,
-                )?.is_moderator;
+                const isTheyMod =
+                  liveUsers.find((u) => u.userId === selectedUser.user_id)?.isModerator ??
+                  activeRoomInfo?.users.find((u) => u.user_id === selectedUser.user_id)
+                    ?.is_moderator;
 
                 if (!amIMod) return null;
 
@@ -924,6 +926,7 @@ export function RoomsPanel() {
     sendComment,
     sendReaction,
     sendGif,
+    syncChannelDetails,
     getNetworkInsights,
     getEarsHealth,
   } = useClubhouseVoice({
@@ -999,7 +1002,10 @@ export function RoomsPanel() {
       }
     },
     onHandRaise: (_userId, userName) => {
-      const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+      const effectiveMyId = myUserId ?? clubhouseSession().myProfile?.userId ?? null;
+      const amIMod =
+        liveUsers.find((u) => u.userId === effectiveMyId)?.isModerator ??
+        activeRoomInfo?.users.find((u) => u.user_id === effectiveMyId)?.is_moderator;
       if (amIMod) {
         toastsStore.add('info', 'Hand Raised', `${userName} wants to come up on stage.`);
         if (
@@ -1070,6 +1076,7 @@ export function RoomsPanel() {
     const updateActiveChannel = async () => {
       try {
         const details = await getClubhouseChannelDetails(activeChannel);
+        syncChannelDetails(details);
         setChannels((prev) => prev.map((ch) => (ch.channel === activeChannel ? details : ch)));
         setActiveRoomInfo(details); // update active room info for the UI
       } catch (err) {
@@ -1081,7 +1088,7 @@ export function RoomsPanel() {
     const interval = setInterval(updateActiveChannel, 10000);
 
     return () => clearInterval(interval);
-  }, [joined, activeChannel]);
+  }, [joined, activeChannel, syncChannelDetails]);
 
   // Scroll to bottom of chat when new comments arrive if user was already near the bottom
   useEffect(() => {
@@ -1431,7 +1438,43 @@ export function RoomsPanel() {
     }
   };
 
-  // Push settings to the backend session whenever they change (and on join, since
+  const refreshAgentModels = async () => {
+    try {
+      const next = await getAgentStatus({ refresh: true });
+      setAgentEngineStatus(next);
+      void getAgentTtsVoices()
+        .then(setTtsVoices)
+        .catch(() => {});
+      if (activeChannel && agentConfigRef.current.enabled) {
+        void getVoiceHealth(activeChannel)
+          .then(setVoiceHealth)
+          .catch(() => {});
+      }
+    } catch (e) {
+      toastsStore.add(
+        'warning',
+        'Model refresh',
+        e instanceof Error ? e.message : 'Could not poll model providers.',
+      );
+    }
+  };
+
+  const handleSelectRoomProvider = (provider: string, model: string) => {
+    if (!provider || !model) return;
+    if (agentEngineStatus?.provider === provider) return;
+    const match = agentEngineStatus?.providers?.find((p) => p.kind === provider);
+    void saveAgentConfig(model, provider, match?.endpoint)
+      .then(() => getAgentStatus())
+      .then((next) => {
+        setAgentEngineStatus(next);
+        if (activeChannel && agentConfigRef.current.enabled) {
+          void getVoiceHealth(activeChannel)
+            .then(setVoiceHealth)
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  };
   // the session is created there and starts on defaults). Debounced: the persona box
   // changes the config on every keystroke. A failure is shown, not just logged to the
   // console, because settings that quietly never arrive look exactly like an agent
@@ -1440,7 +1483,14 @@ export function RoomsPanel() {
     if (!activeChannel) return;
     const timer = setTimeout(() => {
       pushVoiceConfig(activeChannel, agentConfig)
-        .then(() => setSyncError(null))
+        .then(() => {
+          setSyncError(null);
+          if (agentConfig.enabled) {
+            void getVoiceHealth(activeChannel)
+              .then(setVoiceHealth)
+              .catch(() => {});
+          }
+        })
         .catch((e) => {
           const message = e instanceof Error ? e.message : String(e);
           setSyncError(message);
@@ -1658,15 +1708,23 @@ export function RoomsPanel() {
     // carries a preview of a few names and no audience; it used to win here, so
     // whenever the list loaded after the details (every remount) the stage shrank
     // and the audience disappeared until the next poll.
+    const sessionDetails = clubhouseSession().roomDetails;
     const currentRoom =
+      (sessionDetails?.channel === activeChannel ? sessionDetails : null) ??
       (activeRoomInfo?.channel === activeChannel ? activeRoomInfo : null) ??
       channels.find((ch) => ch.channel === activeChannel) ??
+      sessionDetails ??
       activeRoomInfo;
-    const isCurrentUserSpeaker =
-      activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
-    const moderators = currentRoom?.users.filter((u) => u.is_moderator && u.user_id) ?? [];
-    const speakers = currentRoom?.users.filter((u) => u.is_speaker) ?? [];
-    const audience = currentRoom?.users.filter((u) => !u.is_speaker) ?? [];
+    const effectiveMyUserId = myUserId ?? clubhouseSession().myProfile?.userId ?? null;
+    const { isCurrentUserSpeaker, moderators, speakers, audience } = mergeRoomRoster(
+      currentRoom?.users,
+      liveUsers,
+      {
+        userId: effectiveMyUserId,
+        name: myProfileName || clubhouseSession().myProfile?.name || null,
+        photoUrl: clubhouseSession().myProfile?.photoUrl ?? null,
+      },
+    );
 
     const renderUserCard = (u: ChannelUser, isSpeaker: boolean) => {
       const initials = nameInitials(u.name ?? '') || '?';
@@ -1674,7 +1732,7 @@ export function RoomsPanel() {
       const uid = u.user_id ?? 0;
       // Get live state for this user from PubNub events
       const liveState = liveUsers.find((l) => l.userId === uid);
-      const isHandRaised = uid === myUserId ? handRaised : (liveState?.handRaised ?? false);
+      const isHandRaised = uid === effectiveMyUserId ? handRaised : (liveState?.handRaised ?? false);
       const isSpeaking = uid > 0 && (speakingVolumes[uid] ?? 0) > 8;
       const speakingLevel = Math.min(1, (speakingVolumes[uid] ?? 0) / 60);
       const speakingScale = 1 + speakingLevel * 0.18;
@@ -3173,9 +3231,9 @@ export function RoomsPanel() {
               ➕ Invite
             </button>
             {(() => {
-              const amIMod = activeRoomInfo?.users.find(
-                (u) => u.user_id === myUserId,
-              )?.is_moderator;
+              const amIMod =
+                liveUsers.find((u) => u.userId === effectiveMyUserId)?.isModerator ??
+                currentRoom?.users.find((u) => u.user_id === effectiveMyUserId)?.is_moderator;
               if (amIMod) {
                 return (
                   <>
@@ -3553,6 +3611,8 @@ export function RoomsPanel() {
                 setPaneEvents([]);
               }}
               engine={agentEngineStatus}
+              onRefreshModels={refreshAgentModels}
+              onSelectProvider={handleSelectRoomProvider}
               ttsVoices={ttsVoices}
               networkOpen={showNetworkModal}
               onToggleNetwork={() => setShowNetworkModal((open) => !open)}

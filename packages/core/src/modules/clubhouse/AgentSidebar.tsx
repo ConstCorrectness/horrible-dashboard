@@ -13,6 +13,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { dialogs } from '../../dialogs';
+import { resetSetting, setSetting, useSetting } from '../../settings';
 import { toastsStore } from '../../toasts';
 import type { TtsVoiceOption } from './api';
 import { loadPresets, savePresets, upsertPreset, type PersonaPreset } from './agentPresets';
@@ -40,13 +41,155 @@ export type AgentRailState = 'off' | 'idle' | 'thinking' | 'speaking' | 'error';
 
 /**
  * The slice of the dashboard agent's status this panel reads. Declared here, not
- * imported from the agent module, so the panel depends on three fields and not on a
- * sibling module's whole status type (the room pane passes it the real thing).
+ * imported from the agent module, so the panel depends on a minimal contract and not
+ * on a sibling module's whole status type (the room pane passes it the real thing).
  */
+export interface AgentEngineProvider {
+  kind: string;
+  label: string;
+  reachable?: boolean;
+  models: string[];
+}
+
 export interface AgentEngine {
   provider: string | null;
   model: string | null;
   available_models: string[];
+  providers?: AgentEngineProvider[];
+}
+
+export interface RoomModelGroup {
+  kind: string;
+  label: string;
+  options: { value: string; label: string }[];
+}
+
+export interface RoomModelChoices {
+  groups: RoomModelGroup[];
+  selectedValue: string;
+  known: boolean;
+  unknownLabel: string;
+  displayModel: string;
+  servedBy: string | null;
+}
+
+const SPEECH_MODEL_RE = /audio-cpp|(?:^|[/_.-])[a-z0-9]*tts(?:$|[/_.-])/i;
+const STT_MODEL_RE = /(?:^|[/_.-])whisper(?:$|[/_.-])/i;
+
+function bareModelId(raw: string): string {
+  const trimmed = raw.trim();
+  const sep = trimmed.indexOf('::');
+  return sep >= 0 ? trimmed.slice(sep + 2).trim() : trimmed;
+}
+
+/** Whether `modelId` is a TTS/speech synthesis model (e.g. `PocketTTS-GGUF`). */
+export function isSpeechTtsModel(modelId: string): boolean {
+  const id = bareModelId(modelId);
+  return Boolean(id && SPEECH_MODEL_RE.test(id));
+}
+
+/** Whether `modelId` is an audio-only model (TTS or Whisper STT) rather than a chat LLM. */
+export function isAudioOnlyModel(modelId: string): boolean {
+  const id = bareModelId(modelId);
+  return Boolean(id && (SPEECH_MODEL_RE.test(id) || STT_MODEL_RE.test(id)));
+}
+
+/** Speech/TTS models served by Unsloth, for the Voice card's **Voice model** dropdown. */
+export function unslothSpeechModels(engine: AgentEngine | null): string[] {
+  const unsloth = engine?.providers?.find((p) => p.kind === 'unsloth');
+  const raw =
+    unsloth?.models ?? (engine?.provider === 'unsloth' ? engine.available_models : []);
+  return [...new Set(raw.filter(isSpeechTtsModel))];
+}
+
+/**
+ * Build the per-room LLM dropdown options across all connected providers
+ * (Unsloth, LM Studio, Ollama, hosted APIs, etc.), excluding TTS/STT audio models,
+ * and resolve the current room override (`provider::model` or a legacy bare model id).
+ */
+export function roomModelChoices(
+  engine: AgentEngine | null,
+  configuredModel: string,
+): RoomModelChoices {
+  const groups: RoomModelGroup[] = [];
+  if (engine?.providers && engine.providers.length > 0) {
+    for (const p of engine.providers) {
+      if (p.reachable === false) continue;
+      const unique = [...new Set(p.models)].filter((m) => !isAudioOnlyModel(m));
+      if (unique.length === 0) continue;
+      groups.push({
+        kind: p.kind,
+        label: p.label,
+        options: unique.map((m) => ({ value: `${p.kind}::${m}`, label: m })),
+      });
+    }
+  } else if (engine && engine.available_models.length > 0) {
+    const unique = [...new Set(engine.available_models)].filter((m) => !isAudioOnlyModel(m));
+    const kind = engine.provider || '';
+    if (unique.length > 0) {
+      groups.push({
+        kind: kind || 'default',
+        label: kind || 'Models',
+        options: unique.map((m) => ({ value: kind ? `${kind}::${m}` : m, label: m })),
+      });
+    }
+  }
+
+  const raw = configuredModel.trim();
+  if (!raw || isAudioOnlyModel(raw)) {
+    return {
+      groups,
+      selectedValue: '',
+      known: true,
+      unknownLabel: '',
+      displayModel: engine?.model || 'default',
+      servedBy: engine?.provider ?? null,
+    };
+  }
+
+  if (raw.includes('::')) {
+    const sep = raw.indexOf('::');
+    const kind = raw.slice(0, sep);
+    const modelId = raw.slice(sep + 2);
+    const known = groups.some((g) => g.options.some((o) => o.value === raw));
+    return {
+      groups,
+      selectedValue: raw,
+      known,
+      unknownLabel: modelId ? `${modelId} (${kind})` : raw,
+      displayModel: modelId || raw,
+      servedBy: kind || engine?.provider || null,
+    };
+  }
+
+  // Legacy bare model id: match the dashboard's active provider first, then any
+  // connected provider serving that model name.
+  const ordered = [
+    ...groups.filter((g) => g.kind === engine?.provider),
+    ...groups.filter((g) => g.kind !== engine?.provider),
+  ];
+  for (const g of ordered) {
+    const match = g.options.find((o) => o.label === raw);
+    if (match) {
+      return {
+        groups,
+        selectedValue: match.value,
+        known: true,
+        unknownLabel: raw,
+        displayModel: raw,
+        servedBy: g.kind === 'default' ? (engine?.provider ?? null) : g.kind,
+      };
+    }
+  }
+
+  return {
+    groups,
+    selectedValue: raw,
+    known: false,
+    unknownLabel: raw,
+    displayModel: raw,
+    servedBy: engine?.provider ?? null,
+  };
 }
 
 export interface AgentSidebarProps {
@@ -75,6 +218,10 @@ export interface AgentSidebarProps {
   events: VoiceEvent[];
   onClearLog: () => void;
   engine: AgentEngine | null;
+  /** Re-poll Unsloth, LM Studio, and all other connected providers for models. */
+  onRefreshModels?: () => void | Promise<void>;
+  /** Switch the active provider when a room model from another provider is chosen. */
+  onSelectProvider?: (provider: string, model: string) => void;
   ttsVoices: TtsVoiceOption[];
   networkOpen: boolean;
   onToggleNetwork: () => void;
@@ -150,6 +297,12 @@ const MicIcon = () => (
   <Icon size={14}>
     <rect x="9" y="3" width="6" height="11" rx="3" />
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+  </Icon>
+);
+const RefreshIcon = () => (
+  <Icon size={14}>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
   </Icon>
 );
 
@@ -255,6 +408,10 @@ const AGENT_CSS = `
 .ag-card-meta { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-card-body { padding: 0.1rem 0.7rem 0.8rem; display: flex; flex-direction: column; gap: 0.7rem; }
 .ag-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.ag-input-row { display: flex; align-items: stretch; gap: 0.4rem; }
+.ag-input-row > .ag-input { flex: 1; min-width: 0; }
+@keyframes ag-spin { to { transform: rotate(360deg); } }
+.ag-spin svg { animation: ag-spin 0.75s linear infinite; }
 .ag-row-fields { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .ag-row-fields > .ag-field { flex: 1; min-width: 110px; }
 .ag-label { font-size: 0.7rem; font-weight: 600; color: var(--text-dim); }
@@ -1086,8 +1243,43 @@ export function AgentSidebar(props: AgentSidebarProps) {
       : FALLBACK_VOICES;
   const voiceKnown = voices.some(([value]) => value === config.ttsVoice);
 
-  const models = engine?.available_models ?? [];
-  const modelKnown = !config.model || models.includes(config.model);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const handleRefreshModels = () => {
+    if (refreshingModels || !props.onRefreshModels) return;
+    setRefreshingModels(true);
+    void Promise.resolve(props.onRefreshModels()).finally(() => setRefreshingModels(false));
+  };
+
+  const unslothTtsModel = (useSetting<string>('agent.unslothTtsModel') ?? '').trim();
+  const speechModels = unslothSpeechModels(engine);
+  const showVoiceModel =
+    config.ttsVoice.startsWith('unsloth:') || speechModels.length > 0 || unslothTtsModel !== '';
+
+  // If a speech/TTS model (e.g. `unsloth::audio-cpp/…/PocketTTS-GGUF`) was picked in
+  // the room's LLM dropdown before the Voice model field existed, move it to
+  // `agent.unslothTtsModel` and clear the LLM override back to the default chat LLM.
+  // Any `provider::model` value in `config.model` is also normalized to the bare model
+  // id while switching the provider, so `/v1/chat/completions` never sees a `provider::`
+  // prefix.
+  useEffect(() => {
+    if (isSpeechTtsModel(config.model)) {
+      const ttsId = bareModelId(config.model);
+      if (ttsId && !unslothTtsModel) {
+        void setSetting('agent.unslothTtsModel', ttsId);
+      }
+      onPatch({ model: '' });
+      return;
+    }
+    const sep = config.model.indexOf('::');
+    if (sep >= 0) {
+      const kind = config.model.slice(0, sep);
+      const modelId = config.model.slice(sep + 2);
+      onPatch({ model: modelId });
+      props.onSelectProvider?.(kind, modelId);
+    }
+  }, [config.model, unslothTtsModel, onPatch]);
+
+  const modelChoices = roomModelChoices(engine, config.model);
   const defaultModelLabel = `Dashboard default${engine?.model ? ` (${engine.model})` : ''}`;
 
   return (
@@ -1294,6 +1486,36 @@ export function AgentSidebar(props: AgentSidebarProps) {
               ))}
             </select>
           </Field>
+          {showVoiceModel && (
+            <Field
+              label="Voice model"
+              hint="Unsloth speech model used for cloned voices, separate from the room's LLM below."
+            >
+              <select
+                className="ag-input"
+                value={unslothTtsModel}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (next === '') void resetSetting('agent.unslothTtsModel');
+                  else void setSetting('agent.unslothTtsModel', next);
+                }}
+              >
+                <option value="">
+                  {speechModels[0]
+                    ? `Unsloth default (${speechModels[0]})`
+                    : 'Unsloth default (currently loaded)'}
+                </option>
+                {unslothTtsModel && !speechModels.includes(unslothTtsModel) && (
+                  <option value={unslothTtsModel}>{unslothTtsModel}</option>
+                )}
+                {speechModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <div className="ag-row-fields">
             <Field label="Volume">
               <select
@@ -1343,30 +1565,64 @@ export function AgentSidebar(props: AgentSidebarProps) {
           index={4}
           title="Model"
           defaultOpen={false}
-          meta={config.model || engine?.model || 'default'}
+          meta={modelChoices.displayModel}
         >
-          <Field
-            label="Model for this room"
-            hint={
-              engine?.provider
-                ? `Served by ${engine.provider}. A small, fast model answers sooner; this setting is only for this agent, not the dashboard's own.`
-                : undefined
-            }
-          >
-            <select
-              className="ag-input"
-              value={config.model}
-              onChange={(e) => onPatch({ model: e.target.value })}
-            >
-              <option value="">{defaultModelLabel}</option>
-              {!modelKnown && <option value={config.model}>{config.model}</option>}
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div className="ag-field">
+            <label className="ag-label" htmlFor="ag-room-model">
+              Model for this room
+            </label>
+            <div className="ag-input-row">
+              <select
+                id="ag-room-model"
+                className="ag-input"
+                value={modelChoices.selectedValue}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const sep = val.indexOf('::');
+                  if (sep >= 0) {
+                    const kind = val.slice(0, sep);
+                    const modelId = val.slice(sep + 2);
+                    onPatch({ model: modelId });
+                    props.onSelectProvider?.(kind, modelId);
+                  } else {
+                    onPatch({ model: val });
+                  }
+                }}
+              >
+                <option value="">{defaultModelLabel}</option>
+                {!modelChoices.known && (
+                  <option value={modelChoices.selectedValue}>{modelChoices.unknownLabel}</option>
+                )}
+                {modelChoices.groups.map((g) => (
+                  <optgroup key={g.kind} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              {props.onRefreshModels && (
+                <button
+                  type="button"
+                  className={`ag-btn${refreshingModels ? ' ag-spin' : ''}`}
+                  onClick={handleRefreshModels}
+                  disabled={refreshingModels}
+                  aria-label="Refresh model list"
+                  title="Poll Unsloth, LM Studio, and other connected providers for available models"
+                >
+                  <RefreshIcon /> Refresh
+                </button>
+              )}
+            </div>
+            {modelChoices.servedBy && (
+              <p className="ag-hint">
+                Served by {modelChoices.servedBy}. A small, fast model answers sooner; this setting
+                is only for this agent, not the dashboard&apos;s own.
+              </p>
+            )}
+          </div>
           <div className="ag-row-fields">
             <Field label="Creativity" hint="0 is steady, higher is looser.">
               <NumberField

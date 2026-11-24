@@ -160,6 +160,55 @@ def _explain_provider_error(exc: Exception) -> str:
     return f"The agent couldn't answer: {exc}"
 
 
+#: Speech/transcription models that Unsloth lists in `/v1/models` alongside LLMs.
+#: They belong to `/v1/audio/speech` (`agent.unslothTtsModel`) or STT, never
+#: `/v1/chat/completions`.
+_AUDIO_ONLY_MODEL = re.compile(
+    r"audio-cpp|(?:^|[/_.-])(?:[a-z0-9]*tts|whisper)(?:$|[/_.-])", re.I
+)
+
+
+def is_audio_only_model(model_id: str | None) -> bool:
+    """Whether ``model_id`` is a TTS or STT model rather than a chat LLM."""
+    raw = (model_id or "").strip()
+    if "::" in raw:
+        _, _, raw = raw.partition("::")
+    return bool(raw and _AUDIO_ONLY_MODEL.search(raw))
+
+
+def resolve_room_model(
+    room_model: str | None, config_obj: Any
+) -> tuple[Any, str, str]:
+    """The ``(ProviderInfo, endpoint, model)`` a room's turns and health check use.
+
+    The room dropdown encodes a choice from any connected provider as
+    ``provider::model`` (the same shape as the Agent pane's ``ModelPicker``), so a
+    room can run on a small local model in Unsloth or LM Studio while the dashboard
+    stays on a hosted provider. A bare model name (or blank) still resolves against
+    the dashboard's configured provider. Audio-only TTS/STT model ids are ignored
+    here so a speech model accidentally saved as the room's LLM falls back to the
+    configured chat model instead of 404ing on ``/v1/chat/completions``.
+    """
+    from backend.modules.agent import providers as P
+    from backend.modules.agent.routes import _endpoint_for
+
+    raw = (room_model or "").strip()
+    if is_audio_only_model(raw):
+        raw = ""
+    if "::" in raw:
+        kind, _, model_id = raw.partition("::")
+        kind = kind.strip()
+        model_id = model_id.strip()
+        if kind in P.PROVIDERS and model_id:
+            info = P.provider_for(kind)
+            return info, _endpoint_for(info, config_obj), model_id
+
+    info = P.provider_for(config_obj.provider)
+    endpoint = _endpoint_for(info, config_obj)
+    model = raw or config_obj.model
+    return info, endpoint, model
+
+
 async def generate_reply(
     messages: list[dict[str, str]],
     config: VoiceConfig,
@@ -174,16 +223,14 @@ async def generate_reply(
     flattens the system tier for templates that only accept one system message.
     """
     from backend.modules.agent import providers as P
-    from backend.modules.agent.routes import _endpoint_for, _load_config
+    from backend.modules.agent.routes import _load_config
     from backend.modules.settings.routes import get_value
     from backend.modules.telemetry.instrument import instrumented_client
 
     config_obj = _load_config()
     if config_obj is None:
         raise RuntimeError("Agent not configured — finish onboarding")
-    info = P.provider_for(config_obj.provider)
-    endpoint = _endpoint_for(info, config_obj)
-    model = (config.model or "").strip() or config_obj.model
+    info, endpoint, model = resolve_room_model(config.model, config_obj)
 
     timeout_val = float(
         get_value("voice.generationTimeout", GENERATION_TIMEOUT_S)
@@ -262,7 +309,11 @@ async def generate_reply(
 def _model_label(config: VoiceConfig) -> str:
     """The model this room's turns run on, for the log. Never raises."""
     override = (config.model or "").strip()
-    if override:
+    if override and not is_audio_only_model(override):
+        if "::" in override:
+            _, _, model_id = override.partition("::")
+            if model_id.strip():
+                return model_id.strip()
         return override
     try:
         from backend.modules.agent.routes import _load_config

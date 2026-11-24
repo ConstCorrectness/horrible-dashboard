@@ -71,6 +71,56 @@ describe('harmonizeBundledSdp', () => {
     ]);
   });
 
+  it('strips conflicting fmtp lines when bundled m=audio sections have disjoint parameters', () => {
+    const rawSdp = [
+      'v=0',
+      'o=- 0 0 IN IP4 127.0.0.1',
+      's=AgoraGateway',
+      't=0 0',
+      'a=group:BUNDLE 1 2',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=mid:1',
+      'a=sendonly',
+      'a=rtpmap:111 opus/48000/2',
+      'a=fmtp:111 sprop-stereo=1;stereo=1',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=mid:2',
+      'a=recvonly',
+      'a=rtpmap:111 opus/48000/2',
+      'a=fmtp:111 minptime=10;useinbandfec=1',
+    ].join('\r\n');
+
+    const fixed = harmonizeBundledSdp(rawSdp);
+    const fmtpLines = fixed.split('\r\n').filter((l) => l.startsWith('a=fmtp:111'));
+    expect(fmtpLines).toEqual([]);
+  });
+
+  it('backfills canonical fmtp into a bundled m=audio section that omitted it', () => {
+    const rawSdp = [
+      'v=0',
+      'o=- 0 0 IN IP4 127.0.0.1',
+      's=AgoraGateway',
+      't=0 0',
+      'a=group:BUNDLE 1 2',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=mid:1',
+      'a=sendonly',
+      'a=rtpmap:111 opus/48000/2',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=mid:2',
+      'a=recvonly',
+      'a=rtpmap:111 opus/48000/2',
+      'a=fmtp:111 minptime=10;useinbandfec=1',
+    ].join('\r\n');
+
+    const fixed = harmonizeBundledSdp(rawSdp);
+    const fmtpLines = fixed.split('\r\n').filter((l) => l.startsWith('a=fmtp:111'));
+    expect(fmtpLines).toEqual([
+      'a=fmtp:111 minptime=10;useinbandfec=1',
+      'a=fmtp:111 minptime=10;useinbandfec=1',
+    ]);
+  });
+
   it('patches RTCPeerConnection.prototype.setRemoteDescription idempotently', async () => {
     const seen: string[] = [];
     class FakePC {

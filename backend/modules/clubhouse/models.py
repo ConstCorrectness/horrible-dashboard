@@ -127,6 +127,14 @@ class JoinChannelResult(BaseModel):
     handraise_queue_setting: int | None = None
     handraise_queue_options: list[dict[str, Any]] | None = None
     emoji_reaction_options: list[str] | None = None
+    # Full room roster & metadata returned by Clubhouse's /join_channel, so the
+    # pane knows every speaker, moderator, and listener (including our own
+    # is_speaker role) immediately upon joining instead of waiting for /get_channel.
+    topic: str | None = None
+    num_speakers: int | None = None
+    num_all: int | None = None
+    club: Club | None = None
+    users: list[ChannelUser] = []
 
 
 class MuteRequest(BaseModel):

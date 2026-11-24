@@ -523,6 +523,116 @@ def test_health_checks_the_rooms_own_model_not_the_orchestrators(
     assert "room-model" in scoped["model"]["detail"]
 
 
+def test_health_and_resolution_follow_a_cross_provider_room_model(
+    client: TestClient, monkeypatch
+) -> None:
+    """A room can pick ``unsloth::…`` or ``lmstudio::…`` while the dashboard stays
+    configured for another provider (e.g. ``nim``)."""
+    _stub_health(monkeypatch, model="google/gemma-4-31b-it", served=["Qwen3-4B"])
+    client.post(
+        "/api/clubhouse/voice/config",
+        json={
+            "channel": "r2",
+            "config": {"enabled": True, "model": "unsloth::Qwen3-4B"},
+        },
+    )
+    scoped = client.get("/api/clubhouse/voice/health?channel=r2").json()
+    assert scoped["model"]["ok"] is True
+    assert scoped["provider"] == "unsloth"
+    assert scoped["model_name"] == "Qwen3-4B"
+    assert scoped["endpoint"] == "http://127.0.0.1:8888"
+
+
+def test_audio_only_tts_model_in_room_config_falls_back_to_chat_llm(
+    client: TestClient, monkeypatch
+) -> None:
+    """A TTS model id (``PocketTTS-GGUF``) saved in ``config.model`` must not be sent
+    to ``/v1/chat/completions``."""
+    _stub_health(
+        monkeypatch,
+        model="google/gemma-4-31b-it",
+        served=["google/gemma-4-31b-it"],
+    )
+    client.post(
+        "/api/clubhouse/voice/config",
+        json={
+            "channel": "r3",
+            "config": {
+                "enabled": True,
+                "model": "unsloth::audio-cpp/audio.cpp-gguf/PocketTTS-GGUF",
+            },
+        },
+    )
+    scoped = client.get("/api/clubhouse/voice/health?channel=r3").json()
+    assert scoped["model"]["ok"] is True
+    assert scoped["model_name"] == "google/gemma-4-31b-it"
+
+
+def test_unsloth_no_model_loaded_triggers_auto_load_and_retries() -> None:
+    """When Unsloth rejects ``/v1/chat/completions`` with 400 ``No model loaded. Call
+    POST /inference/load first.``, the provider enables auto-switch/multi-model, loads
+    the model, and retries the completion."""
+    import asyncio
+    import json
+    import httpx
+
+    loaded = False
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal loaded
+        seen_paths.append(request.url.path)
+        if request.url.path in (
+            "/api/settings/openai-auto-switch",
+            "/api/settings/multi-model",
+        ):
+            return httpx.Response(200, json={"enabled": True})
+        if request.url.path == "/v1/load":
+            body = json.loads(request.content)
+            assert body["model_path"] == "AtomicChat/LFM3-1.7B-Uncensored-GGUF"
+            assert body["alongside"] is True
+            loaded = True
+            return httpx.Response(200, json={"loaded": True})
+        if request.url.path == "/v1/chat/completions":
+            if not loaded:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "message": (
+                                "No model loaded. Call POST /inference/load first. "
+                                "Or enable Model auto-switch (Settings > API) to load "
+                                "a requested model automatically."
+                            )
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "Hello from Unsloth!"}}]},
+            )
+        return httpx.Response(404)
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http_client:
+            return await P.chat(
+                http_client,
+                P.PROVIDERS["unsloth"],
+                "http://127.0.0.1:8888",
+                "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+                [{"role": "user", "content": "hi"}],
+                [],
+                think=False,
+            )
+
+    res = asyncio.run(run())
+    assert res.content == "Hello from Unsloth!"
+    assert "/v1/load" in seen_paths
+    assert "/api/settings/openai-auto-switch" in seen_paths
+
+
 def test_the_ears_do_not_need_ffmpeg(client: TestClient, monkeypatch) -> None:
     """The pane sends 16 kHz PCM WAV, which the STT service reads itself, so a
     machine without ffmpeg still hears the room."""

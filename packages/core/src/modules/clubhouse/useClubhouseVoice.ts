@@ -33,8 +33,10 @@ import {
   acceptClubhouseSpeaker,
   getClubhouseStatus,
   getClubhouseChannelChat,
-  JoinChannelResult,
-  ChannelUser,
+  type BecomeSpeakerResult,
+  type Channel,
+  type JoinChannelResult,
+  type ChannelUser,
 } from './api';
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
@@ -133,18 +135,24 @@ export interface PubNubRoomMessage {
     username?: string | null;
     photo_url?: string | null;
     user_id?: number | null;
+    is_speaker?: boolean | null;
+    is_moderator?: boolean | null;
   } | null;
   user?: {
     name?: string | null;
     username?: string | null;
     photo_url?: string | null;
     user_id?: number | null;
+    is_speaker?: boolean | null;
+    is_moderator?: boolean | null;
   } | null;
   from_name?: string | null;
   from_photo_url?: string | null;
   from_user_id?: number | null;
   // Room event payloads
   user_id?: number | null;
+  user_profile_id?: number | null;
+  to_user_id?: number | null;
   club_id?: number | null;
   is_speaker?: boolean | null;
   is_moderator?: boolean | null;
@@ -273,18 +281,119 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     session.update('liveUsers', (prev) => prev.filter((u) => u.userId !== userId));
   }, []);
 
-  // Seed liveUsers from the initial room user list after joining
-  const seedLiveUsers = useCallback((users: ChannelUser[]) => {
-    const states: LiveUserState[] = users
-      .filter((u) => u.user_id != null)
-      .map((u) => ({
-        userId: u.user_id!,
-        handRaised: false,
-        isSpeaker: u.is_speaker ?? false,
-        isMuted: false,
-      }));
-    session.set('liveUsers', states);
-  }, []);
+  const upsertRoomDetailsUser = useCallback(
+    (userId: number, patch: Partial<ChannelUser>) => {
+      const details = session.roomDetails;
+      if (!details) return;
+      const existingIdx = details.users.findIndex((u) => Number(u.user_id) === Number(userId));
+      let nextUsers: ChannelUser[];
+      if (existingIdx >= 0) {
+        nextUsers = details.users.map((u, idx) =>
+          idx === existingIdx ? { ...u, ...patch, user_id: userId } : u,
+        );
+      } else {
+        const isMe =
+          session.myProfile?.userId != null &&
+          Number(session.myProfile.userId) === Number(userId);
+        const fallbackName = isMe ? (session.myProfile?.name ?? 'Me') : null;
+        const fallbackPhoto = isMe ? (session.myProfile?.photoUrl ?? null) : null;
+        nextUsers = [
+          ...details.users,
+          {
+            user_id: userId,
+            name: patch.name ?? fallbackName,
+            username: patch.username ?? null,
+            photo_url: patch.photo_url ?? fallbackPhoto,
+            is_speaker: patch.is_speaker ?? false,
+            is_moderator: patch.is_moderator ?? false,
+          },
+        ];
+      }
+      session.roomDetails = {
+        ...details,
+        users: nextUsers,
+        num_speakers: nextUsers.filter((u) => u.is_speaker).length,
+        num_all: Math.max(details.num_all ?? 0, nextUsers.length),
+      };
+    },
+    [session],
+  );
+
+  const removeRoomDetailsUser = useCallback(
+    (userId: number) => {
+      const details = session.roomDetails;
+      if (!details) return;
+      const nextUsers = details.users.filter((u) => Number(u.user_id) !== Number(userId));
+      if (nextUsers.length === details.users.length) return;
+      session.roomDetails = {
+        ...details,
+        users: nextUsers,
+        num_speakers: nextUsers.filter((u) => u.is_speaker).length,
+        num_all: Math.max(0, (details.num_all ?? nextUsers.length + 1) - 1),
+      };
+    },
+    [session],
+  );
+
+  // Seed or sync liveUsers from a room user list, preserving live mute/hand-raise
+  // flags and recent speaker promotions.
+  const seedLiveUsers = useCallback(
+    (users: ChannelUser[]) => {
+      const myId = session.myProfile?.userId ?? null;
+      const recentPromotion = session.isSpeaker && Date.now() - session.promotedAt < 15_000;
+      session.update('liveUsers', (prev) => {
+        const prevById = new Map(prev.map((u) => [u.userId, u]));
+        const seen = new Set<number>();
+        const next: LiveUserState[] = [];
+        for (const u of users) {
+          if (u.user_id == null) continue;
+          seen.add(u.user_id);
+          const existing = prevById.get(u.user_id);
+          const isMe = myId != null && Number(u.user_id) === Number(myId);
+          const isSpeaker =
+            isMe && recentPromotion ? true : (u.is_speaker ?? existing?.isSpeaker ?? false);
+          next.push({
+            userId: u.user_id,
+            handRaised: isSpeaker ? false : (existing?.handRaised ?? false),
+            isSpeaker,
+            isMuted: existing?.isMuted ?? (isMe ? session.state.isMuted : false),
+            ...(u.is_moderator != null
+              ? { isModerator: u.is_moderator }
+              : existing?.isModerator != null
+                ? { isModerator: existing.isModerator }
+                : {}),
+            ...(u.name ? { name: u.name } : existing?.name ? { name: existing.name } : {}),
+            ...(u.username !== undefined
+              ? { username: u.username }
+              : existing?.username !== undefined
+                ? { username: existing.username }
+                : {}),
+            ...(u.photo_url !== undefined
+              ? { photoUrl: u.photo_url }
+              : existing?.photoUrl !== undefined
+                ? { photoUrl: existing.photoUrl }
+                : {}),
+          });
+        }
+        if (myId != null && !seen.has(myId)) {
+          const existing = prevById.get(myId);
+          next.push({
+            userId: myId,
+            handRaised: session.isSpeaker
+              ? false
+              : (existing?.handRaised ?? session.state.handRaised),
+            isSpeaker: session.isSpeaker || (existing?.isSpeaker ?? false),
+            isMuted: session.state.isMuted,
+            ...(existing?.isModerator != null ? { isModerator: existing.isModerator } : {}),
+            name: session.myProfile?.name || existing?.name || 'Me',
+            photoUrl: session.myProfile?.photoUrl ?? existing?.photoUrl ?? null,
+          });
+        }
+        return next;
+      });
+    },
+    [session],
+  );
 
   // 1. Join voice room
   const joinRoom = (channelName: string, initialUsers?: ChannelUser[]) =>
@@ -326,6 +435,33 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const chDetails: JoinChannelResult = await joinClubhouseChannel(channelName);
       if (!chDetails.token) {
         throw new Error('Failed to retrieve Agora token from Clubhouse');
+      }
+
+      const joinedUserId = chDetails.user_id ?? status.user_id;
+      if (joinedUserId != null && session.myProfile) {
+        session.myProfile.userId = joinedUserId;
+      }
+      const joinedRoster =
+        chDetails.users && chDetails.users.length > 0 ? chDetails.users : (initialUsers ?? []);
+      const amISpeakerAtJoin = Boolean(
+        joinedUserId != null &&
+          (joinedRoster.some((u) => Number(u.user_id) === Number(joinedUserId) && u.is_speaker) ||
+            (chDetails.pubnub_token && chDetails.pubnub_token.length > 400)),
+      );
+      session.isSpeaker = amISpeakerAtJoin;
+      session.isTrackPublished = false;
+      session.promotedAt = amISpeakerAtJoin ? Date.now() : 0;
+
+      if (chDetails.users && chDetails.users.length > 0) {
+        session.roomDetails = {
+          channel: channelName,
+          topic: chDetails.topic ?? session.roomDetails?.topic ?? null,
+          num_speakers:
+            chDetails.num_speakers ?? chDetails.users.filter((u) => u.is_speaker).length,
+          num_all: chDetails.num_all ?? chDetails.users.length,
+          club: chDetails.club ?? session.roomDetails?.club ?? null,
+          users: chDetails.users,
+        };
       }
 
       // The upstream join has already moved the account into this room -- and
@@ -416,6 +552,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
       // c. Listen for remote audio updates
       client.on('user-published', async (user, mediaType) => {
+        if (mediaType === 'audio' && typeof user.uid === 'number') {
+          updateLiveUser(user.uid, { isSpeaker: true });
+          upsertRoomDetailsUser(user.uid, { is_speaker: true });
+        }
         await client.subscribe(user, mediaType);
         if (mediaType === 'audio') {
           const remoteAudioTrack = user.audioTrack;
@@ -430,6 +570,24 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       client.on('user-unpublished', (user) => {
         user.audioTrack?.stop();
       });
+
+      const refreshAgoraTokens = async () => {
+        if (session.state.activeChannel !== channelName || session.rtcClient !== client) return;
+        try {
+          const fresh = await joinClubhouseChannel(channelName);
+          if (session.state.activeChannel !== channelName || session.rtcClient !== client) return;
+          if (fresh.pubnub_token && session.pubnub) {
+            session.pubnub.setToken(fresh.pubnub_token);
+          }
+          if (fresh.token) {
+            await client.renewToken(fresh.token);
+          }
+        } catch (err) {
+          console.warn('[ClubhouseVoice] Could not renew expiring room token:', err);
+        }
+      };
+      client.on('token-privilege-will-expire', () => void refreshAgoraTokens());
+      client.on('token-privilege-did-expire', () => void refreshAgoraTokens());
 
       // d. Join the Agora stream
       await within(
@@ -808,16 +966,23 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         );
       }
 
-      // Create and publish mixed microphone stream
+      // Create mixed microphone stream. Only publish immediately if we joined as a
+      // speaker: publishing at join time with a listener-only Agora token fails at
+      // the Agora SFU (or poisons `localTrackMap` under an unauthorized ticket so
+      // later speaker audio is dropped). When promoted from audience to stage,
+      // `upgradeToSpeaker()` renews the Agora token and publishes `localAudioTrack`.
       const mixedTrack = AgoraRTC.createCustomAudioTrack({
         mediaStreamTrack: dest.stream.getAudioTracks()[0],
       });
       session.localAudioTrack = mixedTrack;
-      await within(
-        client.publish(mixedTrack),
-        AGORA_PUBLISH_TIMEOUT_MS,
-        'Publishing your microphone track',
-      );
+      if (session.isSpeaker) {
+        await within(
+          client.publish(mixedTrack),
+          AGORA_PUBLISH_TIMEOUT_MS,
+          'Publishing your microphone track',
+        );
+        session.isTrackPublished = true;
+      }
       session.patch({ isMuted: true });
 
       // e2. Start Agora volume indicator — fires every 200ms with per-user volumes.
@@ -888,53 +1053,201 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               msg.user ||
               (msg as { action_user_profile?: typeof msg.user }).action_user_profile ||
               {};
-            const senderId = sender.user_id ?? msg.user_id ?? msg.from_user_id;
+            const rawSenderId =
+              sender.user_id ?? msg.user_id ?? msg.user_profile_id ?? msg.from_user_id;
+            const senderId = rawSenderId != null ? Number(rawSenderId) : undefined;
 
             // --- Room signaling events ---
             const action = msg.action;
 
             if (action === 'join_channel') {
               if (senderId != null) {
+                const isSpk = sender.is_speaker ?? msg.is_speaker ?? false;
+                const isMod = sender.is_moderator ?? msg.is_moderator ?? undefined;
+                upsertRoomDetailsUser(senderId, {
+                  is_speaker: isSpk,
+                  ...(isMod != null ? { is_moderator: isMod } : {}),
+                  ...(sender.name ? { name: sender.name } : {}),
+                  ...(sender.username !== undefined ? { username: sender.username } : {}),
+                  ...(sender.photo_url !== undefined ? { photo_url: sender.photo_url } : {}),
+                });
                 updateLiveUser(senderId, {
-                  isSpeaker: msg.is_speaker ?? false,
+                  isSpeaker: isSpk,
                   isMuted: false,
+                  ...(isMod != null ? { isModerator: isMod } : {}),
+                  ...(sender.name ? { name: sender.name } : {}),
+                  ...(sender.username !== undefined ? { username: sender.username } : {}),
+                  ...(sender.photo_url !== undefined ? { photoUrl: sender.photo_url } : {}),
                 });
               }
-            } else if (action === 'leave_channel' || action === 'remove_speaker') {
+            } else if (action === 'leave_channel') {
               if (senderId != null) {
+                removeRoomDetailsUser(senderId);
                 removeLiveUser(senderId);
+              }
+            } else if (action === 'remove_speaker') {
+              // Demote from speaker stage to audience (never remove from the room).
+              if (senderId != null) {
+                if (myUserId != null && Number(senderId) === Number(myUserId)) {
+                  void demoteFromSpeaker();
+                } else {
+                  upsertRoomDetailsUser(senderId, { is_speaker: false, is_moderator: false });
+                  updateLiveUser(senderId, {
+                    isSpeaker: false,
+                    isModerator: false,
+                    handRaised: false,
+                    isMuted: true,
+                  });
+                }
               }
             } else if (action === 'raise_hands' || action === 'hand_raised') {
               if (senderId != null) {
-                updateLiveUser(senderId, { handRaised: true });
+                updateLiveUser(senderId, {
+                  handRaised: true,
+                  ...(sender.name ? { name: sender.name } : {}),
+                  ...(sender.photo_url !== undefined ? { photoUrl: sender.photo_url } : {}),
+                });
                 if (session.handlers.onHandRaise && senderId !== myUserId) {
-                  session.handlers.onHandRaise(senderId, sender.name || msg.from_name || 'Someone');
+                  session.handlers.onHandRaise(
+                    senderId,
+                    sender.name || msg.from_name || 'Someone',
+                  );
                 }
               }
             } else if (action === 'lower_hands' || action === 'unraise_hands') {
               if (senderId != null) {
                 updateLiveUser(senderId, { handRaised: false });
               }
-            } else if (action === 'make_speaker' || action === 'accept_speaker_invite') {
+            } else if (
+              action === 'add_speaker' ||
+              action === 'make_speaker' ||
+              action === 'accept_speaker_invite'
+            ) {
               if (senderId != null) {
-                updateLiveUser(senderId, { isSpeaker: true, handRaised: false });
+                upsertRoomDetailsUser(senderId, {
+                  is_speaker: true,
+                  ...(sender.is_moderator != null ? { is_moderator: sender.is_moderator } : {}),
+                  ...(sender.name ? { name: sender.name } : {}),
+                  ...(sender.username !== undefined ? { username: sender.username } : {}),
+                  ...(sender.photo_url !== undefined ? { photo_url: sender.photo_url } : {}),
+                });
+                updateLiveUser(senderId, {
+                  isSpeaker: true,
+                  handRaised: false,
+                  ...(sender.is_moderator != null ? { isModerator: sender.is_moderator } : {}),
+                  ...(sender.name ? { name: sender.name } : {}),
+                  ...(sender.username !== undefined ? { username: sender.username } : {}),
+                  ...(sender.photo_url !== undefined ? { photoUrl: sender.photo_url } : {}),
+                });
+                if (myUserId != null && Number(senderId) === Number(myUserId)) {
+                  void upgradeToSpeaker();
+                }
+              }
+            } else if (action === 'make_moderator') {
+              if (senderId != null) {
+                upsertRoomDetailsUser(senderId, { is_speaker: true, is_moderator: true });
+                updateLiveUser(senderId, {
+                  isSpeaker: true,
+                  isModerator: true,
+                  handRaised: false,
+                });
+                if (myUserId != null && Number(senderId) === Number(myUserId)) {
+                  void upgradeToSpeaker();
+                }
+              }
+            } else if (action === 'lose_moderator') {
+              if (senderId != null) {
+                upsertRoomDetailsUser(senderId, { is_moderator: false });
+                updateLiveUser(senderId, { isModerator: false });
+              }
+            } else if (action === 'reject_speaker_invite') {
+              if (senderId != null) {
+                upsertRoomDetailsUser(senderId, { is_speaker: false });
+                updateLiveUser(senderId, { isSpeaker: false, handRaised: false });
+              }
+            } else if (action === 'mute') {
+              if (senderId != null) {
+                updateLiveUser(senderId, { isMuted: true });
+              }
+            } else if (action === 'unmute') {
+              if (senderId != null) {
+                updateLiveUser(senderId, { isMuted: false });
               }
             } else if (action === 'mute_speaker' || action === 'update_muted') {
-              if (senderId != null) {
-                updateLiveUser(senderId, { isMuted: msg.is_muted ?? true });
+              const mutedVal = msg.is_muted ?? true;
+              const isSelfMute =
+                (senderId != null && myUserId != null && Number(senderId) === Number(myUserId)) ||
+                (action === 'mute_speaker' &&
+                  senderId == null &&
+                  Boolean(
+                    event.channel?.startsWith('channel_user.') ||
+                      event.channel?.startsWith('users.'),
+                  ));
+              if (isSelfMute) {
+                if (session.humanGain) {
+                  session.humanGain.gain.value = mutedVal ? 0 : 1;
+                }
+                session.patch({ isMuted: mutedVal });
+                if (myUserId != null) {
+                  updateLiveUser(Number(myUserId), { isMuted: mutedVal });
+                }
+              } else if (senderId != null) {
+                updateLiveUser(senderId, { isMuted: mutedVal });
+              }
+            } else if (action === 'uninvite_speaker') {
+              const targetId = msg.user_id ?? msg.to_user_id;
+              const isTargetedAtMe =
+                targetId != null
+                  ? myUserId != null && Number(targetId) === Number(myUserId)
+                  : Boolean(
+                      event.channel?.startsWith('channel_user.') ||
+                        event.channel?.startsWith('users.') ||
+                        myUserId != null,
+                    );
+              if (isTargetedAtMe) {
+                session.patch({ speakerInvite: null });
               }
             } else if (action === 'invite_speaker') {
-              const targetId = msg.user_id;
-              if (targetId != null && Number(targetId) === Number(myUserId)) {
+              // Clubhouse delivers `invite_speaker` on `channel_user.<channel>.<myUserId>`
+              // with `{ action: "invite_speaker", channel, from_name, from_user_id, from_photo_url }`
+              // and no `user_id` field (the recipient is implied by the private channel).
+              const targetId = msg.user_id ?? msg.to_user_id;
+              const isTargetedAtMe =
+                targetId != null
+                  ? myUserId != null && Number(targetId) === Number(myUserId)
+                  : Boolean(
+                      event.channel?.startsWith('channel_user.') ||
+                        event.channel?.startsWith('users.') ||
+                        myUserId != null,
+                    );
+              if (isTargetedAtMe) {
                 const invite: SpeakerInvite = {
-                  moderatorId: msg.moderator_id ?? senderId ?? 0,
-                  moderatorName: msg.moderator_name || sender.name || 'A moderator',
-                  moderatorPhoto: msg.moderator_photo_url || sender.photo_url || null,
+                  moderatorId: Number(msg.from_user_id ?? msg.moderator_id ?? senderId ?? 0),
+                  moderatorName:
+                    msg.from_name || msg.moderator_name || sender.name || 'A moderator',
+                  moderatorPhoto:
+                    msg.from_photo_url || msg.moderator_photo_url || sender.photo_url || null,
                 };
                 session.patch({ speakerInvite: invite });
                 if (session.handlers.onSpeakerInvite) {
                   session.handlers.onSpeakerInvite(invite);
                 }
+              }
+            } else if (action === 'end_channel' || action === 'remove_from_channel') {
+              const isTargetedAtMe =
+                action === 'end_channel' ||
+                senderId == null ||
+                (myUserId != null && Number(senderId) === Number(myUserId)) ||
+                Boolean(
+                  event.channel?.startsWith('channel_user.') ||
+                    event.channel?.startsWith('users.'),
+                );
+              if (isTargetedAtMe && session.state.activeChannel === channelName) {
+                void leaveRoom().then(() =>
+                  session.patch({
+                    error: 'This room has ended, or a moderator removed you from it.',
+                  }),
+                );
               }
             }
 
@@ -1021,6 +1334,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           `channel_all.${channelName}`,
           `channel_user.${channelName}.${myUserId}`,
           `users.${myUserId}`,
+          ...(session.isSpeaker ? [`channel_speakers.${channelName}`] : []),
         ];
         pubnub.subscribe({ channels: channelsToSubscribe });
       }
@@ -1058,8 +1372,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.rawVolumes = {};
       session.set('speakingVolumes', {});
 
-      if (initialUsers) {
-        seedLiveUsers(initialUsers);
+      if (joinedRoster.length > 0) {
+        seedLiveUsers(joinedRoster);
+      } else if (joinedUserId != null) {
+        seedLiveUsers([
+          {
+            user_id: joinedUserId,
+            name: session.myProfile?.name ?? 'Me',
+            username: null,
+            photo_url: session.myProfile?.photoUrl ?? null,
+            is_speaker: session.isSpeaker,
+            is_moderator: false,
+          },
+        ]);
       }
 
       try {
@@ -1099,6 +1424,212 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     }
   };
 
+  /**
+   * Upgrade the live room session from audience listener to active stage speaker.
+   *
+   * Called when:
+   * 1. `acceptSpeakerInvite()` succeeds (`/become_speaker` returns new speaker tokens),
+   * 2. PubNub delivers `add_speaker`, `accept_speaker_invite`, or `make_moderator` for
+   *    our user (e.g. a moderator accepted our raised hand directly), or
+   * 3. `/get_channel` polling observes that Clubhouse promoted us to `is_speaker: true`.
+   *
+   * Immediately moves the user onto the stage in `liveUsers` and `roomDetails` (so
+   * the UI switches to `🎙️ Unmute Mic` without waiting for a poll), renews the PubNub
+   * and Agora tokens to speaker-grade credentials, and publishes `localAudioTrack`.
+   */
+  const upgradeToSpeaker = useCallback(
+    (providedTokens?: Partial<BecomeSpeakerResult | JoinChannelResult>): Promise<void> => {
+      const channel = session.state.activeChannel;
+      if (!channel) return Promise.resolve();
+
+      const myId = session.myProfile?.userId ?? null;
+      session.isSpeaker = true;
+      session.promotedAt = Date.now();
+      if (session.humanGain) {
+        session.humanGain.gain.value = 0;
+      }
+      if (myId != null) {
+        upsertRoomDetailsUser(myId, { is_speaker: true });
+        updateLiveUser(myId, {
+          isSpeaker: true,
+          handRaised: false,
+          isMuted: true,
+          name: session.myProfile?.name || 'Me',
+          photoUrl: session.myProfile?.photoUrl ?? null,
+        });
+      }
+      session.patch({
+        handRaised: false,
+        speakerInvite: null,
+        isMuted: true,
+        error: null,
+      });
+
+      const runUpgrade = async () => {
+        let agoraToken = providedTokens?.token ?? null;
+        let pubnubToken = providedTokens?.pubnub_token ?? null;
+
+        if (!agoraToken || !pubnubToken) {
+          try {
+            const fresh = await joinClubhouseChannel(channel);
+            if (session.state.activeChannel !== channel) return;
+            agoraToken = agoraToken || fresh.token || null;
+            pubnubToken = pubnubToken || fresh.pubnub_token || null;
+            if (fresh.users && fresh.users.length > 0) {
+              session.roomDetails = {
+                channel,
+                topic: fresh.topic ?? session.roomDetails?.topic ?? null,
+                num_speakers:
+                  fresh.num_speakers ?? fresh.users.filter((u) => u.is_speaker).length,
+                num_all: fresh.num_all ?? fresh.users.length,
+                club: fresh.club ?? session.roomDetails?.club ?? null,
+                users: fresh.users,
+              };
+              seedLiveUsers(fresh.users);
+            }
+          } catch (err) {
+            console.warn('[ClubhouseVoice] Could not fetch fresh speaker tokens:', err);
+          }
+        }
+
+        if (session.state.activeChannel !== channel) return;
+
+        if (pubnubToken && session.pubnub) {
+          try {
+            session.pubnub.setToken(pubnubToken);
+            session.pubnub.subscribe({
+              channels: [`channel_speakers.${channel}`],
+            });
+          } catch (err) {
+            console.warn('[ClubhouseVoice] Could not update PubNub speaker token:', err);
+          }
+        }
+
+        const client = session.rtcClient;
+        if (client) {
+          if (agoraToken) {
+            try {
+              await within(
+                client.renewToken(agoraToken),
+                AGORA_JOIN_TIMEOUT_MS,
+                'Renewing Agora speaker token',
+              );
+            } catch (err) {
+              console.warn('[ClubhouseVoice] Agora renewToken failed:', err);
+            }
+          }
+
+          if (session.state.activeChannel !== channel || session.rtcClient !== client) return;
+
+          installWebRtcBundleFix();
+          try {
+            if (session.isTrackPublished && session.localAudioTrack) {
+              try {
+                await client.unpublish(session.localAudioTrack);
+              } catch {
+                /* ignore if not currently published on gateway */
+              }
+              session.isTrackPublished = false;
+            }
+
+            if (!session.localAudioTrack && session.agentAudioDest) {
+              const track = session.agentAudioDest.stream.getAudioTracks()[0];
+              if (track) {
+                session.localAudioTrack = AgoraRTC.createCustomAudioTrack({
+                  mediaStreamTrack: track,
+                });
+              }
+            }
+
+            if (session.localAudioTrack && !session.isTrackPublished) {
+              await within(
+                client.publish(session.localAudioTrack),
+                AGORA_PUBLISH_TIMEOUT_MS,
+                'Publishing your microphone track',
+              );
+              session.isTrackPublished = true;
+            }
+          } catch (pubErr) {
+            console.error('[ClubhouseVoice] Publishing speaker track after upgrade failed:', pubErr);
+            reportVoiceError(
+              `Joined stage, but publishing your microphone track failed: ${
+                pubErr instanceof Error ? pubErr.message : String(pubErr)
+              }`,
+            );
+          }
+        }
+
+        void muteClubhouseChannel(channel, true).catch(() => {});
+      };
+
+      const prev = session.speakerUpgradePromise ?? Promise.resolve();
+      const next = prev.then(runUpgrade, runUpgrade).finally(() => {
+        if (session.speakerUpgradePromise === next) {
+          session.speakerUpgradePromise = null;
+        }
+      });
+      session.speakerUpgradePromise = next;
+      return next;
+    },
+    [reportVoiceError, seedLiveUsers, session, updateLiveUser, upsertRoomDetailsUser],
+  );
+
+  const demoteFromSpeaker = useCallback(async (): Promise<void> => {
+    const myId = session.myProfile?.userId ?? null;
+    session.isSpeaker = false;
+    session.promotedAt = 0;
+    if (session.humanGain) {
+      session.humanGain.gain.value = 0;
+    }
+    if (myId != null) {
+      upsertRoomDetailsUser(myId, { is_speaker: false, is_moderator: false });
+      updateLiveUser(myId, {
+        isSpeaker: false,
+        isModerator: false,
+        handRaised: false,
+        isMuted: true,
+      });
+    }
+    session.patch({
+      isMuted: true,
+      handRaised: false,
+      speakerInvite: null,
+    });
+    if (session.rtcClient && session.localAudioTrack && session.isTrackPublished) {
+      try {
+        await session.rtcClient.unpublish(session.localAudioTrack);
+      } catch {
+        /* best effort */
+      }
+      session.isTrackPublished = false;
+    }
+  }, [session, updateLiveUser, upsertRoomDetailsUser]);
+
+  /**
+   * Synchronize a polled `/get_channel` snapshot with `liveUsers` and detect any
+   * stage promotion or demotion whose PubNub event was missed.
+   */
+  const syncChannelDetails = useCallback(
+    (details: Channel) => {
+      session.roomDetails = details;
+      seedLiveUsers(details.users ?? []);
+      const myId = session.myProfile?.userId ?? null;
+      if (myId == null) return;
+      const meInRoom = details.users?.find((u) => Number(u.user_id) === Number(myId));
+      if (!meInRoom) return;
+      if (meInRoom.is_speaker && (!session.isSpeaker || !session.isTrackPublished)) {
+        void upgradeToSpeaker();
+      } else if (
+        meInRoom.is_speaker === false &&
+        session.isSpeaker &&
+        Date.now() - session.promotedAt >= 15_000
+      ) {
+        void demoteFromSpeaker();
+      }
+    },
+    [demoteFromSpeaker, seedLiveUsers, session, upgradeToSpeaker],
+  );
+
   // 2. Leave voice room & cleanup
   /**
    * The user's explicit Leave. Delegates to the session's teardown, which is the
@@ -1124,8 +1655,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
   // 3. Mute/Unmute microphone
   const toggleMute = async () => {
-    if (!activeChannel) return;
-    const nextMuteState = !isMuted;
+    const channel = session.state.activeChannel;
+    if (!channel) return;
+    const nextMuteState = !session.state.isMuted;
     // No `humanGain` means the microphone never opened, so there is nothing to
     // unmute. Reporting `isMuted: false` anyway is the silent failure: the button
     // reads "Mic Active" and Clubhouse shows us unmuted to the room while not one
@@ -1137,8 +1669,18 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     // The gain is ours and always takes effect; only telling Clubhouse can fail.
     session.humanGain.gain.value = nextMuteState ? 0 : 1;
     session.patch({ isMuted: nextMuteState });
+    if (session.myProfile?.userId != null) {
+      updateLiveUser(session.myProfile.userId, { isMuted: nextMuteState });
+    }
+    if (!nextMuteState) {
+      if (session.speakerUpgradePromise) {
+        await session.speakerUpgradePromise;
+      } else if (session.isSpeaker && !session.isTrackPublished) {
+        await upgradeToSpeaker();
+      }
+    }
     try {
-      await muteClubhouseChannel(activeChannel, nextMuteState);
+      await muteClubhouseChannel(channel, nextMuteState);
     } catch (err) {
       // Reported, not just logged. This call fails constantly against a stale
       // client version (161 times in one day's log, answered "they need to update
@@ -1158,34 +1700,59 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
   // 4. Raise/Lower hand
   const raiseHand = async (raised: boolean) => {
-    if (!activeChannel) return;
-    session.patch({ loading: true });
+    const channel = session.state.activeChannel;
+    if (!channel) return;
+    session.patch({ error: null });
     try {
-      await setClubhouseHand(activeChannel, raised);
+      await setClubhouseHand(channel, raised);
       session.patch({ handRaised: raised });
+      if (session.myProfile?.userId != null) {
+        updateLiveUser(session.myProfile.userId, { handRaised: raised });
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       session.patch({ error: errMsg });
       console.error('Failed to update hand raise state:', err);
-    } finally {
-      session.patch({ loading: false });
     }
   };
 
   // 5. Accept speaker invitation
   const acceptSpeakerInvite = async () => {
-    if (!activeChannel) return;
-    session.patch({ loading: true });
+    const channel = session.state.activeChannel;
+    if (!channel) return;
+    session.patch({ error: null });
     try {
-      await acceptClubhouseSpeaker(activeChannel);
-      session.patch({ handRaised: false });
-      session.patch({ speakerInvite: null });
+      const res = await acceptClubhouseSpeaker(channel);
+      await upgradeToSpeaker(res);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      // When a moderator accepts a raised hand from the handraise queue, Clubhouse
+      // promotes the account to speaker on the server immediately (sending
+      // `add_speaker` on PubNub) without waiting for `/become_speaker`. Calling
+      // `/become_speaker` afterwards returns `400 {"success":false,"error_message":""}`
+      // because the account is *already* on stage. Probe `/join_channel` to check
+      // if we are already a speaker; if so, complete the stage upgrade instead of
+      // surfacing a false error.
+      try {
+        const fresh = await joinClubhouseChannel(channel);
+        const myId = fresh.user_id ?? session.myProfile?.userId ?? null;
+        const alreadyOnStage = Boolean(
+          (myId != null &&
+            fresh.users?.some((u) => Number(u.user_id) === Number(myId) && u.is_speaker)) ||
+            (fresh.pubnub_token && fresh.pubnub_token.length > 400),
+        );
+        if (alreadyOnStage) {
+          await upgradeToSpeaker(fresh);
+          return;
+        }
+      } catch {
+        /* fall through to original error */
+      }
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = rawMsg.includes('"error_message":""')
+        ? 'You need a moderator invitation (or an accepted hand raise) to join the stage.'
+        : rawMsg;
       session.patch({ error: errMsg });
       console.error('Failed to accept speaker invite:', err);
-    } finally {
-      session.patch({ loading: false });
     }
   };
 
@@ -1650,6 +2217,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     sendReaction,
     sendGif,
     seedLiveUsers,
+    syncChannelDetails,
     getNetworkInsights,
     getEarsHealth,
   };

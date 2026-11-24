@@ -250,7 +250,7 @@ async def health(channel: str | None = None) -> VoiceHealth:
 
     from backend import extras
     from backend.modules.agent import providers as P
-    from backend.modules.agent.routes import _endpoint_for, _load_config
+    from backend.modules.agent.routes import _load_config
 
     voice_extra = extras.probe("voice")
     # The same extra backs both routes, but they fail for different reasons once it is
@@ -284,14 +284,13 @@ async def health(channel: str | None = None) -> VoiceHealth:
         )
         return VoiceHealth(ok=False, ears=ears, model=model, mouth=mouth)
 
-    info = P.provider_for(config.provider)
-    endpoint = _endpoint_for(info, config)
     # The room's own override wins, exactly as it does on a turn: reporting the
     # orchestrator's model healthy while the room is pointed at a different one is a
     # green light for a turn that cannot happen.
-    wanted = config.model
-    if channel:
-        wanted = (V.session_for(channel).config.model or "").strip() or config.model
+    room_override = (
+        (V.session_for(channel).config.model or "").strip() if channel else ""
+    )
+    info, endpoint, wanted = R.resolve_room_model(room_override, config)
 
     try:
         async with httpx.AsyncClient(timeout=4) as client:

@@ -120,14 +120,18 @@ export function harmonizeBundledSdp(sdp: string): string {
   for (let i = 1; i < sections.length; i++) {
     const sec = sections[i];
     const declaredPts = new Set<string>();
+    const sectionFmtpPts = new Set<string>();
     for (const line of sec) {
       const rtpmapMatch = /^a=rtpmap:(\d+)\s+/.exec(line);
       if (rtpmapMatch) declaredPts.add(rtpmapMatch[1]);
+      const fmtpMatch = /^a=fmtp:(\d+)\s+/.exec(line);
+      if (fmtpMatch) sectionFmtpPts.add(fmtpMatch[1]);
     }
     if (declaredPts.size === 0) continue;
 
     const nextSec: string[] = [];
     const emittedFbForPt = new Set<string>();
+    const emittedFmtpForPt = new Set<string>();
 
     for (const line of sec) {
       const rtpmapMatch = /^a=rtpmap:(\d+)\s+/.exec(line);
@@ -139,6 +143,16 @@ export function harmonizeBundledSdp(sdp: string): string {
           emittedFbForPt.add(pt);
           for (const fb of fbs) {
             nextSec.push(`a=rtcp-fb:${pt} ${fb}`);
+          }
+        }
+        // If this section declared `a=rtpmap:<pt>` without an `a=fmtp:<pt>` line
+        // while another bundled section defined `a=fmtp:<pt>`, emit the canonical
+        // `a=fmtp:<pt>` here so all bundled sections match.
+        if (!sectionFmtpPts.has(pt)) {
+          const canonical = fmtpByPt.get(pt);
+          if (canonical && canonical.size > 0 && !emittedFmtpForPt.has(pt)) {
+            emittedFmtpForPt.add(pt);
+            nextSec.push(`a=fmtp:${pt} ${serializeFmtpParams(canonical)}`);
           }
         }
         continue;
@@ -153,9 +167,15 @@ export function harmonizeBundledSdp(sdp: string): string {
       const fmtpMatch = /^a=fmtp:(\d+)\s+/.exec(line);
       if (fmtpMatch) {
         const pt = fmtpMatch[1];
-        const canonical = fmtpByPt.get(pt);
-        if (canonical && canonical.size > 0) {
-          nextSec.push(`a=fmtp:${pt} ${serializeFmtpParams(canonical)}`);
+        if (fmtpByPt.has(pt)) {
+          const canonical = fmtpByPt.get(pt);
+          if (canonical && canonical.size > 0 && !emittedFmtpForPt.has(pt)) {
+            emittedFmtpForPt.add(pt);
+            nextSec.push(`a=fmtp:${pt} ${serializeFmtpParams(canonical)}`);
+          }
+          // If the intersection across sections is empty (`canonical.size === 0`),
+          // drop the conflicting `a=fmtp:<pt>` line from all sections so Chromium's
+          // BUNDLE check does not reject on mid-call publish/renegotiation.
           continue;
         }
       }

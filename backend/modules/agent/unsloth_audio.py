@@ -249,7 +249,31 @@ async def speak(text: str, voice: str, rate: str | None = None) -> bytes:
             "POST", "/v1/audio/speech", json=body, timeout=SPEECH_TIMEOUT
         )
     except UnslothAudioError as exc:
-        if not model and "no model loaded" in exc.detail.lower():
+        if model and "no model loaded" in exc.detail.lower():
+            for path, payload in (
+                (
+                    "/api/settings/openai-auto-switch",
+                    {"enabled": True, "media_auto_switch_model": True},
+                ),
+                ("/api/settings/multi-model", {"enabled": True, "mode": "fit"}),
+            ):
+                try:
+                    await _request("PUT", path, json=payload)
+                except UnslothAudioError:
+                    pass
+            try:
+                await _request(
+                    "POST",
+                    "/v1/load",
+                    json={"model_path": model, "alongside": True},
+                    timeout=SPEECH_TIMEOUT,
+                )
+            except UnslothAudioError:
+                pass
+            res = await _request(
+                "POST", "/v1/audio/speech", json=body, timeout=SPEECH_TIMEOUT
+            )
+        elif not model and "no model loaded" in exc.detail.lower():
             # Unsloth speaks with the resident model when none is named, and there
             # often is none. Say which setting fixes it.
             raise UnslothAudioError(
@@ -258,7 +282,8 @@ async def speak(text: str, voice: str, rate: str | None = None) -> bytes:
                 '"Unsloth speech model" (for example '
                 "audio-cpp/audio.cpp-gguf/DotTTS-Edit-GGUF), or load one in Unsloth.",
             ) from exc
-        raise
+        else:
+            raise
     if not res.content:
         # An empty 200 reaches the browser as "Unable to decode audio data", which
         # says nothing about why (see test_agent_tts.py).

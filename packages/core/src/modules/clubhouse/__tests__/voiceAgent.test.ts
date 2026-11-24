@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { roomModelChoices, unslothSpeechModels } from '../AgentSidebar';
 import { DEFAULT_VOICE_CONFIG, chatSpeakerLabel, normalizeVoiceConfig } from '../voiceAgent';
 
 describe('normalizeVoiceConfig', () => {
@@ -104,5 +105,76 @@ describe('chatSpeakerLabel', () => {
   it("treats the pane's placeholders as no sender at all", () => {
     expect(chatSpeakerLabel({ userName: 'Anonymous' })).toBeUndefined();
     expect(chatSpeakerLabel({ userName: 'Unknown', username: null })).toBeUndefined();
+  });
+});
+
+describe('roomModelChoices', () => {
+  const engine = {
+    provider: 'nim',
+    model: 'google/gemma-4-31b-it',
+    available_models: ['google/gemma-4-31b-it'],
+    providers: [
+      { kind: 'ollama', label: 'Ollama', reachable: false, models: [] },
+      { kind: 'lmstudio', label: 'LM Studio', reachable: true, models: ['gemma-3-4b-it'] },
+      {
+        kind: 'unsloth',
+        label: 'Unsloth',
+        reachable: true,
+        models: [
+          'audio-cpp/audio.cpp-gguf/PocketTTS-GGUF',
+          'unsloth/Qwen3-4B',
+          'openai/whisper-tiny.en',
+        ],
+      },
+      { kind: 'nim', label: 'NVIDIA NIM', reachable: true, models: ['google/gemma-4-31b-it'] },
+    ],
+  };
+
+  it('lists LLMs from Unsloth, LM Studio, and other connected providers while separating speech models', () => {
+    const out = roomModelChoices(engine, '');
+    expect(out.groups.map((g) => g.kind)).toEqual(['lmstudio', 'unsloth', 'nim']);
+    expect(out.groups[0].options).toEqual([
+      { value: 'lmstudio::gemma-3-4b-it', label: 'gemma-3-4b-it' },
+    ]);
+    expect(out.groups[1].options).toEqual([
+      { value: 'unsloth::unsloth/Qwen3-4B', label: 'unsloth/Qwen3-4B' },
+    ]);
+    expect(unslothSpeechModels(engine)).toEqual(['audio-cpp/audio.cpp-gguf/PocketTTS-GGUF']);
+    expect(out.selectedValue).toBe('');
+    expect(out.known).toBe(true);
+    expect(out.displayModel).toBe('google/gemma-4-31b-it');
+    expect(out.servedBy).toBe('nim');
+  });
+
+  it('falls back to the default LLM if a TTS model was saved in config.model', () => {
+    const out = roomModelChoices(engine, 'unsloth::audio-cpp/audio.cpp-gguf/PocketTTS-GGUF');
+    expect(out.selectedValue).toBe('');
+    expect(out.displayModel).toBe('google/gemma-4-31b-it');
+    expect(out.servedBy).toBe('nim');
+  });
+
+  it('resolves a provider::model choice to that provider and model', () => {
+    const out = roomModelChoices(engine, 'unsloth::unsloth/Qwen3-4B');
+    expect(out.selectedValue).toBe('unsloth::unsloth/Qwen3-4B');
+    expect(out.known).toBe(true);
+    expect(out.displayModel).toBe('unsloth/Qwen3-4B');
+    expect(out.servedBy).toBe('unsloth');
+  });
+
+  it('preserves a saved provider::model choice even while that provider is offline', () => {
+    const out = roomModelChoices(engine, 'ollama::gemma4:e2b');
+    expect(out.selectedValue).toBe('ollama::gemma4:e2b');
+    expect(out.known).toBe(false);
+    expect(out.unknownLabel).toBe('gemma4:e2b (ollama)');
+    expect(out.displayModel).toBe('gemma4:e2b');
+    expect(out.servedBy).toBe('ollama');
+  });
+
+  it('matches a legacy bare model id against the provider serving it', () => {
+    const out = roomModelChoices(engine, 'gemma-3-4b-it');
+    expect(out.selectedValue).toBe('lmstudio::gemma-3-4b-it');
+    expect(out.known).toBe(true);
+    expect(out.displayModel).toBe('gemma-3-4b-it');
+    expect(out.servedBy).toBe('lmstudio');
   });
 });

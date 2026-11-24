@@ -139,6 +139,11 @@ export interface JoinChannelResult {
   handraise_queue_setting: number | null;
   handraise_queue_options: { value: number; label: string; sub_label?: string }[] | null;
   emoji_reaction_options: string[] | null;
+  topic?: string | null;
+  num_speakers?: number | null;
+  num_all?: number | null;
+  club?: { name: string | null } | null;
+  users?: ChannelUser[];
 }
 
 export function joinClubhouseChannel(channel: string): Promise<JoinChannelResult> {
@@ -178,10 +183,21 @@ export function setClubhouseHand(
   });
 }
 
+export interface BecomeSpeakerResult {
+  success: boolean;
+  token?: string | null;
+  rtm_token?: string | null;
+  pubnub_token?: string | null;
+  pubnub_origin?: string | null;
+  pubnub_heartbeat_value?: number | null;
+  pubnub_heartbeat_interval?: number | null;
+}
+
 /** Come up on stage. Takes no user id: upstream's `become_speaker` accepts the
- *  stage itself, not one particular moderator's invitation. */
-export function acceptClubhouseSpeaker(channel: string): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, {});
+ *  stage itself, not one particular moderator's invitation, and returns new
+ *  speaker-grade Agora and PubNub tokens. */
+export function acceptClubhouseSpeaker(channel: string): Promise<BecomeSpeakerResult> {
+  return apiPost<BecomeSpeakerResult>(`/clubhouse/channels/${channel}/accept_speaker`, {});
 }
 
 export function inviteClubhouseSpeaker(

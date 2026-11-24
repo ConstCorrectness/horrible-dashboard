@@ -1436,3 +1436,62 @@ def test_run_helper_httpx_fallback_uses_clubdeck_headers_and_redacts_token(
         assert hdrs["ch-userid"] == "(null)"
         assert hdrs["ch-deviceid"] == "INSTALL-DEV"
     assert "SECRET-FALLBACK" not in caplog.text
+
+
+def test_join_channel_returns_normalized_roster_and_accept_speaker_returns_tokens(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        if path == "/join_channel":
+            return {
+                "success": True,
+                "channel": "room-stage",
+                "topic": "Late Night Stage",
+                "token": "agora-listener-tkn",
+                "pubnub_token": "pn-listener-tkn",
+                "pubnub_enable": True,
+                "social_club": {"name": "Tech House"},
+                "users": [
+                    {
+                        "user_id": 1,
+                        "name": "Host",
+                        "username": "host",
+                        "photo_url": None,
+                        "is_speaker": True,
+                        "is_moderator": True,
+                    },
+                    {
+                        "user_id": 4242,
+                        "name": "Horrible",
+                        "username": "horrible",
+                        "photo_url": None,
+                        "is_speaker": False,
+                        "is_moderator": False,
+                    },
+                ],
+            }
+        assert (path, payload) == ("/become_speaker", {"channel": "room-stage"})
+        return {
+            "success": True,
+            "token": "agora-speaker-tkn",
+            "pubnub_token": "pn-speaker-tkn",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    join_res = client.post("/api/clubhouse/channels/room-stage/join")
+    assert join_res.status_code == 200
+    body = join_res.json()
+    assert body["topic"] == "Late Night Stage"
+    assert body["club"] == {"name": "Tech House"}
+    assert body["num_speakers"] == 1
+    assert body["num_all"] == 2
+    assert len(body["users"]) == 2
+    assert body["users"][1]["user_id"] == 4242
+    assert body["users"][1]["is_speaker"] is False
+
+    accept_res = client.post("/api/clubhouse/channels/room-stage/accept_speaker")
+    assert accept_res.status_code == 200
+    assert accept_res.json()["token"] == "agora-speaker-tkn"
+    assert accept_res.json()["pubnub_token"] == "pn-speaker-tkn"

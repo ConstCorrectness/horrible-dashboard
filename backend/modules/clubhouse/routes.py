@@ -1033,10 +1033,12 @@ async def get_channel_details(channel: str) -> dict[str, Any]:
         auth.get("device_id"),
     )
 
-    # Map social_club to club
+    # Map social_club / club
     club_data = None
-    if res.get("social_club"):
+    if res.get("social_club") and isinstance(res["social_club"], dict):
         club_data = {"name": res["social_club"].get("name")}
+    elif res.get("club") and isinstance(res["club"], dict):
+        club_data = {"name": res["club"].get("name")}
 
     # Map users
     users_list = []
@@ -1108,6 +1110,12 @@ async def join_channel(channel: str) -> dict[str, Any]:
     global _joined_channel
     _joined_channel = channel
     res["user_id"] = auth["user_id"]
+    parsed = _parse_channel_data(res)
+    if parsed:
+        res["users"] = parsed["users"]
+        res["club"] = parsed["club"]
+        res["num_speakers"] = parsed["num_speakers"]
+        res["num_all"] = parsed["num_all"]
     # Log the full response to help diagnose PubNub issues
     logger.info("join_channel response keys: %s", list(res.keys()))
     logger.info(

@@ -18,7 +18,12 @@ import {
   paneSessionKey,
   resetPaneSessionsForTests,
 } from '../../../layout/pane-lifetime';
-import { createRoomSession, disposeRoomSession, type ClubhouseRoomSession } from '../roomSession';
+import {
+  createRoomSession,
+  disposeRoomSession,
+  mergeRoomRoster,
+  type ClubhouseRoomSession,
+} from '../roomSession';
 
 const KEY = paneSessionKey('ws1', 'clubhouse.account#1');
 
@@ -174,5 +179,105 @@ describe('a switch cannot leave the previous room running', () => {
     // The next switch must still run — a failed join that jammed the queue would
     // make the pane permanently unable to enter another room.
     await expect(session.serialize(async () => 'ok')).resolves.toBe('ok');
+  });
+});
+
+describe('mergeRoomRoster stage promotion & live roster updates', () => {
+  it('immediately promotes the current user from audience to speakers when liveUsers flips isSpeaker', () => {
+    const baseUsers = [
+      {
+        user_id: 1,
+        name: 'Host',
+        username: 'host',
+        photo_url: null,
+        is_speaker: true,
+        is_moderator: true,
+      },
+      {
+        user_id: 42,
+        name: 'Horrible Coder',
+        username: 'horriblecoder',
+        photo_url: null,
+        is_speaker: false,
+        is_moderator: false,
+      },
+    ];
+    const liveUsers = [
+      { userId: 1, handRaised: false, isSpeaker: true, isMuted: false },
+      { userId: 42, handRaised: false, isSpeaker: true, isMuted: true },
+    ];
+
+    const roster = mergeRoomRoster(baseUsers, liveUsers, {
+      userId: 42,
+      name: 'Horrible Coder',
+      photoUrl: null,
+    });
+
+    expect(roster.isCurrentUserSpeaker).toBe(true);
+    expect(roster.speakers.map((u) => u.user_id)).toEqual([1, 42]);
+    expect(roster.audience).toEqual([]);
+  });
+
+  it('places the current user on stage even when baseUsers was a hallway preview without them', () => {
+    const baseUsers = [
+      {
+        user_id: 1,
+        name: 'Host',
+        username: 'host',
+        photo_url: null,
+        is_speaker: true,
+        is_moderator: true,
+      },
+    ];
+    const liveUsers = [
+      { userId: 1, handRaised: false, isSpeaker: true, isMuted: false },
+      { userId: 42, handRaised: false, isSpeaker: true, isMuted: true },
+    ];
+
+    const roster = mergeRoomRoster(baseUsers, liveUsers, {
+      userId: 42,
+      name: 'Horrible Coder',
+      photoUrl: 'https://example.com/me.jpg',
+    });
+
+    expect(roster.isCurrentUserSpeaker).toBe(true);
+    expect(roster.speakers.map((u) => u.user_id)).toEqual([1, 42]);
+    expect(roster.speakers[1].name).toBe('Horrible Coder');
+    expect(roster.speakers[1].photo_url).toBe('https://example.com/me.jpg');
+  });
+
+  it('demotes a speaker back to audience without removing them from the room', () => {
+    const baseUsers = [
+      {
+        user_id: 1,
+        name: 'Host',
+        username: 'host',
+        photo_url: null,
+        is_speaker: true,
+        is_moderator: true,
+      },
+      {
+        user_id: 42,
+        name: 'Horrible Coder',
+        username: 'horriblecoder',
+        photo_url: null,
+        is_speaker: true,
+        is_moderator: false,
+      },
+    ];
+    const liveUsers = [
+      { userId: 1, handRaised: false, isSpeaker: true, isMuted: false },
+      { userId: 42, handRaised: false, isSpeaker: false, isMuted: true },
+    ];
+
+    const roster = mergeRoomRoster(baseUsers, liveUsers, {
+      userId: 42,
+      name: 'Horrible Coder',
+      photoUrl: null,
+    });
+
+    expect(roster.isCurrentUserSpeaker).toBe(false);
+    expect(roster.speakers.map((u) => u.user_id)).toEqual([1]);
+    expect(roster.audience.map((u) => u.user_id)).toEqual([42]);
   });
 });

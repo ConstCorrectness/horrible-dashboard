@@ -600,10 +600,10 @@ Raises or lowers a hand in the channel.
 
 ### 13. `POST /channels/{channel}/accept_speaker`
 
-Comes up on stage after being invited to speak.
+Comes up on stage after being invited to speak (or confirms stage promotion).
 
 - **Request Schema:** none — takes only the channel in the path.
-- **Response Schema:** Generic success object.
+- **Response Schema:** `BecomeSpeakerResult` (`{ success, token, rtm_token, pubnub_token, pubnub_origin, pubnub_heartbeat_value, pubnub_heartbeat_interval }`).
 - **Errors:** **409 Conflict** if not connected.
 
 > [!NOTE]
@@ -611,6 +611,18 @@ Comes up on stage after being invited to speak.
 > The 26.08.30 client pairs it with the `/reject_speaker_invite` we already call,
 > and **neither carries a moderator id** — you accept the stage itself, not one
 > particular person's invitation, so there is no user id to get stale.
+
+#### Stage Promotion, Live Roster Merging & Token Renewal
+
+Joining a room as an audience member (`is_speaker: false`) issues listener-only Agora and PubNub tokens (`pubnub_token` ~368 bytes, Agora `Role_Subscriber`). When a moderator accepts your raised hand or invites you onto the stage, two things must happen without leaving the room:
+
+1. **Immediate UI Roster Merge (`mergeRoomRoster` in `roomSession.ts`):**
+   - `POST /api/clubhouse/channels/{channel}/join` returns the full room `users` roster, `topic`, `club`, `num_speakers`, and `num_all` from `/join_channel`, so the stage and audience render immediately on join instead of starting from the 3–5 speaker hallway preview.
+   - `RoomsPanel.tsx` merges `currentRoom.users` with real-time `liveUsers` (`mergeRoomRoster`) on every render, so `isCurrentUserSpeaker`, `moderators`, `speakers`, and `audience` update in 0 ms when PubNub delivers `add_speaker` (carrying `user_profile` or `user_profile_id`), `accept_speaker_invite`, `make_moderator`, `remove_speaker` (which demotes a speaker back to the audience rather than removing them from the room), or `invite_speaker` (delivered on `channel_user.<channel>.<myUserId>` with `from_name`, `from_user_id`, `from_photo_url` and no `user_id` field).
+2. **In-Place Agora & PubNub Speaker Token Upgrade (`upgradeToSpeaker` in `useClubhouseVoice.ts`):**
+   - At join time, `client.publish(mixedTrack)` is only called if the account joined as a speaker (`session.isSpeaker`). Listeners keep `session.localAudioTrack` un-published until promoted, preventing Agora SFU rejections or `localTrackMap` poisoning under a subscriber token.
+   - When promoted to the stage (via `acceptSpeakerInvite`, PubNub `add_speaker` / `accept_speaker_invite` / `make_moderator`, or detected by the 10s `/get_channel` poll via `syncChannelDetails`), `upgradeToSpeaker` updates PubNub with the 444-byte speaker `pubnub_token` (and subscribes to `channel_speakers.<channel>`), calls `rtcClient.renewToken(agoraToken)` to upgrade the Agora gateway ticket, and then publishes `session.localAudioTrack`.
+   - If a moderator accepted a raised hand directly from the handraise queue (which promotes the user on Clubhouse's server immediately and causes a subsequent `/become_speaker` call to return `400`), `acceptSpeakerInvite` probes `/join_channel` and completes `upgradeToSpeaker` seamlessly when the account is already on stage.
 
 ### 14. Moderation & room control
 
@@ -1379,7 +1391,16 @@ the room pane owns the voice session and passes it config, status and actions.
   memory), when it answers, hearing, voice, model. Every control changes something the
   agent does in every mode.
 - **Model for this room** is the per-room override only. It used to be paired with an
-  "Active Engine Model" select that rewrote the *dashboard-wide* agent config.
+  "Active Engine Model" select that rewrote the *dashboard-wide* agent config. Options
+  are grouped across every connected provider (Unsloth, LM Studio, Ollama, llama.cpp,
+  and hosted APIs with keys) as `provider::model`, with a **Refresh** button beside the
+  dropdown that re-polls `/api/agent/status?refresh=true` when a local server is started
+  or a new model is loaded while in a room. Audio-only speech/transcription models
+  (such as `PocketTTS-GGUF` or `whisper-*`) are filtered out of the LLM dropdown, and
+  Unsloth TTS models are selectable separately under **Voice → Voice model**
+  (`agent.unslothTtsModel`). If Unsloth Desktop responds with `400 No model loaded`, the
+  provider automatically enables Unsloth's `openai-auto-switch` and `multi-model: fit`
+  settings, loads the requested model via `POST /v1/load`, and retries the turn.
 - **Config hygiene**: every change goes through `normalizeVoiceConfig`, which clamps
   numbers, rejects wrongly typed values and migrates old saved configs (wake words,
   turn eagerness, thinking filler, silence timeout, interject posture and interval,
