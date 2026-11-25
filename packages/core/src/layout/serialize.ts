@@ -72,6 +72,10 @@ const RENAMED_VIEWS: Readonly<Record<string, string | { to: string; section: str
   'interpretability.architecture': { to: 'interpretability.suite', section: 'model' },
   'agentpedia.hub': { to: 'interpretability.suite', section: 'runs' },
   'webml.lens': { to: 'interpretability.suite', section: 'lens' },
+  'llamacpp.server': { to: 'interpretability.suite', section: 'runtime' },
+  'webml.playground': { to: 'interpretability.suite', section: 'playground' },
+  'trajectories.hub': { to: 'interpretability.suite', section: 'runs' },
+  'evals.hub': { to: 'interpretability.suite', section: 'evals' },
   // hAssault's ten windows became three. The studio's per-tab openers were the
   // studio; the armory pane was the main menu's armory section, so it lands on
   // the game. (Console, companion, radar and voice still exist — as `embedded`

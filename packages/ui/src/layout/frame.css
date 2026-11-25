@@ -253,6 +253,13 @@
   min-width: 0;
   min-height: 0;
 }
+.frame-pane-railed-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .frame-pane-railed-body {
   display: flex;
   flex-direction: column;
@@ -260,6 +267,41 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+.frame-pane-railed-body--split {
+  flex-direction: row;
+  overflow: hidden;
+  --stage-left-px: 520px;
+}
+.frame-section-keep.is-split-left {
+  flex: 0 0 var(--stage-left-px);
+  width: var(--stage-left-px);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+}
+.frame-section-keep.is-split-right {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+}
+.frame-section-keep.is-split-focused {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.frame-stage-split-handle {
+  flex: 0 0 5px;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 120ms ease;
+}
+.frame-stage-split-handle:hover,
+.frame-stage-split-handle:focus-visible {
+  background: var(--accent);
+  outline: none;
 }
 .frame-section-rail {
   display: flex;
@@ -297,6 +339,48 @@
 .frame-section-rail.collapsed .frame-section-rail-heading {
   display: none;
 }
+.frame-section-rail-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  height: 22px;
+  padding: 0 10px 0 8px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  --icon-size: 11px;
+}
+.frame-section-rail-group-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.frame-section-rail-group-chevron {
+  display: inline-flex;
+  flex: none;
+  transition: transform 120ms ease;
+}
+.frame-section-rail-group-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.frame-section-rail-group-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
 /* Classed, so controls.css's 30px action-button height does not apply: these are
    rail rows. The 2px accent edge marks the active one — no glow, no pill. */
 .frame-section-rail-tab {
@@ -330,6 +414,11 @@
   color: var(--text);
   border-left-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.frame-section-rail-tab.split-active {
+  color: var(--text);
+  border-left-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
 }
 .frame-section-rail-tab:focus-visible {
   outline: 1px solid var(--accent);

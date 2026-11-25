@@ -29,7 +29,7 @@ previously invisible:
   If the model "ignored" a tool you were sure it had, this is why — the pane says
   so in a full-width warning, with the dropped count.
 - **The gap between requested and real context length.** `num_ctx` is what we
-  *ask* for; the model has what it has. Asking for more gets you the model's real
+  _ask_ for; the model has what it has. Asking for more gets you the model's real
   limit silently. The header shows both.
 
 ## Prompt, weights, activations — three surfaces, three modules
@@ -52,7 +52,7 @@ tensors into a **snapshot on disk**, scrubbed offline rather than streamed (one
 pass with attention on is about a gigabyte), and is read in the `traces` section
 of the llama.cpp pane.
 
-That page also now carries the **lens** — the same snapshot read as *words*
+That page also now carries the **lens** — the same snapshot read as _words_
 rather than as numbers, a layer × position grid of what the model was disposed to
 say at each point, which is [Neuronpedia's Jacobian
 Lens](https://github.com/anthropics/jacobian-lens) with the identity transport.
@@ -73,17 +73,13 @@ only be shown together when both the build and the model hash agree
 an answer it did not produce — which is exactly the kind of confident wrongness
 this module exists to refuse.
 
-## Research Compass & Connected Workflow
+## Research Compass, Playbooks & Connected IDE Workflow
 
-To make the dashboard approachable for beginners and fast for researchers, both interpretability panes host a unified **Workflow Header** and the **Research Compass** (`interpretability.guide` command or the 🧭 Compass button):
+All prompt, architecture, runtime, playground, trajectory, and evaluation surfaces now live together inside `interpretability.suite` (see [Interpretability IDE](./interp-suite.mdx)), framed by a unified `SubjectBar` and side-by-side split stage:
 
-1. **Context Window (Prompt)**: `interpretability.context` — measures exact token counts, prompt block kinds (system, history, buffer, tools), and tool budget truncation. Includes an onboarding launchpad with prompt suggestions and quick navigation when no turns have been captured.
-2. **Model Explorer (Weights)**: `interpretability.architecture` — inspects real GGUF tensor directories, quantizations (Q4_K_M, Q8_0), and architecture specs. Features inline glossary tooltips for technical metrics (GQA vs MHA, KV cache footprint, SwiGLU gating, RoPE θ, MoE active fractions) and empty-state links to Hugging Face and llama.cpp.
-3. **Logit Lens & Stepper (Activations)**: `llamacpp.server` — dynamic layer representations and execution stepping.
-
-The 🧭 **Compass** modal maps the 7 stages of AI research (Literature, Datasets, Context Window, Model Explorer, Logit Lens, Evals, Training), answering *which question each pane answers*, *when to use it*, and *common beginner pitfalls*.
-
-Merge `interpretability.architecture` and `llamacpp.server` into one window to keep prompt, weights, and activations within immediate reach.
+1. **Context Window (Prompt)**: `interpretability.suite` → `context` — measures exact token counts, prompt block kinds (system, history, buffer, tools), and tool budget truncation.
+2. **Model Explorer (Weights)**: `interpretability.suite` → `model` — inspects real GGUF tensor directories, quantizations (Q4_K_M, Q8_0), and architecture specs, highlighting active blocks live when paired side-by-side with `Stepper` or `Lens`.
+3. **Runtime, Playground, Runs & Evals**: `runtime` (`llama.cpp`), `playground` (WebML GPU), `runs` (Trajectories + Agentpedia), and `evals` sit in the same IDE window, launched via **Guided Playbooks** on `Home` (`interpretability.guide`).
 
 ## Architecture
 
@@ -121,8 +117,8 @@ Both halves are read together by [agentpedia](agentpedia.mdx), which steps one t
 through what it was shown, what it sent, and what it did.
 
 The third ring in the diagram is the telemetry one, and it is a different kind of
-record: `IoEvent` is *what went over the wire*, where a `RoundSnapshot` is *what the
-model was shown*. `run_agent_loop` stamps every request it makes with `turn_id` and
+record: `IoEvent` is _what went over the wire_, where a `RoundSnapshot` is _what the
+model was shown_. `run_agent_loop` stamps every request it makes with `turn_id` and
 `round` (`telemetry/turn.py`, a contextvar rather than a parameter — the recording
 happens in httpx's response hook, several layers below the loop that knows the
 answer), which is what lets the two be lined up without matching them by timestamp.
@@ -140,16 +136,16 @@ Two invariants hold the design together, both enforced in tests:
 `main` is not the only agent that runs. It orchestrates two different ways, and the
 pane distinguishes them because they have very different visibility.
 
-| | `agent.delegate` | `agent.ask_peer` |
-| --- | --- | --- |
-| Runs on | this node, this browser connection | another user's node |
-| Tools | full — relayed to your frontend, gated under the sub-agent's mode | none (tool-less, read-only) |
-| Depth | one level (specialists set `can_delegate: false`) | n/a |
-| Visible in this pane | fully — it's a real captured turn | **opaque node only** |
+|                      | `agent.delegate`                                                  | `agent.ask_peer`            |
+| -------------------- | ----------------------------------------------------------------- | --------------------------- |
+| Runs on              | this node, this browser connection                                | another user's node         |
+| Tools                | full — relayed to your frontend, gated under the sub-agent's mode | none (tool-less, read-only) |
+| Depth                | one level (specialists set `can_delegate: false`)                 | n/a                         |
+| Visible in this pane | fully — it's a real captured turn                                 | **opaque node only**        |
 
 A delegated turn needs no special capture: `run_delegate` reuses
 `orchestrator.run_agent_loop`, which is exactly where the capture hook lives, so the
-sub-agent is recorded like any other turn with its own `agentId`. What it *did* need
+sub-agent is recorded like any other turn with its own `agentId`. What it _did_ need
 was the link — `parent_turn_id` is threaded from `run_delegate` into the loop so the
 pane can rebuild the handoff tree instead of showing unrelated siblings.
 
@@ -182,8 +178,8 @@ than a silent gap the reader has to guess about.
 
 ## Model explorer
 
-Beside the context view sits the loaded model: what it *is*, next to what it was
-*given*. It is a thing you click through rather than a picture — selecting a stage
+Beside the context view sits the loaded model: what it _is_, next to what it was
+_given_. It is a thing you click through rather than a picture — selecting a stage
 of the stack shows the tensors that actually implement it.
 
 ```mermaid
@@ -215,13 +211,13 @@ It is now a read-only `@xyflow/react` canvas (`inspect/InspectCanvas.tsx`) with 
 zoom, a minimap and two fit controls, sitting inside a resizable split.
 
 **The node model is O(1) in the layer count.** A 48-layer model has ~290 sublayers,
-and drawing them would be unreadable *and* a lie: the interesting fact about a stack
+and drawing them would be unreadable _and_ a lie: the interesting fact about a stack
 of 48 decoder blocks is that they are identical, and 48 drawn boxes assert the
 opposite. So the stack is **one node carrying a rail of N ticks**, and exactly one
 block is ever expanded — the selected one. Six to eight nodes, ever, plus the rail.
 
-The rail earns its place twice over. Tick *height* is that block's real bytes from
-the GGUF inventory, so a model whose later blocks are heavier says so. Tick *band* is
+The rail earns its place twice over. Tick _height_ is that block's real bytes from
+the GGUF inventory, so a model whose later blocks are heavier says so. Tick _band_ is
 its tensor-shape signature, computed by `layerSignatures`, so a model that alternates
 its attention shape by layer — Gemma 4's `blk.0.attn_q` is 3840×4096 while
 `blk.17.attn_q` is 3840×8192 — draws as **stripes** instead of as a grey `varies`
@@ -231,7 +227,7 @@ head count for the whole model.
 
 `Selection {stage, layer}` is unchanged and remains the single source of truth;
 `inspect/graph.ts` only provides a bijection to node ids, so the canvas is a
-*projection* of the selection rather than a second copy of it. That is what let the
+_projection_ of the selection rather than a second copy of it. That is what let the
 model-locus wiring survive the rewrite with no edit at all — the
 lens still publishes a layer, the explorer still selects and opens that block, and the
 canvas now additionally brings it into view. The focus is driven by a **nonce** rather
@@ -243,7 +239,7 @@ designer's `LR` one. `designer/layout.ts` already argues both sides: `LR` becaus
 editors read left to right, and `TB` for `training/panels/ModelGraphPane` because "a
 traced module tree reads as a stack". Inspect is the second case by that file's own
 criterion — and every canonical transformer figure is vertical, the residual only
-reads as a *spine* when the block runs down the page, and the left column is now
+reads as a _spine_ when the block runs down the page, and the left column is now
 narrow by default so the axis with room to spare is the vertical one.
 
 :::note[The third importer of the graph engine]
@@ -254,13 +250,13 @@ built around the designer's **editable** `GraphNode` — typed sockets,
 `socketsCompatible` refusing a link at the wire, `onConnect`, frame membership, a
 persisted layout sidecar. Inspect's nodes are read-only, derived, socketless and
 unpersisted, so reusing it would mean every one of those invariants growing a "not in
-inspect mode" branch. What the rule protects — the node *model* is the API, the engine
+inspect mode" branch. What the rule protects — the node _model_ is the API, the engine
 stays swappable — still holds: nothing outside that file imports the engine.
 :::
 
 **Zoom means two things**, because the wheel already changes the zoom factor and a
-control that did the same would be redundant. *Fit* is the whole model and the way
-back. *Focus* is the selected node **and what it connects to**, on double-click — the
+control that did the same would be redundant. _Fit_ is the whole model and the way
+back. _Focus_ is the selected node **and what it connects to**, on double-click — the
 useful verb on a graph is "show me this and its neighbours", not "make it 1.4×". On
 top of that the nodes read the viewport zoom and drop their fact rows below ~0.62, so
 zooming out shows the model's shape and zooming in reads its numbers.
@@ -272,7 +268,7 @@ to Inspect's two columns and to the designer's palette and inspector — which w
 `width: 176px` and `width: 320px`, equally unresizable.
 
 It is not `packages/ui/src/layout/Sash.tsx`: that one takes a `SplitNode` and
-dispatches `SET_SPLIT_SIZES` to `layoutStore` because it divides the *workspace*. A
+dispatches `SET_SPLIT_SIZES` to `layoutStore` because it divides the _workspace_. A
 pane's own columns are not part of the layout tree, and core cannot import ui anyway.
 Sizes live in `localStorage` (`split-sizes.ts`, mirroring `llamacpp/pins.ts`) rather
 than in the layout store, which also keeps them out of an exported workspace — opening
@@ -291,11 +287,11 @@ Two things in it are load-bearing:
 
 ### Two sources, and why they stay separate
 
-| Source | Available for | What it gives |
-| --- | --- | --- |
-| The model's own **GGUF header** | the node's own llama.cpp server, Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size — and, read the same way, the **description** and the per-layer **attention layout** |
-| GGUF `model_info` via `/api/show` | Ollama | The **description**, written from the weights the server loaded |
-| `config.json` from a HF repo | any server whose weights file cannot be found | The description, but strictly of the *repo* |
+| Source                            | Available for                                                                                          | What it gives                                                                                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The model's own **GGUF header**   | the node's own llama.cpp server, Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size — and, read the same way, the **description** and the per-layer **attention layout** |
+| GGUF `model_info` via `/api/show` | Ollama                                                                                                 | The **description**, written from the weights the server loaded                                                                                                   |
+| `config.json` from a HF repo      | any server whose weights file cannot be found                                                          | The description, but strictly of the _repo_                                                                                                                       |
 
 The pane labels which it used (`weights` / `repo`, plus a `gguf` chip when the
 inventory is present) rather than presenting them interchangeably.
@@ -346,8 +342,8 @@ it. While a trace is being stepped, the model locus carries the stepper's `stage
 and `step` as well as the layer, and the explorer selects that block, **lights the
 sub-block executing** (attention, FFN, experts, norm — mapped in
 `inspect/stepper-stage.ts`, because the two panes share the bus and nothing else),
-and shows a *following the stepper* strip with a way back to it. The canvas
-re-centres only when the *block* changes, so stepping from attention to FFN moves a
+and shows a _following the stepper_ strip with a way back to it. The canvas
+re-centres only when the _block_ changes, so stepping from attention to FFN moves a
 highlight rather than refitting the diagram under the reader.
 
 It works in reverse too: while the stepper is driving, clicking a block or a
@@ -364,8 +360,8 @@ The explorer's lens so far has been the llama.cpp trace grid: a trace the node
 captured, read as words. The second source is the model **running in this window**.
 When a GGUF generates with the logit lens on (the playground's `webml.lens`, or a
 `{webllm}` with `:show: lens`; see [WebML](./webml.mdx)), the engine reads out every
-layer at every token, and the explorer draws the latest such reply under *Whole
-model* and under a selected block (`inspect/WindowLens.tsx`).
+layer at every token, and the explorer draws the latest such reply under _Whole
+model_ and under a selected block (`inspect/WindowLens.tsx`).
 
 - **A layer × token grid**, layer 0 at the top, the reply's last 32 tokens across.
   Each cell is the token the LM head would pick from the residual stream after that
@@ -394,7 +390,7 @@ model* and under a selected block (`inspect/WindowLens.tsx`).
    a way to say "it is this file" that no upstream release can break.
 2. **The node's own [llama.cpp](./llamacpp.mdx) server**, when one is running and
    its `--alias` matches the configured model. This is the only source that is
-   *known* rather than inferred: we chose the file. It is matched on the alias and
+   _known_ rather than inferred: we chose the file. It is matched on the alias and
    not merely on "a server is running", because `llama-server` can be up while the
    agent talks to Ollama, and answering with the wrong model's tensors is exactly
    the plausible-looking wrongness this module exists to prevent.
@@ -402,7 +398,7 @@ model* and under a selected block (`inspect/WindowLens.tsx`).
    `…image.model`; that digest is the blob. `OLLAMA_MODELS` relocates the root.
 4. **LM Studio's index** (`~/.lmstudio/.internal/model-index-cache.json`), where
    `indexedModelIdentifier` is exactly the id its API serves. Its REST API reports a
-   model's arch and quantization but *not* its path, so the index is the only route.
+   model's arch and quantization but _not_ its path, so the index is the only route.
    Taking `entryPoint` matters: a multimodal repo ships an `mmproj-*.gguf` beside the
    weights, and the first file in the directory is a real GGUF that parses cleanly
    and describes the wrong thing.
@@ -445,15 +441,15 @@ between a question and its follow-up would be the wrong seam.
 
 ### What is taken from Blender, and what is refused
 
-| Blender | Here |
-| --- | --- |
-| Colour-coded **typed sockets** | `tensor` / `int` / `float` / `bool`; a link between different types is refused at the wire |
-| **Node groups** (Group input/output) | a group **is** a generated `nn.Module` subclass — the reason the metaphor fits at all |
-| A socket that accepts **many links** | `op.add`, so a residual can fold several branches; every other input takes exactly one |
-| **Mute** a node (`M`) | ablation: it emits nothing, its input passes through, and it stops being counted |
-| **Reroute** nodes, **frames** | the same, and purely cosmetic — codegen walks straight through them |
-| **Timings overlay** | a **cost overlay**: each node's share of the parameter count |
-| Left→right data flow | enforced by the dagre auto-layout (`rankdir: 'LR'`) |
+| Blender                              | Here                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Colour-coded **typed sockets**       | `tensor` / `int` / `float` / `bool`; a link between different types is refused at the wire |
+| **Node groups** (Group input/output) | a group **is** a generated `nn.Module` subclass — the reason the metaphor fits at all      |
+| A socket that accepts **many links** | `op.add`, so a residual can fold several branches; every other input takes exactly one     |
+| **Mute** a node (`M`)                | ablation: it emits nothing, its input passes through, and it stops being counted           |
+| **Reroute** nodes, **frames**        | the same, and purely cosmetic — codegen walks straight through them                        |
+| **Timings overlay**                  | a **cost overlay**: each node's share of the parameter count                               |
+| Left→right data flow                 | enforced by the dagre auto-layout (`rankdir: 'LR'`)                                        |
 
 Not taken: Blender's **implicit socket conversions**. A float becoming a colour is a
 convenience; a tensor silently becoming a differently-shaped tensor is the class of
@@ -469,7 +465,7 @@ a conflict.
 
 **Where the parameters actually are.** Change `d_model` from 512 to 256 and the count
 drops from 54.9M to 26.2M, every downstream shape re-labels, and the generated
-`__init__` signature changes with it — because config values stay *variables* in the
+`__init__` signature changes with it — because config values stay _variables_ in the
 emitted class rather than being frozen into it.
 
 :::note Estimated until something runs it
@@ -483,7 +479,7 @@ answer. Where they disagree, the estimate is the one that is wrong.
 
 Read mode is syntax-highlighted by `designer/highlight.ts`, which parses the generated
 module with the same lezer grammar CodeMirror uses and hands back **one token array per
-line**. Spans go *inside* the existing per-line DOM rather than replacing it with an
+line**. Spans go _inside_ the existing per-line DOM rather than replacing it with an
 editor view, because the pane does two things per line that an editor would have to
 re-derive as decorations: light the lines a hovered node generated, and render the
 gutter number.
@@ -493,7 +489,7 @@ Two things are bugs if missed, and both are pinned by tests:
 - **A styled range can span newlines** (a docstring, a bracketed expression), so every
   emitted run is split on `\n`. Otherwise the line count moves and every
   `# horrible:node=` marker points at the wrong line.
-- **Highlighting may not alter the text.** `highlightTree` only reports *styled* ranges;
+- **Highlighting may not alter the text.** `highlightTree` only reports _styled_ ranges;
   the gaps between them are real source and must be emitted too. The test rejoins every
   token and compares against the original — a dropped gap would still render as
   plausible-looking code.
@@ -535,7 +531,7 @@ regenerate and nothing churns, so a save never looks like a change you did not m
 
 A group is one generated `nn.Module` subclass, so editing one is editing a class. The
 breadcrumb under the toolbar is Blender's context path — the model, then whichever
-groups you have stepped into. **Double-click a block** (or *Edit contents* in the
+groups you have stepped into. **Double-click a block** (or _Edit contents_ in the
 inspector) to go in; click a crumb to come back out. The canvas is handed one level and
 knows nothing about groups; the rules live in `designer/scope.ts` as pure functions.
 
@@ -576,16 +572,16 @@ is deliberately full of holes: a dimension the metadata did not state stays `nul
 rather than being guessed. A graph has no holes. So the import splits the difference
 along one line:
 
-| | |
-| --- | --- |
-| **Width, depth, vocabulary, head count** | Required. Missing any of them, there is **no import** — and the reason names which. A hidden size we invented would produce a plausible model of nothing |
+|                                                       |                                                                                                                                                                                              |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Width, depth, vocabulary, head count**              | Required. Missing any of them, there is **no import** — and the reason names which. A hidden size we invented would produce a plausible model of nothing                                     |
 | **Gated or dense, RMSNorm or LayerNorm, RoPE or not** | Assumed when absent, and **every assumption is listed** in a panel that stays until you close it. These only shape the graph, and the result is a starting point you edit, not a measurement |
 
 :::note The import audits itself
 The panel ends with the parameter count our arithmetic derives beside the one the
 metadata states. On Llama 3.2 3B those differ by 12% — and the whole difference is the
 output head, which that model ties to its embedding while the graph gives it its own
-matrix. So the import says that, in those words. A gap it *cannot* account for is
+matrix. So the import says that, in those words. A gap it _cannot_ account for is
 reported as exactly that: a wrong import that stays quiet is worse than one that says
 it does not add up.
 :::
@@ -603,11 +599,11 @@ Everything above is the pane&apos;s own arithmetic. **Run it** builds the genera
 in a training project&apos;s venv and runs one batch through it — the only thing that can
 turn an estimate into a measurement. It reports **three** states, never two:
 
-| | What it means |
-| --- | --- |
-| **Ran** | Output shape, parameter count and torch version, measured. If the measurement disagrees with the estimate, the pane says so and by how much — the measurement is right and the cost overlay was wrong |
-| **Failed** | The traceback, verbatim. Not summarised: the traceback *is* the answer, and paraphrasing throws away the line number |
-| **Not checked** | No project, no venv, or no torch — said out loud, with the reason, and with a reminder that the numbers are still estimates |
+|                 | What it means                                                                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ran**         | Output shape, parameter count and torch version, measured. If the measurement disagrees with the estimate, the pane says so and by how much — the measurement is right and the cost overlay was wrong |
+| **Failed**      | The traceback, verbatim. Not summarised: the traceback _is_ the answer, and paraphrasing throws away the line number                                                                                  |
+| **Not checked** | No project, no venv, or no torch — said out loud, with the reason, and with a reminder that the numbers are still estimates                                                                           |
 
 That third state is the point. A model reported as validated when nothing validated it
 is worse than not offering the button at all — the same rule the
@@ -628,7 +624,7 @@ because the backend genuinely does not have it.
 
 ### Tracing a module that already exists
 
-The other importer reads a *description* of a model; **Trace** reads the model.
+The other importer reads a _description_ of a model; **Trace** reads the model.
 `torch.fx.symbolic_trace` records what a `forward` actually does, in order, with real
 propagated shapes, and that becomes an editable graph. It runs in a training project's
 venv, like the probe and for the same reason.
@@ -651,15 +647,15 @@ The canvas takes Blender's verbs, declared through
 [the keymap](../architecture/keybindings.mdx) — never a `keydown` listener in a
 component:
 
-| | |
-| --- | --- |
-| `Shift-A` | focus the node search |
-| `M` | mute (ablate) the selected node |
-| `X` | delete it |
-| `H` | collapse it |
-| `Home` | frame everything |
-| `Tab` / `Shift-Tab` | enter / leave a group |
-| `Ctrl-G` | fold the selection into a group |
+|                     |                                 |
+| ------------------- | ------------------------------- |
+| `Shift-A`           | focus the node search           |
+| `M`                 | mute (ablate) the selected node |
+| `X`                 | delete it                       |
+| `H`                 | collapse it                     |
+| `Home`              | frame everything                |
+| `Tab` / `Shift-Tab` | enter / leave a group           |
+| `Ctrl-G`            | fold the selection into a group |
 
 Every one is scoped to the pane **and** guarded with `!textInput`: unguarded, typing a
 `d_model` value in the inspector would delete the selected node. A binding naming
@@ -673,7 +669,7 @@ Two more borrowings, both deliberately weightless. A **reroute** is a bend in a 
 drawn as a dot rather than a titled box — codegen walks straight through it, and a box
 would look like a node that does something. A **frame** is a labelled rectangle behind
 a set of nodes: pure cosmetics, living entirely in the layout sidecar, so the generated
-module is byte-identical before and after you draw one. Its rectangle is *derived* from
+module is byte-identical before and after you draw one. Its rectangle is _derived_ from
 where its members currently are, never stored, so dragging a member re-draws the frame
 around it and there is never a second competing fact about where the frame is.
 
@@ -714,22 +710,22 @@ the skill catalog's header, which is imported from the module that writes it so 
 rewording the header can't silently relabel the block. The heuristic cannot tell the
 workspace index from a tool guide, and labels it `guides`.
 
-| Kind | Source | Role |
-| --- | --- | --- |
-| `system` | `spec.system_prompt` | system |
-| `guides` | `_guides_message` — usage notes for preloaded groups | system |
-| `skills` | `_skills_message` — the [skill](skills.mdx) catalog | system |
-| `history` | prior conversation replayed into the turn | user / assistant |
-| `editor` | `_active_editor_message` — the focused buffer | system |
-| `user` | this turn's prompt | user |
-| `assistant` | the model's output this turn (incl. tool calls) | assistant |
-| `workspace` | `_workspace_context_message` — the other visible panes | system |
-| `tool_result` | a tool's return value | tool |
-| `skill_loaded` | a `use_skill` result — the skill body the model asked for | tool |
-| `tools_loaded` | a `load_tools` result — the guides of the groups it loaded | tool |
-| `mcp_result` | an `mcp-*` tool's return value | tool |
-| `nudge` | the force-tool retry system message | system |
-| `dropped_tools` | the `[tool budget]` note naming groups cut to fit | system |
+| Kind            | Source                                                     | Role             |
+| --------------- | ---------------------------------------------------------- | ---------------- |
+| `system`        | `spec.system_prompt`                                       | system           |
+| `guides`        | `_guides_message` — usage notes for preloaded groups       | system           |
+| `skills`        | `_skills_message` — the [skill](skills.mdx) catalog        | system           |
+| `history`       | prior conversation replayed into the turn                  | user / assistant |
+| `editor`        | `_active_editor_message` — the focused buffer              | system           |
+| `user`          | this turn's prompt                                         | user             |
+| `assistant`     | the model's output this turn (incl. tool calls)            | assistant        |
+| `workspace`     | `_workspace_context_message` — the other visible panes     | system           |
+| `tool_result`   | a tool's return value                                      | tool             |
+| `skill_loaded`  | a `use_skill` result — the skill body the model asked for  | tool             |
+| `tools_loaded`  | a `load_tools` result — the guides of the groups it loaded | tool             |
+| `mcp_result`    | an `mcp-*` tool's return value                             | tool             |
+| `nudge`         | the force-tool retry system message                        | system           |
+| `dropped_tools` | the `[tool budget]` note naming groups cut to fit          | system           |
 
 A tool result's kind is decided by the tool that produced it. The name comes from the
 message's own `tool_name`, or failing that from its `tool_call_id`, matched back to
@@ -743,7 +739,7 @@ hash rather than on position. The loop removes and re-appends its own notes, so
 
 `skills` is deliberately not folded into `guides`: their cost profiles are
 opposites. A guide is paid only on turns where its group is active, while every line
-of the skill catalog rides *every* round — so merging them would hide the one block
+of the skill catalog rides _every_ round — so merging them would hide the one block
 whose growth the user most needs to see.
 
 The prompt/loop boundary is pinned at round 0 so classification stays stable as
@@ -781,12 +777,13 @@ that answered:
 
    The result is memoized per model, misses included, because capture runs every
    round.
+
 3. `model`: the model id, if it is shaped like `owner/name`.
 4. `family`: a same-family default. The pane shows this as "approx".
 
 **A GGUF's `general.base_model` is its parent, not itself.** An instruction-tuned
 Gemma's GGUF names `google/gemma-3-1b-pt` there, the checkpoint it was fine-tuned
-*from*. So `base_model` alone is never taken as the weights' repo; the file's name
+_from_. So `base_model` alone is never taken as the weights' repo; the file's name
 parts decide, the same match the [interp suite's](./interp-suite.mdx)
 compatibility check makes for SAEs.
 
@@ -810,17 +807,17 @@ to prevent.
 
 ## Contributions to the layout shell
 
-| Kind | ID | Notes |
-| --- | --- | --- |
-| Section | `interpretability.suite` → `context` | The context window — a section of the [interpretability suite](./interp-suite.mdx) |
-| Section | `interpretability.suite` → `model` / `design` | Model explorer and designer, two sections where they were two modes of one pane |
-| Command | `interpretability.open` | Inspect context window (opens the suite's Context section) |
-| Command | `interpretability.openDiagram` | Explore model structure (opens the suite's Model section) |
-| Command | `interpretability.guide` | Opens the suite's Home, which replaced the Compass modal |
-| Keybinding | designer verbs | Scoped `paneFocus == 'interpretability.suite' && paneSection == 'design' && !textInput` |
-| Keybinding | `mod+shift+x` | → `interpretability.open` |
-| Setting | `interpretability.modelRepo` | HF repo for exact tokens **and** the description |
-| Setting | `interpretability.ggufPath` | Explicit weights file for the tensor inventory |
+| Kind       | ID                                            | Notes                                                                                   |
+| ---------- | --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Section    | `interpretability.suite` → `context`          | The context window — a section of the [interpretability suite](./interp-suite.mdx)      |
+| Section    | `interpretability.suite` → `model` / `design` | Model explorer and designer, two sections where they were two modes of one pane         |
+| Command    | `interpretability.open`                       | Inspect context window (opens the suite's Context section)                              |
+| Command    | `interpretability.openDiagram`                | Explore model structure (opens the suite's Model section)                               |
+| Command    | `interpretability.guide`                      | Opens the suite's Home, which replaced the Compass modal                                |
+| Keybinding | designer verbs                                | Scoped `paneFocus == 'interpretability.suite' && paneSection == 'design' && !textInput` |
+| Keybinding | `mod+shift+x`                                 | → `interpretability.open`                                                               |
+| Setting    | `interpretability.modelRepo`                  | HF repo for exact tokens **and** the description                                        |
+| Setting    | `interpretability.ggufPath`                   | Explicit weights file for the tensor inventory                                          |
 
 :::note Layouts saved before the budget widget was merged
 `interpretability.budget` was a compact `role: 'tool'` widget duplicating the
@@ -845,29 +842,29 @@ not tiles you glance at.
 
 ## Backend surface
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/api/interpretability/turns` | Recent captured turns from the ring, newest first |
-| GET | `/api/interpretability/turns/history` | Turn *summaries* from the durable table (`limit`, `agent_id`, `since`, `roots_only`) |
-| GET | `/api/interpretability/turns/{turn_id}` | One turn in full — ring first, then the table |
-| GET | `/api/interpretability/turns/{turn_id}/requests` | The turn's provider calls as summaries — literal, else rebuilt from the snapshot. See [Literal requests](#literal-requests-ctx_requests) |
-| GET | `/api/interpretability/requests/{request_id}` | One provider call in full: messages, provenance segments, `tools`, params, response, usage |
-| DELETE | `/api/interpretability/turns` | Clear the ring |
-| GET | `/api/interpretability/model` | Model metadata + true context length |
-| GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
-| GET | `/api/interpretability/tensors` | The GGUF tensor inventory; no fallback source |
-| GET | `/api/interpretability/attention` | The per-layer attention layout from the GGUF header; no fallback source |
-| GET | `/api/interpretability/graph/specs` | The designer's node catalog and templates |
-| POST | `/api/interpretability/graph/code` | A design graph → a PyTorch module (stateless) |
-| POST | `/api/interpretability/graph/validate` | Shape inference and parameter counts (stateless) |
-| POST | `/api/interpretability/graph/parse` | A PyTorch module → a design graph (the round trip in) |
-| POST | `/api/interpretability/graph/probe` | Build and run the module in a training project's venv |
-| GET/PUT/DELETE | `/api/interpretability/graph/{name}` | A saved design |
+| Method         | Path                                             | Purpose                                                                                                                                  |
+| -------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| GET            | `/api/interpretability/turns`                    | Recent captured turns from the ring, newest first                                                                                        |
+| GET            | `/api/interpretability/turns/history`            | Turn _summaries_ from the durable table (`limit`, `agent_id`, `since`, `roots_only`)                                                     |
+| GET            | `/api/interpretability/turns/{turn_id}`          | One turn in full — ring first, then the table                                                                                            |
+| GET            | `/api/interpretability/turns/{turn_id}/requests` | The turn's provider calls as summaries — literal, else rebuilt from the snapshot. See [Literal requests](#literal-requests-ctx_requests) |
+| GET            | `/api/interpretability/requests/{request_id}`    | One provider call in full: messages, provenance segments, `tools`, params, response, usage                                               |
+| DELETE         | `/api/interpretability/turns`                    | Clear the ring                                                                                                                           |
+| GET            | `/api/interpretability/model`                    | Model metadata + true context length                                                                                                     |
+| GET            | `/api/interpretability/architecture`             | Normalized model structure (the description)                                                                                             |
+| GET            | `/api/interpretability/tensors`                  | The GGUF tensor inventory; no fallback source                                                                                            |
+| GET            | `/api/interpretability/attention`                | The per-layer attention layout from the GGUF header; no fallback source                                                                  |
+| GET            | `/api/interpretability/graph/specs`              | The designer's node catalog and templates                                                                                                |
+| POST           | `/api/interpretability/graph/code`               | A design graph → a PyTorch module (stateless)                                                                                            |
+| POST           | `/api/interpretability/graph/validate`           | Shape inference and parameter counts (stateless)                                                                                         |
+| POST           | `/api/interpretability/graph/parse`              | A PyTorch module → a design graph (the round trip in)                                                                                    |
+| POST           | `/api/interpretability/graph/probe`              | Build and run the module in a training project's venv                                                                                    |
+| GET/PUT/DELETE | `/api/interpretability/graph/{name}`             | A saved design                                                                                                                           |
 
 `/turns/history` is declared **before** `/turns/{turn_id}`: FastAPI matches routes in
 declaration order, and the other way round `history` resolves as a turn id — a 404 on
 a route that exists. A summary carries no context blocks, only metadata and a round
-*count*; content is fetched one turn at a time, which is also the boundary the MCP
+_count_; content is fetched one turn at a time, which is also the boundary the MCP
 export redacts at.
 
 `/api/interpretability/model` reads Ollama's `/api/show`. The OpenAI dialect (LM
@@ -886,12 +883,12 @@ Every server reports it somewhere different, so the probe branches on the provid
 **kind**, not just the dialect — asking `/api/show` alone would have made this dead on
 an LM Studio box, which is the common local setup here:
 
-| kind | asked | read |
-| --- | --- | --- |
-| `ollama` | `POST /api/show` | the `*.context_length` metadata key |
-| `llamacpp` | `GET /props` | `default_generation_settings.n_ctx` |
+| kind       | asked                     | read                                               |
+| ---------- | ------------------------- | -------------------------------------------------- |
+| `ollama`   | `POST /api/show`          | the `*.context_length` metadata key                |
+| `llamacpp` | `GET /props`              | `default_generation_settings.n_ctx`                |
 | `lmstudio` | `GET /api/v0/models/{id}` | `loaded_context_length`, else `max_context_length` |
-| `vllm` | `GET /v1/models` | that model's `max_model_len` |
+| `vllm`     | `GET /v1/models`          | that model's `max_model_len`                       |
 
 A hosted `litellm` provider is not probed at all: no endpoint of ours reports a remote
 model's window, and a guess here would be rendered as a measurement. The probe runs in
@@ -906,11 +903,11 @@ event per round as it happens; the HTTP routes back-fill the pane on open.
 
 ## Browser vs desktop
 
-| | Browser | Desktop |
-| --- | --- | --- |
-| Pane + live capture | ✅ | ✅ |
-| Exact token counts | ✅ (needs one tokenizer fetch) | ✅ |
-| Offline / no HF access | estimates, flagged | estimates, flagged |
+|                        | Browser                        | Desktop            |
+| ---------------------- | ------------------------------ | ------------------ |
+| Pane + live capture    | ✅                             | ✅                 |
+| Exact token counts     | ✅ (needs one tokenizer fetch) | ✅                 |
+| Offline / no HF access | estimates, flagged             | estimates, flagged |
 
 No platform branching — the pane is the same component in both layouts.
 
@@ -920,11 +917,11 @@ The recorder writes each turn through to an `agent_turns` table in `app.db`
 (`store.py`) as well as into its ring. The two serve different jobs and neither
 replaces the other:
 
-| | Ring (`recorder.py`) | Table (`store.py`) |
-| --- | --- | --- |
-| Holds | 25 turns | 5000 turns (pruned) |
-| Survives restart | no | yes |
-| Read by | the pane | historical queries, the [MCP export](mcp.mdx#the-server-we-export) |
+|                  | Ring (`recorder.py`) | Table (`store.py`)                                                 |
+| ---------------- | -------------------- | ------------------------------------------------------------------ |
+| Holds            | 25 turns             | 5000 turns (pruned)                                                |
+| Survives restart | no                   | yes                                                                |
+| Read by          | the pane             | historical queries, the [MCP export](mcp.mdx#the-server-we-export) |
 
 The pane never reads the database, so a slow or failed write cannot stall a turn. Every
 store call swallows and logs its own errors for the same reason: **observation must not
@@ -989,7 +986,7 @@ know. The rebuild's id is `r:{turn_id}:{round}`.
   counts delegated sub-turns and peer nodes as entries, so a heavily-delegating session
   fills it faster; an orphaned child (parent already evicted) is promoted to a root
   rather than dropped. Turns **are** now also persisted to `app.db` (see below), so what
-  the *pane* shows is bounded while the underlying history is not.
+  the _pane_ shows is bounded while the underlying history is not.
 - **A peer's context is never visible here.** By design — see above.
 - **Block previews are clipped** for transport. Conversation and tool results are
   cut at 4000 characters. Harness text is cut at 65536: the system prompt, the skill
@@ -997,7 +994,7 @@ know. The rebuild's id is `r:{turn_id}:{round}`.
   tool-group bodies. That text is what a reader comes to learn from. The ring does
   not multiply it, because an unclipped block keeps the message's own string, so
   every round of a turn shares one copy. The persisted snapshot does repeat it once
-  per round. Token counts always describe the *full* text, and clipped blocks say
+  per round. Token counts always describe the _full_ text, and clipped blocks say
   so.
 - **Counts are of what we send.** Ollama applies its own chat template on top, so
   the true prompt is marginally larger than the sum of the blocks.

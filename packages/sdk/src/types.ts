@@ -228,6 +228,17 @@ export interface PanelDecl {
    */
   sectionsKeepAlive?: boolean;
   /**
+   * Optional header rendered once across the top of the section stage in a railed
+   * pane (e.g. an IDE subject/runtime bar and open-tabs strip), so split sections
+   * share one chrome bar instead of repeating it per body.
+   */
+  stageHeader?: ComponentType;
+  /**
+   * Allow a keep-alive railed pane to display a secondary section side-by-side
+   * (`params.splitSection`) without unmounting visited sections.
+   */
+  allowSectionSplit?: boolean;
+  /**
    * This view accepts `explorerSources` contributed by other modules, appended
    * after its own `sections`. Exactly one view should set it (Explorer); the flag
    * exists so the registry resolves the host by declaration rather than by
@@ -335,6 +346,17 @@ export interface WidgetDecl {
    * Each kept body keeps its own section-scoped agent context.
    */
   sectionsKeepAlive?: boolean;
+  /**
+   * Optional header rendered once across the top of the section stage in a railed
+   * pane (e.g. an IDE subject/runtime bar and open-tabs strip), so split sections
+   * share one chrome bar instead of repeating it per body.
+   */
+  stageHeader?: ComponentType;
+  /**
+   * Allow a keep-alive railed pane to display a secondary section side-by-side
+   * (`params.splitSection`) without unmounting visited sections.
+   */
+  allowSectionSplit?: boolean;
   /**
    * This view accepts `explorerSources` contributed by other modules, appended
    * after its own `sections`. Exactly one view should set it (Explorer); the flag
@@ -630,6 +652,13 @@ export interface SectionDecl {
    * sharing a group sit together under one divider; the tab strip ignores it.
    */
   group?: string;
+  /**
+   * Allow folding this section's `group` in the rail layout. Automatically expands
+   * while any section in the group is active or shown in a side-by-side split.
+   */
+  groupCollapsible?: boolean;
+  /** Start this `group` folded in the rail layout until opened or entered. */
+  groupDefaultCollapsed?: boolean;
   /**
    * Section body, given either inline as a component or as the id of a
    * registered (usually `embedded`) view. Exactly one of the two.

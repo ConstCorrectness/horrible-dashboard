@@ -167,6 +167,15 @@ describe('retired panes stay reachable (VIEW_ALIASES)', () => {
     ['Logit Lens', 'interpretability.suite', 'lens'],
     ['Traces', 'interpretability.suite', 'traces'],
     ['Stepper', 'interpretability.suite', 'stepper'],
+    ['NLA', 'interpretability.suite', 'nla'],
+    ['llamacpp.server', 'interpretability.suite', 'runtime'],
+    ['llama.cpp', 'interpretability.suite', 'runtime'],
+    ['webml.playground', 'interpretability.suite', 'playground'],
+    ['WebML Playground', 'interpretability.suite', 'playground'],
+    ['trajectories.hub', 'interpretability.suite', 'runs'],
+    ['Trajectories', 'interpretability.suite', 'runs'],
+    ['evals.hub', 'interpretability.suite', 'evals'],
+    ['Evals', 'interpretability.suite', 'evals'],
   ];
 
   /**
@@ -218,12 +227,16 @@ describe('retired panes stay reachable (VIEW_ALIASES)', () => {
         title: 'Interpretability',
         sections: [
           { id: 'home', label: 'Home' },
+          { id: 'playground', label: 'Playground' },
+          { id: 'runtime', label: 'Models & llama.cpp' },
+          { id: 'evals', label: 'Evals' },
           { id: 'context', label: 'Context' },
           { id: 'runs', label: 'Runs' },
           { id: 'model', label: 'Model' },
           { id: 'traces', label: 'Traces' },
           { id: 'stepper', label: 'Stepper' },
           { id: 'lens', label: 'Lens' },
+          { id: 'nla', label: 'Activation → Words' },
         ],
       },
     ],

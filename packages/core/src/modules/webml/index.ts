@@ -1,18 +1,16 @@
 /**
  * WebML: language models that run in this window, on its GPU (WebGPU), with no
  * backend round-trip and nothing leaving the machine. One app-global engine
- * (`engine.ts`) serves the playground pane, the `browser` chat provider and Scrive's
- * `{webllm}` blocks. See docs/modules/webml.mdx.
+ * (`engine.ts`) serves the IDE's Playground section, the `browser` chat provider
+ * and Scrive's `{webllm}` blocks. See docs/modules/webml.mdx.
  */
 import { nodeGgufModelId, probeWebGpu, SUPPORTED_ARCHS } from '@horrible/webml';
 
 import { isHosted } from '../../hosted';
-import { openPane, revealSection } from '../../layout/controller';
-import { lazyPane } from '../../lazy-pane';
 import { minibuffer } from '../../minibuffer';
 import type { ModuleManifest } from '../../registry';
-import { SUITE_SECTIONS, SUITE_VIEW } from '../interp/ids';
-import { setSubSection } from '../interp/SubSections';
+import { SUITE_SECTIONS } from '../interp/ids';
+import { openSuiteTab } from '../interp/stage';
 import { webmlEngine } from './engine';
 
 export { initWebmlRelay } from './relay';
@@ -21,24 +19,20 @@ export { useEngineState, useGpuReport, webmlEngine } from './engine';
 // For the model explorer: the window's latest logit-lens run.
 export { settlesAt, useLensRun, type LensRun, type LensToken } from './lens-run';
 
-const PlaygroundPanel = lazyPane(() => import('./panels/PlaygroundPanel'), 'PlaygroundPanel');
-
+/** Legacy view id kept as a constant; resolves via `VIEW_ALIASES` to the IDE's Playground. */
 export const PLAYGROUND_VIEW = 'webml.playground';
 
 /**
- * The lens lab, which is the interpretability suite's Lens section now: its
- * Reply / Guess / Compare views are tabs there, beside the llama.cpp trace lens.
+ * The lens lab, inside the Interpretability IDE's Lens section: its Reply /
+ * Guess / Compare views are tabs there, beside the llama.cpp trace lens.
  */
 export function openLensLab(tab: 'reply' | 'guess' | 'compare' = 'reply'): void {
-  setSubSection(SUITE_SECTIONS.lens, tab);
-  revealSection(SUITE_SECTIONS.lens, SUITE_VIEW);
+  openSuiteTab(SUITE_SECTIONS.lens, { subTab: tab });
 }
 
 /**
  * Whether "Run in this window" makes sense for a GGUF the node lists: an
- * architecture the WGSL engine runs, and a node on this machine. Hosted, the
- * backend is a remote machine, and every load would pull the whole file across
- * the network with nowhere to keep it.
+ * architecture the WGSL engine runs, and a node on this machine.
  */
 export function canRunNodeGguf(architecture: string): boolean {
   return !isHosted() && SUPPORTED_ARCHS.includes(architecture);
@@ -46,8 +40,7 @@ export function canRunNodeGguf(architecture: string): boolean {
 
 /**
  * Load a GGUF this node has (a path from the llama.cpp catalog, a training run's
- * conversion) into the window's engine, and open the playground to chat with it.
- * Nothing comes from the Hub: the bytes stream from the node's file route.
+ * conversion) into the window's engine, and open the IDE's Playground to chat with it.
  */
 export async function runNodeGguf(path: string): Promise<void> {
   const gpu = await probeWebGpu();
@@ -55,7 +48,7 @@ export async function runNodeGguf(path: string): Promise<void> {
     minibuffer.say(`No WebGPU in this window: ${gpu.reason}`);
     return;
   }
-  void openPane(PLAYGROUND_VIEW);
+  openSuiteTab(SUITE_SECTIONS.playground);
   try {
     await webmlEngine().load(nodeGgufModelId(path), 'q4f16', 'webgpu');
   } catch (err) {
@@ -67,16 +60,6 @@ export const webmlModule: ModuleManifest = {
   id: 'webml',
   title: 'WebML',
   category: 'research',
-  panels: [
-    {
-      id: PLAYGROUND_VIEW,
-      title: 'WebML Playground',
-      component: PlaygroundPanel,
-      role: 'document',
-      icon: '🧪',
-      singleton: true,
-    },
-  ],
   settings: [
     {
       key: 'webml.defaultModel',
@@ -123,7 +106,9 @@ export const webmlModule: ModuleManifest = {
     {
       id: 'webml.openPlayground',
       title: 'WebML: Open playground (run a model on this GPU)',
-      run: () => void openPane(PLAYGROUND_VIEW),
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.playground);
+      },
     },
     {
       id: 'webml.openLens',

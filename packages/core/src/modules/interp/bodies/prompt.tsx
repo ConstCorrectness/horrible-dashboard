@@ -1,13 +1,10 @@
 /**
- * The PROMPT group: what the model was shown, and what an agent run did with it.
- * Both bodies are the panes they used to be, framed by the suite's state strip.
+ * The Agents & Prompts group: exact prompt composition (`ContextBody`) and the
+ * unified Agent Runs & Trajectories workspace (`RunsBody`).
  */
-import { AgentpediaHub } from '../../agentpedia/AgentpediaHub';
-import { AGENTPEDIA_TABS } from '../../agentpedia/tabs';
 import { InterpretabilityPanel } from '../../interpretability/view';
-import { SUITE_SECTIONS } from '../ids';
-import { SubSections } from '../SubSections';
 import { SuiteFrame } from '../SuiteFrame';
+import { RunsWorkspace } from './RunsWorkspace';
 
 export function ContextBody() {
   return (
@@ -19,10 +16,8 @@ export function ContextBody() {
 
 export function RunsBody() {
   return (
-    <SuiteFrame title="Agent runs">
-      <SubSections scope={SUITE_SECTIONS.runs} tabs={AGENTPEDIA_TABS}>
-        <AgentpediaHub />
-      </SubSections>
+    <SuiteFrame title="Runs & trajectories">
+      <RunsWorkspace />
     </SuiteFrame>
   );
 }

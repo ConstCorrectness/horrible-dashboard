@@ -11,10 +11,10 @@ beforeEach(() => registry.resetForTests());
 afterEach(() => registry.resetForTests());
 
 describe('webml manifest', () => {
-  it('registers the playground and its commands', () => {
+  it('registers its commands and settings while delegating panes to the IDE', () => {
     registry.register(webmlModule);
-    // The lens lab is the interpretability suite's Lens section now, not a pane.
-    expect((webmlModule.panels ?? []).map((p) => p.id)).toEqual(['webml.playground']);
+    // Both the playground and lens lab are sections of `interpretability.suite` now.
+    expect((webmlModule.panels ?? []).map((p) => p.id)).toEqual([]);
     expect((webmlModule.commands ?? []).map((c) => c.id)).toEqual([
       'webml.openPlayground',
       'webml.openLens',

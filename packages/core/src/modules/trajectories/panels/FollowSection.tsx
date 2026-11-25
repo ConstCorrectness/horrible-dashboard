@@ -20,7 +20,9 @@ import { useContext, useEffect, useMemo, useState, useSyncExternalStore } from '
 
 import { PaneInstanceContext } from '../../../agent-context';
 import { IconClose, IconExternal, IconMinus, IconPin, IconPinOff } from '../../../glyphs';
-import { focusInstance, openPane, revealSection } from '../../../layout/controller';
+import { focusInstance, openPane } from '../../../layout/controller';
+import { SUITE_SECTIONS } from '../../interp/ids';
+import { openSuiteTab } from '../../interp/stage';
 import { listPanes } from '../../../layout/model';
 import { layoutStore } from '../../../layout/store';
 import { EmptyState, PaneHeader } from '../../../Primitives';
@@ -61,7 +63,7 @@ export function FollowSection({ mode = 'pane' }: { mode?: 'pane' | 'drawer' }) {
   const instanceId = useContext(PaneInstanceContext);
   const popOut = () => {
     setTraceDrawer({ open: false });
-    revealSection('follow', 'trajectories.hub');
+    openSuiteTab(SUITE_SECTIONS.runs, { subTab: 'follow' });
   };
   const dockIntoChat = () => {
     setTraceDrawer({ open: true });
@@ -228,9 +230,7 @@ function TurnRail({
 
 /** A turn's provider calls: live from the socket, back-filled on open. */
 function useTurnRequests(turnId: string): RequestSummary[] | undefined {
-  const calls = useSyncExternalStore(subscribeRequests, () =>
-    getTurnRequests(turnId),
-  );
+  const calls = useSyncExternalStore(subscribeRequests, () => getTurnRequests(turnId));
   useEffect(() => {
     void loadTurnRequests(turnId);
   }, [turnId]);
@@ -238,9 +238,7 @@ function useTurnRequests(turnId: string): RequestSummary[] | undefined {
 }
 
 /** One call's bodies, re-read when its status changes (pending → ok). */
-function useRequestDetail(
-  call: RequestSummary | undefined,
-): RequestDetail | null {
+function useRequestDetail(call: RequestSummary | undefined): RequestDetail | null {
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const id = call?.id;
   const status = call?.status;
@@ -257,19 +255,11 @@ function useRequestDetail(
   return detail && detail.id === id ? detail : null;
 }
 
-function TurnView({
-  turnId,
-  focus,
-}: {
-  turnId: string;
-  focus: FollowFocus | null;
-}) {
+function TurnView({ turnId, focus }: { turnId: string; focus: FollowFocus | null }) {
   const calls = useTurnRequests(turnId);
   const list = useMemo(() => calls ?? [], [calls]);
   const [picked, setPicked] = useState<string | null>(null);
-  const [jump, setJump] = useState<{ index: number; nonce: number } | null>(
-    null,
-  );
+  const [jump, setJump] = useState<{ index: number; nonce: number } | null>(null);
 
   // A deep link picks its call once the turn's calls are known, and again for
   // every new nonce: the user may have clicked elsewhere in between.
@@ -306,8 +296,7 @@ function TurnView({
     );
   }
 
-  const pick = (id: string) =>
-    setPicked(id === list[list.length - 1].id ? null : id);
+  const pick = (id: string) => setPicked(id === list[list.length - 1].id ? null : id);
 
   return (
     <div className="traj-follow-main">
@@ -322,12 +311,9 @@ function TurnView({
         <section className="traj-follow-rounds" aria-label="Calls">
           <h3 className="traj-follow-h">
             Calls
-            <span
-              className="traj-follow-h-meta"
-              title={selected?.model || undefined}
-            >
+            <span className="traj-follow-h-meta" title={selected?.model || undefined}>
               {list.length}
-              {selected?.model ? ` · ${selected.model}` : ""}
+              {selected?.model ? ` · ${selected.model}` : ''}
             </span>
           </h3>
           {list.map((call, i) => (
@@ -354,7 +340,7 @@ function TurnView({
 }
 
 const fmtMs = (v: number | null) =>
-  v == null ? "" : v < 1000 ? `${v}ms` : `${(v / 1000).toFixed(1)}s`;
+  v == null ? '' : v < 1000 ? `${v}ms` : `${(v / 1000).toFixed(1)}s`;
 
 /** One provider call and what came back. The selected card opens up: the full
  *  answer, its reasoning folded, each tool it asked for, and the results that
@@ -378,14 +364,14 @@ function CallCard({
 }) {
   const response = detail?.response ?? null;
   const reasoning = reasoningOf(response);
-  const content = typeof response?.content === "string" ? response.content : "";
+  const content = typeof response?.content === 'string' ? response.content : '';
   const asked = toolCallsOf(response);
   const answers = answersIn(response, next);
   return (
     <div
       className="traj-call traj-in"
       aria-current={selected}
-      style={{ ["--traj-i" as string]: Math.min(index, 8) }}
+      style={{ ['--traj-i' as string]: Math.min(index, 8) }}
     >
       <button type="button" className="traj-call-head" onClick={onPick}>
         <span className="traj-call-r" data-status={call.status}>
@@ -393,20 +379,14 @@ function CallCard({
         </span>
         <span style={mono}>
           {fmt(call.estTokens)} est
-          {call.promptTokens != null
-            ? ` · ${fmt(call.promptTokens)} reported`
-            : ""}
+          {call.promptTokens != null ? ` · ${fmt(call.promptTokens)} reported` : ''}
         </span>
         <span style={{ flex: 1 }} />
         {call.reconstructed ? <span style={mono}>rebuilt</span> : null}
-        <span style={mono}>
-          {call.status === "pending" ? "in flight" : fmtMs(call.durationMs)}
-        </span>
+        <span style={mono}>{call.status === 'pending' ? 'in flight' : fmtMs(call.durationMs)}</span>
       </button>
       <div className="traj-call-body">
-        {call.error ? (
-          <div style={{ ...mono, color: "var(--danger)" }}>{call.error}</div>
-        ) : null}
+        {call.error ? <div style={{ ...mono, color: 'var(--danger)' }}>{call.error}</div> : null}
         {!selected ? (
           call.toolNames.length ? (
             <div className="traj-call-chips">
@@ -417,17 +397,13 @@ function CallCard({
               ))}
             </div>
           ) : call.responsePreview ? (
-            <div className="traj-call-text traj-call-preview">
-              {call.responsePreview}
-            </div>
+            <div className="traj-call-text traj-call-preview">{call.responsePreview}</div>
           ) : null
         ) : (
           <>
             {reasoning ? (
               <details className="traj-call-reasoning">
-                <summary style={mono}>
-                  reasoning · {fmt(reasoning.length)} chars
-                </summary>
+                <summary style={mono}>reasoning · {fmt(reasoning.length)} chars</summary>
                 <pre className="traj-call-text">{reasoning}</pre>
               </details>
             ) : null}
@@ -443,16 +419,14 @@ function CallCard({
                 {asked.map((c, k) => (
                   <div key={k} className="traj-call-asked">
                     <span className="traj-call-chip">{c.name}</span>
-                    <span style={mono}>{c.id || "no id"}</span>
+                    <span style={mono}>{c.id || 'no id'}</span>
                   </div>
                 ))}
               </>
             ) : null}
             {answers.length && next ? (
               <>
-                <div className="traj-call-k">
-                  Answered in {requestLabel(next)}
-                </div>
+                <div className="traj-call-k">Answered in {requestLabel(next)}</div>
                 {answers.map((m) => (
                   <button
                     type="button"
@@ -462,7 +436,7 @@ function CallCard({
                     title="Open this result in the next call"
                   >
                     <span style={mono}>#{m.index}</span>
-                    <span>{m.segments[0]?.toolName ?? "tool"}</span>
+                    <span>{m.segments[0]?.toolName ?? 'tool'}</span>
                     <span style={{ flex: 1 }} />
                     <span style={mono}>{fmt(m.tokens)} tok</span>
                   </button>

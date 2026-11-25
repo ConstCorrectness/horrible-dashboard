@@ -12,12 +12,13 @@
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
-import { openPane } from '../../../layout/controller';
 import { useGraphicsQuality } from '../../../graphics';
 import { RollingCounter, entranceProps } from '../../../viz';
 import { useEngineState } from '../../webml/engine';
 import { showToken } from '../../webml/lens-lab/model';
 import { playgroundSource } from '../../webml/playground-state';
+import { SUITE_SECTIONS } from '../ids';
+import { openSuiteTab } from '../stage';
 import { S } from '../styles';
 import { bindNeuronActions } from './actions';
 import { cellOf } from './grid';
@@ -145,12 +146,14 @@ function Empty({ engineKind }: { engineKind: string }) {
         <button
           type="button"
           onClick={() => {
-            // This section only shows GGUF models: land on that picker, not the ONNX catalog.
+            // This section only shows GGUF models: open Playground side-by-side on its GGUF picker.
             if (engineKind !== 'loading') playgroundSource.requestGguf();
-            void openPane('webml.playground');
+            openSuiteTab(SUITE_SECTIONS.playground, { splitWith: SUITE_SECTIONS.neurons });
           }}
         >
-          {engineKind === 'loading' ? 'Watch it load' : 'Open the WebML playground'}
+          {engineKind === 'loading'
+            ? 'Watch it load beside Neurons'
+            : 'Pair WebML Playground beside Neurons'}
         </button>
       </div>
     </div>

@@ -6,12 +6,24 @@
  * and focusing the pane makes it the frame's focused pane — which is what the
  * keybinding service resolves `paneFocus` / `paneInstance` against.
  */
-import { Suspense, useMemo, useRef, useState, type ComponentType } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from 'react';
 import {
   activeSectionOf,
+  clampSize,
+  getSplitSize,
   layoutStore,
   moduleOwningView,
   setModuleEnabled,
+  setSplitSize,
   useModulePackages,
   PaneInstanceContext,
   PaneParamsContext,
@@ -63,6 +75,92 @@ function PaneLoading() {
 /** A section body, or undefined when the section falls through to the pane's own. */
 function bodyOfSection(s: SectionDecl | undefined): ComponentType | undefined {
   return s?.component ?? bodyOfView(s?.view);
+}
+
+const SPLIT_MIN = 260;
+const SPLIT_INITIAL = 520;
+
+/**
+ * Draggable divider between two side-by-side kept-alive sections. Writes the live
+ * width straight to `--stage-left-px` on `.frame-pane-railed-body` during drag and
+ * commits once on pointerup, matching `SplitPane.tsx` so 60 Hz pointer moves never
+ * re-render heavy React Flow or WebGL children.
+ */
+function StageSplitHandle({
+  splitId,
+  stageRef,
+}: {
+  splitId: string;
+  stageRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [size, setSize] = useState(() => getSplitSize(splitId) ?? SPLIT_INITIAL);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+
+  const paint = useCallback(
+    (px: number) => {
+      stageRef.current?.style.setProperty('--stage-left-px', `${px}px`);
+    },
+    [stageRef],
+  );
+
+  useLayoutEffect(() => paint(size), [paint, size]);
+  useEffect(() => {
+    setSize(getSplitSize(splitId) ?? SPLIT_INITIAL);
+  }, [splitId]);
+
+  const commit = useCallback(
+    (next: number) => {
+      sizeRef.current = next;
+      setSize(next);
+      setSplitSize(splitId, next);
+    },
+    [splitId],
+  );
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const span = stageRef.current?.getBoundingClientRect().width ?? 0;
+    if (span <= 0) return;
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const origin = event.clientX;
+    const from = sizeRef.current;
+    let latest = from;
+
+    const onMove = (move: PointerEvent) => {
+      latest = clampSize(from + (move.clientX - origin), span, SPLIT_MIN, SPLIT_MIN);
+      paint(latest);
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(event.pointerId);
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      commit(latest);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  };
+
+  return (
+    <div
+      className="frame-stage-split-handle"
+      role="separator"
+      tabIndex={0}
+      aria-orientation="vertical"
+      aria-label="Split stage width"
+      style={{ order: 2 }}
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => {
+        const span = stageRef.current?.getBoundingClientRect().width ?? SPLIT_INITIAL * 2;
+        commit(clampSize(Math.round(span / 2), span, SPLIT_MIN, SPLIT_MIN));
+      }}
+      title="Drag to resize split · double-click to 50/50"
+    />
+  );
 }
 
 /**
@@ -121,6 +219,7 @@ export function PaneHost({ pane }: { pane: PaneState }) {
   // Sections a keep-alive pane has shown since it mounted. Mounting lazily is the
   // point: opening the pane must not boot every section's canvases at once.
   const visited = useRef(new Set<string>());
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const decl = resolveView(viewId);
   if (!decl) {
@@ -141,8 +240,51 @@ export function PaneHost({ pane }: { pane: PaneState }) {
   // Keep-alive only covers sections with a body of their own: one that falls
   // through to the pane's component has nothing separate to keep.
   const keepAlive = Boolean(decl.sectionsKeepAlive) && Boolean(sectionBody);
+
+  // Side-by-side companion section (`allowSectionSplit`). Both slots stay mounted at
+  // their flat `[s.id]` fiber keys and are positioned via CSS flex `order`, so
+  // turning split on/off or clicking between left and right halves never unmounts
+  // WebGL or graph canvases.
+  const rawSplit =
+    keepAlive && decl.allowSectionSplit && typeof params?.splitSection === 'string'
+      ? params.splitSection
+      : undefined;
+  const splitSection =
+    rawSplit && rawSplit !== activeSection && sections.some((s) => s.id === rawSplit)
+      ? rawSplit
+      : undefined;
+  const primarySide: 'left' | 'right' = params?.splitPrimarySide === 'right' ? 'right' : 'left';
+
   if (keepAlive && activeSection) visited.current.add(activeSection);
+  if (keepAlive && splitSection) visited.current.add(splitSection);
   const rail = decl.sectionsLayout === 'rail' && sections.length > 1;
+  const StageHeader = decl.stageHeader;
+
+  // Focusing the secondary split slot makes it `activeSection` (so `paneSection`
+  // keybindings and agent context follow focus immediately) while flipping
+  // `splitPrimarySide` so neither pane jumps across the divider.
+  const focusSplitSlot = (targetSection: string) => {
+    if (!splitSection || !activeSection || targetSection === activeSection) return;
+    const nextSide: 'left' | 'right' = primarySide === 'left' ? 'right' : 'left';
+    layoutStore.dispatch({
+      type: 'SET_PANE_PARAMS',
+      instanceId,
+      params: {
+        ...(params ?? {}),
+        splitSection: activeSection,
+        splitPrimarySide: nextSide,
+      },
+    });
+    setPaneSection(instanceId, targetSection);
+  };
+
+  const pickSection = (id: string) => {
+    if (splitSection && id === splitSection) {
+      focusSplitSlot(id);
+      return;
+    }
+    setPaneSection(instanceId, id);
+  };
 
   // Focus (any descendant) and pointerdown both count — a click on non-focusable
   // pane content still selects the pane.
@@ -164,28 +306,53 @@ export function PaneHost({ pane }: { pane: PaneState }) {
 
   function body() {
     if (keepAlive) {
-      // Every visited section stays mounted; only the active one is displayed.
-      // `display: contents` keeps the active body a direct flex child of the host,
-      // exactly where a non-kept body would sit.
-      return sections
-        .filter((s) => visited.current.has(s.id))
-        .map((s) => {
-          const Body = bodyOfSection(s);
-          if (!Body) return null;
-          return (
-            <div
-              key={s.id}
-              className="frame-section-keep"
-              style={{ display: s.id === activeSection ? 'contents' : 'none' }}
-            >
-              <SectionInstanceContext.Provider value={s.id}>
-                <Suspense fallback={<PaneLoading />}>
-                  <Body />
-                </Suspense>
-              </SectionInstanceContext.Provider>
-            </div>
-          );
-        });
+      const isSplit = Boolean(splitSection && activeSection);
+      const leftId = isSplit ? (primarySide === 'left' ? activeSection : splitSection) : undefined;
+      const rightId = isSplit ? (primarySide === 'left' ? splitSection : activeSection) : undefined;
+
+      // Every visited section stays mounted; non-split active uses `display: contents`
+      // while split mode places the two active slots side-by-side via flex order.
+      return (
+        <>
+          {sections
+            .filter((s) => visited.current.has(s.id))
+            .map((s) => {
+              const Body = bodyOfSection(s);
+              if (!Body) return null;
+              const isPrimary = s.id === activeSection;
+              const isSecondary = isSplit && s.id === splitSection;
+              const shown = isPrimary || isSecondary;
+              const isLeft = isSplit && s.id === leftId;
+              const isRight = isSplit && s.id === rightId;
+              return (
+                <div
+                  key={s.id}
+                  className={
+                    `frame-section-keep` +
+                    (isLeft ? ' is-split-left' : '') +
+                    (isRight ? ' is-split-right' : '') +
+                    (isSplit && isPrimary ? ' is-split-focused' : '')
+                  }
+                  style={{
+                    display: !shown ? 'none' : isSplit ? 'flex' : 'contents',
+                    order: isLeft ? 1 : isRight ? 3 : 0,
+                  }}
+                  onPointerDownCapture={isSecondary ? () => focusSplitSlot(s.id) : undefined}
+                  onFocusCapture={isSecondary ? () => focusSplitSlot(s.id) : undefined}
+                >
+                  <SectionInstanceContext.Provider value={s.id}>
+                    <Suspense fallback={<PaneLoading />}>
+                      <Body />
+                    </Suspense>
+                  </SectionInstanceContext.Provider>
+                </div>
+              );
+            })}
+          {isSplit ? (
+            <StageSplitHandle splitId={`${viewId}:stage-split`} stageRef={stageRef} />
+          ) : null}
+        </>
+      );
     }
     return (
       // The section slot is supplied only when *we* render the section body.
@@ -199,6 +366,8 @@ export function PaneHost({ pane }: { pane: PaneState }) {
       </SectionInstanceContext.Provider>
     );
   }
+
+  const isSplitStage = Boolean(keepAlive && splitSection && activeSection);
 
   return (
     <PaneInstanceContext.Provider value={instanceId}>
@@ -219,17 +388,22 @@ export function PaneHost({ pane }: { pane: PaneState }) {
                 viewId={viewId}
                 sections={sections}
                 active={activeSection}
-                onPick={(id) => setPaneSection(instanceId, id)}
+                secondaryActive={splitSection}
+                onPick={pickSection}
               />
-              <div className="frame-pane-railed-body">{body()}</div>
+              <div className="frame-pane-railed-main">
+                {StageHeader ? <StageHeader /> : null}
+                <div
+                  ref={stageRef}
+                  className={`frame-pane-railed-body${isSplitStage ? ' frame-pane-railed-body--split' : ''}`}
+                >
+                  {body()}
+                </div>
+              </div>
             </div>
           ) : (
             <>
-              <SectionTabs
-                sections={sections}
-                active={activeSection}
-                onPick={(id) => setPaneSection(instanceId, id)}
-              />
+              <SectionTabs sections={sections} active={activeSection} onPick={pickSection} />
               {body()}
             </>
           )}

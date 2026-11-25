@@ -34,6 +34,7 @@ export {
   IconShuffle,
   IconSkipNext,
   IconSkipPrev,
+  IconSplit,
   IconTrash,
   IconVolume,
   NAMED_GLYPHS,
@@ -369,6 +370,7 @@ export {
   useGraphicsQuality,
   type GraphicsQuality,
 } from './graphics';
+export { clampSize, getSplitSize, setSplitSize } from './split-sizes';
 export { lazyPane } from './lazy-pane';
 export * from './module-packages';
 export { defineModule, type ModuleContext, type ModuleDefinition } from './module-def';

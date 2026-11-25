@@ -33,7 +33,7 @@ measuring a catalog nobody ever ships.
 
 ### The seam
 
-`_call_frontend_tool` registers a future in `conn.pending[callId]` and *then*
+`_call_frontend_tool` registers a future in `conn.pending[callId]` and _then_
 awaits `conn.send_json`. So an object whose `send_json` resolves that future is a
 complete stand-in for a browser — no monkeypatching of orchestrator internals, and
 nothing to keep in sync as the orchestrator changes.
@@ -76,7 +76,7 @@ not reach into each other. One proven copy, two callers.
 A case supplies `fixtures`: what each tool returns. Running the real tool would
 make a suite **destructive** (`files.delete` is in the catalog), **unrepeatable**
 (the result would depend on what happened to be open), and slow. What is graded is
-the *choice*; the fixture is what lets a multi-step case continue past it.
+the _choice_; the fixture is what lets a multi-step case continue past it.
 
 A tool with no fixture returns a bland `{"ok": true}` rather than an error —
 otherwise the model's next move is a reaction to a broken tool, and the case ends
@@ -116,20 +116,20 @@ eval.
 A single "did it call the right tool" check is wrong in both directions at once. It
 fails a model that called the right tool with a harmless extra argument, and it
 passes a model that fired a tool at a question that wanted an answer. Both are the
-*normal* behaviour of a small model.
+_normal_ behaviour of a small model.
 
-| Grade | Passes when |
-| --- | --- |
-| `exact` | name and arguments identical |
-| `name_only` | the right tool; arguments unchecked |
-| `subset` | every expected argument present and equal, extras tolerated (**default**) |
-| `sequence` | the expected calls in order, as a **subsequence** — a model that looked something up first was careful, not wrong |
-| `no_call` | no tool at all |
-| `judge` | an LLM grades the answer against a rubric — **declared, not selectable** |
+| Grade       | Passes when                                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `exact`     | name and arguments identical                                                                                      |
+| `name_only` | the right tool; arguments unchecked                                                                               |
+| `subset`    | every expected argument present and equal, extras tolerated (**default**)                                         |
+| `sequence`  | the expected calls in order, as a **subsequence** — a model that looked something up first was careful, not wrong |
+| `no_call`   | no tool at all                                                                                                    |
+| `judge`     | an LLM grades the answer against a rubric — **declared, not selectable**                                          |
 
 **`judge` is rejected at validation.** The judge needs a provider and `graders.py`
 is deliberately pure, so nothing routes it: a case selecting it fails every time it
-runs, and the failure reads as the *model* getting it wrong — the one misreading
+runs, and the failure reads as the _model_ getting it wrong — the one misreading
 this module exists to prevent. The frontend's picker never offered it; `Expect.grade`
 now refuses it too, closing the two paths that bypass the picker (an agent-authored
 case and a hand-edited `.jsonl`). It stays in the `Grade` vocabulary because a
@@ -156,11 +156,11 @@ both. It is also what makes results comparable: if exposure came from whatever t
 node's settings happened to be, two runs of the same suite would not be measuring
 the same thing.
 
-| Mode | The model sees |
-| --- | --- |
-| `progressive` | the shipped path — a small core plus `list_tool_groups`/`load_tools`, `preload` as a head start |
-| `all` | every group at once, still capped by `TOOL_BUDGET`. The comparison that says whether disclosure earns its keep |
-| `explicit` | only the named groups, and it cannot load its way out — for isolating one capability |
+| Mode          | The model sees                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| `progressive` | the shipped path — a small core plus `list_tool_groups`/`load_tools`, `preload` as a head start                |
+| `all`         | every group at once, still capped by `TOOL_BUDGET`. The comparison that says whether disclosure earns its keep |
+| `explicit`    | only the named groups, and it cannot load its way out — for isolating one capability                           |
 
 ### What the budget cut is recorded
 
@@ -175,19 +175,19 @@ rendered for a long time; nothing ever filled it.
 
 "Dropped" means **cut from the largest catalog the case reached**:
 
-| Mode | `tools_dropped` |
-| --- | --- |
-| `all` | the cut of the one list the run started with |
+| Mode          | `tools_dropped`                                                                                                                                                                                                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`         | the cut of the one list the run started with                                                                                                                                                                                                                                                                              |
 | `progressive` | the cut of the **final** selection. The catalog grows as the model calls `load_tools`, so a tool in a group it loaded, which the budget then refused to show it, was dropped just as surely as one cut up front. A group the model never loaded is out of scope, not dropped — that is disclosure working, not the budget |
-| `explicit` | always empty: that mode is uncapped by design |
+| `explicit`    | always empty: that mode is uncapped by design                                                                                                                                                                                                                                                                             |
 
 One recomputation after the loop is enough, because the selection only grows by
 appending groups and the cap slices from the tail: a tool past the budget in an early
 round is still past it in the last.
 
 When a **failing** case's expected tool is among them, the result's `detail` leads
-with *"expected tool … was dropped by the tool budget and never offered to the
-model"*, and the Results pane says the same in place of the generic budget line.
+with _"expected tool … was dropped by the tool budget and never offered to the
+model"_, and the Results pane says the same in place of the generic budget line.
 That failure measured the catalog, not the model, and the red verdict beside it says
 the opposite. A pass is left alone — a case that succeeded without the tool was not
 held back by its absence.
@@ -211,7 +211,7 @@ name yours.
 They are **read-only**. Writing would edit a file inside the repo — you would lose
 it on the next pull and it would show as a dirty working tree in the meantime —
 so a write returns **409** and names the way through: fork it. `fork_suite` copies
-the *cases* rather than the file, so a fork is normalised through the same parser
+the _cases_ rather than the file, so a fork is normalised through the same parser
 everything else uses and a suite with a broken line does not carry it forward.
 
 A bundled id arrives from a URL, so `bundled:../../secrets` must not become a path.
@@ -224,9 +224,9 @@ starter is there to fork, read, or run as-is.
 
 ### What is in it
 
-`suites/starter.jsonl` — the failures a small model running *this* dashboard has,
+`suites/starter.jsonl` — the failures a small model running _this_ dashboard has,
 which are not the ones a generic tool-calling benchmark covers: the layout floor,
-negatives (including one preloaded with the *tempting* group), discovery through
+negatives (including one preloaded with the _tempting_ group), discovery through
 `load_tools`, multi-step cases where the second argument can only come from the
 first tool's result, and a context case where the answer is already in the
 workspace snapshot. Blank lines and `#` comments are skipped by the loader, so the
@@ -298,18 +298,18 @@ the model.** Read the tool declaration before writing what you expect of it.
 
 The four remaining failures are real, and they cluster:
 
-| Case | Tools offered | What happened |
-| --- | --- | --- |
-| `discovery-github-repos` | 12 | called nothing at all |
-| `discovery-library-search` | 12 | `show(target="notes about vector databases")`, then `files.list(path="library/notes")` |
-| `negative-greeting` | 12 | called `show` twice, over 9 rounds, at "hey, are you there?" |
-| `negative-ambiguous-reference` | 30 | `show(target="People")` at "close it" |
+| Case                           | Tools offered | What happened                                                                          |
+| ------------------------------ | ------------- | -------------------------------------------------------------------------------------- |
+| `discovery-github-repos`       | 12            | called nothing at all                                                                  |
+| `discovery-library-search`     | 12            | `show(target="notes about vector databases")`, then `files.list(path="library/notes")` |
+| `negative-greeting`            | 12            | called `show` twice, over 9 rounds, at "hey, are you there?"                           |
+| `negative-ambiguous-reference` | 30            | `show(target="People")` at "close it"                                                  |
 
 Both **discovery** cases failed — the two whose capability was reachable only by
 calling `load_tools`. This model never called it. It has, in practice, **no access
 to the library or GitHub at all**, no matter how well it calls the tools it can
 already see. Note the second row especially: rather than loading the group, it
-tried to reach the library by *guessing at the filesystem*.
+tried to reach the library by _guessing at the filesystem_.
 
 That is precisely the question the module was built to ask — progressive
 disclosure and `TOOL_BUDGET` were mitigations nobody had measured — and the answer
@@ -329,7 +329,7 @@ A malformed suite is still **listable and openable** — the case count is taken
 leniently — because one bad line must not take out the suite list and leave no way
 to reach the file and fix it. The parse error, with its line number, is reported by
 `GET /suites/{id}/cases` on a **200**, since the pane needs to render the suite
-*with* the error rather than show a toast over nothing.
+_with_ the error rather than show a toast over nothing.
 
 A duplicate case id is refused outright: results are keyed by `(run, case)`, so the
 second one would overwrite the first and the suite would silently be one case
@@ -340,7 +340,7 @@ shorter than it looks.
 A sweep runs **detached under its own semaphore, not on the shared task queue**.
 That queue is serial, and parking every library ingest behind a 200-case × 6-model
 sweep would make the eval module something you avoid running — the same reasoning
-as karaoke downloads. The limit is per *target*, not per case: most local setups
+as karaoke downloads. The limit is per _target_, not per case: most local setups
 have one model server, so more concurrency would not finish sooner, it would just
 make every per-case duration a measurement of queueing.
 
@@ -351,7 +351,7 @@ open.
 
 Two failures that are deliberately distinguished:
 
-- A target that **cannot be resolved** fails as a *run*, not as N failed cases.
+- A target that **cannot be resolved** fails as a _run_, not as N failed cases.
   "Your endpoint is wrong" and "this model gets everything wrong" look identical on
   a scoreboard otherwise.
 - A **provider error mid-sweep** is a failed row carrying the error, not a dead
@@ -368,7 +368,7 @@ in flight finished, which on a stuck endpoint is the timeout and the whole reaso
 press stop. Cancellation then has to close the rows out by hand — a `CancelledError`
 is raised inside whichever await is in flight and by the time it reaches the sweep's
 own task the gather has discarded which children were running, so run ids are handed
-*up* as each row is created. Unfinished runs become **`cancelled`**, not `failed`:
+_up_ as each row is created. Unfinished runs become **`cancelled`**, not `failed`:
 "you stopped it" and "it broke" are different facts and the scoreboard reads a
 failed run as a signal about the model. A target that finished before the cancel
 landed keeps its verdict.
@@ -377,7 +377,7 @@ Aggregates go to [localtrack](localtrack.mdx) (one run per sweep) so the existin
 charts do the plotting, into a project derived from the **suite** rather than one
 `evals` bucket for everything — localtrack charts a project's runs against each
 other, so pouring a tool-calling suite and an MMLU benchmark into one project plots
-two unrelated pass rates on the same axis. Wrapped in swallows throughout: localtrack is a *reporting*
+two unrelated pass rates on the same axis. Wrapped in swallows throughout: localtrack is a _reporting_
 destination and a tracking failure must never cost a run the results already in
 `app.db`. The mirroring itself is now `localtrack.mirror.RunMirror`, shared with the
 [training](training.mdx) module — the four moves and the swallow-everything posture are
@@ -390,7 +390,7 @@ the other does not.
 `GET /api/evals/targets` offers the node's configured agent provider **and every
 GGUF in the [llama.cpp](llamacpp.mdx) catalog**, managed origin first — because
 after a fine-tune the file you want to score is the one this node just wrote. It
-used to offer llama.cpp *installs*: builds, emitted with an empty `model`, so the
+used to offer llama.cpp _installs_: builds, emitted with an empty `model`, so the
 one target that mattered on the machine was the one you could not pick.
 
 A target therefore names a **file**, not just a model id (`RunTarget.model_path`).
@@ -421,13 +421,13 @@ llama-server took an ephemeral one.
 A target this node **trained** also carries its provenance. `GET /targets` joins the
 [model lineage](training.mdx#the-conversion-records-where-the-file-came-from) table in
 one query for the whole catalog (a lookup per row would be a query per file on every
-page load), so a converted fine-tune reads *"— fine-tune of meta-llama/Llama-3.2-3B"*
+page load), so a converted fine-tune reads _"— fine-tune of meta-llama/Llama-3.2-3B"_
 and exposes `baseModel` / `projectId` alongside it. That is the whole of "score my
 fine-tune against its base": the base is a field rather than something you have to
 remember. Absent for every model the user merely downloaded, which is the normal case
 and renders as no provenance rather than as a guess.
 
-Each target also carries its `architecture` from the GGUF header. That is *shown*
+Each target also carries its `architecture` from the GGUF header. That is _shown_
 in the picker, never filtered on: it is what marks the `nomic-bert` embedder or a
 TTS model living in the same directory, while a header that could not be parsed is
 no evidence at all — hiding a model on that basis would present a guess as a
@@ -439,7 +439,7 @@ The frontend tool catalog only exists on a live connection — panes push their
 `agentTools` onto the socket and there is no server-side copy. A sweep with nothing
 connected would grade every model against backend tools only and score them all at
 zero on anything UI-shaped, so it **refuses with that reason** instead. When
-several windows are connected, the *richest* manifest wins, so a second window
+several windows are connected, the _richest_ manifest wins, so a second window
 still registering its panes cannot hand the sweep a shorter catalog than the one
 you are looking at.
 
@@ -453,7 +453,7 @@ indistinguishable from a model that gets everything wrong.
 
 The run row records the node it ran on, and shows it only when that was somebody
 else's machine. **Recorded, not inferred:** a peer target reaches its lender
-through a *local* tunnel port, so the endpoint on the row reads `127.0.0.1` for a
+through a _local_ tunnel port, so the endpoint on the row reads `127.0.0.1` for a
 remote run exactly as it does for a local one. The sweep then takes a compute
 [lease](network.mdx#compute-lending) on that peer and points the target at the
 tunnel endpoint — everything downstream is unchanged, because a borrowed endpoint
@@ -467,7 +467,7 @@ would serialize away the whole reason for distributing a sweep.
 
 Two rules carry over unchanged from `llama_target.serving`:
 
-- **A lease that cannot be granted fails the *run*, not the cases.** "Your friend
+- **A lease that cannot be granted fails the _run_, not the cases.** "Your friend
   said no" and "this model gets everything wrong" must not look alike on a
   scoreboard — the same reasoning as an unloadable GGUF.
 - **The lease is released in a `finally`.** A sweep that dies must not leave a
@@ -475,7 +475,7 @@ Two rules carry over unchanged from `llama_target.serving`:
 
 ## Running on a friend's agent
 
-A peer target borrows a friend's *GPU*; grading, the catalog and the harness stay
+A peer target borrows a friend's _GPU_; grading, the catalog and the harness stay
 here. The Run section's **On a friend's agent** block does something different: it
 hands the cases to the friend's node, which runs them through **its own**
 `run_agent_loop` — its skills, its MCP servers, its model — and reports each verdict
@@ -524,7 +524,7 @@ report results into it.
 Only cases `run_case` executes in-process with `simulate`, so **no tool acts on their
 machine**: every call gets the offerer's fixture. `hf_benchmark` cases (a venv, and
 for `code_exec` model-written code) and `judge` grades (a second model call nobody
-estimated, against a judge the *offerer* names) are refused **on the runner** — the
+estimated, against a judge the _offerer_ names) are refused **on the runner** — the
 offerer leaves them out too and says how many, but that is a courtesy, not the gate.
 
 ### Honesty about what came back
@@ -534,8 +534,8 @@ offerer leaves them out too and says how many, but that is a courtesy, not the g
   covers skills and MCP tools — **not model weights**. A friend reporting `qwen3:8b`
   could be running a fine-tune.
 - So the run is stored with `attestation = 'peer'`. It ranks beside local runs, never
-  merged into them: the ranking row says *peer-reported*, and Compare's harness banner
-  says the catalog was *reported* — even when the hashes match, which then means only
+  merged into them: the ranking row says _peer-reported_, and Compare's harness banner
+  says the catalog was _reported_ — even when the hashes match, which then means only
   "they reported the same catalog".
 - **`case_hash` is computed here, from this node's case**, never taken from the reply:
   the question asked is the offerer's to vouch for.
@@ -554,18 +554,13 @@ peer runs as **failed** with that reason, rather than leaving them `running` for
 
 ## Contributions to the layout shell
 
-| Kind | Id | Notes |
-| --- | --- | --- |
-| Panel | `evals.hub` | "Evals"; singleton, role `document` |
-| Section | `evals.hub` → `suites` | Default, key <kbd>s</kbd> |
-| Section | `evals.hub` → `run` | Key <kbd>r</kbd> |
-| Section | `evals.hub` → `results` | Key <kbd>e</kbd> |
-| Section | `evals.hub` → `compare` | Key <kbd>c</kbd> |
-| Command | `evals.open` | Evals: Open |
+| Kind    | Id                                                    | Notes                                                                                                                                                                                   |
+| ------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Section | `interpretability.suite` → `evals`                    | Hosted inside the [Interpretability IDE](./interp-suite.mdx) with `suites`, `run`, `results`, and `compare` sub-tabs (`evals.hub` resolves here via `RENAMED_VIEWS` and `VIEW_ALIASES`) |
+| Command | `evals.open`                                          | Evals: Open suites & benchmarks                                                                                                                                                         |
+| Command | `section.show:evals.hub:{suites,run,results,compare}` | Shims preserving deep-link callers (`LocalModels`, `RecipePane`)                                                                                                                        |
 
-One pane with four sections rather than four panes: Suites, Run, Results and
-Compare are four views of the same object, and splitting them would mean four
-openers and four copies of "which suite are we talking about".
+Every result row with a `turn_id` offers **debug beside** (splits the 4-column Turn Debugger right next to `Evals`) as well as jumping to `turn <id>`.
 
 The Suites section carries a **case editor** — id, prompt, grade, exposure,
 expected calls — plus Fork, Edit and Delete. It is deliberately shallow: anything
@@ -596,7 +591,7 @@ They now compose `DataList` / `DataRow` / `PickRow` from
   count, duration and percentage. Never the title's treatment, so a row scans as
   label-then-figures at a glance.
 - **Verdict** (`data-kind`) — a 2px rail down the leading edge and a matching corner
-  notch. An accent *edge*, not an accent perimeter: the row stays a row instead of
+  notch. An accent _edge_, not an accent perimeter: the row stays a row instead of
   becoming a card.
 
 The type contract is the design. There is no `color` or `style` prop — a caller that
@@ -628,51 +623,51 @@ counter reading `0` for a figure that is `62` is worse than no animation at all.
 
 `backend/modules/evals/`, mounted at `/api/evals`.
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/evals/suites` | Every suite, with case counts |
-| `POST /api/evals/suites` | Create one, empty |
-| `POST /api/evals/suites/{id}/fork` | Copy a suite into a new one you own |
-| `GET /api/evals/suites/{id}/cases` | The parsed cases, or a line-numbered parse error on a 200 |
-| `PUT /api/evals/suites/{id}/cases` | Rewrite the file (the case editor and the authoring tools). **409** for a bundled one |
-| `DELETE /api/evals/suites/{id}` | Forget a suite. The **file survives** unless `remove_file=true`. **409** for a bundled one |
-| `GET /api/evals/runs` | Recent runs, optionally by suite |
-| `GET /api/evals/runs/{id}` | One run and every case result |
-| `POST /api/evals/runs` | Start a sweep. Returns **immediately** |
-| `GET /api/evals/sweeps` | What is running on this node right now, with target labels |
-| `DELETE /api/evals/sweeps/{key}` | Stop a sweep. Targets it already finished keep their results |
-| `GET /api/evals/leaderboard` | A suite's runs: ranking, case matrix, universal failures |
-| `GET /api/evals/leaderboard/diff` | What one run fixed and broke relative to another |
-| `GET /api/evals/datasets/splits` | The (config, split) pairs a Hub dataset offers |
-| `POST /api/evals/datasets/peek` | Columns and a few real rows, without downloading it |
-| `POST /api/evals/datasets/compare-preview` | What a case would compare, for one row, plus everything wrong with it |
-| `GET /api/evals/datasets/presets` | Known-good benchmark blocks for datasets whose answer column is a trap |
-| `POST /api/evals/exports` | Turn a run's results into an SFT dataset on disk |
-| `GET /api/evals/exports/preview` | The first few examples, without writing a file |
-| `GET /api/evals/targets` | Models this node could sweep — the agent provider plus every catalog GGUF — so the launcher is a picker not a form |
-| `GET /api/evals/remote/friends` | Connected friends whose node understands suite offers |
-| `POST /api/evals/remote/offer` | Offer a suite to a friend's agent; **409** with the reason when refused |
-| `DELETE /api/evals/remote/runs/{id}` | Withdraw an offer, pending or running |
-| `GET /api/evals/remote/offers` | Offers friends sent this node, and whether it is accepting |
-| `POST /api/evals/remote/offers/{id}/accept` | Accept one — needs a browser attached, like a sweep |
-| `POST /api/evals/remote/offers/{id}/decline` | Decline one; the friend's run row records it |
-| `POST /api/evals/remote/offers/{id}/stop` | Stop a friend's suite running on this node |
+| Route                                        | Purpose                                                                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/evals/suites`                      | Every suite, with case counts                                                                                      |
+| `POST /api/evals/suites`                     | Create one, empty                                                                                                  |
+| `POST /api/evals/suites/{id}/fork`           | Copy a suite into a new one you own                                                                                |
+| `GET /api/evals/suites/{id}/cases`           | The parsed cases, or a line-numbered parse error on a 200                                                          |
+| `PUT /api/evals/suites/{id}/cases`           | Rewrite the file (the case editor and the authoring tools). **409** for a bundled one                              |
+| `DELETE /api/evals/suites/{id}`              | Forget a suite. The **file survives** unless `remove_file=true`. **409** for a bundled one                         |
+| `GET /api/evals/runs`                        | Recent runs, optionally by suite                                                                                   |
+| `GET /api/evals/runs/{id}`                   | One run and every case result                                                                                      |
+| `POST /api/evals/runs`                       | Start a sweep. Returns **immediately**                                                                             |
+| `GET /api/evals/sweeps`                      | What is running on this node right now, with target labels                                                         |
+| `DELETE /api/evals/sweeps/{key}`             | Stop a sweep. Targets it already finished keep their results                                                       |
+| `GET /api/evals/leaderboard`                 | A suite's runs: ranking, case matrix, universal failures                                                           |
+| `GET /api/evals/leaderboard/diff`            | What one run fixed and broke relative to another                                                                   |
+| `GET /api/evals/datasets/splits`             | The (config, split) pairs a Hub dataset offers                                                                     |
+| `POST /api/evals/datasets/peek`              | Columns and a few real rows, without downloading it                                                                |
+| `POST /api/evals/datasets/compare-preview`   | What a case would compare, for one row, plus everything wrong with it                                              |
+| `GET /api/evals/datasets/presets`            | Known-good benchmark blocks for datasets whose answer column is a trap                                             |
+| `POST /api/evals/exports`                    | Turn a run's results into an SFT dataset on disk                                                                   |
+| `GET /api/evals/exports/preview`             | The first few examples, without writing a file                                                                     |
+| `GET /api/evals/targets`                     | Models this node could sweep — the agent provider plus every catalog GGUF — so the launcher is a picker not a form |
+| `GET /api/evals/remote/friends`              | Connected friends whose node understands suite offers                                                              |
+| `POST /api/evals/remote/offer`               | Offer a suite to a friend's agent; **409** with the reason when refused                                            |
+| `DELETE /api/evals/remote/runs/{id}`         | Withdraw an offer, pending or running                                                                              |
+| `GET /api/evals/remote/offers`               | Offers friends sent this node, and whether it is accepting                                                         |
+| `POST /api/evals/remote/offers/{id}/accept`  | Accept one — needs a browser attached, like a sweep                                                                |
+| `POST /api/evals/remote/offers/{id}/decline` | Decline one; the friend's run row records it                                                                       |
+| `POST /api/evals/remote/offers/{id}/stop`    | Stop a friend's suite running on this node                                                                         |
 
 ## Agent tools
 
 Group `evals` — name prefix and declared `group=` identical, since an omitted
 `group=` charges the schema to every round of every agent.
 
-| Tool | Purpose |
-| --- | --- |
-| `evals.listSuites` | What suites exist, with case counts, `source` and `readOnly` |
-| `evals.createSuite` | A new, empty suite to add cases to |
-| `evals.fork` | Copy a suite — how a bundled one becomes editable |
-| `evals.addCase` | Append one case. Refuses a duplicate id |
-| `evals.removeCase` | Delete one case by id |
-| `evals.run` | Start a sweep; returns immediately |
-| `evals.export` | Turn a run's results into a fine-tuning dataset |
-| `evals.results` | Recent runs, or one run's **failing** cases and why each failed |
+| Tool                | Purpose                                                         |
+| ------------------- | --------------------------------------------------------------- |
+| `evals.listSuites`  | What suites exist, with case counts, `source` and `readOnly`    |
+| `evals.createSuite` | A new, empty suite to add cases to                              |
+| `evals.fork`        | Copy a suite — how a bundled one becomes editable               |
+| `evals.addCase`     | Append one case. Refuses a duplicate id                         |
+| `evals.removeCase`  | Delete one case by id                                           |
+| `evals.run`         | Start a sweep; returns immediately                              |
+| `evals.export`      | Turn a run's results into a fine-tuning dataset                 |
+| `evals.results`     | Recent runs, or one run's **failing** cases and why each failed |
 
 Everything that writes is `side_effect=True` and so goes through the permission
 gate — a read-only tool skips it entirely, which would mean an agent editing your
@@ -686,7 +681,7 @@ the one thing an agent's context does not need.
 An earlier version withheld the authoring tools on the grounds that the thing under
 test should not write its own exam. That was too broad. Drafting twenty cases from
 a set of tool descriptions is exactly the tedious work worth delegating; what
-matters is that a case is a *claim about correct behaviour* and that you review the
+matters is that a case is a _claim about correct behaviour_ and that you review the
 claim — and since a suite is a `.jsonl` in your data dir, reviewing means reading a
 diff.
 
@@ -701,7 +696,7 @@ mode an authoring agent actually has, which is enthusiasm rather than malice:
 
 `listSuites` reports `source` and `readOnly` for the same reason: it saves the
 model a failed write and a wasted round. `addCase` also accepts the case as a JSON
-*string* as well as an object, because small models routinely stringify an
+_string_ as well as an object, because small models routinely stringify an
 object-typed argument and a retry round costs more than a `json.loads`.
 
 ## Runner B: benchmarks in a project venv
@@ -726,7 +721,7 @@ runs — losing it because `uv` is missing would be a poor trade.
 ### That project is working storage, and says so
 
 `ensure_project` goes **straight to `projects.create_project`**, not through the
-training create *route* — so it gets a directory and a venv, but no scaffolded
+training create _route_ — so it gets a directory and a venv, but no scaffolded
 `main.ipynb` (the route is what asks a provider for starter cells), and the venv
 holds only `requirements_for(cases)`: no `ipykernel`, no `horrible_train`.
 
@@ -734,7 +729,7 @@ That is correct for a benchmark runner and wrong for a notebook. Since the proje
 lands under the training projects root, the [training](training.mdx) pane listed it
 as an ordinary project with an **Open notebook** button whose only possible outcome
 was an error — and the error it produced was a bare `FileNotFoundError`, whose
-`str()` is *only the path*, rendered beside a kernel badge still reading "starting".
+`str()` is _only the path_, rendered beside a kernel badge still reading "starting".
 
 So these projects carry `ProjectModel.owner = "evals"`. The training pane **marks
 them rather than hiding them** — the same call the bundled suites above make — and
@@ -773,7 +768,7 @@ produce a script that fails to parse.
 ### Answer extraction, and the 0.000 that was not the model's fault
 
 The first real benchmark — six rows of GSM8K against a local 3B — scored **0.000**.
-The model was fine. GSM8K stores the *worked solution* in its answer column and
+The model was fine. GSM8K stores the _worked solution_ in its answer column and
 marks the final answer with a separator:
 
 ```text
@@ -807,7 +802,7 @@ broken rather than that the key is misspelled.
 
 This was not hypothetical — it is how the regexes above were lost the first time. A
 case written against a newer schema than the running backend had two fields dropped
-on the way in, and the only symptom was a benchmark scoring 0.000 *again*, for a
+on the way in, and the only symptom was a benchmark scoring 0.000 _again_, for a
 completely different reason. Every case model now sets `extra="forbid"`, so an
 unknown field is a 422 naming the field. The cost is that an older backend refuses
 a suite written for a newer one; that is the right trade, since a loud refusal
@@ -832,7 +827,7 @@ with a note rather than blocking the form.
 
 **Presets.** GSM8K, MMLU, HellaSwag and TruthfulQA ship as known-good blocks,
 because each has a trap: GSM8K's `####` separator, MMLU and HellaSwag storing the
-answer as an *index* into a list column. A preset is cheaper than a paragraph nobody
+answer as an _index_ into a list column. A preset is cheaper than a paragraph nobody
 reads at the moment they need it, and `backend/modules/evals/presets.py` is that
 paragraph anyway for the ones that are not covered.
 
@@ -857,8 +852,8 @@ hold just the answer, because a warning people learn to ignore is worse than non
 are real functions in `harness.py` and are inlined into the generated script via
 `inspect.getsource`, so the preview, the script, and the score all run the same
 code. A TypeScript reimplementation in the form would have been the obvious way to
-make the preview instant, and the thing it could quietly disagree about is *what the
-score means* — which is the one disagreement this module cannot afford. The preview
+make the preview instant, and the thing it could quietly disagree about is _what the
+score means_ — which is the one disagreement this module cannot afford. The preview
 is a backend call for that reason alone.
 
 ### Validation before the run, not during it
@@ -883,7 +878,7 @@ compare.
 The obvious design — record what the model did and train on it — is wrong in both
 directions. For a case the model **failed**, its trajectory is the mistake you are
 trying to remove. For one it **passed**, its trajectory and the ideal one are the
-same thing anyway. So an example is built from the *case*: the prompt it was given,
+same thing anyway. So an example is built from the _case_: the prompt it was given,
 the tools it was shown, and the call `expect` says was correct.
 
 That has a consequence worth stating plainly: **a case is a claim about correct
@@ -910,7 +905,7 @@ written.
 
 **Nothing is pre-rendered.** Examples are written as `messages` + `tools`, never as
 a rendered string. The tokenizer's own `apply_chat_template(messages, tools=…)` is
-what the serving path uses, and rendering here would bake in *this* model's template
+what the serving path uses, and rendering here would bake in _this_ model's template
 and silently mistrain anything else — the exact failure `--jinja` exists to avoid at
 serving time.
 
@@ -977,8 +972,8 @@ left out rather than quietly dropping them.
 
 **The suite changed underneath.** This is the subtle one, and it is a mistake this
 module has already made. Case ids survive an edit, so `layout-open-terminal` before
-and after someone corrected its expectation is the same id and a *different
-question*. Comparing them shows a model "fixing" a case that was actually fixed by
+and after someone corrected its expectation is the same id and a _different
+question_. Comparing them shows a model "fixing" a case that was actually fixed by
 editing the exam.
 
 So a result now carries a **`case_hash`** — a hash of everything that decides
@@ -997,8 +992,8 @@ appears on anyone's machine but the one it was written on.
 
 ### The harness changed underneath — the same bug one level up
 
-`case_hash` pins that two runs asked the same *questions*. It says nothing about
-whether they were offered the same *tools*, and two things rewrite the catalog
+`case_hash` pins that two runs asked the same _questions_. It says nothing about
+whether they were offered the same _tools_, and two things rewrite the catalog
 without touching a single case:
 
 - every **enabled skill** rides every turn — its description sits in the catalog the
@@ -1030,7 +1025,7 @@ Added to existing databases with an explicit `ALTER`, for the same reason
 `case_hash` was.
 
 MCP servers and skills are **variables of the experiment**, not furniture: an eval
-sweep measures a model *with* a given tool set. The `trainer` agent's prompt already
+sweep measures a model _with_ a given tool set. The `trainer` agent's prompt already
 covers eval sweeps, conversion and serving, so it is the agent to pick in the chat
 for this work rather than a persona invented for one pane.
 
@@ -1077,7 +1072,7 @@ data: {"error":{"message":"Engine protocol predict stream returned an error:
 ```
 
 LM Studio's constrained decoder had rejected the model's tool-call output, and it
-reports that *inside* an already-200 SSE stream. `raise_for_status` has long since
+reports that _inside_ an already-200 SSE stream. `raise_for_status` has long since
 passed by then, and the openai-dialect stream loop did:
 
 ```python
@@ -1103,7 +1098,7 @@ With errors surfacing, the real finding appeared: **the model does call
 {"groups": "['files', 'editor']"}
 ```
 
-An *array* parameter handed back as a string — the second not even valid JSON.
+An _array_ parameter handed back as a string — the second not even valid JSON.
 Small models do this constantly. The dispatcher did:
 
 ```python
@@ -1118,7 +1113,7 @@ right group, was told it got nothing, and the capability never appeared.
 `_coerce_group_list` now reads any of the shapes a model actually produces — a real
 list, a JSON array in a string, a Python-style list with single quotes, a bracketed
 comma list, a bare name. `_coerce_args` does the same job one level up for the
-arguments payload as a whole; this slipped past it because the payload *was* valid
+arguments payload as a whole; this slipped past it because the payload _was_ valid
 JSON, it just had a string where an array belonged.
 
 After the fix a discovery case reports `groups loaded: ['files']` — the first time
@@ -1132,7 +1127,7 @@ fail on another. That is an engine-side limitation. What changed is that it is n
 **reported as a provider error on the result row** rather than scored as a model
 that declined to act.
 
-The lesson generalises past this bug. Every layer here failed *safely* — an empty
+The lesson generalises past this bug. Every layer here failed _safely_ — an empty
 answer, an empty choice, an empty group list — and safe failures compose into a
 plausible number. A harness has to be built so that the absence of a thing is
 distinguishable from the thing being absent on purpose.
@@ -1150,7 +1145,7 @@ the screen and hunt the Runs list for it. The concern that stopped it being a li
 was that the recorder keeps a live in-memory ring, which a finished sweep outlives.
 That turned out to be only half the picture: `recorder._persist` writes every turn
 through to `agent_turns` in `app.db` unconditionally, and `GET
-/api/agentpedia/turns/{id}` reads the ring *then* the table for exactly this reason.
+/api/agentpedia/turns/{id}` reads the ring _then_ the table for exactly this reason.
 A turn the store never kept 404s and the stepper says "No captured turn `<id>`",
 which is a better answer than a dead string.
 
@@ -1171,7 +1166,7 @@ caught three of them.
 
 `sweep.localtrack_project_for(suite_id)` derives the [localtrack](localtrack.mdx)
 project, backend-side, so both callers get it. Only one of them used to derive
-anything: the browser sent a slug of the suite's *name*, and `evals.run` — the agent
+anything: the browser sent a slug of the suite's _name_, and `evals.run` — the agent
 tool, and the one an agent reaches for to answer "did this fine-tune help?" — sent
 nothing at all. `_LocalTrack("")` builds a `RunMirror("")`, which is inactive by
 construction and swallows every metric without error, so an agent-started sweep
@@ -1218,7 +1213,7 @@ Three rules keep a judge from being worse than no grade:
   case that could rewrite the whole prompt could quietly ask for something other than
   grading.
 - **A judge that fails is not a fail.** A provider error, a truncated reply, an
-  unparseable verdict: each is an *error*, never `passed=False`. Scoring a zero because
+  unparseable verdict: each is an _error_, never `passed=False`. Scoring a zero because
   the judge could not be reached is exactly the "the case was wrong and the model got
   the blame" failure.
 
@@ -1263,11 +1258,11 @@ rather than letting every row fail and score a zero that looks like a verdict.
 Three details that are each a wrong score if missed:
 
 - **Markdown fences are stripped.** Models return ```python blocks; running the fence
-  is a `SyntaxError` graded as a wrong answer.
+is a `SyntaxError` graded as a wrong answer.
 - **The stub is prepended when the completion does not redefine the function.**
-  HumanEval's format is a *completion* — the model gets a signature and returns a
+  HumanEval's format is a _completion_ — the model gets a signature and returns a
   body. Running the body alone is a `NameError`.
-- **A timeout is a fail, not an error.** An infinite loop *is* a wrong answer to a
+- **A timeout is a fail, not an error.** An infinite loop _is_ a wrong answer to a
   programming problem; calling it infrastructure trouble would hide a real result.
 
 ### Nine presets

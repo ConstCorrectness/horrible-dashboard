@@ -1,33 +1,37 @@
 /**
- * The interpretability suite's addresses, in a leaf file of constants.
+ * The interpretability IDE's addresses, in a leaf file of constants.
  *
- * Every module whose pane folded into the suite (interpretability, llama.cpp,
- * agentpedia, webml) still owns its commands and keybindings, and they now need
- * to name the suite and its sections. Importing the suite's manifest for that
- * would import every body the suite lazily loads; this file imports nothing.
+ * Every module whose pane folded into the IDE (interpretability, llama.cpp,
+ * agentpedia, trajectories, webml, evals) still owns its commands and keybindings,
+ * and they now need to name the suite and its sections. Importing the suite's
+ * manifest for that would import every body the suite lazily loads; this file
+ * imports nothing.
  */
 
 /** The one window. */
 export const SUITE_VIEW = 'interpretability.suite';
 
-/** Rail sections, in rail order. */
+/** Rail sections, in progressive IDE rail order. */
 export const SUITE_SECTIONS = {
   home: 'home',
+  playground: 'playground',
+  runtime: 'runtime',
+  evals: 'evals',
   context: 'context',
   runs: 'runs',
   model: 'model',
   attention: 'attention',
-  design: 'design',
-  traces: 'traces',
-  stepper: 'stepper',
   lens: 'lens',
-  heads: 'heads',
+  stepper: 'stepper',
+  traces: 'traces',
   neurons: 'neurons',
+  heads: 'heads',
   features: 'features',
   steer: 'steer',
   axis: 'axis',
   graph: 'graph',
   nla: 'nla',
+  design: 'design',
   library: 'library',
 } as const;
 

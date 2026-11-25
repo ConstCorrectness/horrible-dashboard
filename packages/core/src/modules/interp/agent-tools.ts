@@ -29,7 +29,6 @@
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
-import { revealSection } from '../../layout/controller';
 import { setModelLocus } from '../../model-locus';
 import { interpretabilityStore } from '../interpretability/store';
 import { sameFile } from './attention/model';
@@ -41,7 +40,8 @@ import {
   refreshTraces,
   type HeadMetric,
 } from './heads/state';
-import { SUITE_SECTIONS, SUITE_VIEW, type SuiteSection } from './ids';
+import { SUITE_SECTIONS, type SuiteSection } from './ids';
+import { openSuiteTab } from './stage';
 import {
   encode as encodeFeatures,
   featuresStore,
@@ -594,19 +594,24 @@ export const interpAgentTools: AgentToolDecl[] = [
   {
     name: 'interp.goto',
     description:
-      'Show the user something in the interpretability suite: open a section and, ' +
-      'optionally, point the shared locus at a layer and prompt position so the model ' +
-      'explorer, the stepper and the lens all follow. Use it to show what you are ' +
-      'explaining.',
+      'Show the user something in the Interpretability IDE: open a section, optionally pair a ' +
+      'second section side-by-side (`splitWith`, e.g. stepper + model, playground + neurons, ' +
+      'features + steer, evals + runs), and optionally point the shared locus at a layer and ' +
+      'prompt position so synchronized views follow.',
     params: {
       type: 'object',
       properties: {
-        section: { type: 'string', enum: SECTIONS, description: 'The rail section to show.' },
+        section: { type: 'string', enum: SECTIONS, description: 'The primary section to show.' },
+        splitWith: {
+          type: 'string',
+          enum: SECTIONS,
+          description: 'Optional companion section to display side-by-side.',
+        },
         tab: {
           type: 'string',
           description:
-            "A tab inside the section: runs/harness/forks/duels for 'runs'; " +
-            "trace/reply/guess/compare for 'lens'.",
+            "A sub-tab inside the section: all/runs/live/follow/harness/forks/duels/datasets for 'runs'; " +
+            "trace/lenses/reply/guess/compare for 'lens'; server/models for 'runtime'; suites/run/results/compare for 'evals'.",
         },
         layer: { type: 'integer', description: 'Block to select (-1 = the embedding).' },
         position: { type: 'integer', description: 'Prompt position to select.' },
@@ -618,13 +623,28 @@ export const interpAgentTools: AgentToolDecl[] = [
       if (!SECTIONS.includes(section)) {
         return { ok: false, error: `Unknown section '${section}'. One of: ${SECTIONS.join(', ')}` };
       }
+      let splitWith: SuiteSection | undefined;
+      if (typeof args.splitWith === 'string' && args.splitWith) {
+        if (!SECTIONS.includes(args.splitWith as SuiteSection)) {
+          return {
+            ok: false,
+            error: `Unknown splitWith '${args.splitWith}'. One of: ${SECTIONS.join(', ')}`,
+          };
+        }
+        splitWith = args.splitWith as SuiteSection;
+      }
       if (typeof args.tab === 'string' && args.tab) setSubSection(section, args.tab);
-      const instanceId = revealSection(section, SUITE_VIEW);
+      const instanceId = openSuiteTab(section, splitWith !== undefined ? { splitWith } : undefined);
       const locus: { layer?: number; position?: number } = {};
       if (typeof args.layer === 'number') locus.layer = args.layer;
       if (typeof args.position === 'number') locus.position = args.position;
       if (Object.keys(locus).length) setModelLocus(locus, 'agent');
-      return { ok: instanceId !== null, section, ...locus };
+      return {
+        ok: instanceId !== null,
+        section,
+        ...(splitWith && splitWith !== section ? { splitWith } : {}),
+        ...locus,
+      };
     },
   },
 ];

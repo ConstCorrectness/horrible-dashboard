@@ -1,28 +1,69 @@
 /**
- * Home: what the suite is looking at, and a map of the tools that look at it.
+ * Home & Playbooks: the self-teaching front door of the Interpretability IDE.
  *
- * It replaces two things. The workflow strip that sat atop the context view and
- * the explorer, jumping between three panes — the rail is that strip now. And the
- * Compass modal, which explained which pane to use when; that is this page's map,
- * drawn from the same list as the rail (`tools.ts`), with the research stages that
- * live outside this window kept underneath.
+ * Replaces a flat icon grid with:
+ * 1. Interactive Goal-Driven Playbooks that configure paired side-by-side views
+ *    for the six core AI-research questions.
+ * 2. Live workbench status tiles (Agent model, llama.cpp runtime, WebML GPU,
+ *    captured turns, shared locus) — each clickable to configure.
+ * 3. The complete tool atlas across ALL groups (`SUITE_GROUPS` + `Library`),
+ *    fixing the bug where Features, Circuits and Library were omitted.
+ * 4. Deep-links to external notebook/corpus companions (Datasets, HF Hub,
+ *    Training, LocalTrack, Papers).
  */
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 
-import { NAMED_GLYPHS } from '../../glyphs';
-import { revealSection } from '../../layout/controller';
+import { IconSplit, NAMED_GLYPHS } from '../../glyphs';
 import { useModelLocus } from '../../model-locus';
 import { registry } from '../../registry';
 import { RollingCounter } from '../../viz/RollingCounter';
 import { RESEARCH_PANE_GUIDE } from '../interpretability/ResearchGuide';
 import { interpretabilityStore } from '../interpretability/store';
-import { SUITE_VIEW } from './ids';
-import { S } from './styles';
+import { getLlamaStatus, type LlamaStatus } from '../llamacpp/api';
+import { useEngineState } from '../webml/engine';
+import { SUITE_SECTIONS, SUITE_VIEW } from './ids';
 import { locusLabel } from './locus-label';
+import { launchPlaybook, SUITE_PLAYBOOKS } from './playbooks';
+import { openSuiteTab } from './stage';
+import { S } from './styles';
 import { useSuiteAgentContext } from './SuiteFrame';
-import { SUITE_TOOLS } from './tools';
+import { SUITE_GROUPS, SUITE_TOOLS, toolForSection } from './tools';
 
-function Tile({ label, children, index }: { label: string; children: ReactNode; index: number }) {
+function Tile({
+  label,
+  onClick,
+  title,
+  children,
+  index,
+}: {
+  label: string;
+  onClick?: () => void;
+  title?: string;
+  children: ReactNode;
+  index: number;
+}) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className="interp-card-button"
+        title={title}
+        onClick={onClick}
+        style={{
+          ...S.tile,
+          ...S.stagger(index),
+          border: '1px solid var(--border)',
+          borderTop: '2px solid var(--accent)',
+          textAlign: 'left',
+          cursor: 'pointer',
+          font: 'inherit',
+        }}
+      >
+        <div style={S.heading}>{label}</div>
+        <div style={S.tileValue}>{children}</div>
+      </button>
+    );
+  }
   return (
     <div style={{ ...S.tile, ...S.stagger(index) }}>
       <div style={S.heading}>{label}</div>
@@ -42,36 +83,132 @@ export function HomeSection() {
     interpretabilityStore.getSnapshot,
   );
   const locus = useModelLocus();
+  const webml = useEngineState();
+  const [llama, setLlama] = useState<LlamaStatus | null>(null);
 
-  const groups = ['Prompt', 'Weights', 'Activations'] as const;
-  // Research stages served by this window are on the map above; the rest point out.
+  useEffect(() => {
+    let alive = true;
+    void getLlamaStatus()
+      .then((s) => alive && setLlama(s))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Research stages served outside this IDE (Papers, Datasets, Training/LocalTrack).
   const elsewhere = RESEARCH_PANE_GUIDE.filter((stage) => stage.paneId !== SUITE_VIEW);
+  const libraryTool = toolForSection(SUITE_SECTIONS.library);
 
   return (
     <div style={S.home}>
-      <h2 style={S.homeTitle}>Interpretability</h2>
+      <h2 style={S.homeTitle}>Interpretability &amp; Model Lab IDE</h2>
       <p style={S.lede}>
-        One model, read at three depths: the prompt it was handed, the weights it is made of, and
-        the activations of a forward pass. Every tool here shares one model and one locus — pick a
-        layer in one and the others follow.
+        Test models in-browser or on llama.cpp, debug agent runs and tool evaluations, and inspect
+        prompts, weights, activations, features, and circuits in one workspace. Open any two tools
+        side-by-side — clicking a layer, token, or turn synchronizes every view on screen.
       </p>
 
+      {/* Live clickable status tiles */}
       <div style={S.tiles}>
-        <Tile label="Model" index={0}>
-          {arch ? `${arch.model}${arch.family ? ` · ${arch.family}` : ''}` : 'no model resolved'}
+        <Tile
+          label="Agent Model"
+          index={0}
+          title="Open Model Explorer"
+          onClick={() => openSuiteTab(SUITE_SECTIONS.model)}
+        >
+          {arch && !arch.error
+            ? `${arch.model}${arch.layers != null ? ` · ${arch.layers}L` : ''}`
+            : 'no model resolved → inspect'}
         </Tile>
-        <Tile label="Blocks" index={1}>
-          {arch?.layers != null ? <RollingCounter value={arch.layers} /> : '—'}
+        <Tile
+          label="llama.cpp Server"
+          index={1}
+          title="Manage local GGUF runtime & weights"
+          onClick={() => openSuiteTab(SUITE_SECTIONS.runtime)}
+        >
+          {llama?.ready
+            ? llama.model || llama.modelPath?.split(/[\\/]/).pop() || 'serving'
+            : llama?.running
+              ? 'loading…'
+              : 'stopped → configure'}
         </Tile>
-        <Tile label="Captured turns" index={2}>
+        <Tile
+          label="WebML (Browser GPU)"
+          index={2}
+          title="Open WebGPU Playground"
+          onClick={() => openSuiteTab(SUITE_SECTIONS.playground)}
+        >
+          {webml.kind === 'ready'
+            ? (webml.model.split('/').pop() ?? webml.model)
+            : webml.kind === 'loading'
+              ? 'loading…'
+              : 'idle → load model'}
+        </Tile>
+        <Tile
+          label="Captured Turns"
+          index={3}
+          title="Inspect agent runs & prompts"
+          onClick={() => openSuiteTab(SUITE_SECTIONS.runs)}
+        >
           <RollingCounter value={turns.length} />
         </Tile>
-        <Tile label="Locus" index={3}>
-          {locusLabel(locus) ?? 'not set'}
+        <Tile label="Shared Locus" index={4}>
+          {locusLabel(locus) ?? 'click any layer / token'}
         </Tile>
       </div>
 
-      {groups.map((group) => (
+      {/* Goal-Driven Playbooks */}
+      <section>
+        <h3 style={S.groupHead}>Guided Playbooks — Start from a question (opens side-by-side)</h3>
+        <div style={S.cards}>
+          {SUITE_PLAYBOOKS.map((pb, i) => {
+            const Icon = NAMED_GLYPHS[pb.glyph];
+            const primaryLabel = toolForSection(pb.primary)?.label ?? pb.primary;
+            const companionLabel = toolForSection(pb.splitWith)?.label ?? pb.splitWith;
+            return (
+              <button
+                key={pb.id}
+                type="button"
+                className="interp-playbook-card"
+                style={{
+                  ...S.card,
+                  ...S.stagger(i + 2),
+                  borderTop: '2px solid var(--accent)',
+                }}
+                onClick={() => launchPlaybook(pb.id)}
+              >
+                <span style={S.cardTitle}>
+                  {Icon ? <Icon /> : null}
+                  <span>{pb.title}</span>
+                </span>
+                <span style={{ ...S.cardText, color: 'var(--text-primary)', fontWeight: 600 }}>
+                  {pb.question}
+                </span>
+                <span style={S.cardText}>{pb.summary}</span>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginTop: 2,
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10.5,
+                    color: 'var(--accent)',
+                    ['--icon-size' as string]: '12px',
+                  }}
+                >
+                  <IconSplit />
+                  {primaryLabel} + {companionLabel}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Complete Tool Atlas across all progressive groups */}
+      {SUITE_GROUPS.map((group) => (
         <section key={group}>
           <h3 style={S.groupHead}>{group}</h3>
           <div style={S.cards}>
@@ -83,7 +220,7 @@ export function HomeSection() {
                   type="button"
                   className="interp-card-button"
                   style={{ ...S.card, ...S.stagger(i + 4) }}
-                  onClick={() => revealSection(tool.section, SUITE_VIEW)}
+                  onClick={() => openSuiteTab(tool.section)}
                 >
                   <span style={S.cardTitle}>
                     {Icon ? <Icon /> : null}
@@ -100,7 +237,32 @@ export function HomeSection() {
         </section>
       ))}
 
-      <h3 style={S.groupHead}>Beyond this window</h3>
+      {/* Library & Worker */}
+      {libraryTool ? (
+        <section>
+          <h3 style={S.groupHead}>Artifacts &amp; GPU Worker</h3>
+          <div style={S.cards}>
+            <button
+              type="button"
+              className="interp-card-button"
+              style={S.card}
+              onClick={() => openSuiteTab(libraryTool.section)}
+            >
+              <span style={S.cardTitle}>
+                {NAMED_GLYPHS[libraryTool.glyph] ? NAMED_GLYPHS[libraryTool.glyph]({}) : null}
+                {libraryTool.label}
+              </span>
+              <span style={{ ...S.cardText, color: 'var(--text-primary)' }}>
+                {libraryTool.question}
+              </span>
+              <span style={S.cardText}>{libraryTool.when}</span>
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {/* External AI Research Companions */}
+      <h3 style={S.groupHead}>Connected Research Surfaces (Data, Hub &amp; Training)</h3>
       <div style={S.cards}>
         {elsewhere.map((stage, i) => (
           <button

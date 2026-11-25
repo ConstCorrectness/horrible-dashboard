@@ -9,6 +9,9 @@
 import { useEffect, useState } from 'react';
 
 import { Button, Chip } from '../../../Primitives';
+import { openAgentpediaTurn } from '../../agentpedia';
+import { SUITE_SECTIONS } from '../../interp/ids';
+import { openSuiteTab } from '../../interp/stage';
 import {
   addLabel,
   getRunMcp,
@@ -250,8 +253,37 @@ export function RunDetail({
           </div>
         ) : null}
         {run.turn_id ? (
-          <div style={{ ...mono, marginTop: 'var(--space-1)' }}>
-            turn {run.turn_id} — joins `agent_turns` for the context side
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 'var(--space-2)',
+              marginTop: 'var(--space-2)',
+            }}
+          >
+            <span style={mono}>turn {run.turn_id}</span>
+            <Button
+              size="sm"
+              intent="ghost"
+              onClick={() => openAgentpediaTurn(run.turn_id!)}
+              title="Step this turn round-by-round in the 4-column Turn Debugger (Shown · Wire · Did · Cost)"
+            >
+              Step rounds (4-col)
+            </Button>
+            <Button
+              size="sm"
+              intent="ghost"
+              onClick={() =>
+                openSuiteTab(SUITE_SECTIONS.runs, {
+                  splitWith: SUITE_SECTIONS.context,
+                  params: { turnId: run.turn_id! },
+                })
+              }
+              title="Open the Context Window side-by-side for this turn"
+            >
+              Pair Context
+            </Button>
           </div>
         ) : null}
         {/* Provenance, and only when there is any: every local run would otherwise

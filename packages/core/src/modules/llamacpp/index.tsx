@@ -1,15 +1,11 @@
-import { lazyPane } from '../../lazy-pane';
-import { revealSection } from '../../layout/controller';
 import { minibuffer } from '../../minibuffer';
 import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu';
 import { registry, type ModuleManifest } from '../../registry';
 import type { EditorService } from '../editor/service';
-import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection } from '../interp/ids';
+import { SUITE_SECTIONS, whenSuiteSection } from '../interp/ids';
+import { openSuiteTab } from '../interp/stage';
 import { layerStepperAction } from './stepper/actions';
 import { sendTracePrompt } from './trace-prompt';
-
-// Loaded when the pane first renders, not at boot — see `lazyPane`.
-const LlamaCppPane = lazyPane(() => import('./ServerPane'), 'LlamaCppPane');
 
 /** Enough of the buffer to name it in the traces section. */
 function bufferLabel(uri: string): string {
@@ -60,7 +56,7 @@ function traceSelection(): void {
   }
   const scope = selection.text ? 'selection' : 'whole file';
   sendTracePrompt({ prompt: text, label: `${bufferLabel(uri)} (${scope})` });
-  revealSection(SUITE_SECTIONS.traces, SUITE_VIEW);
+  openSuiteTab(SUITE_SECTIONS.traces);
 }
 
 /**
@@ -87,7 +83,7 @@ function traceTextItems(target: ContextTarget): ContextMenuItem[] {
       detail: 'Record a forward pass over this text and read it in the lens.',
       run: () => {
         sendTracePrompt({ prompt: text, label: label ? bufferLabel(label) : 'selection' });
-        revealSection(SUITE_SECTIONS.traces, SUITE_VIEW);
+        openSuiteTab(SUITE_SECTIONS.traces);
       },
     },
   ];
@@ -110,42 +106,38 @@ export const llamacppModule: ModuleManifest = {
   id: 'llamacpp',
   title: 'llama.cpp',
   category: 'research',
-  panels: [
-    {
-      id: 'llamacpp.server',
-      title: 'llama.cpp',
-      component: LlamaCppPane,
-      // Running a model: pick a build, browse GGUFs. Reading one — traces, the
-      // stepper and the lens — moved to the interpretability suite, which is where
-      // the rest of reading a model lives.
-      role: 'document',
-      icon: '🦙',
-      singleton: true,
-      sections: [
-        { id: 'server', label: 'Server', icon: '⚙️', key: 's', default: true },
-        { id: 'models', label: 'Models', icon: '🧠', key: 'm' },
-      ],
-    },
-  ],
   commands: [
     {
       id: 'llamacpp.open',
       title: 'llama.cpp: Server and models',
-      run: () => registry.openPanel('llamacpp.server'),
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.runtime, { subTab: 'server' });
+      },
     },
     {
       id: 'llamacpp.openStepper',
       title: 'llama.cpp: Step through a trace (layer debugger)',
-      run: () => revealSection(SUITE_SECTIONS.stepper, SUITE_VIEW),
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.stepper);
+      },
       slash: 'stepper',
     },
+    ...(['server', 'models'] as const).map((subTab) => ({
+      id: `section.show:llamacpp.server:${subTab}`,
+      title: `llama.cpp: ${subTab[0].toUpperCase()}${subTab.slice(1)} (in Interpretability)`,
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.runtime, { subTab });
+      },
+    })),
     // The traces / lens / stepper sections were part of this pane. Their
     // synthesized `section.show:` ids are an API a keybinding may still name, so
     // they are kept, pointing where the sections went.
     ...(['traces', 'lens', 'stepper'] as const).map((section) => ({
       id: `section.show:llamacpp.server:${section}`,
       title: `llama.cpp: ${section[0].toUpperCase()}${section.slice(1)} (in Interpretability)`,
-      run: () => void revealSection(SUITE_SECTIONS[section], SUITE_VIEW),
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS[section]);
+      },
     })),
     // The stepper's verbs. Commands so the palette lists them and the keymap can
     // bind them; each is a no-op unless the Stepper section is mounted (the

@@ -1,25 +1,29 @@
-# The interpretability suite
+# The Interpretability & Model Lab IDE
 
-One window, a rail of tools, all reading **the same model** and following **one locus** (layer · position · trace). Pick a layer in one tool and the others follow.
+One IDE window with a progressive rail, open tabs, a **side-by-side split stage**, and a shared **SubjectBar** (Agent model · llama.cpp · WebML GPU · Locus). Every tool follows **one model locus** (layer · position · trace) and shared `turnId` — pick a layer or token in one side of a split and the companion view updates immediately.
 
-| Group       | Section     | Answers                                                                                 |
-| ----------- | ----------- | --------------------------------------------------------------------------------------- |
-| Prompt      | `context`   | What the model was handed: blocks, real token counts, tools dropped by the budget       |
-| Prompt      | `runs`      | One agent turn, round by round; forks and duels (tabs `runs` `harness` `forks` `duels`) |
-| Weights     | `model`     | Block structure, tensor inventory, quantization, where the bytes sit                    |
-| Weights     | `attention` | Each layer's mixer, window, head widths, KV sharing, the KV cache it costs              |
-| Weights     | `design`    | A node-graph design that generates a PyTorch module                                     |
-| Activations | `traces`    | Record a forward pass (llama.cpp)                                                       |
-| Activations | `stepper`   | Step a trace node by node: attention maps, residual deltas, MoE routing                 |
-| Activations | `lens`      | Each layer's residual read as words (tabs `trace` `lenses` `reply` `guess` `compare`)   |
-| Activations | `heads`     | Every attention head of a trace, scored: induction, previous-token, duplicate, sink     |
-| Activations | `neurons`   | The window's GGUF in 3D, every MLP neuron: dose a few, compare replies, per-token heat   |
-| Features    | `features`  | SAE features of a trace: per token, labelled, with a reconstruction and a label check   |
-| Features    | `steer`     | Push a feature into the model; default and steered generations side by side             |
-| Features    | `axis`      | The Assistant Axis on a local GGUF: is this still the assistant talking; floor it       |
-| Circuits    | `graph`     | Attribution graphs: which features, through which paths, made the prediction            |
-| Circuits    | `nla`       | A natural language autoencoder: an activation in words, and whether the words carry it  |
-| —           | `library`   | SAEs, transcoders and lenses: installed, what they fit, the catalog; the GPU worker     |
+| Group                 | Section      | Answers                                                                                                                   |
+| --------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| —                     | `home`       | Guided side-by-side playbooks, live runtime tiles, and the complete tool atlas                                            |
+| Run & Test            | `playground` | In-browser WebGPU chat (ONNX & GGUF), token-probability strip, and live feed for 3D Neurons & Logit Lens                  |
+| Run & Test            | `runtime`    | Local `llama.cpp` server, per-block VRAM offload planner, and GGUF catalog (tabs `server` `models`)                       |
+| Run & Test            | `evals`      | Tool-calling & benchmark suites, sweeps, results, and diffs (tabs `suites` `run` `results` `compare`)                     |
+| Agents & Prompts      | `context`    | Exact prompt composition: blocks, real token counts, per-tool schema cost, and `TOOL_BUDGET` truncation                   |
+| Agents & Prompts      | `runs`       | Unified fleet trajectories + 4-col Turn Debugger (tabs `all` `runs` `live` `follow` `harness` `forks` `duels` `datasets`) |
+| Architecture & Layers | `model`      | GGUF tensor inventory, block structure, mixed quantization, and live sub-block highlight when paired with Stepper         |
+| Architecture & Layers | `attention`  | Per-layer attention mixer (sliding/global/SSM/KV-sharing), causal masks, and fp16 KV cache footprint                      |
+| Architecture & Layers | `lens`       | Residual stream read as words (tabs `trace` `lenses` `reply` `guess` `compare`)                                           |
+| Architecture & Layers | `stepper`    | Forward-pass debugger node by node: attention maps, residual deltas, MoE routing                                          |
+| Architecture & Layers | `traces`     | Record and scrub ggml forward-pass snapshots on disk (`llama.cpp`)                                                        |
+| Mechanistic Lab       | `neurons`    | WebGPU GGUF in 3D, every MLP neuron: dose up to 32 neurons, compare greedy replies, per-token activation heat             |
+| Mechanistic Lab       | `heads`      | Every attention head of a trace, scored: induction, previous-token, duplicate, sink + 1-click induction probe             |
+| Mechanistic Lab       | `features`   | Gemma Scope SAE features per token, FVU/L0 reconstruction self-check, Neuronpedia cards & label verification              |
+| Mechanistic Lab       | `steer`      | Inject/suppress an SAE feature direction via control vector; arrived check, KL shift, and side-by-side text               |
+| Mechanistic Lab       | `axis`       | Assistant Axis built on a local GGUF: held-out AUC check, persona drift monitor, and answer-token floor capping           |
+| Mechanistic Lab       | `graph`      | Attribution graphs from Neuronpedia or circuit-tracer: prune, pin subgraphs, supernodes, excitatory paths                 |
+| Mechanistic Lab       | `nla`        | Natural language autoencoder (AV explainer + AR reconstructor): activation in words, scored above neutral floor           |
+| Mechanistic Lab       | `design`     | Editable node-graph architecture fork that exports runnable PyTorch module code                                           |
+| —                     | `library`    | Curated SAEs, transcoders, and Jacobian lenses: compatibility check, disk budget, GPU worker, Neuronpedia                 |
 
 ## Tools
 
@@ -33,7 +37,7 @@ One window, a rail of tools, all reading **the same model** and following **one 
 - `interp.axis {traceId?, layer?}` — the Assistant Axis built in the Axis section on a local GGUF: its held-out check (**report it first**), the default layer and cap band, where the roles sit along it, the section's last reading (a conversation, an agent turn or a trace: mean, share below the assistant floor, trend) and its last capped generation. With `traceId`, reads that trace of the same model now. Read-only — building (minutes of generation) and capping run in the section.
 - `interp.nla {readoutId?}` — the NLA section's readout: per explained position, the explanation, its reconstruction `cos`, the neutral floor `nullCos`, the verdict and flags; and whether the pair's three GGUFs are on disk. **Read `cos` above `nullCos`, never against 0.** Read-only — explaining (three models, ~20 s per explanation on the CPU) runs in the section.
 - `interp.library` — installed artifacts with their stated facts (layer, input width, dictionary width, and where each was read) and a fit verdict per model; the disk budget; the catalog; the GPU worker (state, held model, VRAM). It never downloads: to get something, name the catalog entry and send the user to the Library section, where they confirm its size.
-- `interp.goto {section, tab?, layer?, position?}` — show it. Moving the locus moves every tool.
+- `interp.goto {section, splitWith?, tab?, layer?, position?}` — show a section, optionally pair a companion section side-by-side (`splitWith`, e.g. `stepper` + `model`, `playground` + `neurons`, `features` + `steer`, `evals` + `runs`), and move the shared locus so every view follows.
 - For trace contents (what the model was disposed to say at a layer), use the `lens` group.
 
 ## How a fact is known — always say which

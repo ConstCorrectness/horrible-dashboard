@@ -10,6 +10,8 @@ import { usePaneParams } from '../../panes';
 import './evals.css';
 import { subscribeChannel } from '../../ws';
 import { openAgentpediaTurn } from '../agentpedia';
+import { SUITE_SECTIONS } from '../interp/ids';
+import { openSuiteTab } from '../interp/stage';
 import { getNetworkState, initNetwork, requestPeers, subscribeNetwork } from '../network/ws';
 import {
   benchmarkPresets,
@@ -1708,13 +1710,30 @@ function Results({ selected }: { selected: string }) {
                       stepper says so, which is a better answer than a dead
                       string. */}
                   {r.turn_id && (
-                    <button
-                      className="evals-turn-link"
-                      title="Open this turn in Agentpedia — what the model was actually given"
-                      onClick={() => openAgentpediaTurn(r.turn_id!)}
-                    >
-                      turn {r.turn_id}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="evals-turn-link"
+                        title="Debug this turn side-by-side beside Evals"
+                        onClick={() =>
+                          openSuiteTab(SUITE_SECTIONS.evals, {
+                            splitWith: SUITE_SECTIONS.runs,
+                            companionSubTab: 'runs',
+                            params: { turnId: r.turn_id! },
+                          })
+                        }
+                      >
+                        debug beside
+                      </button>
+                      <button
+                        type="button"
+                        className="evals-turn-link"
+                        title="Open this turn in the 4-column Turn Debugger"
+                        onClick={() => openAgentpediaTurn(r.turn_id!)}
+                      >
+                        turn {r.turn_id}
+                      </button>
+                    </>
                   )}
                 </>
               }

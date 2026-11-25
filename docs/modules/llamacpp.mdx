@@ -5,7 +5,7 @@ sidebar_label: llama.cpp
 
 # Module: llamacpp
 
-The node serving its own weights. Ollama and LM Studio are *applications* the user
+The node serving its own weights. Ollama and LM Studio are _applications_ the user
 installs and runs elsewhere; this module makes the backend itself fetch a
 `llama-server` build, keep a catalog of GGUF files, and supervise the process the
 agent talks to.
@@ -13,19 +13,18 @@ agent talks to.
 **Status: implemented** — backend in `backend/modules/llamacpp/`, frontend in
 `packages/core/src/modules/llamacpp/`, tests in `backend/tests/test_llamacpp.py`.
 
-
 ## Agent tools
 
 This module had **none** until now, which made the fine-tuning agent's own prompt a
 description of a loop it could not run: it could convert a checkpoint and then had no
 way to serve the result — the step immediately before the eval it is told to run.
 
-| Tool | Does |
-| --- | --- |
-| `llamacpp.status` | Whether a local GGUF is being served, and which |
+| Tool                   | Does                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `llamacpp.status`      | Whether a local GGUF is being served, and which                                                                                              |
 | `llamacpp.list_models` | Every servable GGUF — the managed directory plus whatever Ollama and LM Studio already have — with its base model where this node trained it |
-| `llamacpp.serve` | Load a GGUF into the local server |
-| `llamacpp.stop` | Stop it, freeing the memory |
+| `llamacpp.serve`       | Load a GGUF into the local server                                                                                                            |
+| `llamacpp.stop`        | Stop it, freeing the memory                                                                                                                  |
 
 `llamacpp.serve` **refuses rather than replacing** a server that is already running a
 different model. `llama-server` holds one model at a time, so serving a second means
@@ -45,12 +44,12 @@ disk-budget readout, not to a turn that inferred it would be helpful.
 Note this inverts a rule recorded in two places. `roster.py` and
 [training](training.mdx) both said `llamacpp` must never appear in an agent's
 `tool_groups`, because a group is a tool name's prefix and that namespace held only
-*settings* keys — true until these tools existed, wrong after. Both comments are
+_settings_ keys — true until these tools existed, wrong after. Both comments are
 updated.
 
 ## Why this is not just another provider entry
 
-Every other local provider answers "which model are you running?" with a *name*. It
+Every other local provider answers "which model are you running?" with a _name_. It
 cannot tell you which file that name resolves to, what quantization it is, or how
 big it is — which is why [`interpretability`](./interpretability.mdx) has to
 reverse-engineer a path out of Ollama's blob store and LM Studio's undocumented
@@ -79,11 +78,11 @@ flowchart LR
 
 ## Three artifacts, three lifetimes
 
-| | Where it comes from | Where it lives | Who owns it |
-| --- | --- | --- | --- |
-| The binary | Upstream GitHub release, downloaded on demand | `$HORRIBLE_DATA_DIR/llamacpp/bin/<tag>-<variant>/` | us |
-| The weights | Hugging Face, or already on disk | `$HORRIBLE_DATA_DIR/llamacpp/models/`, or Ollama's / LM Studio's store | mixed |
-| The process | Spawned by `server.py` | pid + a loopback port | us |
+|             | Where it comes from                           | Where it lives                                                         | Who owns it |
+| ----------- | --------------------------------------------- | ---------------------------------------------------------------------- | ----------- |
+| The binary  | Upstream GitHub release, downloaded on demand | `$HORRIBLE_DATA_DIR/llamacpp/bin/<tag>-<variant>/`                     | us          |
+| The weights | Hugging Face, or already on disk              | `$HORRIBLE_DATA_DIR/llamacpp/models/`, or Ollama's / LM Studio's store | mixed       |
+| The process | Spawned by `server.py`                        | pid + a loopback port                                                  | us          |
 
 Nothing is bundled. That is the same call as SearXNG, AssaultCube content and the
 DB-IP database: we support it, we fetch it on request, we ship none of it.
@@ -105,16 +104,16 @@ carry meaning — OS, arch, accelerator — with two rules that are the whole te
   and `_extract` picks the reader by extension rather than by OS, because the
   extension is what the bytes actually are.
 - **The name must start with `llama-`.** Releases also carry
-  `cudart-llama-bin-win-cu12.4-x64.zip`, the CUDA *runtime redistributable*, which
+  `cudart-llama-bin-win-cu12.4-x64.zip`, the CUDA _runtime redistributable_, which
   matches every other token, is shorter than the real CUDA build, and contains no
   server at all.
 
-When nothing matches, the error names the assets it *did* see, rather than failing
+When nothing matches, the error names the assets it _did_ see, rather than failing
 blind on a release whose naming moved again.
 
 ### The picker knows before you click install
 
-`select_asset` used to run only *after* the user picked a variant and hit
+`select_asset` used to run only _after_ the user picked a variant and hit
 Install — a release publishing no CUDA build for Linux surfaced as an error only
 once the download was already "starting." `GET /llamacpp/install/variants` runs
 the same match ahead of time, for every variant against the current release and
@@ -136,7 +135,7 @@ holds, and "we could not ask" must never install a CUDA build.
 publishes CUDA for **Windows only** — there is no `ubuntu-cuda-*` asset in any
 release, because Linux NVIDIA users are expected to build it or run the Vulkan
 build. So an NVIDIA card on Linux resolves to `vulkan`, with a reason string that
-says why. Getting this wrong is not a slow build, it is *no install at all*, and
+says why. Getting this wrong is not a slow build, it is _no install at all_, and
 it only became reachable when the default moved from `cpu` to `auto`.
 `test_upstream_publishes_no_linux_cuda_build` pins the upstream fact, so if a
 Linux CUDA asset ever appears the special case can be deleted on a failing test
@@ -199,7 +198,7 @@ What it does **not** claim: compute buffers, the CUDA context and driver overhea
 depend on the build and the batch size, not on the weights. Rather than a fudge factor
 hidden inside the total, a flat `VRAM_RESERVE_BYTES` is held back and named in the
 tooltip. And with no measured VRAM — a card reporting no memory size, a probe that
-could not ask, or unified memory where the "VRAM" *is* the RAM — the ceiling is simply
+could not ask, or unified memory where the "VRAM" _is_ the RAM — the ceiling is simply
 not drawn and no verdict is given, because "unknown" rendering as "fits" is the exact
 failure the hardware module exists to prevent.
 
@@ -219,7 +218,7 @@ default is a starting point.
 
 The preview above began life as three stacked widths — weights on the GPU, KV cache,
 weights left in RAM — with a ceiling line across them. That drawing could state both
-of the rules in the previous section and *show* neither, because a single bar has no
+of the rules in the previous section and _show_ neither, because a single bar has no
 place to put a block index.
 
 `LayerColumns.tsx` draws one column per decoder block, height from the real
@@ -273,12 +272,12 @@ Three of them carry a rule that used to be a comment:
   Passing the ratchet is not the same as being themed. The sign becomes a data
   attribute and the alpha a custom property, resolved in CSS against two new
   per-theme tokens, `--ramp-pos` and `--ramp-neg` — the only two tokens whose job is
-  to be read as a *direction* rather than as a status, which is why they are not
+  to be read as a _direction_ rather than as a status, which is why they are not
   `--accent` and `--danger`: a negative activation is not an error.
 
 `HeatCanvas` is deliberately **not** added to the hex guard's `CANVAS_EXEMPT` bucket.
 That exemption exists because a `CanvasRenderingContext2D` cannot resolve a custom
-property — true, but it only covers a canvas with no way to *ask*. This one reads its
+property — true, but it only covers a canvas with no way to _ask_. This one reads its
 ramp through `getComputedStyle` and repaints on a theme change. The cautionary case is
 `training/panels/MetricsPane.tsx`, which passed `var(--accent, #539bf5)` straight into
 uPlot: `ctx.strokeStyle` ignores an unparseable value **without throwing**, so that
@@ -360,7 +359,7 @@ it with `--lora` beside a base model rather than serving it alone.
 **`GET /models` carries that provenance, not just the agent tool.** Each row gets
 `baseModel`, `projectId` and `isAdapter`, joined from `training.lineage` on the GGUF
 path. Without it the pane — which is where a person actually picks a model — listed a
-fine-tune by whatever `general.name` the converter wrote: the *adapter* of a Qwen
+fine-tune by whatever `general.name` the converter wrote: the _adapter_ of a Qwen
 fine-tune appeared as a servable model called "Qwen/Qwen3-0.6B", and the merged model
 beside it as "Merged". The row now says "fine-tune of &lt;base&gt;", the adapter is
 tagged in the list and in the start picker, and a missing row reads as **unknown
@@ -374,7 +373,7 @@ into a 40 GB transfer. The ceiling is `llamacpp.diskBudgetGb` (default 80).
 
 Downloads write to a `.part` file and rename on success, so an interrupted transfer
 can never be picked up by the catalog scan as a servable model — a truncated GGUF
-fails at load time with an error that reads like a corrupt *model*.
+fails at load time with an error that reads like a corrupt _model_.
 
 ### Reading the catalogue
 
@@ -391,7 +390,7 @@ Two things that were sentences became pictures:
   and never which file was responsible for it.
 - **Quantization cost** is a log-log scatter of `parameters` against `sizeBytes`.
   Plotted against each other the two numbers stop being two numbers and become a
-  *rate* — bytes per parameter — and each quantization family falls on its own line
+  _rate_ — bytes per parameter — and each quantization family falls on its own line
   through the origin, with guides drawn at 0.5, 1, 2 and 4. Q8_0 sits at about twice
   Q4_K_M's slope and F16 at four times, which is readable without knowing what any of
   the names mean. Log-log because a catalogue spans 0.5B to 70B and a linear axis puts
@@ -446,7 +445,7 @@ its last log lines rather than a timeout.
 `spawn` stores a `SpawnSpec` — model path, alias, port, context size, GPU layers,
 threads, extra args — and `spawn_spec` hands it to anyone who has to restore the
 server. There is exactly one process and one model, so anything that wants to
-*borrow* it has to be able to give it back: [evals](evals.mdx#sweeping-a-local-gguf-the-server-is-borrowed-then-given-back)
+_borrow_ it has to be able to give it back: [evals](evals.mdx#sweeping-a-local-gguf-the-server-is-borrowed-then-given-back)
 loads a GGUF to score it and then restores whatever was running.
 
 Restoring from the spec rather than from defaults is the whole point. Defaults
@@ -477,14 +476,14 @@ however convenient that would be.
 ### Flags are probed, never hardcoded
 
 `features.probe_flags()` shells `llama-server --help` and reports which spelling
-*this* build wants, cached by binary path **and mtime**.
+_this_ build wants, cached by binary path **and mtime**.
 
 Two reasons, both silent failures otherwise. Upstream renamed the tuning flags
 under a `--spec-` prefix in 2026 (`--draft-max` → `--spec-draft-n-max`), and both
 spellings are in the wild; passing the wrong one does not warn — the server exits
 during load and `wait_ready` reports the generic "did not start", which reads as a
 broken model. And `--rpc` is a compile-time feature whose presence in upstream's
-*release* binaries has changed over time: b10453-cuda, which this module
+_release_ binaries has changed over time: b10453-cuda, which this module
 downloads, **does** have it, so a documented constant would have been true when
 written and quietly wrong later.
 
@@ -499,7 +498,7 @@ the build uses its own default, which works, where a wrong flag does not.
 vocabulary size, a hash over a stride of the token list, and the BOS/EOS ids.
 
 It **refuses** rather than warning, because the failure is invisible: the draft
-proposes token *ids*, so a mismatched tokenizer collapses the acceptance rate and
+proposes token _ids_, so a mismatched tokenizer collapses the acceptance rate and
 makes generation **slower than not drafting at all**, while looking like it
 worked. A warning on a feature whose only symptom is "mysteriously slower" gets
 ignored. For the same reason an unreadable header is a refusal, not a pass, and
@@ -538,14 +537,14 @@ same machine, since tokens/sec is not comparable across runs on a laptop that
 throttles. `compare()` may return a verdict of "slower" — that is a result.
 
 The acceptance rate is included because it explains the outcome: 20% acceptance
-and slower is a *model pairing* problem, 70% and slower is a *memory* problem.
+and slower is a _model pairing_ problem, 70% and slower is a _memory_ problem.
 
 ## Per-agent provider selection
 
 `model`, `temperature`, `contextSize`, `maxTokens` and `topP` have been per-agent
 since the roster landed. `provider` and `endpoint` were not — which made "run the
 coder on the node's llama.cpp server and leave the orchestrator on Ollama"
-unexpressible, because the only per-agent knob was a model *name*, and a name means
+unexpressible, because the only per-agent knob was a model _name_, and a name means
 nothing on a server that does not have that model.
 
 `roster.resolve_provider(config, agent_id)` resolves both, per key:
@@ -557,30 +556,28 @@ value must not take the agent down.
 `run_agent_loop` is called from three places: the orchestrator
 (`orchestrator.py`), local delegation (`delegate.py`), and the flow executor's Agent
 node. A site left on `provider_for(config.provider)` does not fail — it quietly runs
-that path on the *global* provider, which is how a delegate ends up on a different
+that path on the _global_ provider, which is how a delegate ends up on a different
 model than the one its settings show.
 :::
 
 ## Contributions to the layout shell
 
-| Kind | ID | Notes |
-| --- | --- | --- |
-| Panel | `llamacpp.server` | "llama.cpp" 🦙; singleton, role `document` — running a model, not reading one |
-| Section | `llamacpp.server` → `server` | Default, key <kbd>s</kbd> — build + process + log |
-| Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
-| Section | `interpretability.suite` → `traces` | The activation scrubber — a section of the [interpretability suite](./interp-suite.mdx) |
-| Section | `interpretability.suite` → `lens` | A trace read as words (the Trace lens tab) |
-| Section | `interpretability.suite` → `stepper` | The layer debugger: a trace in execution order (see "The stepper" below) |
-| Command | `section.show:llamacpp.server:{traces,lens,stepper}` | Kept as shims for those sections' old ids; they open the suite section |
-| Command | `llamacpp.open` | llama.cpp: Server and models |
-| Command | `llamacpp.openStepper` | llama.cpp: Step through a trace (`/stepper`) |
-| Command | `llamacpp.stepper.*` | Step into/back/over/out, continue (both ways), toggle breakpoint, play, restart — no-ops unless the Stepper section is mounted |
-| Keybinding | stepper verbs | <kbd>→</kbd>/<kbd>←</kbd> step, <kbd>↓</kbd>/<kbd>F10</kbd> over, <kbd>↑</kbd>/<kbd>Shift+F10</kbd> back over, <kbd>Shift+→</kbd> out, <kbd>C</kbd>/<kbd>Shift+C</kbd> continue, <kbd>B</kbd> breakpoint, <kbd>Space</kbd> play, <kbd>Home</kbd> restart — scoped `paneFocus == 'interpretability.suite' && paneSection == 'stepper' && !textInput`, because the suite keeps the stepper mounted behind its other sections |
-| Command | `llamacpp.traceSelection` | llama.cpp: Trace editor selection (`/trace-selection`) |
-| Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
-| Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |
-| Setting | `llamacpp.traceBudgetGb` | Ceiling for stored traces (default 2 GB) |
-| Setting | `llamacpp.lensCacheGb` | Ceiling for the dequantized output-head cache (default 4 GB) |
+| Kind       | ID                                                                 | Notes                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Section    | `interpretability.suite` → `runtime`                               | **Models & llama.cpp** inside the [Interpretability IDE](./interp-suite.mdx), with `Server & Offload` (`server`) and `GGUF Catalog` (`models`) sub-tabs; retired `llamacpp.server` resolves here via `RENAMED_VIEWS` and `VIEW_ALIASES`                                                                                                                                                                                    |
+| Section    | `interpretability.suite` → `traces`                                | The activation scrubber                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Section    | `interpretability.suite` → `lens`                                  | A trace read as words (the Trace lens tab)                                                                                                                                                                                                                                                                                                                                                                                 |
+| Section    | `interpretability.suite` → `stepper`                               | The layer debugger: a trace in execution order (pair side-by-side with `Model` to highlight executing sub-blocks)                                                                                                                                                                                                                                                                                                          |
+| Command    | `section.show:llamacpp.server:{server,models,traces,lens,stepper}` | Kept as shims for old section ids; open the matching IDE section/sub-tab                                                                                                                                                                                                                                                                                                                                                   |
+| Command    | `llamacpp.open`                                                    | llama.cpp: Server and models                                                                                                                                                                                                                                                                                                                                                                                               |
+| Command    | `llamacpp.openStepper`                                             | llama.cpp: Step through a trace (`/stepper`)                                                                                                                                                                                                                                                                                                                                                                               |
+| Command    | `llamacpp.stepper.*`                                               | Step into/back/over/out, continue (both ways), toggle breakpoint, play, restart — no-ops unless the Stepper section is mounted                                                                                                                                                                                                                                                                                             |
+| Keybinding | stepper verbs                                                      | <kbd>→</kbd>/<kbd>←</kbd> step, <kbd>↓</kbd>/<kbd>F10</kbd> over, <kbd>↑</kbd>/<kbd>Shift+F10</kbd> back over, <kbd>Shift+→</kbd> out, <kbd>C</kbd>/<kbd>Shift+C</kbd> continue, <kbd>B</kbd> breakpoint, <kbd>Space</kbd> play, <kbd>Home</kbd> restart — scoped `paneFocus == 'interpretability.suite' && paneSection == 'stepper' && !textInput`, because the suite keeps the stepper mounted behind its other sections |
+| Command    | `llamacpp.traceSelection`                                          | llama.cpp: Trace editor selection (`/trace-selection`)                                                                                                                                                                                                                                                                                                                                                                     |
+| Setting    | `llamacpp.modelDirs`                                               | Extra GGUF directories to scan                                                                                                                                                                                                                                                                                                                                                                                             |
+| Setting    | `llamacpp.diskBudgetGb`                                            | Ceiling for the managed directory                                                                                                                                                                                                                                                                                                                                                                                          |
+| Setting    | `llamacpp.traceBudgetGb`                                           | Ceiling for stored traces (default 2 GB)                                                                                                                                                                                                                                                                                                                                                                                   |
+| Setting    | `llamacpp.lensCacheGb`                                             | Ceiling for the dequantized output-head cache (default 4 GB)                                                                                                                                                                                                                                                                                                                                                               |
 
 One pane, five sections — the build, the weights, the traces and the lens are one
 workflow in a strict order (no build, no server; no weights, nothing to serve;
@@ -621,7 +618,7 @@ Four things it does deliberately:
   (selection)"; typing in the box drops the label, because a textarea that
   silently repopulated itself is indistinguishable from a bug.
 
-The handoff itself is `trace-prompt.ts`: a pending value *plus* a subscription,
+The handoff itself is `trace-prompt.ts`: a pending value _plus_ a subscription,
 because revealing the section mounts it fresh (a prompt pushed first has no listener
 yet) while a push into an already-open section has no mount to read it. Either
 mechanism alone drops half the cases, and the read clears the value so a later visit
@@ -629,40 +626,40 @@ does not resurrect an old selection over what you were typing.
 
 ## Backend surface
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/llamacpp/status` | Build, process, readiness, log tail |
-| `POST` | `/api/llamacpp/install` | Download + unpack a build (NDJSON progress) |
-| `POST` | `/api/llamacpp/install/remove` | Delete a build (refused while it runs) |
-| `GET` | `/api/llamacpp/models` | Catalog + disk usage + starter repos |
-| `GET` | `/api/llamacpp/repo?repo=` | GGUF files in a Hugging Face repo, with sizes |
-| `POST` | `/api/llamacpp/models/download` | Fetch one GGUF (NDJSON progress) |
-| `POST` | `/api/llamacpp/models/delete` | Delete a managed model (403 otherwise) |
-| `GET` | `/api/llamacpp/models/layers` | Per-block byte sizes + KV cost per token, for the offload preview. **Catalog-only** — it opens a client-supplied path, so an uncatalogued one 404s rather than becoming an arbitrary-file read |
-| `POST` | `/api/llamacpp/start` | Spawn on a chosen GGUF, optionally waiting for ready |
-| `POST` | `/api/llamacpp/stop` | Terminate |
-| `GET` | `/api/llamacpp/traces` | Stored traces, disk usage, and whether tracing is available at all |
-| `POST` | `/api/llamacpp/traces/estimate` | Pre-flight cost, from the GGUF header |
-| `POST` | `/api/llamacpp/traces` | Run one traced forward pass (NDJSON progress) |
-| `GET` | `/api/llamacpp/traces/{id}` | Manifest, record list, tokens |
-| `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side (capped at `_VALUE_CAP`) |
-| `GET` | `/api/llamacpp/traces/{id}/series` | One node's statistic per forward pass, **by name**. Summarizes the whole record, unlike `/record/{i}` |
-| `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
-| `GET` | `/api/llamacpp/traces/{id}/record/{i}/matrix?head=&cols=` | One 2-D plane read **through the record's strides**: tokens × features (max-abs pooled, full-resolution row norms) or one attention head's query × key matrix cropped to the KV in use |
-| `GET` | `/api/llamacpp/traces/{id}/record/{i}/heads` | Per-head entropy / self-weight / first-token weight for an attention record |
-| `GET` | `/api/llamacpp/traces/{id}/heads` | Every head of a pass scored (`heads.py`): previous-token, induction, duplicate, sink, self, entropy — induction/duplicate `null` on a prompt with no repeats |
-| `POST` | `/api/llamacpp/heads/probe` | Record the induction probe on a GGUF: a random word sequence twice, attention + `l_out` only; streams like `/traces` |
-| `GET` | `/api/llamacpp/traces/{id}/layer/{L}/delta?passIndex=` | What block `L` wrote into the residual stream, per token (relative change, cosine) |
-| `GET` | `/api/llamacpp/traces/{id}/experts?passIndex=` | Mixture-of-experts routing: per-token expert choices and weights, per-layer counts. `moe: false` on a dense model |
-| `POST` | `/api/llamacpp/traces/{id}/fork` | Re-run with some tokens replaced (NDJSON progress) |
-| `GET` | `/api/llamacpp/traces/capture-sets` | The named capture sets and their real ggml node patterns |
-| `GET` | `/api/llamacpp/traces/{id}/lens` | The layer × position readout |
-| `GET` | `/api/llamacpp/traces/{id}/lens/track` | One vocabulary token's logit and rank at every cell |
-| `GET` | `/api/llamacpp/traces/{id}/lenses` | Which lenses apply to this trace's model |
-| `GET` | `/api/llamacpp/models/vocab` | Search a GGUF's own vocabulary — the token picker behind a swap |
-| `GET` | `/api/llamacpp/traces/catalog` | The `llamacpp_traces` rows in `app.db` — filterable by model hash or parent, which the directory listing cannot do |
-| `POST` | `/api/llamacpp/traces/{id}/finding` | File a lens reading into a library as a `note`. A 200 with `error` set is a refusal, not a failure |
-| `DELETE` | `/api/llamacpp/traces/{id}` | Delete a trace |
+| Method   | Path                                                      | Purpose                                                                                                                                                                                        |
+| -------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/llamacpp/status`                                    | Build, process, readiness, log tail                                                                                                                                                            |
+| `POST`   | `/api/llamacpp/install`                                   | Download + unpack a build (NDJSON progress)                                                                                                                                                    |
+| `POST`   | `/api/llamacpp/install/remove`                            | Delete a build (refused while it runs)                                                                                                                                                         |
+| `GET`    | `/api/llamacpp/models`                                    | Catalog + disk usage + starter repos                                                                                                                                                           |
+| `GET`    | `/api/llamacpp/repo?repo=`                                | GGUF files in a Hugging Face repo, with sizes                                                                                                                                                  |
+| `POST`   | `/api/llamacpp/models/download`                           | Fetch one GGUF (NDJSON progress)                                                                                                                                                               |
+| `POST`   | `/api/llamacpp/models/delete`                             | Delete a managed model (403 otherwise)                                                                                                                                                         |
+| `GET`    | `/api/llamacpp/models/layers`                             | Per-block byte sizes + KV cost per token, for the offload preview. **Catalog-only** — it opens a client-supplied path, so an uncatalogued one 404s rather than becoming an arbitrary-file read |
+| `POST`   | `/api/llamacpp/start`                                     | Spawn on a chosen GGUF, optionally waiting for ready                                                                                                                                           |
+| `POST`   | `/api/llamacpp/stop`                                      | Terminate                                                                                                                                                                                      |
+| `GET`    | `/api/llamacpp/traces`                                    | Stored traces, disk usage, and whether tracing is available at all                                                                                                                             |
+| `POST`   | `/api/llamacpp/traces/estimate`                           | Pre-flight cost, from the GGUF header                                                                                                                                                          |
+| `POST`   | `/api/llamacpp/traces`                                    | Run one traced forward pass (NDJSON progress)                                                                                                                                                  |
+| `GET`    | `/api/llamacpp/traces/{id}`                               | Manifest, record list, tokens                                                                                                                                                                  |
+| `GET`    | `/api/llamacpp/traces/{id}/record/{i}`                    | One record's values, decoded server-side (capped at `_VALUE_CAP`)                                                                                                                              |
+| `GET`    | `/api/llamacpp/traces/{id}/series`                        | One node's statistic per forward pass, **by name**. Summarizes the whole record, unlike `/record/{i}`                                                                                          |
+| `GET`    | `/api/llamacpp/traces/{id}/tensors`                       | The raw blob, honouring `Range`                                                                                                                                                                |
+| `GET`    | `/api/llamacpp/traces/{id}/record/{i}/matrix?head=&cols=` | One 2-D plane read **through the record's strides**: tokens × features (max-abs pooled, full-resolution row norms) or one attention head's query × key matrix cropped to the KV in use         |
+| `GET`    | `/api/llamacpp/traces/{id}/record/{i}/heads`              | Per-head entropy / self-weight / first-token weight for an attention record                                                                                                                    |
+| `GET`    | `/api/llamacpp/traces/{id}/heads`                         | Every head of a pass scored (`heads.py`): previous-token, induction, duplicate, sink, self, entropy — induction/duplicate `null` on a prompt with no repeats                                   |
+| `POST`   | `/api/llamacpp/heads/probe`                               | Record the induction probe on a GGUF: a random word sequence twice, attention + `l_out` only; streams like `/traces`                                                                           |
+| `GET`    | `/api/llamacpp/traces/{id}/layer/{L}/delta?passIndex=`    | What block `L` wrote into the residual stream, per token (relative change, cosine)                                                                                                             |
+| `GET`    | `/api/llamacpp/traces/{id}/experts?passIndex=`            | Mixture-of-experts routing: per-token expert choices and weights, per-layer counts. `moe: false` on a dense model                                                                              |
+| `POST`   | `/api/llamacpp/traces/{id}/fork`                          | Re-run with some tokens replaced (NDJSON progress)                                                                                                                                             |
+| `GET`    | `/api/llamacpp/traces/capture-sets`                       | The named capture sets and their real ggml node patterns                                                                                                                                       |
+| `GET`    | `/api/llamacpp/traces/{id}/lens`                          | The layer × position readout                                                                                                                                                                   |
+| `GET`    | `/api/llamacpp/traces/{id}/lens/track`                    | One vocabulary token's logit and rank at every cell                                                                                                                                            |
+| `GET`    | `/api/llamacpp/traces/{id}/lenses`                        | Which lenses apply to this trace's model                                                                                                                                                       |
+| `GET`    | `/api/llamacpp/models/vocab`                              | Search a GGUF's own vocabulary — the token picker behind a swap                                                                                                                                |
+| `GET`    | `/api/llamacpp/traces/catalog`                            | The `llamacpp_traces` rows in `app.db` — filterable by model hash or parent, which the directory listing cannot do                                                                             |
+| `POST`   | `/api/llamacpp/traces/{id}/finding`                       | File a lens reading into a library as a `note`. A 200 with `error` set is a refusal, not a failure                                                                                             |
+| `DELETE` | `/api/llamacpp/traces/{id}`                               | Delete a trace                                                                                                                                                                                 |
 
 Progress rides **NDJSON on the request**, not a `/ws` channel — the shape
 `/agent/pull` already uses, and it keeps a multi-gigabyte transfer scoped to the
@@ -678,7 +675,7 @@ needs would be backwards.
 
 No difference. The server is a backend child process and the pane is ordinary HTTP —
 both layouts drive the same node. The only asymmetry is the usual one: a browser
-layout pointed at someone else's backend manages *that* machine's models, which is
+layout pointed at someone else's backend manages _that_ machine's models, which is
 what "the node serves its own weights" means.
 
 ## Testing
@@ -715,8 +712,8 @@ produce the answer above it.
 ### The watch window — pinned nodes, gdb-style
 
 The scrubber could show exactly one node at a time, so the two questions an
-interpretability session is made of — *what does this node do as the model
-generates?* and *how do these two compare?* — could only be answered by clicking
+interpretability session is made of — _what does this node do as the model
+generates?_ and _how do these two compare?_ — could only be answered by clicking
 back and forth and remembering numbers. **Pinning** answers both: pinned nodes stack
 in a Watch card above the list, all visible at once, re-resolved for whichever pass
 is on screen.
@@ -725,7 +722,7 @@ is on screen.
 watch in a debugger is an expression re-evaluated at each stop, not a pointer to one
 evaluation of it. So a pin survives switching pass (each generated token is its own
 forward pass with its own records under the same names) and survives opening a
-*different trace of the same model* — the closest thing here to re-running a program
+_different trace of the same model_ — the closest thing here to re-running a program
 under gdb. Pins are keyed by **model**, not by trace, for the same reason: "watch
 layer 41's residual" is a fact about the architecture, and keying by trace id would
 throw the list away exactly when it became useful, on the second trace.
@@ -738,7 +735,7 @@ Three states are deliberate:
   one, and the gap tells you the capture set differed rather than pretending the
   node was never interesting.
 - **A `summary` pin shows statistics and no strip.** The rule that a summary carries
-  statistics *instead of* a tensor is preserved rather than special-cased away.
+  statistics _instead of_ a tensor is preserved rather than special-cased away.
 - **The cap is 8, and it says why.** Each pin is a request per pass change; an
   uncapped watch list turns switching pass into a request storm. `pin all` on a
   block fills up to the cap rather than dropping the ones that fit.
@@ -771,13 +768,13 @@ built from a pure `node-kind.ts` classifier. Two details worth keeping:
 
 A `TraceRecord` carries seven statistics (`count, min, max, mean, rms, absMax,
 zeroFraction`) and the pane rendered exactly one of them, for pinned nodes only — so
-the most basic question you can ask of a traced pass, *does the residual grow with
-depth?*, took eight manual pins and still could not be seen at a glance. The Profile
+the most basic question you can ask of a traced pass, _does the residual grow with
+depth?_, took eight manual pins and still could not be seen at a glance. The Profile
 card answers it in two views, above the record list.
 
 **Why it is a route and not a `useMemo`.** The first cut computed it from
 `records[].summary`, already in the browser, and cost no request. Against every trace
-on disk it drew an empty chart reading *0 of 28 layers measured*, and blamed the
+on disk it drew an empty chart reading _0 of 28 layers measured_, and blamed the
 fidelity for it. `tracer._capture` writes `summary` **only** for `summary`-fidelity
 records — the ones that hold no data — so on an fp16 trace the manifest carries 170
 records and zero statistics. Exactly the records with data have no statistics. That
@@ -792,7 +789,7 @@ the number the pane prints.
 The pass and the statistic are the whole request; **which role is on screen is not**,
 because that is arrangement of a response already in hand. So:
 
-- **One role against depth.** A *role* is a record name with its block index
+- **One role against depth.** A _role_ is a record name with its block index
   removed, so `kqv_out-3` and `kqv_out-27` are the same role at two depths — which
   is the only way to compare them. Two naming schemes reach `roleOf` and only one is
   `blk.N.`: graph nodes named by llama.cpp's `cb()` carry the index as a **`-N`
@@ -803,9 +800,9 @@ because that is arrangement of a response already in hand. So:
 - **The pass as a fingerprint** — node kind against depth as a heat grid,
   **normalized per row, not globally.** An attention score and an FFN activation are
   different quantities in different units, and one shared scale would render every
-  row but the largest as uniformly blank, which reads as *nothing happens there*.
+  row but the largest as uniformly blank, which reads as _nothing happens there_.
   Per-row normalization asks the only question a heat grid can honestly answer here:
-  where along the depth is *this* quantity large? Several records of one kind landing
+  where along the depth is _this_ quantity large? Several records of one kind landing
   on one layer (q, k and v are all attention) average rather than max, so one outlier
   cannot stand for the group.
 
@@ -827,7 +824,7 @@ look identical on screen otherwise, and only one of them is a bug worth seeing.
 
 ### Architectures beyond the transformer
 
-`DEFAULT_CAPTURE` is a *transformer* capture set — `attn_norm`, `kqv_out`, `ffn_*`.
+`DEFAULT_CAPTURE` is a _transformer_ capture set — `attn_norm`, `kqv_out`, `ffn_*`.
 llama.cpp also runs Mamba/Mamba2, RWKV and hybrids (Jamba, Falcon-H1, Nemotron-H),
 and on those none of those names exist: tracing one recorded the residual stream and
 **nothing whatsoever about the mechanism**, which reads as a broken tracer rather
@@ -849,7 +846,7 @@ Two rules:
 
 :::caution[Diffusion is not covered]
 Image diffusion is `stable-diffusion.cpp` — a different binary this module does not
-run, and nothing here traces it. Diffusion *language* models (LLaDA, Dream) do exist
+run, and nothing here traces it. Diffusion _language_ models (LLaDA, Dream) do exist
 in llama.cpp, but they denoise the whole sequence iteratively, so their steps are not
 `passIndex`-as-generated-token and the tracer's autoregressive `llama_decode` loop
 does not express them. Both are open, not half-supported.
@@ -861,8 +858,8 @@ present on the development machine.
 
 ### Why snapshots, not a stream
 
-Attention scores alone are fp32 `[n_kv, n_tokens, n_head]` — roughly 33 MB *per
-layer per pass* at 512 tokens and 32 heads, about a gigabyte across 32 layers. A
+Attention scores alone are fp32 `[n_kv, n_tokens, n_head]` — roughly 33 MB _per
+layer per pass_ at 512 tokens and 32 heads, about a gigabyte across 32 layers. A
 live tensor feed is therefore a websocket carrying a gigabyte a second to a pane
 that can render none of it. A run writes a snapshot and the pane scrubs it
 afterwards, which also makes a trace something you can keep, compare and delete.
@@ -876,7 +873,7 @@ $HORRIBLE_DATA_DIR/llamacpp/traces/<trace_id>/
 ```
 
 One blob rather than a file per layer — hassault's cube-grid precedent literally.
-Per-layer files give thousands of handles and *still* cannot address a single node
+Per-layer files give thousands of handles and _still_ cannot address a single node
 inside a layer; blob plus `Range` gives both, and the range handling (including the
 suffix form, where `bytes=-3` is the **last** three bytes) is copied from karaoke
 along with its tests.
@@ -889,7 +886,7 @@ so the callback hands over a `void *` that nothing in the wheel can read.
 `ggml_abi.py` closes that gap as narrowly as possible:
 
 1. **Mirror as little as possible.** Only the first four fields (`type`, `buffer`,
-   `ne[4]`, `nb[4]`). Name, op and data are read through functions ggml *exports* —
+   `ne[4]`, `nb[4]`). Name, op and data are read through functions ggml _exports_ —
    the same instinct as serving `plane_order` instead of hardcoding it.
 2. **A self-check gates every trace.** On the first tensor, `nbytes` is recomputed
    from `(type, ne, nb)` using ggml's own formula and compared against
@@ -899,10 +896,10 @@ so the callback hands over a `void *` that nothing in the wheel can read.
    garbage is worse than no trace.
 3. **The tracer is a subprocess.** `python -m backend.modules.llamacpp.tracer
    <spec.json>`, spawned with `subprocess.Popen` on a worker thread (never
-   `asyncio.create_subprocess_exec` — under `uvicorn --reload` on Windows the loop
-   cannot spawn subprocesses at all). A segfault inside a ggml callback is then an
-   exit code the runner reports, not a dead FastAPI backend mid-turn. A non-zero
-   exit with no error line is reported as exactly that.
+`asyncio.create_subprocess_exec` — under `uvicorn --reload` on Windows the loop
+cannot spawn subprocesses at all). A segfault inside a ggml callback is then an
+exit code the runner reports, not a dead FastAPI backend mid-turn. A non-zero
+exit with no error line is reported as exactly that.
 
 Those exported functions live in **`ggml-base`, and only there**. A modern wheel
 splits the build into several shared libraries, and `llama.dll` re-exports none of
@@ -920,7 +917,7 @@ the wrong file being open.
 
 - **Flash attention must be disabled explicitly.** With it on,
   `ggml_flash_attn_ext` is one fused node and the score matrix never materialises —
-  attention capture would produce *nothing*, reading as a bug in the name filter
+  attention capture would produce _nothing_, reading as a bug in the name filter
   rather than a missing flag. Recent llama.cpp auto-enables it, so the default is
   not safe; `_disable_flash_attn` sets `flash_attn_type` (or the older `flash_attn`
   bool, whichever this build has).
@@ -932,7 +929,7 @@ the wrong file being open.
   plausible everywhere else. There is no dequantizer here, and `traces.decode`
   refuses a quantized dtype rather than guessing.
 - **No chat template is applied.** The prompt is traced as raw text; rendering a
-  template ourselves would put a *different* token sequence through the model than
+  template ourselves would put a _different_ token sequence through the model than
   the one shown beside it. The manifest carries `chatTemplate: false` and says so.
 
 ### Everything declares what it is
@@ -949,7 +946,7 @@ The module's three-state honesty applies unchanged:
   different model" and does not pretend to be a whole-file checksum.
 - **The estimate is labelled an estimate.** `POST /traces/estimate` costs the run
   from the GGUF header (`block_count`, `embedding_length`, `attention.head_count`)
-  *before* it starts, because the difference between a 200 MB trace and a 12 GB one
+  _before_ it starts, because the difference between a 200 MB trace and a 12 GB one
   is one checkbox and a progress bar that has already started is too late. The
   manifest's `blobBytes` is what actually happened.
 
@@ -1062,7 +1059,7 @@ seconds and a picture nothing can be found in. `getLensGrid` has accepted `layer
 and `positions` since it was written and the pane passed **neither**.
 
 The control is a **stride**, not a window, and that is the interesting choice. What a
-logit lens is for is seeing *where along the depth* a prediction settles. A window
+logit lens is for is seeing _where along the depth_ a prediction settles. A window
 over layers 0–32 of a 262-layer model answers a different question: it shows a sixth
 of the model in full detail and hides where the answer actually appeared. A stride
 keeps the full span and samples it, so the knee is still visible and you can then
@@ -1075,7 +1072,7 @@ Three rules in `narrow.ts` (pure, tested):
   never made.
 - **The window is applied first, then the stride samples within it.** Striding first
   and clipping after gives a different row count depending on where the window sits,
-  so widening it could make the picture *coarser* — the opposite of what the control
+  so widening it could make the picture _coarser_ — the opposite of what the control
   says it does.
 - **Only an unnarrowed response tells us the true depth.** A narrowed one reports the
   rows it was asked for; treating that as the depth would let the suggested stride
@@ -1104,14 +1101,14 @@ which would read as a missing feature.
 
 ### Swapping a token
 
-A grid alone cannot separate *the model knows this* from *the prompt said it*.
+A grid alone cannot separate _the model knows this_ from _the prompt said it_.
 `POST /traces/{id}/fork` replaces tokens and re-runs, and the two grids are
 diffed cell by cell.
 
 Three decisions carry it:
 
 - **Token ids, not text.** `TraceRequest.tokenIds` bypasses tokenization
-  entirely. Re-tokenizing an edited *string* can merge or split its neighbours,
+  entirely. Re-tokenizing an edited _string_ can merge or split its neighbours,
   so the run would differ in more places than the one you changed and the diff
   would be unreadable.
 - **Everything else is inherited** from the parent — model, generation length,
@@ -1212,7 +1209,7 @@ thing a trace can hold.
 `lens` is the readout: `lens.grid`, `lens.cell`, `lens.track_token`, `lens.fork`,
 `lens.focus`, `lens.layer` and `lens.save_finding`. `lens.layer` is what one block
 did, in numbers an explanation can quote — the share of each token's residual it
-rewrote and the angle it turned, its sharpest *content* heads and its attention
+rewrote and the angle it turned, its sharpest _content_ heads and its attention
 sinks (ranked separately: a head parked on the first token is low-entropy too, so
 ranking by entropy alone just re-lists the sinks), and on a mixture-of-experts model
 which experts it routed tokens to. It reuses the stepper's reads, so the agent and
@@ -1282,19 +1279,19 @@ screen is worse than declining.
 
 The Traces section is a record list you pin and scrub; the Lens is a grid of words.
 The **Stepper** is the third reading: **execution order**. It needs nothing new on
-disk, because a trace already *is* an instruction stream — the tracer appends
+disk, because a trace already _is_ an instruction stream — the tracer appends
 records in the order ggml computed them, each tagged with its pass and its block.
 `stepper/program.ts` turns the record list into a program and gives every debugger
 verb a meaning:
 
-| verb | lands on |
-| --- | --- |
-| step into / back | the next / previous graph node |
-| step over | the first node of the next **frame** (a block of one pass; the embedding and output head are frames of their own, so stepping over the last block lands on the head rather than skipping it) |
-| reverse step over | the start of this frame, then of the previous one |
-| step out | the first node of the next forward pass |
-| continue / reverse continue | the next node a breakpoint stops on |
-| play | step over on a timer, stopping at any breakpoint crossed inside a frame |
+| verb                        | lands on                                                                                                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| step into / back            | the next / previous graph node                                                                                                                                                               |
+| step over                   | the first node of the next **frame** (a block of one pass; the embedding and output head are frames of their own, so stepping over the last block lands on the head rather than skipping it) |
+| reverse step over           | the start of this frame, then of the previous one                                                                                                                                            |
+| step out                    | the first node of the next forward pass                                                                                                                                                      |
+| continue / reverse continue | the next node a breakpoint stops on                                                                                                                                                          |
+| play                        | step over on a timer, stopping at any breakpoint crossed inside a frame                                                                                                                      |
 
 Reverse execution is free — a snapshot has no side effects to undo — which is the
 one way this debugger is better than the real kind.
@@ -1306,7 +1303,7 @@ no second list of ggml node names exists to drift from the first.
 
 ### Breakpoints, including ones no source debugger has
 
-- **block** — stops on *entry* to the block only, so Continue does not stop six
+- **block** — stops on _entry_ to the block only, so Continue does not stop six
   times inside it;
 - **stage** ("every attention node") and **node** (one name);
 - **threshold** — a stage's `rms` above a value, evaluated against the per-pass
@@ -1316,7 +1313,7 @@ no second list of ggml node names exists to drift from the first.
   identity lens at the selected position for every layer of the pass (one
   `/lens?positions=&passIndex=&k=1` call) and offers each token that is ever top-1,
   with the block it first appears at. Verified on Llama-3.2-3B with the prompt
-  *"The capital of France is"*: ' Paris' first wins at block 19, Continue stops on
+  _"The capital of France is"_: ' Paris' first wins at block 19, Continue stops on
   `l_out-19`, and the timeline marks blocks 19–27.
 
 Breakpoint marks on the timeline are drawn with the **same** `HitContext` Continue
@@ -1336,7 +1333,7 @@ and is still retried, since an error may be transient.
   matrix on `HeatCanvas`, with the selected position's row outlined and its top keys
   listed. `kq` is labelled as **raw pre-softmax scores**, where a query may score
   keys after it — causality is applied by the next node.
-- **Residual** (`l_out`) — what the block *wrote*: the share of each token's vector
+- **Residual** (`l_out`) — what the block _wrote_: the share of each token's vector
   it rewrote and the angle the vector turned, and what the stream now says through
   the lens at this layer.
 - **MoE** (`ffn_moe_*`) — the layer × expert atlas and the experts the selected
@@ -1354,14 +1351,14 @@ strip and wrong for anything with two axes — the first 8192 values of a
 `[256, 6, 24]` attention record are a few rows of head 0. `record_array` rebuilds
 the 4-D tensor through its strides, and there is a trap in that:
 
-**`nb` is recorded in the *source* dtype.** The tracer copies strides off the live
+**`nb` is recorded in the _source_ dtype.** The tracer copies strides off the live
 tensor and then downcasts f32 to f16, so an `fp16` record's bytes are half as wide
 as its strides claim. Element strides are `nb / 4` for `fp16` and `nb / itemsize`
 for `full`; dividing by the stored width doubles every stride and reads a different,
 plausible-looking tensor. Pinned by `test_llamacpp_stepper.py`, alongside a permuted
 view, KV cropping (`kq_soft_max` is as wide as the **allocated** cache — 256 on a
 six-token prompt — and its masked columns are exact zeros), and the pruned tail (the
-last block's output on a prompt pass is one column, compared against the *last*
+last block's output on a prompt pass is one column, compared against the _last_
 column of the block before, never the first).
 
 Two things were found on real traces rather than assumed:
@@ -1385,8 +1382,8 @@ meaningless, and an f16 downcast is lossy past 2048), and `traces.decode` reads
 
 The cursor publishes `traceId`, `modelSha`, `layer`, `stage`, `step`, `passIndex`
 and `position` to the model locus. The [model explorer](./interpretability.mdx)
-selects that block, lights the sub-block the stage names, and shows a *following the
-stepper* strip; clicking a block or sub-block on its diagram publishes back, and the
+selects that block, lights the sub-block the stage names, and shows a _following the
+stepper_ strip; clicking a block or sub-block on its diagram publishes back, and the
 stepper jumps there. An echo of the block the cursor is already in is ignored, so the
 explorer re-selecting what it was just shown cannot yank the cursor to the block's
 start.
@@ -1403,7 +1400,7 @@ for the same two-directional mount race. `dash.lens` gained `program`, `tensor`,
 `summary` are written, and the enum lists exactly those. Traces are not yet overlaid
 on a chat turn in the interpretability pane: `traces.matches_run` is the guard that
 work will need, but the pane wiring is not built. The tracer also samples greedily
-and traces a raw prompt, so it reproduces a *forward pass*, not a chat turn.
+and traces a raw prompt, so it reproduces a _forward pass_, not a chat turn.
 
 No **fitted** J-lens ships yet: the artifact format, the picker and the
 `unavailable` verdict for a non-identity lens are all in place, but importing

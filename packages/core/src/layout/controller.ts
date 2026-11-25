@@ -278,9 +278,16 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
     const alias = VIEW_ALIASES[viewId];
     if (alias?.kind === 'view') {
       if (!alias.section) return openPane(alias.viewId, opts);
-      // Params first, through the real open: a deep link (`{turnId}`) into a pane
-      // that was merged into a section must still reach the pane that now reads it.
-      if (opts?.params) openPane(alias.viewId, opts);
+      // Params first, merged onto any existing params on the host so a deep link
+      // (`{turnId}`, `{modelPath}`) into a section-hosted view preserves host state
+      // such as open IDE tabs or an active split.
+      if (opts?.params) {
+        const hostExisting = hostInstanceOf(alias.viewId);
+        const merged = hostExisting
+          ? { ...(hostExisting.pane.params ?? {}), ...opts.params }
+          : opts.params;
+        openPane(alias.viewId, { ...opts, instanceId: undefined, params: merged });
+      }
       return revealSection(alias.section, alias.viewId);
     }
     // Nothing resolved: say so. `openPanel` returning null in silence is why the
@@ -296,6 +303,13 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
   const embeddedHost = hostOfEmbedded(viewId);
   if (embeddedHost) {
     if (embeddedHost.kind === 'section') {
+      if (opts?.params) {
+        const hostExisting = hostInstanceOf(embeddedHost.hostViewId);
+        const merged = hostExisting
+          ? { ...(hostExisting.pane.params ?? {}), ...opts.params }
+          : opts.params;
+        openPane(embeddedHost.hostViewId, { ...opts, instanceId: undefined, params: merged });
+      }
       return revealSection(embeddedHost.section, embeddedHost.hostViewId);
     }
     revealRegionView(viewId);
@@ -729,6 +743,15 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
   Traces: { kind: 'view', viewId: 'interpretability.suite', section: 'traces' },
   Stepper: { kind: 'view', viewId: 'interpretability.suite', section: 'stepper' },
   Lens: { kind: 'view', viewId: 'interpretability.suite', section: 'lens' },
+  NLA: { kind: 'view', viewId: 'interpretability.suite', section: 'nla' },
+  'llamacpp.server': { kind: 'view', viewId: 'interpretability.suite', section: 'runtime' },
+  'llama.cpp': { kind: 'view', viewId: 'interpretability.suite', section: 'runtime' },
+  'webml.playground': { kind: 'view', viewId: 'interpretability.suite', section: 'playground' },
+  'WebML Playground': { kind: 'view', viewId: 'interpretability.suite', section: 'playground' },
+  'trajectories.hub': { kind: 'view', viewId: 'interpretability.suite', section: 'runs' },
+  Trajectories: { kind: 'view', viewId: 'interpretability.suite', section: 'runs' },
+  'evals.hub': { kind: 'view', viewId: 'interpretability.suite', section: 'evals' },
+  Evals: { kind: 'view', viewId: 'interpretability.suite', section: 'evals' },
 };
 
 /** The candidate set `show` matches against, gathered from the live registry. */

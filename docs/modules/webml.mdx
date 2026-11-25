@@ -26,10 +26,7 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 
 ## Contributions to the layout shell
 
-- **Panels:** `webml.playground` (WebML Playground, document, singleton). The lens
-  lab is the **Lens** section of the [interpretability suite](./interp-suite.mdx),
-  its **Reply**, **Guess** and **Compare** views tabs there beside the trace lens;
-  the retired `webml.lens` pane id resolves to it.
+- **Panels:** none standalone — both **Playground** (`interpretability.suite` → `playground`) and the **Lens** lab (`interpretability.suite` → `lens`, with **Reply**, **Guess** and **Compare** sub-tabs) live inside the [Interpretability IDE](./interp-suite.mdx) so Playground pairs side-by-side with **3D Neurons** and **Logit Lens** without switching windows. The retired `webml.playground` and `webml.lens` pane ids resolve there via `RENAMED_VIEWS` and `VIEW_ALIASES`.
 - **Commands:** `webml.openPlayground`, `webml.openLens` (opens the suite's Lens at
   Reply), `webml.unload`.
 - **Boot:** `initWebmlRelay()` (beside `initAgentRelay`) answers relayed generations and
@@ -142,9 +139,9 @@ the model explorer's grid, fill in while the reply is written. Code is in
     blank where they agree. Values come from the top-5 readouts, so a token outside
     a layer's top 5 counts as 0 there, and the tooltip says so.
   - Any position's two stacks side by side.
-  The window holds one model at a time, so a comparison loads A, then B, and leaves B
-  loaded. Models that tokenize the reply differently are compared by index, with a
-  warning.
+    The window holds one model at a time, so a comparison loads A, then B, and leaves B
+    loaded. Models that tokenize the reply differently are compared by index, with a
+    warning.
 
 ## The `browser` chat provider
 
@@ -221,8 +218,8 @@ E2B, Qwen3.5) are not listed — they load through a processor, not
 
 ## Browser vs desktop
 
-| | Browser | Desktop (Electron) |
-| --- | --- | --- |
-| WebGPU | Chrome/Edge 113+, secure context (localhost counts) | Chromium's defaults, no GPU flags: on for Windows and macOS; on Linux, wherever Chromium has enabled it for the GPU |
-| Weight cache | per origin | per app origin |
-| Hosted (Vercel) | works — the GPU is the visitor's | n/a |
+|                 | Browser                                             | Desktop (Electron)                                                                                                  |
+| --------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| WebGPU          | Chrome/Edge 113+, secure context (localhost counts) | Chromium's defaults, no GPU flags: on for Windows and macOS; on Linux, wherever Chromium has enabled it for the GPU |
+| Weight cache    | per origin                                          | per app origin                                                                                                      |
+| Hosted (Vercel) | works — the GPU is the visitor's                    | n/a                                                                                                                 |

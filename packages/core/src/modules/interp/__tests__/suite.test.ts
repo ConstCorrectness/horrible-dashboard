@@ -1,8 +1,10 @@
 /**
- * The interpretability suite's manifest, and the rules that break silently.
+ * The interpretability IDE's manifest, and the rules that break silently.
  *
  * - The pane id is written out literally in the manifest (a source-scanning test
  *   reads it), so it is pinned to `SUITE_VIEW` here.
+ * - Every tool with a `group` belongs to `SUITE_GROUPS`, so `HomeSection` cannot
+ *   silently omit an entire group of tools.
  * - The suite keeps sections mounted once opened. A single-key binding that names
  *   only the pane would fire into a hidden section — `x` in the lens deleting a
  *   designer node — so every such binding must name its section too.
@@ -16,8 +18,9 @@ import { interpretabilityModule } from '../../interpretability';
 import { llamacppModule } from '../../llamacpp';
 import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection } from '../ids';
 import { interpSuiteModule, suiteBodyView } from '../index';
+import { SubjectBar } from '../SubjectBar';
 import { setSubSection, subSectionOf } from '../SubSections';
-import { SUITE_TOOLS } from '../tools';
+import { SUITE_GROUPS, SUITE_TOOLS } from '../tools';
 
 const suite = () => interpSuiteModule.panels!.find((p) => p.id === SUITE_VIEW)!;
 
@@ -41,30 +44,54 @@ function ctx(over: Partial<KeyContext>): KeyContext {
 }
 
 describe('interpretability suite manifest', () => {
-  it('declares the suite pane under the id the rest of the app names', () => {
+  it('declares the IDE pane with rail, keep-alive, SubjectBar, and section splitting', () => {
     expect(suite()).toBeDefined();
     expect(suite().singleton).toBe(true);
     expect(suite().sectionsLayout).toBe('rail');
     expect(suite().sectionsKeepAlive).toBe(true);
+    expect(suite().allowSectionSplit).toBe(true);
+    expect(suite().stageHeader).toBe(SubjectBar);
   });
 
-  it('draws its sections from the one tool list, Home first and default', () => {
+  it('draws all 20 sections from the one tool list, Home first and default', () => {
     const sections = suite().sections ?? [];
+    expect(sections).toHaveLength(20);
     expect(sections.map((s) => s.id)).toEqual(SUITE_TOOLS.map((t) => t.section));
     expect(sections.filter((s) => s.default).map((s) => s.id)).toEqual([SUITE_SECTIONS.home]);
   });
 
-  it('gives every section an embedded body view it declares itself', () => {
-    const embedded = new Map(
-      (interpSuiteModule.panels ?? []).filter((p) => p.embedded).map((p) => [p.id, p]),
-    );
-    for (const section of suite().sections ?? []) {
-      expect(section.view).toBe(suiteBodyView(section.id as never));
-      expect(embedded.has(section.view!), section.id).toBe(true);
+  it('covers every grouped tool in SUITE_GROUPS so Home never omits a group', () => {
+    const allowed = new Set<string>(SUITE_GROUPS);
+    for (const tool of SUITE_TOOLS) {
+      if (tool.section === SUITE_SECTIONS.home || tool.section === SUITE_SECTIONS.library) {
+        expect(tool.group).toBeUndefined();
+      } else {
+        expect(tool.group && allowed.has(tool.group), tool.section).toBe(true);
+      }
+    }
+    const mech = SUITE_TOOLS.filter((t) => t.group === 'Mechanistic Lab');
+    expect(mech.length).toBeGreaterThan(0);
+    for (const t of mech) {
+      expect(t.groupCollapsible).toBe(true);
+      expect(t.groupDefaultCollapsed).toBe(true);
     }
   });
 
-  it('carries the interp agent tools and the Ask strip', () => {
+  it('gives every section an embedded body view with a unique title', () => {
+    const embedded = new Map(
+      (interpSuiteModule.panels ?? []).filter((p) => p.embedded).map((p) => [p.id, p]),
+    );
+    const titles = new Set<string>();
+    for (const section of suite().sections ?? []) {
+      expect(section.view).toBe(suiteBodyView(section.id as never));
+      const decl = embedded.get(section.view!);
+      expect(decl, section.id).toBeDefined();
+      expect(titles.has(decl!.title.toLowerCase()), decl!.title).toBe(false);
+      titles.add(decl!.title.toLowerCase());
+    }
+  });
+
+  it('carries the interp agent tools and valid region strips', () => {
     expect((suite().agentTools ?? []).map((t) => t.name).sort()).toEqual([
       'interp.attention',
       'interp.axis',
@@ -78,22 +105,33 @@ describe('interpretability suite manifest', () => {
       'interp.state',
       'interp.steer',
     ]);
-    // Read-only, so the permission engine never stops the agent explaining the screen —
-    // except steering, which runs the model and records traces.
     expect((suite().agentTools ?? []).filter((t) => t.sideEffect).map((t) => t.name)).toEqual([
       'interp.steer',
     ]);
     const ask = suite().regions?.find((r) => r.id === 'interp.ask');
     expect(ask?.position).toBe('right');
+    for (const r of suite().regions ?? []) {
+      expect(['t', 'n', 'b']).not.toContain(r.key);
+    }
     const view = interpSuiteModule.panels?.find((p) => p.id === 'interp.ask');
     expect(view?.embedded).toBe(true);
   });
 
-  it('refuses a goto to a section that does not exist, naming the real ones', async () => {
+  it('validates both section and splitWith in interp.goto', async () => {
     const goto = suite().agentTools!.find((t) => t.name === 'interp.goto')!;
-    const result = (await goto.handler({ section: 'nowhere' })) as { ok: boolean; error: string };
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('attention');
+    const badSection = (await goto.handler({ section: 'nowhere' })) as {
+      ok: boolean;
+      error: string;
+    };
+    expect(badSection.ok).toBe(false);
+    expect(badSection.error).toContain('attention');
+
+    const badSplit = (await goto.handler({ section: 'stepper', splitWith: 'nowhere' })) as {
+      ok: boolean;
+      error: string;
+    };
+    expect(badSplit.ok).toBe(false);
+    expect(badSplit.error).toContain('splitWith');
   });
 
   it('names a glyph that exists for every rail entry', () => {

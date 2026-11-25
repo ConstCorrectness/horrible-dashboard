@@ -15,6 +15,7 @@ model. The surface around it — the backdrop, the status bar, boot — belongs 
 the verbs that change it.
 
 :::info History, and why it is a workbench
+
 - **Until 2026-10** a desktop could be **floating** or **tiling** (a Blender-style
   centre grid with tool docks, rails and a dozen `frames:` presets). Tiling was
   removed: two paradigms meant a lossy convert between them, a mode menu, and every
@@ -141,11 +142,11 @@ destination, and it must not stop being reachable.
 another pane. It stays fully registered — regions and sections keep working — but it
 drops out of every affordance that would present it as a competing home:
 
-| Surface                  | Effect                                                   |
-| ------------------------ | -------------------------------------------------------- |
-| `pane.open:<id>` command | not synthesized (`registry.ts`)                          |
-| the Start menu           | filtered                                                 |
-| `list_available_panes`   | no top-level row — listed under its host instead         |
+| Surface                  | Effect                                           |
+| ------------------------ | ------------------------------------------------ |
+| `pane.open:<id>` command | not synthesized (`registry.ts`)                  |
+| the Start menu           | filtered                                         |
+| `list_available_panes`   | no top-level row — listed under its host instead |
 
 The last row is the one that matters for the agent, and it is why `show` learned to
 resolve an embedded view to _where it lives_: `show("Outline")` reveals it in its
@@ -186,17 +187,28 @@ the host, and one with neither falls through to the host's own component, which
 switches internally via `usePaneSection()`. Both exist because a pane being merged
 usually already switches internally, and a new one usually doesn't want to.
 
-Three options extend this, all introduced by the
-[interpretability suite](../modules/interp-suite.mdx):
+Five options extend this, introduced by the
+[Interpretability IDE](../modules/interp-suite.mdx):
 
 - **`sectionsLayout: 'rail'`** draws the sections as a vertical rail down the left
   edge (`SectionRail`), grouped under `SectionDecl.group` headings with vector icons
   named by `SectionDecl.glyph` — for a pane with more sections than a top strip
   holds.
+- **`groupCollapsible` / `groupDefaultCollapsed`** (on `SectionDecl`) let a rail
+  group fold away for progressive disclosure (persisted in `localStorage` per view
+  and group), automatically expanding whenever any section in the group is active or
+  shown in a side-by-side split.
 - **`sectionsKeepAlive: true`** keeps a section mounted after its first visit,
   hiding it rather than unmounting it. Because a hidden section's verbs stay bound,
   the keymap has a **`paneSection`** context key; a single-key binding into such a
   pane names its section as well as the pane.
+- **`stageHeader` and `allowSectionSplit`** (on `PanelDecl`) render one shared IDE
+  chrome bar (`SubjectBar`) above the kept-alive stage and allow displaying a
+  companion section side-by-side (`params.splitSection`) via CSS flex ordering +
+  a zero-rerender drag handle (`--stage-left-px`) so toggling a split or clicking
+  between halves never unmounts WebGL or React Flow canvases. Focusing the secondary
+  half promotes it to `activeSection` while flipping `splitPrimarySide`, so nothing
+  jumps visually and `paneSection` immediately tracks focus.
 - **`SectionScopeContext`** lets a host answer `usePaneSection()` for a body one
   level down, so a pane that switched its own sections can become a section of
   another pane unchanged, its own tabs now a sub-strip. A rename in `RENAMED_VIEWS`
@@ -317,7 +329,7 @@ catches them all by construction.
 Only a **move** is recorded. A pane appearing for the first time (an open, a load,
 a v3 migration) was placed by these same rules, so recording it would only re-file
 the default. The one exception is a move **into a pop-out**: there the place the
-pane is *leaving* is recorded, because Dock back asks `placeFor` where to put it
+pane is _leaving_ is recorded, because Dock back asks `placeFor` where to put it
 and the answer has to be where it came from. Without that, a terminal that arrived
 in the bottom dock from a saved layout, and was never dragged, came back on the
 right.
@@ -356,13 +368,13 @@ then focuses it**. It used to focus and return, dropping them.
 
 The failure was invisible and inverted: a deep link — "compare these six runs",
 "score this checkpoint", "show me the turn behind this eval case" — worked only
-while its target pane happened to be *closed*, and did nothing when it was open.
+while its target pane happened to be _closed_, and did nothing when it was open.
 Open is the normal state for a pane you are working in. Nothing threw and nothing
 warned; the pane came to the front showing what it showed before, which reads as the
 button being broken.
 
 `RETARGET_PANE` cannot serve here — it refuses `instanceId === newInstanceId` by
-design, and a singleton's instance id *is* its view id, so there is no new identity
+design, and a singleton's instance id _is_ its view id, so there is no new identity
 to move to. Hence `SET_PANE_PARAMS`, applied where `openPane` focuses an existing
 pane.
 
@@ -434,7 +446,7 @@ that genuinely wants one instance per invocation (a terminal) uses neither and
 calls `openPanel` directly.
 
 Such an opener should also pass a **`title` param** naming the thing it opened.
-A view's declared title names a *kind* of pane, so without it every open notebook
+A view's declared title names a _kind_ of pane, so without it every open notebook
 is a tab reading "Notebook Editor". `paneDisplayTitle(pane)`
 (`layout/controller.ts`) is the one rule — `title` → `name` → `path` → the view's
 declared title — and the group's tabs, a pop-out's OS title and the status bar's
@@ -492,7 +504,7 @@ the failure we chose: strictly better than killing a live shell on every tab swi
 ### View state: the cheap half
 
 Beside the resources sits `paneUiBag` — the same keys, a separate map, and the same
-close/move/reset paths, holding what a pane was *looking at*: scroll offset, caret
+close/move/reset paths, holding what a pane was _looking at_: scroll offset, caret
 position, which markdown cell was open for editing. Nobody loses work when one of
 these is dropped, which is why they are not sessions. But a notebook that jumps back
 to the top and an editor whose caret resets to zero every time you glance at another
@@ -515,7 +527,7 @@ A second, separate cache lives in `BufferView` for the same reason, keyed by **s
 URI** rather than by pane: reopening a file anywhere should land where you left it,
 not only in the pane you left it in. It records caret and scroll on `view.destroy()`,
 before the teardown detaches `scrollDOM`, and restores only when no
-**code locus** claimed the buffer first — a locus is someone *asking* for a line, and
+**code locus** claimed the buffer first — a locus is someone _asking_ for a line, and
 restoring over it would silently undo a go-to-definition.
 
 None of this is written to the layout blob. `serialize.ts` carries what the user

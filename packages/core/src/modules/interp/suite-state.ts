@@ -15,6 +15,8 @@
  * screen (the workspace-context budget is ~1.5k characters per pane), so it is a
  * handful of strings. `full` is what `interp.state` returns when asked.
  */
+import { listPanes } from '../../layout/model';
+import { layoutStore } from '../../layout/store';
 import { getModelLocus, type ModelLocus } from '../../model-locus';
 import {
   interpretabilityStore,
@@ -23,7 +25,9 @@ import {
   type ModelArchitecture,
   type TurnSnapshot,
 } from '../interpretability/store';
+import { webmlEngine } from '../webml/engine';
 import { lensRuns, type LensRun } from '../webml/lens-run';
+import { SUITE_VIEW } from './ids';
 import { fmtBytes, fmtContext, savings } from './attention/model';
 import { axisDigest } from './axis/state';
 import { headsDigest } from './heads/state';
@@ -56,9 +60,19 @@ export interface DigestInputs {
   nla?: string | null;
   /** The Library's: artifacts, what fits, what the worker holds (`library/state.ts`). */
   library?: string | null;
+  /** Companion section shown side-by-side in the IDE split stage, if any. */
+  splitSection?: string | null;
+  /** Model loaded in the in-browser WebML engine, if ready. */
+  webmlModel?: string | null;
 }
 
 export function readDigestInputs(): DigestInputs {
+  const suitePane = listPanes(layoutStore.getSnapshot().frame).find(
+    (p) => p.pane.viewId === SUITE_VIEW,
+  )?.pane;
+  const splitSection =
+    typeof suitePane?.params?.splitSection === 'string' ? suitePane.params.splitSection : null;
+  const eng = webmlEngine().getState();
   return {
     arch: interpretabilityStore.getArchitecture(),
     attention: interpretabilityStore.getAttention(),
@@ -73,6 +87,8 @@ export function readDigestInputs(): DigestInputs {
     axis: axisDigest(),
     nla: nlaDigest(),
     library: libraryDigest(),
+    splitSection,
+    webmlModel: eng.kind === 'ready' ? `${eng.model} (${eng.engine})` : null,
   };
 }
 
@@ -124,6 +140,8 @@ export interface SuiteDigest {
   axis?: string;
   nla?: string;
   library?: string;
+  splitSection?: string;
+  webmlModel?: string;
   caveats?: string[];
   /** Full only. */
   layers?: string[];
@@ -206,6 +224,8 @@ export function buildDigest(
   if (inputs.axis) out.axis = inputs.axis;
   if (inputs.nla) out.nla = inputs.nla;
   if (inputs.library) out.library = inputs.library;
+  if (inputs.splitSection) out.splitSection = inputs.splitSection;
+  if (inputs.webmlModel) out.webmlModel = inputs.webmlModel;
 
   if (lensRun && lensRun.tokens.length) {
     out.windowLens =

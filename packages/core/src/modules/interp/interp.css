@@ -34,6 +34,22 @@
   border-color: var(--accent);
 }
 
+.interp-playbook-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.interp-stage-tab:hover,
+.interp-chip-btn:hover,
+.interp-mini-action:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.interp-stage-tab-close:hover {
+  color: var(--danger);
+}
+
 /* Ribbon columns and chart bars: classed, so controls.css leaves their height to
    the chart they sit in. */
 .interp-col:hover {

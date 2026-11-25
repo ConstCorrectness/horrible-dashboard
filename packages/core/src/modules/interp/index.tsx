@@ -1,31 +1,25 @@
 /**
- * The interpretability suite: one window, a rail of tools down its left edge.
- *
- * Interpretability had grown into six panes that did not know about each other —
- * the context window, the model explorer, the llama.cpp traces / stepper / lens,
- * agentpedia and the window's lens lab — joined only by a hand-built strip that
- * opened one from another. They were always one subject: the same model, read at
- * the prompt, the weights and the activations. So they are one pane, with the
- * section machinery doing what that strip did by hand (persisted, commandable,
- * nameable by the agent), and `sectionsKeepAlive` keeping each tool mounted once
- * opened — a design with unsaved edits survives a look at the lens.
- *
- * The bodies stay where they were written and are registered here as `embedded`
- * views, so `show("Stepper")` and `openPane` still find them by name. Each module
- * keeps its own commands and keybindings, re-pointed at the suite (`ids.ts`).
- * The llama.cpp pane keeps the server and the model catalog: running a model is
- * not reading one. See docs/modules/interp-suite.mdx.
+ * The Interpretability & Model Lab IDE: one window fusing prompts, agent runs,
+ * evaluations, local/browser runtimes (`llama.cpp` + WebML), weights, activations,
+ * features, and circuits — with a multi-tab + side-by-side split center stage,
+ * progressive rail groups, and a shared Subject & Runtime Bar.
  */
 import { lazyPane } from '../../lazy-pane';
-import { revealSection } from '../../layout/controller';
+import { listPanes } from '../../layout/model';
+import { layoutStore } from '../../layout/store';
 import type { ModuleManifest, PanelDecl } from '../../registry';
 import { interpAgentTools } from './agent-tools';
 import { ASK_VIEW, askInterp } from './ask';
 import { SUITE_SECTIONS, SUITE_VIEW, whenSuiteSection, type SuiteSection } from './ids';
 import { NEURON_KEYS, NEURON_VERBS, neuronAction } from './neurons/actions';
+import { openSuiteTab, splitSuiteWith, swapSuiteSplit } from './stage';
+import { SubjectBar } from './SubjectBar';
 import { SUITE_TOOLS } from './tools';
 
 const HomeSection = lazyPane(() => import('./HomeSection'), 'HomeSection');
+const PlaygroundBody = lazyPane(() => import('./bodies/runtime'), 'PlaygroundBody');
+const RuntimeBody = lazyPane(() => import('./bodies/runtime'), 'RuntimeBody');
+const EvalsBody = lazyPane(() => import('./bodies/runtime'), 'EvalsBody');
 const ContextBody = lazyPane(() => import('./bodies/prompt'), 'ContextBody');
 const RunsBody = lazyPane(() => import('./bodies/prompt'), 'RunsBody');
 const ModelBody = lazyPane(() => import('./bodies/weights'), 'ModelBody');
@@ -42,35 +36,44 @@ const AxisBody = lazyPane(() => import('./axis/AxisSection'), 'AxisBody');
 const GraphBody = lazyPane(() => import('./graph/GraphSection'), 'GraphBody');
 const NlaBody = lazyPane(() => import('./nla/NlaSection'), 'NlaBody');
 const LibraryBody = lazyPane(() => import('./library/LibrarySection'), 'LibraryBody');
-// The chat (and its 3D avatar) loads when the Ask strip first opens, not with the suite.
 const AskPanel = lazyPane(() => import('./AskPanel'), 'AskPanel');
 
 /**
- * Each section's body, as an embedded view. The titles are what `show("…")`
- * matches, so they are the names people used for the panes these replaced.
+ * Each section's body, as an embedded view. Distinct titles so `show("…")` and
+ * `registry-titles.test.ts` resolve unambiguously.
  */
 const BODIES: Record<SuiteSection, { title: string; component: PanelDecl['component'] }> = {
   home: { title: 'Interpretability home', component: HomeSection },
+  playground: { title: 'Model playground (WebGPU)', component: PlaygroundBody },
+  runtime: { title: 'Local runtime & GGUF models', component: RuntimeBody },
+  evals: { title: 'Evaluation suites & benchmarks', component: EvalsBody },
   context: { title: 'Context window', component: ContextBody },
-  runs: { title: 'Agent runs', component: RunsBody },
+  runs: { title: 'Agent runs & trajectories', component: RunsBody },
   model: { title: 'Model explorer', component: ModelBody },
   attention: { title: 'Attention layout', component: AttentionBody },
-  design: { title: 'Model designer', component: DesignBody },
-  traces: { title: 'Activation traces', component: TracesBody },
-  stepper: { title: 'Layer stepper', component: StepperBody },
   lens: { title: 'Logit lens', component: LensBody },
-  heads: { title: 'Attention heads', component: HeadsBody },
+  stepper: { title: 'Layer stepper', component: StepperBody },
+  traces: { title: 'Activation traces', component: TracesBody },
   neurons: { title: 'Neuron steering', component: NeuronsBody },
+  heads: { title: 'Attention heads', component: HeadsBody },
   features: { title: 'SAE features', component: FeaturesBody },
   steer: { title: 'Steering', component: SteerBody },
   axis: { title: 'Assistant axis', component: AxisBody },
   graph: { title: 'Attribution graph', component: GraphBody },
   nla: { title: 'Natural language autoencoder', component: NlaBody },
+  design: { title: 'Model designer', component: DesignBody },
   library: { title: 'Interpretability library', component: LibraryBody },
 };
 
 export function suiteBodyView(section: SuiteSection): string {
   return `interp.${section}`;
+}
+
+function suiteInstanceId(): string | null {
+  return (
+    listPanes(layoutStore.getSnapshot().frame).find((p) => p.pane.viewId === SUITE_VIEW)?.pane
+      .instanceId ?? null
+  );
 }
 
 export const interpSuiteModule: ModuleManifest = {
@@ -80,19 +83,17 @@ export const interpSuiteModule: ModuleManifest = {
   panels: [
     {
       // Spelled out rather than `SUITE_VIEW`: `openers-resolve.test.ts` finds view
-      // ids by reading source for `id: '…'` beside a `component:`. The suite test
-      // pins the two together.
+      // ids by reading source for `id: '…'` beside a `component:`.
       id: 'interpretability.suite',
       title: 'Interpretability',
-      // Never rendered while every section has a body; a fallback, not a page.
       component: HomeSection,
       role: 'document',
       icon: '🔬',
       singleton: true,
       sectionsLayout: 'rail',
       sectionsKeepAlive: true,
-      // Ask: the interpretability agent beside whatever tool is open. A region, not a
-      // section — a section would replace the thing being asked about.
+      stageHeader: SubjectBar,
+      allowSectionSplit: true,
       regions: [
         { id: ASK_VIEW, label: 'Ask', icon: '?', key: 'a', position: 'right', defaultSize: 380 },
       ],
@@ -102,6 +103,8 @@ export const interpSuiteModule: ModuleManifest = {
         label: tool.label,
         glyph: tool.glyph,
         group: tool.group,
+        groupCollapsible: tool.groupCollapsible,
+        groupDefaultCollapsed: tool.groupDefaultCollapsed,
         view: suiteBodyView(tool.section),
         default: tool.section === SUITE_SECTIONS.home,
       })),
@@ -148,30 +151,41 @@ export const interpSuiteModule: ModuleManifest = {
   commands: [
     {
       id: 'interp.open',
-      title: 'Interpretability: Open the suite',
-      run: () => void revealSection(SUITE_SECTIONS.home, SUITE_VIEW),
+      title: 'Interpretability: Open the IDE',
+      run: () => void openSuiteTab(SUITE_SECTIONS.home),
     },
     {
       id: 'interp.askAboutThis',
       title: 'Interpretability: Ask the agent about what is on screen',
-      run: () => askInterp('interpretability suite'),
+      run: () => askInterp('interpretability IDE'),
+    },
+    {
+      id: 'interp.splitSwap',
+      title: 'Interpretability: Swap side-by-side split views',
+      run: () => {
+        const id = suiteInstanceId();
+        if (id) swapSuiteSplit(id);
+      },
+    },
+    {
+      id: 'interp.splitClose',
+      title: 'Interpretability: Close side-by-side split view',
+      run: () => {
+        const id = suiteInstanceId();
+        if (id) splitSuiteWith(id, null);
+      },
     },
     {
       id: 'interp.neurons.open',
       title: 'Interpretability: Open Neurons (3D neuron steering)',
-      run: () => void revealSection(SUITE_SECTIONS.neurons, SUITE_VIEW),
+      run: () => void openSuiteTab(SUITE_SECTIONS.neurons),
     },
-    // The scene's verbs: commands so the palette lists them and the keymap binds
-    // them; no-ops unless the Neurons section is mounted (`bindNeuronActions`).
     ...NEURON_VERBS.map(([verb, title]) => ({
       id: `interp.neurons.${verb}`,
       title: `Neurons: ${title}`,
       run: () => neuronAction(verb),
     })),
   ],
-  // Section-scoped and `!textInput`-guarded, the stepper's precedent: arrows typed
-  // in the prompt must not move the selection, and keys pressed in another suite
-  // section must not drive this one kept mounted behind it.
   keybindings: NEURON_KEYS.map(([key, verb]) => ({
     key,
     command: `interp.neurons.${verb}`,

@@ -1,48 +1,18 @@
-import { lazyPane } from '../../lazy-pane';
-import { registry, type ModuleManifest } from '../../registry';
-
-// Loaded when the pane first renders, not at boot — see `lazyPane`.
-const EvalsHub = lazyPane(() => import('./EvalsHub'), 'EvalsHub');
+import type { ModuleManifest } from '../../registry';
+import { SUITE_SECTIONS } from '../interp/ids';
+import { openSuiteTab } from '../interp/stage';
 
 /**
  * Evals: measuring what a model actually does with this app's tools.
  *
- * The module exists because progressive disclosure and `TOOL_BUDGET` were
- * mitigations nobody had ever measured. A case runs through the *real*
- * orchestrator loop against a stubbed browser, so what it scores is the catalog
- * this app ships — not a tool list a harness invented.
- *
- * **One pane, four sections**, per the pane-consolidation rule. Suites, Run,
- * Results and Compare are four views of the same object; four panes would mean
- * four openers and four copies of "which suite are we talking about".
- *
- * Cases are *not* authored here beyond a browse view. A suite is a `.jsonl` file
- * and the editor is the case editor — that is what makes a suite reviewable,
- * diffable and committable, which a form-built blob in a database is not.
+ * Hosted inside the Interpretability IDE (`SUITE_SECTIONS.evals`), so suites,
+ * sweeps, results, and comparisons sit right beside the Turn Debugger and Context
+ * Window that explain every failing row.
  */
 export const evalsModule: ModuleManifest = {
   id: 'evals',
   title: 'Evals',
   category: 'research',
-  panels: [
-    {
-      // `document`: you work in it for a long stretch, beside the suite file you
-      // are editing. A widget takes an area alone, which is wrong for a pane whose
-      // whole workflow is "read the failure, fix the case, run it again".
-      id: 'evals.hub',
-      title: 'Evals',
-      component: EvalsHub,
-      role: 'document',
-      icon: '🎯',
-      singleton: true,
-      sections: [
-        { id: 'suites', label: 'Suites', icon: '📋', key: 's', default: true },
-        { id: 'run', label: 'Run', icon: '▶', key: 'r' },
-        { id: 'results', label: 'Results', icon: '📊', key: 'e' },
-        { id: 'compare', label: 'Compare', icon: '🏁', key: 'c' },
-      ],
-    },
-  ],
   settings: [
     {
       key: 'evals.acceptRemoteSuites',
@@ -56,8 +26,19 @@ export const evalsModule: ModuleManifest = {
   commands: [
     {
       id: 'evals.open',
-      title: 'Evals: Open',
-      run: () => registry.openPanel('evals.hub'),
+      title: 'Evals: Open suites & benchmarks',
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.evals);
+      },
     },
+    // Preserves callers (`LocalModels.tsx`, `RecipePane.tsx`, saved keybindings)
+    // that switch to a specific Evals sub-tab via `section.show:evals.hub:<tab>`.
+    ...(['suites', 'run', 'results', 'compare'] as const).map((subTab) => ({
+      id: `section.show:evals.hub:${subTab}`,
+      title: `Evals: ${subTab[0].toUpperCase()}${subTab.slice(1)} (in Interpretability)`,
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.evals, { subTab });
+      },
+    })),
   ],
 };

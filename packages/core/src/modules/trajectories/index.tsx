@@ -1,74 +1,45 @@
-import { lazyPane } from '../../lazy-pane';
-import { registry, type ModuleManifest } from '../../registry';
-
-// Loaded when the pane first renders, not at boot — see `lazyPane`.
-const TrajectoriesHub = lazyPane(() => import('./TrajectoriesHub'), 'TrajectoriesHub');
+import type { ModuleManifest } from '../../registry';
+import { SUITE_SECTIONS } from '../interp/ids';
+import { openSuiteTab } from '../interp/stage';
 
 /**
  * Trajectories: what this node's agents actually did, as queryable data.
  *
- * The module exists because the node runs agents constantly and retained almost
- * none of it. `agent_turns` records what a model was *shown*; `eval_results`
- * records how one graded case scored. Nothing recorded what the agent *did*, so
- * "which tool does the coder waste rounds on" and "did last week's prompt edit
- * help" had no data behind them.
- *
- * **One pane, four sections**, per the pane-consolidation rule: what is happening
- * now, the runs it becomes, the collections they land in, and the harness that
- * produced them are four views of one object.
- *
- * Capture is **on by default** (a `dashboard-agent` dataset, seeded once) and
- * dataset-scoped — see the Datasets section.
- * Runs are stored raw, including tool arguments, and redacted only on the way out
- * (export, peer share, MCP). That is a deliberate local-introspection stance and
- * it is documented in docs/modules/trajectories.mdx.
+ * Now unified with Agentpedia inside the Interpretability IDE's `Runs` section
+ * (`SUITE_SECTIONS.runs`), so fleet run search, live OTLP streams, paired harness
+ * comparisons, and the 4-column round debugger live in one workspace instead of
+ * two competing panes with duplicate "Runs" and "Harness" tabs.
  */
 export const trajectoriesModule: ModuleManifest = {
   id: 'trajectories',
   title: 'Trajectories',
   category: 'research',
-  panels: [
-    {
-      // `document`: you read a run for a long stretch, usually beside the code or
-      // the chat that produced it. A widget takes an area alone, which is wrong
-      // for a pane whose workflow is "read the failure, change the harness, run
-      // it again".
-      id: 'trajectories.hub',
-      title: 'Trajectories',
-      component: TrajectoriesHub,
-      role: 'document',
-      icon: '🛤️',
-      singleton: true,
-      sections: [
-        { id: 'runs', label: 'Runs', icon: '▤', key: 'r', default: true },
-        { id: 'live', label: 'Live', icon: '◉', key: 'l' },
-        // Every agent's harness revisions and the runs each produced, as one zoomable
-        // tree with a runs-over-time inset. Runs and Harness are where you read one;
-        // this is where you see how they relate.
-        { id: 'lineage', label: 'Lineage', icon: '⋔', key: 'g' },
-        // The agent chat's turns from the inside: what each round was shown, what it
-        // added, and what it did. Follows the chat pane used most recently.
-        { id: 'follow', label: 'Agent', icon: '◈', key: 'a' },
-        { id: 'datasets', label: 'Datasets', icon: '▦', key: 'd' },
-        { id: 'harness', label: 'Harness', icon: '⚖', key: 'h' },
-        // Runs from elsewhere, one section with a Friends/Public switch: whole runs a
-        // friend shares (pulled in, they land in Runs beside this node's own), and
-        // digests on the agent commons index — a run's shape, never its payloads.
-        // Two tabs named "Friends" and "Commons" read as a second social network
-        // inside a trace viewer. Publishing still happens from a run's detail view.
-        { id: 'shared', label: 'Shared', icon: '⇄', key: 's' },
-        // Agents you wrote, reporting in over OTLP: the endpoint, the token for other
-        // machines, and a snippet per framework. Their runs land in Runs.
-        { id: 'connect', label: 'Connect', icon: '⊕', key: 'o' },
-      ],
-    },
-  ],
   commands: [
     {
       id: 'trajectories.open',
-      title: 'Trajectories: Open',
-      run: () => registry.openPanel('trajectories.hub'),
+      title: 'Trajectories: Open runs & fleet history',
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.runs, { subTab: 'all' });
+      },
     },
+    ...(
+      [
+        ['runs', 'all', 'All Runs'],
+        ['live', 'live', 'Live'],
+        ['lineage', 'harness', 'Lineage'],
+        ['follow', 'follow', 'Wire Requests'],
+        ['datasets', 'datasets', 'Datasets'],
+        ['harness', 'harness', 'Harness'],
+        ['shared', 'datasets', 'Shared'],
+        ['connect', 'datasets', 'Connect'],
+      ] as const
+    ).map(([oldTab, subTab, label]) => ({
+      id: `section.show:trajectories.hub:${oldTab}`,
+      title: `Trajectories: ${label} (in Interpretability)`,
+      run: () => {
+        openSuiteTab(SUITE_SECTIONS.runs, { subTab });
+      },
+    })),
   ],
   settings: [
     {
@@ -86,8 +57,6 @@ export const trajectoriesModule: ModuleManifest = {
       type: 'boolean',
       default: true,
     },
-    // OpenTelemetry (backend/modules/otel). None of these is a credential — the
-    // export endpoint and its headers live in the `otel` connector.
     {
       key: 'otel.enabled',
       title: 'Trace built-in agents (OpenTelemetry)',

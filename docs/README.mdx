@@ -58,7 +58,7 @@ flowchart TB
   versions differ.
 - [Data directories](architecture/data-directories.mdx) — where a node keeps its
   files, resolved once in `backend/paths.py` per launcher and per OS. Read before
-  adding storage: the old inline `.data` default was relative to the *cwd*, so it
+  adding storage: the old inline `.data` default was relative to the _cwd_, so it
   silently meant a different directory depending on who started the backend.
 - [HorribleAssault's two clients](architecture/hassault-two-clients.mdx) — the
   browser pane and the native Rust client render the same game from the same
@@ -150,6 +150,10 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [OpenTelemetry (OTLP)](modules/otel.mdx) — **Implemented.** An OTLP/HTTP collector
   for agents you write (received traces become trajectory runs), GenAI-semconv spans
   for the built-in agents, and optional export to Phoenix/Langfuse/Jaeger/Tempo.
+- [Interpretability IDE (suite)](modules/interp-suite.mdx) — **Implemented.** One
+  multi-tab, side-by-side split-capable IDE fusing `Interpretability`, `llama.cpp`,
+  `WebML Playground`, unified `Trajectories + Agentpedia`, and `Evals` under a shared
+  `SubjectBar`, progressive rail groups, and guided playbooks.
 - [Interpretability](modules/interpretability.mdx) — **Implemented.** The exact context
   each agent round was handed: prompt composition in real tokens, per-tool schema cost,
   and the tool-budget truncation that was previously silent. Plus the model explorer —
@@ -172,7 +176,7 @@ layout shell and how it behaves in the browser vs the desktop app:
   per-agent provider selection, so one agent can run here while the rest stay on Ollama.
 - [Hardware](modules/hardware.mdx) — **Implemented.** One capability probe deciding
   the llama.cpp build, GPU offload, thread count and trace cap, with three states
-  rather than two: found it, looked and found nothing, and *could not ask*. No pane —
+  rather than two: found it, looked and found nothing, and _could not ask_. No pane —
   a settings section and three overrides.
 - [Marketplace](modules/marketplace.mdx)
 - [Settings](modules/settings.mdx)
@@ -191,7 +195,7 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Terminal](modules/terminal.mdx)
 - [File explorer](modules/file-explorer.mdx)
 - [Explorer](modules/explorer.mdx) — **Implemented.** One pane whose
-  sections are *contributed by other modules* (`explorerSources`), replacing five
+  sections are _contributed by other modules_ (`explorerSources`), replacing five
   near-identical browsers — files, notebooks, training projects, flows, tables —
   that each had their own pane and launcher entry only because a module had no way to
   add a tab to a pane it does not own.
@@ -219,7 +223,7 @@ layout shell and how it behaves in the browser vs the desktop app:
   URLs and notes into the vector store as sources + chunks, watch them ingest live,
   and semantic-search them for RAG.
 - [Doc viewer](modules/docviewer.mdx) — **Implemented.** Capture a whole
-  documentation site and read it offline at full fidelity — real CSS *and* real
+  documentation site and read it offline at full fidelity — real CSS _and_ real
   JavaScript, in an opaque-origin sandbox — with a page tree and semantic search over
   the set.
 - [Records](modules/records.mdx) — **Implemented.** User-defined tables (rows,
@@ -259,7 +263,7 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Audio](modules/audio.mdx) — **Implemented.** Default input, default output and
   a VoiceMeeter-shaped routing matrix over both: sources are strips, outputs are
   buses, and a strip can feed several buses at once — which is what makes "play
-  this into my microphone *and* my headphones" expressible. Per-platform virtual
+  this into my microphone _and_ my headphones" expressible. Per-platform virtual
   device support (PipeWire creates them, Voicemeeter is driven, BlackHole is
   detected), and `audio.*` agent tools.
 - [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph

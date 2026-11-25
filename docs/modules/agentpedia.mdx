@@ -8,11 +8,11 @@ sidebar_label: Agentpedia
 A turn was already recorded three times over, in three places, by three modules that
 were not designed together:
 
-| Record | Module | Answers |
-| --- | --- | --- |
-| `agent_turns` | [interpretability](interpretability.mdx) | what the model was **shown** |
-| the `IoEvent` ring | [observability](observability.mdx) | what went over the **wire** |
-| `traj_runs` / `traj_steps` | [trajectories](trajectories.mdx) | what the agent **did** |
+| Record                     | Module                                   | Answers                      |
+| -------------------------- | ---------------------------------------- | ---------------------------- |
+| `agent_turns`              | [interpretability](interpretability.mdx) | what the model was **shown** |
+| the `IoEvent` ring         | [observability](observability.mdx)       | what went over the **wire**  |
+| `traj_runs` / `traj_steps` | [trajectories](trajectories.mdx)         | what the agent **did**       |
 
 Reading one turn meant three panes and a lot of matching by timestamp. Agentpedia is
 what happens when you put the three beside each other and scrub them together.
@@ -24,7 +24,7 @@ two forks were put side by side, and which one a person preferred), because noth
 else records either and there is nowhere honest to put them — see
 [Where the edge lives](#where-the-edge-lives) and [Duels](#duels).
 
-The name is the point of comparison. A Neuronpedia feature page gives a *feature* a
+The name is the point of comparison. A Neuronpedia feature page gives a _feature_ a
 permanent address you can cite and compare against. A **harness** — the prompt, the
 tools, the sampling settings, everything that decides how an agent behaves minus the
 task itself — deserves the same, instead of being an untracked implementation detail
@@ -44,11 +44,13 @@ running at once into a transcript that reads as one agent behaving erratically.
 
 ## Contributions to the layout shell
 
-- **Panels:** none of its own. The hub is the **Runs** section of the
-  [interpretability suite](./interp-suite.mdx), with **Runs**, **Harness**, **Forks**
-  and **Duels** as sub-tabs (`tabs.ts`) — one object, four views. The retired
-  `agentpedia.hub` id and the title "Agentpedia" still resolve there, and
-  `openAgentpediaTurn(turnId)` is the deep link other modules (evals) use.
+- **Panels:** none of its own. Unified with [Trajectories](./trajectories.mdx) inside
+  the **Runs** section of the [Interpretability IDE](./interp-suite.mdx)
+  (`RunsWorkspace.tsx`), where **All Runs** lists fleet trajectories and **Turn
+  Debugger** (`runs`), **Harnesses & Lineage** (`harness`), **Forks** (`forks`), and
+  **Duels** (`duels`) inspect and branch individual turns. The retired `agentpedia.hub`
+  id and the title "Agentpedia" still resolve there, and `openAgentpediaTurn(turnId)`
+  is the deep link other modules (`evals`, `trajectories`) use.
 - **Commands:** `agentpedia.open`, `agentpedia.prevRound`, `agentpedia.nextRound`.
 - **Agent tools** (grouped under `agentpedia`, so they cost nothing until loaded):
   `agentpedia.step`, `agentpedia.harness`, `agentpedia.fork` (gated),
@@ -108,11 +110,11 @@ approximate, but the shape change, which is the whole point, is exact.
 An empty column is a claim, and the wrong claim is worse than none. The wire half
 reports `wire_status`:
 
-| Status | Means |
-| --- | --- |
-| `live` | Requests matched this turn. |
-| `aged_out` | The ring holds only events newer than this turn — it is 500 events, in memory, never written to disk. |
-| `unrecorded` | Nothing matched and nothing is newer: this turn predates the `turn_id` stamp, or telemetry was off. |
+| Status       | Means                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------- |
+| `live`       | Requests matched this turn.                                                                           |
+| `aged_out`   | The ring holds only events newer than this turn — it is 500 events, in memory, never written to disk. |
+| `unrecorded` | Nothing matched and nothing is newer: this turn predates the `turn_id` stamp, or telemetry was off.   |
 
 The Did column draws the same distinction differently: trajectory capture is **off by
 default and dataset-scoped**, so an empty Did column says either "this round called
@@ -121,7 +123,7 @@ empty list is the failure this module exists to avoid.
 
 The Cost column follows the same rule for the context window: no window means no
 denominator, so `window_pct` stays null and the pane says the provider does not report
-one, rather than drawing a percentage of a guess. (Where the window *does* come from
+one, rather than drawing a percentage of a guess. (Where the window _does_ come from
 is [the probe](interpretability.mdx#the-window-a-turn-actually-ran-under).)
 
 A **peer** turn has no rounds at all and that is not an error: `agent.ask_peer` ran on
@@ -358,21 +360,21 @@ tasks rather than on a public benchmark (`duel.py`, `DuelsSection.tsx`).
 
 ## Backend surface
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/api/agentpedia/turns` | The timeline — stored turn summaries joined to their runs (`limit`, `agent_id`, `since`, `roots_only`) |
-| GET | `/api/agentpedia/turns/{turn_id}` | One turn, joined: shown / wire / did / cost per round |
-| POST | `/api/agentpedia/fork/preview` | What a fork would run — rebuilt messages, catalog, drift — without running it |
-| POST | `/api/agentpedia/fork` | Run the fork. Tools simulated unless `live` |
-| GET | `/api/agentpedia/forks` | The fork edges, newest first (`limit`, `parent`) |
-| GET | `/api/agentpedia/forks/{fork_turn_id}/diff` | Parent beside fork at the branch round |
-| DELETE | `/api/agentpedia/forks/{fork_turn_id}` | Forget the edge; the fork's own turn stays |
-| POST | `/api/agentpedia/duels` | Run two contestants (fork edits) on one round at once; A and B assigned at random |
-| GET | `/api/agentpedia/duels` | Duels, newest first |
-| GET | `/api/agentpedia/duels/{id}` | One duel |
-| POST | `/api/agentpedia/duels/{id}/vote` | Record the verdict (`a`, `b`, `tie`, `both_bad`); voting again replaces it |
-| DELETE | `/api/agentpedia/duels/{id}` | Forget the pairing and its vote; both forks stay |
-| GET | `/api/agentpedia/leaderboard` | Elo over every voted duel, replayed from the votes |
+| Method | Path                                        | Purpose                                                                                                |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/agentpedia/turns`                     | The timeline — stored turn summaries joined to their runs (`limit`, `agent_id`, `since`, `roots_only`) |
+| GET    | `/api/agentpedia/turns/{turn_id}`           | One turn, joined: shown / wire / did / cost per round                                                  |
+| POST   | `/api/agentpedia/fork/preview`              | What a fork would run — rebuilt messages, catalog, drift — without running it                          |
+| POST   | `/api/agentpedia/fork`                      | Run the fork. Tools simulated unless `live`                                                            |
+| GET    | `/api/agentpedia/forks`                     | The fork edges, newest first (`limit`, `parent`)                                                       |
+| GET    | `/api/agentpedia/forks/{fork_turn_id}/diff` | Parent beside fork at the branch round                                                                 |
+| DELETE | `/api/agentpedia/forks/{fork_turn_id}`      | Forget the edge; the fork's own turn stays                                                             |
+| POST   | `/api/agentpedia/duels`                     | Run two contestants (fork edits) on one round at once; A and B assigned at random                      |
+| GET    | `/api/agentpedia/duels`                     | Duels, newest first                                                                                    |
+| GET    | `/api/agentpedia/duels/{id}`                | One duel                                                                                               |
+| POST   | `/api/agentpedia/duels/{id}/vote`           | Record the verdict (`a`, `b`, `tie`, `both_bad`); voting again replaces it                             |
+| DELETE | `/api/agentpedia/duels/{id}`                | Forget the pairing and its vote; both forks stay                                                       |
+| GET    | `/api/agentpedia/leaderboard`               | Elo over every voted duel, replayed from the votes                                                     |
 
 `GET /turns` reads the **durable** `agent_turns` table, not the 25-turn ring: a
 stepper whose history ends 25 turns ago cannot answer "what was the agent doing this
@@ -385,12 +387,12 @@ already returns them, and a second aggregate would be the one that drifts.
 
 ## Browser vs desktop
 
-| | Browser | Desktop |
-| --- | --- | --- |
-| Stepper, harness pages | Yes | Yes |
-| Live turns | Yes | Yes |
-| Simulated forks | Yes | Yes |
-| Live forks | Yes | Yes |
+|                        | Browser | Desktop |
+| ---------------------- | ------- | ------- |
+| Stepper, harness pages | Yes     | Yes     |
+| Live turns             | Yes     | Yes     |
+| Simulated forks        | Yes     | Yes     |
+| Live forks             | Yes     | Yes     |
 
 Nothing here touches a native capability, so both layouts behave identically. A
 **live** fork is the one thing that needs a browser attached at all — not because of

@@ -379,14 +379,22 @@ describe('deserialize view renames', () => {
   });
 
   describe('into a section (the interpretability suite)', () => {
-    const SUITE = new Set(['interpretability.suite', 'llamacpp.server']);
+    const SUITE = new Set(['interpretability.suite', 'lab.hub']);
     const panes = (f: FrameState) => listPanes(f).map((p) => p.pane);
 
-    it('lands a retired pane on the section that replaced it', () => {
-      const back = deserialize(blobWith(['interpretability.architecture']), SUITE)!;
-      const [pane] = panes(back);
-      expect(pane.viewId).toBe('interpretability.suite');
-      expect(pane.activeSection).toBe('model');
+    it('lands each retired research pane on the IDE section that replaced it', () => {
+      for (const [retired, expectedSection] of [
+        ['interpretability.architecture', 'model'],
+        ['llamacpp.server', 'runtime'],
+        ['webml.playground', 'playground'],
+        ['trajectories.hub', 'runs'],
+        ['evals.hub', 'evals'],
+      ] as const) {
+        const back = deserialize(blobWith([retired]), SUITE)!;
+        const [pane] = panes(back);
+        expect(pane.viewId).toBe('interpretability.suite');
+        expect(pane.activeSection).toBe(expectedSection);
+      }
     });
 
     it('drops the old pane own section, which named a tab of the old view', () => {
@@ -396,7 +404,7 @@ describe('deserialize view renames', () => {
       expect(pane.activeSection).toBe('runs');
     });
 
-    it('collapses four retired panes into one suite pane, with no holes', () => {
+    it('collapses retired panes into one suite pane, with no holes', () => {
       const back = deserialize(
         blobWith([
           'interpretability.context',
@@ -404,10 +412,14 @@ describe('deserialize view renames', () => {
           'agentpedia.hub',
           'webml.lens',
           'llamacpp.server',
+          'webml.playground',
+          'trajectories.hub',
+          'evals.hub',
+          'lab.hub',
         ]),
         SUITE,
       )!;
-      expect(viewIds(back)).toEqual(['interpretability.suite', 'llamacpp.server']);
+      expect(viewIds(back)).toEqual(['interpretability.suite', 'lab.hub']);
       // The first one the layout named wins, and keeps its own landing section.
       expect(panes(back)[0].activeSection).toBe('context');
     });

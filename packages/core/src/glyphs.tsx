@@ -670,12 +670,58 @@ export function IconThought(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Interactive prompt / WebGPU playground: a terminal prompt inside a frame. */
+export function IconPlayground(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />
+      <path d="m5 6.25 2.25 1.75L5 9.75M8.5 9.75h2.5" />
+    </Glyph>
+  );
+}
+
+/** Local model server & hardware stack: two rack blades with status dots. */
+export function IconRuntime(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.5" y="3" width="11" height="4.25" rx="1" />
+      <rect x="2.5" y="8.75" width="11" height="4.25" rx="1" />
+      <path d="M5 5.1h.01M5 10.9h.01M8 5.1h3.2M8 10.9h3.2" />
+    </Glyph>
+  );
+}
+
+/** Evals & benchmarks: concentric target rings with a centre mark. */
+export function IconEvals(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="8" cy="8" r="5.75" />
+      <circle cx="8" cy="8" r="2.75" />
+      <path d="M8 8h.01" />
+    </Glyph>
+  );
+}
+
+/** Side-by-side split panes. */
+export function IconSplit(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.25" y="3" width="11.5" height="10" rx="1.25" />
+      <path d="M8 3v10" />
+    </Glyph>
+  );
+}
+
 /** Icons addressable by name, for declarations that can only carry a string
  *  (a `SectionDecl.glyph`). */
 export const NAMED_GLYPHS: Readonly<
   Record<string, (props: SVGProps<SVGSVGElement>) => ReactElement>
 > = {
   home: IconHome,
+  playground: IconPlayground,
+  runtime: IconRuntime,
+  evals: IconEvals,
+  split: IconSplit,
   layers: IconLayers,
   timeline: IconTimeline,
   cube: IconCube,

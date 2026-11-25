@@ -20,12 +20,12 @@ editor's language intelligence. This page is about trajectories as **stored data
 The node runs agents constantly and retained almost none of it. Four stores held
 fragments, and each answered a different question:
 
-| Store | What it holds | Why it was not enough |
-| --- | --- | --- |
-| `agent_turns` (interpretability) | per-round context blocks — what the model was *shown* | tool calls only as serialized text; no queryable steps |
-| `eval_results` | `[{name, arguments}]` for one graded case | no results, no timings, and `EvalConnection.events` was discarded |
-| `research_steps` | the best per-step model in the repo | deep-research runs only |
-| `EpisodeStep` (games) | a true obs → action → reward record | lives on the remote games server |
+| Store                            | What it holds                                         | Why it was not enough                                             |
+| -------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------- |
+| `agent_turns` (interpretability) | per-round context blocks — what the model was _shown_ | tool calls only as serialized text; no queryable steps            |
+| `eval_results`                   | `[{name, arguments}]` for one graded case             | no results, no timings, and `EvalConnection.events` was discarded |
+| `research_steps`                 | the best per-step model in the repo                   | deep-research runs only                                           |
+| `EpisodeStep` (games)            | a true obs → action → reward record                   | lives on the remote games server                                  |
 
 So "which tool does the coder waste the most rounds on", "did last week's
 system-prompt edit help", and "show me runs that got stuck the way this one is"
@@ -65,13 +65,13 @@ The schema follows from these; they are stated in full in
 `backend/modules/trajectories/models.py` and `store.py`.
 
 1. **A step is one decision, and an action carries its own observation.** A tool
-   call and its result are *one* `action` row. Splitting them means every query
+   call and its result are _one_ `action` row. Splitting them means every query
    re-pairs by name and ordinal, which is silently wrong the moment a round calls
    the same tool twice.
 2. **The harness is content-addressed.** The fingerprint is
    `sha256(canonical_json(system_prompt, sorted tool names, tool schemas, model, provider, params))[:16]`.
    Without that join key, "did my change help" has nothing to group by. The label
-   is deliberately *not* in the hash — renaming a harness must not fork it.
+   is deliberately _not_ in the hash — renaming a harness must not fork it.
 3. **Grading is late-bound and additive.** `outcome`/`reward` are nullable;
    judgments land in `traj_labels` carrying a `source`. A human thumbs-down and an
    LLM critic's guess are not the same evidence.
@@ -86,13 +86,13 @@ The schema follows from these; they are stated in full in
    chronological.
 7. **A run with no actions is still a run.** "The agent answered instead of
    acting" is the finding, not the absence of one.
-8. **A step's `ts` is when it *started*.** `RunRecorder.action` is called after the
+8. **A step's `ts` is when it _started_.** `RunRecorder.action` is called after the
    tool has been awaited, so the store's own default would record the moment it
-   *finished* — and a waterfall drawn from that sits one whole duration to the right
+   _finished_ — and a waterfall drawn from that sits one whole duration to the right
    of the truth while still looking entirely plausible. The orchestrator stamps
    `started_wall = time.time()` before dispatch and passes it explicitly.
 9. **Prose the model emits alongside its calls is recorded.** A round that both
-   narrates and acts writes a `message` step *before* its actions. Without it a run
+   narrates and acts writes a `message` step _before_ its actions. Without it a run
    read as a bare list of calls with no account of why any of them happened, which is
    the half a postmortem is usually looking for.
 
@@ -142,7 +142,7 @@ file contents, tokens. The database is local and unencrypted.
 :::
 
 `store.redact()` is the boundary, shape-matching key suffixes via
-`SECRET_KEY_SUFFIXES`, and it is applied where data *leaves* the node: SFT export,
+`SECRET_KEY_SUFFIXES`, and it is applied where data _leaves_ the node: SFT export,
 peer share, and MCP content exposure. A credential still belongs in a connector.
 
 ## Comparing two harnesses
@@ -166,7 +166,7 @@ as `null`, not `0` — rendering "unknown" as "0%" invents a finding.
 task before and uses that as context. One default is load-bearing — **retrieved
 examples are successes unless asked otherwise**, because handing a model its own
 failed runs as few-shot context teaches the failure. It is the same insight
-`evals/export.py` states about exporting the *ideal* trajectory rather than the
+`evals/export.py` states about exporting the _ideal_ trajectory rather than the
 model's, applied to retrieval. `include_failures` exists for "how do I usually get
 this wrong", and the tool's response says which mode it used.
 
@@ -237,7 +237,7 @@ Two behaviours worth knowing:
 - **Hash-fallback vectors are never persisted.** `get_embedding` degrades to a
   deterministic hash when no embedder is reachable. Storing those would poison the
   collection permanently, because LanceDB fixes a table's vector width at first
-  write — so indexing *skips* and reports `skipped`, and `POST /reindex` picks the
+  write — so indexing _skips_ and reports `skipped`, and `POST /reindex` picks the
   runs up once an embedder is back.
 - **The response says which search you got.** `method` is `semantic`, `substring`
   (no embedder answered) or `recent` (empty query). A caller told it ran a semantic
@@ -256,7 +256,7 @@ module's recipe form.
 
 **This exports the model's ACTUAL trajectory — the opposite of `evals/export.py`,**
 and the contrast is why both exist. The evals exporter builds an example from the
-*case*: the prompt, the tools, and the call `expect` says was correct. It exports the
+_case_: the prompt, the tools, and the call `expect` says was correct. It exports the
 **ideal** trajectory, because for a failed case the model's own trajectory is the
 mistake you are removing.
 
@@ -268,7 +268,7 @@ back into it. `label_source="human"` narrows it further, and is what to reach fo
 when the training run matters: an `agent-critic` label is a model grading a model.
 
 The two traps are inherited verbatim. **One system message** — a strict Jinja
-template *raises* on a second one, a 500 from the engine rather than a warning.
+template _raises_ on a second one, a 500 from the engine rather than a warning.
 **Never pre-render the chat template** — examples are `messages` + `tools`, because
 rendering here bakes in one model's template and silently mistrains anything else;
 `meta.drawn_from` records the model the data came off so a mismatch stays visible.
@@ -282,11 +282,11 @@ trajectory is training data nobody checked.
 `POST /import` takes `{dataset_id, format, content}` for three formats, each a pure
 `(text) -> list[TrajectoryWrite]` function so it is testable against a fixture:
 
-| Format | Notes |
-| --- | --- |
-| `claude-code` | The JSONL session transcript. A `tool_use` block and its `tool_result` live in **different records**, keyed by `tool_use_id`; re-pairing them is the whole job. |
-| `openai` | A chat-completions message list, or a request body with `messages`. Tool arguments arrive as a JSON *string*; malformed JSON is preserved as written, because a model emitting broken JSON is a fact about the run. |
-| `messages` | A plain `[{role, content}]` list. No actions. |
+| Format        | Notes                                                                                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude-code` | The JSONL session transcript. A `tool_use` block and its `tool_result` live in **different records**, keyed by `tool_use_id`; re-pairing them is the whole job.                                                     |
+| `openai`      | A chat-completions message list, or a request body with `messages`. Tool arguments arrive as a JSON _string_; malformed JSON is preserved as written, because a model emitting broken JSON is a fact about the run. |
+| `messages`    | A plain `[{role, content}]` list. No actions.                                                                                                                                                                       |
 
 Imports land **ungraded** (`outcome: null`). Nothing in a transcript says the session
 went well, and inventing `success` would push unvetted runs straight into the SFT
@@ -338,7 +338,7 @@ declared there rather than in `network/protocol.py`, the share/hassault preceden
    an untrusted node gets silence, not an error.
 2. **`traj_datasets.shared`**, default off, set per dataset from the Datasets section
    behind a confirmation that says what cannot be undone: switching sharing off stops
-   *new* pulls, but copies already pulled stay on your friends' machines. A missing,
+   _new_ pulls, but copies already pulled stay on your friends' machines. A missing,
    unshared or peer-sourced dataset all answer the same `not shared`, so the reply does
    not confirm what exists.
 3. **For live watching only**, the friend is a participant in the share session this
@@ -399,7 +399,7 @@ or this node would relay requests to anything it happened to be connected to.
 
 ### Watching live
 
-The share mirror relays *layout* only, so a mirrored trajectories pane would show a
+The share mirror relays _layout_ only, so a mirrored trajectories pane would show a
 guest their own runs. Live runs therefore get their own content stream, `traj_live`,
 hung off the same `stream._send` that feeds the local pane — a watcher sees exactly the
 events this node's own Live view does, from every source — while authority comes
@@ -430,12 +430,12 @@ digest stops the index serving it and reaches no copy already fetched. So what a
 publishes is a **digest of its shape** (`CommonsTrajectoryDigest`, built by
 `backend/modules/trajectories/commons.py`), never the run:
 
-| Kept | Dropped |
-| --- | --- |
-| harness fingerprint, model, provider kind, tool names | every `args` / `result` / `content` payload |
+| Kept                                                                       | Dropped                                                        |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| harness fingerprint, model, provider kind, tool names                      | every `args` / `result` / `content` payload                    |
 | tool-call sequence by name; per step `ok`, `duration_ms`, `gated`, `round` | `turn_id`, `external_id`, `person_id`, `parent_run_id`, `meta` |
-| rounds, status, outcome, reward, token counts, duration | labels, the system prompt (the fingerprint stands in) |
-| `goal` — **only** if opted in for this run, scrubbed, first 500 characters | |
+| rounds, status, outcome, reward, token counts, duration                    | labels, the system prompt (the fingerprint stands in)          |
+| `goal` — **only** if opted in for this run, scrubbed, first 500 characters |                                                                |
 
 Two things are not anonymous, and the publish panel says so instead of hiding them:
 
@@ -460,14 +460,14 @@ run still in progress are refused outright.
 `commons_server.py` verifies three things before storing a digest: `node_id` is the
 fingerprint of `public_key`, the signature covers the digest, and **`digest_id` is the
 digest's actual content hash**. The last is not implied by the signature — a publisher
-could sign a digest carrying *someone else's* content hash, and if the index trusted the
+could sign a digest carrying _someone else's_ content hash, and if the index trusted the
 id, the real digest would then be answered `duplicate` and never stored. A republish of
 the same run dedupes on that id; the index keeps at most 200 per node and **refuses**
 past that rather than evicting the oldest, which nobody would notice. Only a connection
 that has published the signing node's profile can withdraw a digest.
 
-The **Shared** section's *Public* side lists digests on the connected index — everyone's, or yours with
-Withdraw — and says *not connected* rather than rendering an empty list that would read
+The **Shared** section's _Public_ side lists digests on the connected index — everyone's, or yours with
+Withdraw — and says _not connected_ rather than rendering an empty list that would read
 as nobody having published anything.
 
 ## Tokens and cost
@@ -479,12 +479,12 @@ and nothing ever filled them.
 
 Where the numbers come from, per dialect:
 
-| Path | Source |
-| --- | --- |
-| ollama (stream and not) | top-level `prompt_eval_count` / `eval_count` — the streamed one rides the `done` chunk, which was already in scope and discarded by the `break` |
-| openai dialect, non-stream | `usage.{prompt_tokens,completion_tokens}` + `usage.prompt_tokens_details.cached_tokens` |
-| openai dialect, **stream** | a usage-only frame, which arrives **only** if `stream_options: {include_usage: true}` was sent |
-| litellm | `response.usage`, plus `_hidden_params["response_cost"]` — litellm prices its own call |
+| Path                       | Source                                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| ollama (stream and not)    | top-level `prompt_eval_count` / `eval_count` — the streamed one rides the `done` chunk, which was already in scope and discarded by the `break` |
+| openai dialect, non-stream | `usage.{prompt_tokens,completion_tokens}` + `usage.prompt_tokens_details.cached_tokens`                                                         |
+| openai dialect, **stream** | a usage-only frame, which arrives **only** if `stream_options: {include_usage: true}` was sent                                                  |
+| litellm                    | `response.usage`, plus `_hidden_params["response_cost"]` — litellm prices its own call                                                          |
 
 Two silent failures this shape exists to avoid:
 
@@ -525,7 +525,7 @@ rule governs the token line, where each half is rendered independently so a prov
 reporting only completion tokens shows `—↓ 340↑` rather than a measured-looking `0↓`.
 
 These are a different number from interpretability's `agent_turns`, which holds a
-*tokenizer estimate* of what the model was shown. The estimate exists so a context
+_tokenizer estimate_ of what the model was shown. The estimate exists so a context
 window can be drawn before a request is made; the report exists so a bill can be
 reconciled after one. Keeping them in separate tables keeps them from being averaged
 together.
@@ -534,11 +534,11 @@ together.
 
 Runs stream as they happen on the shared `/ws` channel `trajectories`. Three events:
 
-| Event | Payload | When |
-| --- | --- | --- |
-| `run` | the whole `TrajectoryRun` | a run opens, and on any change to its header |
-| `step` | `{runId, step}` | one step appended |
-| `seal` | `{runId, status, steps, rounds, duration_ms}` | the run is sealed |
+| Event  | Payload                                       | When                                         |
+| ------ | --------------------------------------------- | -------------------------------------------- |
+| `run`  | the whole `TrajectoryRun`                     | a run opens, and on any change to its header |
+| `step` | `{runId, step}`                               | one step appended                            |
+| `seal` | `{runId, status, steps, rounds, duration_ms}` | the run is sealed                            |
 
 **Published from the store, not the recorder.** `store.append_step` / `start_run` /
 `finish_run` is the one chokepoint every source passes — the chat orchestrator, the
@@ -594,33 +594,33 @@ and nothing to say there was one.
 
 Routes are mounted under `/api/trajectories`.
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` `POST` | `/datasets` | list, create |
-| `GET` `PATCH` `DELETE` | `/datasets/{id}` | read, toggle capture, delete |
-| `GET` | `/runs` | filter by dataset, source, harness, outcome, agent, status, `q` |
-| `GET` `DELETE` | `/runs/{id}` | detail with steps; delete (and its blobs) |
-| `GET` | `/runs/by-turn/{turn_id}` | the run one orchestrator turn recorded; 404 when capture was off |
-| `POST` | `/runs/{id}/labels` | attach a judgment |
-| `POST` | `/ingest` | batch — the SDK, importers and adapters all use this |
-| `GET` | `/harnesses`, `/harnesses/{fp}` | list, read |
-| `GET` | `/stats`, `/tools` | aggregates |
-| `GET` | `/compare?a=&b=` | the harness diff |
-| `POST` | `/search` | semantic search; reports which method it used |
-| `POST` | `/reindex` | build the vector index (`full=true` rebuilds) |
-| `POST` | `/export` | SFT JSONL of graded successes |
-| `POST` | `/import` | a Claude Code / OpenAI / messages file |
-| `POST` | `/import/replay/{id}` | a games replay, one run per seat |
+| Method                 | Path                            | Purpose                                                          |
+| ---------------------- | ------------------------------- | ---------------------------------------------------------------- |
+| `GET` `POST`           | `/datasets`                     | list, create                                                     |
+| `GET` `PATCH` `DELETE` | `/datasets/{id}`                | read, toggle capture, delete                                     |
+| `GET`                  | `/runs`                         | filter by dataset, source, harness, outcome, agent, status, `q`  |
+| `GET` `DELETE`         | `/runs/{id}`                    | detail with steps; delete (and its blobs)                        |
+| `GET`                  | `/runs/by-turn/{turn_id}`       | the run one orchestrator turn recorded; 404 when capture was off |
+| `POST`                 | `/runs/{id}/labels`             | attach a judgment                                                |
+| `POST`                 | `/ingest`                       | batch — the SDK, importers and adapters all use this             |
+| `GET`                  | `/harnesses`, `/harnesses/{fp}` | list, read                                                       |
+| `GET`                  | `/stats`, `/tools`              | aggregates                                                       |
+| `GET`                  | `/compare?a=&b=`                | the harness diff                                                 |
+| `POST`                 | `/search`                       | semantic search; reports which method it used                    |
+| `POST`                 | `/reindex`                      | build the vector index (`full=true` rebuilds)                    |
+| `POST`                 | `/export`                       | SFT JSONL of graded successes                                    |
+| `POST`                 | `/import`                       | a Claude Code / OpenAI / messages file                           |
+| `POST`                 | `/import/replay/{id}`           | a games replay, one run per seat                                 |
 
 ### Agent tools
 
-| Tool | Description | Side effect |
-| --- | --- | --- |
-| `trajectories.search` | Past runs by goal; successes by default | No |
-| `trajectories.get` | One run's steps, trimmed head-and-tail if long | No |
-| `trajectories.stats` | Outcomes, average steps, tool call/failure counts | No |
-| `trajectories.compare` | Two harness fingerprints | No |
-| `trajectories.label` | Attach a judgment, always as `agent-critic` | **Yes** |
+| Tool                   | Description                                       | Side effect |
+| ---------------------- | ------------------------------------------------- | ----------- |
+| `trajectories.search`  | Past runs by goal; successes by default           | No          |
+| `trajectories.get`     | One run's steps, trimmed head-and-tail if long    | No          |
+| `trajectories.stats`   | Outcomes, average steps, tool call/failure counts | No          |
+| `trajectories.compare` | Two harness fingerprints                          | No          |
+| `trajectories.label`   | Attach a judgment, always as `agent-critic`       | **Yes**     |
 
 Names are `trajectories.<verb>` because the orchestrator derives a tool's group
 from the **name prefix** (`_group_of`), not from `AgentTool.group`. The group is
@@ -647,25 +647,26 @@ FROM traj_runs r JOIN agent_turns t ON t.turn_id = r.turn_id;
 
 ## Frontend
 
-One pane, `trajectories.hub` (`role: document`, singleton), eight sections:
+Unified with [Agentpedia](./agentpedia.mdx) inside the [Interpretability IDE](./interp-suite.mdx)'s **Runs** section (`interpretability.suite` → `runs`), eliminating duplicate `Runs` and `Harness` tabs across two windows (retired `trajectories.hub` resolves here via `RENAMED_VIEWS` and `VIEW_ALIASES`). Sub-tabs in `RunsWorkspace`:
 
-| Section | Key | What it is |
-| --- | --- | --- |
-| **Runs** | `r` | Run index + timeline + step-by-step detail, with grading, deletion and search |
-| **Live** | `l` | Runs happening right now, socket-fed |
-| **Lineage** | `g` | Every agent's harness revisions and their runs as one zoomable tree, with a linked runs-over-time inset. See [Lineage](#lineage) |
-| **Agent** | `a` | The agent chat's turns from the inside: each provider call's literal request, hoverable, with what came back. See [Following the agent chat](#following-the-agent-chat) |
-| **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
-| **Harness** | `h` | The A/B comparison and the harness inspector |
-| **Shared** | `s` | Runs from elsewhere. *Friends*: a friend's shared datasets and runs, pull a finished one. *Public*: digests on the agent commons index, withdraw your own |
-| **Connect** | `o` | Wire an OTLP exporter up: endpoint, ingest token, per-framework snippets, last-span indicator |
+| Sub-tab           | ID     | What it is                                                                                                                                                              |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **All Runs**      | `all`  | Run index + timeline + step-by-step detail, with grading, semantic search, **Step rounds (4-col)** and **Pair Context** buttons                                         |
+| **Turn Debugger** | `runs` | Agentpedia's 4-column round stepper (_Shown · Wire · Did · Cost_)                                                                                                       |
+| **Live**          | `live` | Runs happening right now, socket-fed                                                                                                                                    |
+| **Lineage**       | `g`    | Every agent's harness revisions and their runs as one zoomable tree, with a linked runs-over-time inset. See [Lineage](#lineage)                                        |
+| **Agent**         | `a`    | The agent chat's turns from the inside: each provider call's literal request, hoverable, with what came back. See [Following the agent chat](#following-the-agent-chat) |
+| **Datasets**      | `d`    | Collections, the capture toggle, headline counts, tool usage, import/export                                                                                             |
+| **Harness**       | `h`    | The A/B comparison and the harness inspector                                                                                                                            |
+| **Shared**        | `s`    | Runs from elsewhere. _Friends_: a friend's shared datasets and runs, pull a finished one. _Public_: digests on the agent commons index, withdraw your own               |
+| **Connect**       | `o`    | Wire an OTLP exporter up: endpoint, ingest token, per-framework snippets, last-span indicator                                                                           |
 
 Sections rather than panes, per the pane-consolidation rule: they are views of one
 object. No `RENAMED_VIEWS` entry is needed — no view id was removed.
 
 **Shared** was two tabs, **Friends** (`peers`) and **Commons** (`commons`), until
 they read as a second friends list and a second social network inside a trace
-viewer. Both are *trajectories that came from somewhere else*, so they are one
+viewer. Both are _trajectories that came from somewhere else_, so they are one
 section with a Friends/Public switch in its header (remembered per viewer). A saved
 layout still pointing at `peers` or `commons` falls back to Runs, the default.
 
@@ -676,7 +677,7 @@ lays out round by round. Selecting a span shows its attributes and events. The v
 renders nothing for a run with no trace (`panels/TraceView.tsx`, geometry in the pure
 `panels/trace-model.ts`).
 
-The Connect section *does* poll (`GET /api/otel/ingest`, every 5 s). It is a "did my
+The Connect section _does_ poll (`GET /api/otel/ingest`, every 5 s). It is a "did my
 exporter reach you yet" indicator for the minute you spend wiring one up, and the
 ingest route publishes nothing to watch.
 
@@ -693,7 +694,7 @@ switch. That split is what let the pane move onto the shared primitives —
 Three things the restyle fixed, each of which had been invisible:
 
 - **The pane rendered dark under the light themes.** It styled itself from a local
-  object of raw pixels and *legacy alias* tokens, and an undefined `var()` falls
+  object of raw pixels and _legacy alias_ tokens, and an undefined `var()` falls
   silently through to its hex fallback. `no-hex-literals.test.ts` holds every file
   here at **zero** hardcoded colours, and its list names each `panels/` path —
   splitting a guarded file moves its code out from under the guard, so the new paths
@@ -705,7 +706,7 @@ Three things the restyle fixed, each of which had been invisible:
   (`initial 320`, `min 240`, `minOther 360`, `narrowBelow 720`).
 
 A run's row carries the goal, its verdict as the leading rail, and two figures.
-Ungraded is stated in the row *body* rather than a badge: a badge shares the head
+Ungraded is stated in the row _body_ rather than a badge: a badge shares the head
 line with the figures, and at the column's 240px floor the two land on top of each
 other.
 
@@ -742,7 +743,7 @@ Past 500 runs it shows the newest 500 and says so. The design keeps it fast:
 - **Pan and zoom never re-render.** `d3-zoom`'s handler writes one `transform`
   attribute on one `<g>`. React renders only when the data, the level or the spread
   changes. Nothing in `lineage.css` may animate `transform` on a node, because a CSS
-  transform on an SVG element *replaces* its `transform` attribute, which is where
+  transform on an SVG element _replaces_ its `transform` attribute, which is where
   the node's position lives.
 - **The inset and the card are overlays.** The inset is `pointer-events: none` with
   its points opted back in, so wheel and drag fall through it to the tree.
@@ -762,7 +763,7 @@ transcript (`agent/chat-state.ts`) supplies which turns exist and the sub-agents
 one delegated to.
 
 It shows **roles only**. The labels the recorder infers ("Skill catalog", "Workspace
-index", "Force-tool nudge") are provenance, drawn as tinted spans *inside* a message,
+index", "Force-tool nudge") are provenance, drawn as tinted spans _inside_ a message,
 never as a role of their own. Trajectory steps are not in this view. They are in a
 run's detail in **Runs**, where the request link below joins the two.
 
@@ -802,11 +803,11 @@ colours are `--traj-src-*` tokens in `panels/follow.css`.
 **Deep links.** The view opens on a specific call from three places, all through
 `focusFollowTarget` in `agent/chat-state.ts`:
 
-| From | Lands on |
-| --- | --- |
-| A chat reply's **trace** chip | the turn's newest call |
-| **request** on an action step in a run's detail | the call in that round whose response asked for that tool, so the retry wins over the call it replaced |
-| **request** on a round's `POST` in the run's network lane | the call in that round that started closest before the wire event |
+| From                                                      | Lands on                                                                                               |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| A chat reply's **trace** chip                             | the turn's newest call                                                                                 |
+| **request** on an action step in a run's detail           | the call in that round whose response asked for that tool, so the retry wins over the call it replaced |
+| **request** on a round's `POST` in the run's network lane | the call in that round that started closest before the wire event                                      |
 
 The step and network links go through `panels/open-request.ts`, which also reveals
 this section.
@@ -904,7 +905,7 @@ to a table that already exists, so an upgraded install would otherwise fail ever
 append on an unknown column. `test_an_existing_steps_table_gains_parent_seq` builds the
 old table and pins that.
 
-Deliberately *not* extracted into a shared `viz/Timeline`. There is one consumer, and
+Deliberately _not_ extracted into a shared `viz/Timeline`. There is one consumer, and
 the generic version would need a colour mapper, a nesting strategy and a label
 renderer as props — three abstractions invented for a second caller that does not
 exist.
@@ -933,12 +934,12 @@ params — a fingerprint is a hash, and "a3f2 beats 91cd" is unusable without it
 
 ### Settings
 
-| Key | Default | Effect |
-| --- | --- | --- |
-| `trajectories.retentionRuns` | `5000` | Prune a dataset to this many runs, oldest first |
-| `trajectories.captureDelegates` | `true` | Record delegated sub-agent turns as linked child runs |
-| `otel.enabled` / `otel.captureContent` / `otel.injectEnv` / `otel.forwardReceived` | `true` / `false` / `true` / `false` | OpenTelemetry — see [otel.mdx](otel.mdx) |
-| `agent.modelPricing` | `''` | JSON overriding the bundled price table (declared by the agent module; see Tokens and cost) |
+| Key                                                                                | Default                             | Effect                                                                                      |
+| ---------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
+| `trajectories.retentionRuns`                                                       | `5000`                              | Prune a dataset to this many runs, oldest first                                             |
+| `trajectories.captureDelegates`                                                    | `true`                              | Record delegated sub-agent turns as linked child runs                                       |
+| `otel.enabled` / `otel.captureContent` / `otel.injectEnv` / `otel.forwardReceived` | `true` / `false` / `true` / `false` | OpenTelemetry — see [otel.mdx](otel.mdx)                                                    |
+| `agent.modelPricing`                                                               | `''`                                | JSON overriding the bundled price table (declared by the agent module; see Tokens and cost) |
 
 ## Browser vs desktop
 
