@@ -87,4 +87,42 @@ describe('stage promotion upgrades tokens and publishes only when speaker', () =
     expect(source).toContain("action === 'make_moderator'");
     expect(source).toContain("action === 'remove_speaker'");
   });
+
+  it('determines initial speaker state from the room roster rather than pubnub_token length', () => {
+    // A listener in any room where `can_post_to_chat=True` gets a 444-byte PAMv3
+    // PubNub token (versus 368 bytes when chat is disabled), so checking
+    // `pubnub_token.length > 400` falsely marked every listener as a speaker at join
+    // time and published under a listener Agora token.
+    expect(source).not.toContain('pubnub_token.length > 400');
+  });
+
+  it('preserves mute state across toggleMute, upgradeToSpeaker, syncChannelDetails, and agent TTS', () => {
+    const toggleIdx = source.indexOf('const toggleMute = async () =>');
+    expect(toggleIdx).toBeGreaterThan(-1);
+    const toggleSlice = source.slice(toggleIdx, toggleIdx + 2200);
+    // Flip local state and gain immediately so the button never gets stuck behind
+    // async microphone acquisition or token renewal.
+    expect(toggleSlice).toContain('session.patch({ isMuted: nextMuteState })');
+    expect(toggleSlice).toContain('upgradeToSpeaker(undefined, { preserveMute: true })');
+    expect(toggleSlice).toContain('connectPhysicalMicrophone(5000)');
+
+    // `syncChannelDetails` only promotes when transitioning from listener to speaker,
+    // not every 10s whenever `isTrackPublished` is false.
+    const syncIdx = source.indexOf('const syncChannelDetails =');
+    expect(syncIdx).toBeGreaterThan(-1);
+    const syncSlice = source.slice(syncIdx, syncIdx + 600);
+    expect(syncSlice).toContain('if (meInRoom.is_speaker && !session.isSpeaker)');
+    expect(syncSlice).not.toContain('!session.isTrackPublished');
+
+    // `playAgentAudio` reads `session.state.isMuted` directly and only re-mutes if the
+    // operator is still muted when TTS finishes.
+    const agentAudioIdx = source.indexOf('const playAgentAudio =');
+    const stopMusicIdx = source.indexOf('const stopRoomMusic =');
+    expect(agentAudioIdx).toBeGreaterThan(-1);
+    expect(stopMusicIdx).toBeGreaterThan(agentAudioIdx);
+    const agentAudioSlice = source.slice(agentAudioIdx, stopMusicIdx);
+    expect(agentAudioSlice).toContain('const wasMuted = session.state.isMuted');
+    expect(agentAudioSlice).toContain('wasMuted &&');
+    expect(agentAudioSlice).toContain('session.state.isMuted &&');
+  });
 });

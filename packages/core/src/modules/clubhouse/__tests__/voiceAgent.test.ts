@@ -1,7 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { roomModelChoices, unslothSpeechModels } from '../AgentSidebar';
-import { DEFAULT_VOICE_CONFIG, chatSpeakerLabel, normalizeVoiceConfig } from '../voiceAgent';
+import {
+  DEFAULT_VOICE_CONFIG,
+  chatSpeakerLabel,
+  normalizeVoiceConfig,
+  recordVoiceSpoken,
+  takeVoiceTurn,
+} from '../voiceAgent';
 
 describe('normalizeVoiceConfig', () => {
   it('turns nothing, or nonsense, into the defaults', () => {
@@ -176,5 +182,60 @@ describe('roomModelChoices', () => {
     expect(out.known).toBe(true);
     expect(out.displayModel).toBe('gemma-3-4b-it');
     expect(out.servedBy).toBe('lmstudio');
+  });
+});
+
+describe('prompt generation and direct TTS routing API helpers', () => {
+  it('passes remember=false when generating a model draft without speaking', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        spoke: true,
+        reason: 'generated draft',
+        reply: 'Generated draft line.',
+        notice: null,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const res = await takeVoiceTurn({
+        channel: 'room-1',
+        text: 'Summarize the room',
+        source: 'nudge',
+        force: true,
+        remember: false,
+        room: { topic: 'AI', club: null, members: [], my_user_id: 1, my_name: 'Me' },
+      });
+      expect(res.reply).toBe('Generated draft line.');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init.body as string);
+      expect(body.remember).toBe(false);
+      expect(body.force).toBe(true);
+      expect(body.source).toBe('nudge');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('posts direct TTS text to /api/clubhouse/voice/spoken for echo suppression', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ recorded: true, text: 'Hello stage!' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const res = await recordVoiceSpoken('room-1', 'Hello stage!');
+      expect(res).toEqual({ recorded: true, text: 'Hello stage!' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toContain('/api/clubhouse/voice/spoken');
+      expect(JSON.parse(init.body as string)).toEqual({
+        channel: 'room-1',
+        text: 'Hello stage!',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

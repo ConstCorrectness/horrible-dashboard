@@ -230,6 +230,16 @@ export interface AgentSidebarProps {
   onInterrupt: () => void;
   onSpeakNow: () => void;
   onTestVoice: () => void;
+  /** Prompt the room's LLM to generate text into the TTS draft box without speaking it yet. */
+  onGenerateText?: (prompt: string) => Promise<string | null>;
+  /** Prompt the room's LLM and immediately speak/post the generated reply. */
+  onPromptAndSpeak?: (prompt: string) => void;
+  /** Route arbitrary text directly to the room's TTS stage output (and optionally room chat). */
+  onSpeakText?: (text: string, options?: { postToChat?: boolean }) => void | Promise<void>;
+  /** Preview arbitrary text through TTS on local speakers only. */
+  onPreviewText?: (text: string) => void;
+  /** Post arbitrary text to the room chat. */
+  onPostText?: (text: string) => void | Promise<void>;
   onHide: () => void;
 }
 
@@ -1061,6 +1071,230 @@ function LogCard({
   );
 }
 
+// --- prompt & tts studio -------------------------------------------------------------
+
+const PROMPT_PRESETS: { label: string; prompt: string }[] = [
+  {
+    label: 'Take the floor',
+    prompt:
+      'Take the floor now: pick up the current conversation, or open one if it has gone quiet.',
+  },
+  {
+    label: 'Introduce topic',
+    prompt: 'Introduce the room topic and welcome everyone on stage and in the audience.',
+  },
+  {
+    label: 'Summarize room',
+    prompt: 'Briefly summarize what the speakers have just been discussing.',
+  },
+  {
+    label: 'Ask a question',
+    prompt:
+      'Ask the speakers on stage a thoughtful follow-up question about what they just said.',
+  },
+];
+
+function PromptAndTtsCard({
+  index,
+  speaking,
+  thinking,
+  audienceOnly,
+  defaultPostToChat,
+  onGenerateText,
+  onPromptAndSpeak,
+  onSpeakText,
+  onPreviewText,
+  onPostText,
+}: {
+  index: number;
+  speaking: boolean;
+  thinking: boolean;
+  audienceOnly: boolean;
+  defaultPostToChat: boolean;
+  onGenerateText?: AgentSidebarProps['onGenerateText'];
+  onPromptAndSpeak?: AgentSidebarProps['onPromptAndSpeak'];
+  onSpeakText?: AgentSidebarProps['onSpeakText'];
+  onPreviewText?: AgentSidebarProps['onPreviewText'];
+  onPostText?: AgentSidebarProps['onPostText'];
+}) {
+  const [promptDraft, setPromptDraft] = useState('');
+  const [ttsDraft, setTtsDraft] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [alsoPostToChat, setAlsoPostToChat] = useState(defaultPostToChat);
+
+  const busy = speaking || thinking || generating;
+  const trimmedPrompt = promptDraft.trim();
+  const trimmedTts = ttsDraft.trim();
+
+  const handleGenerate = async () => {
+    if (!onGenerateText || !trimmedPrompt || busy) return;
+    setGenerating(true);
+    try {
+      const reply = await onGenerateText(trimmedPrompt);
+      if (reply && reply.trim()) {
+        setTtsDraft(reply.trim());
+      }
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleGenerateAndSpeak = () => {
+    if (!onPromptAndSpeak || !trimmedPrompt || busy) return;
+    onPromptAndSpeak(trimmedPrompt);
+  };
+
+  const handleSpeak = () => {
+    if (!onSpeakText || !trimmedTts || busy) return;
+    void onSpeakText(trimmedTts, { postToChat: alsoPostToChat });
+  };
+
+  const handlePreview = () => {
+    if (!onPreviewText || !trimmedTts || speaking) return;
+    onPreviewText(trimmedTts);
+  };
+
+  const handlePost = () => {
+    if (!onPostText || !trimmedTts) return;
+    void onPostText(trimmedTts);
+  };
+
+  return (
+    <AgentCard
+      id="prompt"
+      index={index}
+      title="Prompt & TTS"
+      meta={generating ? 'generating…' : speaking ? 'speaking' : 'ready'}
+      defaultOpen={true}
+    >
+      <div className="ag-chips" role="group" aria-label="Prompt presets">
+        {PROMPT_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="ag-chip"
+            aria-pressed={promptDraft === p.prompt}
+            title={p.prompt}
+            onClick={() => setPromptDraft(p.prompt)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <label className="ag-field">
+        <span className="ag-label">
+          Prompt model <span className="ag-mono">{promptDraft.length} chars</span>
+        </span>
+        <textarea
+          className="ag-textarea"
+          style={{ minHeight: '64px' }}
+          value={promptDraft}
+          aria-label="Model prompt"
+          placeholder="Direct the model (e.g. 'Ask a question about the topic' or 'Summarize the room')…"
+          onChange={(e) => setPromptDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+              e.preventDefault();
+              void handleGenerate();
+            }
+          }}
+        />
+        <p className="ag-hint">
+          Uses the room&apos;s model, persona, stage roster, and conversation memory. Generate fills
+          the TTS box below so you can review or edit before speaking.
+        </p>
+      </label>
+
+      <div className="ag-actions">
+        <button
+          type="button"
+          className="ag-btn"
+          onClick={() => void handleGenerate()}
+          disabled={!trimmedPrompt || busy || !onGenerateText}
+          title="Generate text from the model into the TTS box below without speaking yet (Ctrl/Cmd+Enter)"
+        >
+          {generating ? 'Generating…' : 'Generate'}
+        </button>
+        <button
+          type="button"
+          className="ag-btn"
+          data-tone="primary"
+          onClick={handleGenerateAndSpeak}
+          disabled={!trimmedPrompt || busy || !onPromptAndSpeak}
+          title="Prompt the model and immediately route its reply to TTS"
+        >
+          <MicIcon /> Generate &amp; speak
+        </button>
+      </div>
+
+      <label className="ag-field">
+        <span className="ag-label">
+          Route to TTS <span className="ag-mono">{ttsDraft.length} chars</span>
+        </span>
+        <textarea
+          className="ag-textarea"
+          style={{ minHeight: '68px' }}
+          value={ttsDraft}
+          aria-label="TTS text"
+          placeholder="Type or paste text to synthesize with TTS (or click Generate above)…"
+          onChange={(e) => setTtsDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+              e.preventDefault();
+              handleSpeak();
+            }
+          }}
+        />
+      </label>
+
+      <Check
+        checked={alsoPostToChat}
+        onChange={setAlsoPostToChat}
+        label="Also post to room chat when speaking"
+        hint={
+          audienceOnly
+            ? 'You are in the audience, so only your local speakers and room chat will receive it.'
+            : undefined
+        }
+      />
+
+      <div className="ag-actions">
+        <button
+          type="button"
+          className="ag-btn"
+          onClick={handlePreview}
+          disabled={!trimmedTts || speaking || !onPreviewText}
+          title="Hear this text on your local speakers only without broadcasting to the room"
+        >
+          <PlayIcon /> Preview
+        </button>
+        {onPostText && (
+          <button
+            type="button"
+            className="ag-btn"
+            onClick={handlePost}
+            disabled={!trimmedTts}
+            title="Post this text directly to the room chat"
+          >
+            Post to chat
+          </button>
+        )}
+        <button
+          type="button"
+          className="ag-btn"
+          data-tone="primary"
+          onClick={handleSpeak}
+          disabled={!trimmedTts || busy || !onSpeakText}
+          title="Synthesize this text with TTS and broadcast it into the Clubhouse room (Ctrl/Cmd+Enter)"
+        >
+          <MicIcon /> Speak to room
+        </button>
+      </div>
+    </AgentCard>
+  );
+}
+
 // --- persona -------------------------------------------------------------------------
 
 function PersonaBody({
@@ -1348,9 +1582,22 @@ export function AgentSidebar(props: AgentSidebarProps) {
           )}
         </div>
 
+        <PromptAndTtsCard
+          index={0}
+          speaking={props.speaking}
+          thinking={props.thinking}
+          audienceOnly={props.audienceOnly}
+          defaultPostToChat={config.postToChat}
+          onGenerateText={props.onGenerateText}
+          onPromptAndSpeak={props.onPromptAndSpeak}
+          onSpeakText={props.onSpeakText}
+          onPreviewText={props.onPreviewText}
+          onPostText={props.onPostText}
+        />
+
         <AgentCard
           id="persona"
-          index={0}
+          index={1}
           title="Persona"
           meta={config.persona ? 'custom' : 'default'}
         >
@@ -1714,7 +1961,7 @@ export function AgentSidebar(props: AgentSidebarProps) {
           type="button"
           className="ag-btn"
           onClick={props.onSpeakNow}
-          disabled={!config.enabled || props.speaking || props.thinking}
+          disabled={props.speaking || props.thinking}
           title="Ask the agent to take the floor now"
         >
           <MicIcon /> {props.thinking ? 'Thinking' : props.speaking ? 'Speaking' : 'Speak now'}

@@ -72,6 +72,7 @@ import {
   getVoiceState,
   normalizeVoiceConfig,
   pushVoiceConfig,
+  recordVoiceSpoken,
   resetVoiceMemory,
   takeVoiceTurn,
   type VoiceAgentConfig,
@@ -1299,6 +1300,121 @@ export function RoomsPanel() {
     void drainAgentQueue();
   };
   enqueueUtteranceRef.current = enqueueUtterance;
+
+  /**
+   * Prompt the room's LLM to generate text into the Prompt & TTS draft box without
+   * immediately speaking or posting it. Uses `remember: false` so the draft is only
+   * added to conversation history once the operator decides to speak it.
+   */
+  const handleGenerateText = async (prompt: string): Promise<string | null> => {
+    const channel = activeChannelRef.current;
+    const trimmed = prompt.trim();
+    if (!channel || !trimmed) return null;
+    const controller = new AbortController();
+    agentAbortControllerRef.current = controller;
+    setIsAgentThinking(true);
+    try {
+      const result = await takeVoiceTurn({
+        channel,
+        text: trimmed,
+        speaker: '',
+        source: 'nudge',
+        force: true,
+        remember: false,
+        room: buildRoomSnapshot(),
+        config: agentConfigRef.current,
+        signal: controller.signal,
+      });
+      setAgentReason(result.reason);
+      if (result.notice) toastsStore.add('info', 'Agent', result.notice);
+      if (result.reply && result.reply.trim()) {
+        return result.reply.trim();
+      }
+      if (result.reason) {
+        toastsStore.add('warning', 'Generate', `No text generated (${result.reason}).`);
+      }
+      return null;
+    } catch (e) {
+      if (
+        (e instanceof DOMException && e.name === 'AbortError') ||
+        (e instanceof Error && e.name === 'AbortError') ||
+        String(e).includes('aborted')
+      ) {
+        setAgentReason('interrupted');
+        logPane('Draft generation was interrupted.', 'interrupted');
+        return null;
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      setAgentReason(message);
+      logPane(`Draft generation failed: ${message}`, 'turn failed');
+      toastsStore.add('error', 'Generate failed', message);
+      return null;
+    } finally {
+      setIsAgentThinking(false);
+      if (agentAbortControllerRef.current === controller) {
+        agentAbortControllerRef.current = null;
+      }
+    }
+  };
+
+  /**
+   * Route text directly to the room's TTS synthesizer (`playAgentAudio`) so it plays
+   * into the live Clubhouse stage track (and local speakers), while registering the
+   * line with the backend session so Whisper STT ignores any echo.
+   */
+  const handleSpeakText = async (text: string, options?: { postToChat?: boolean }) => {
+    const channel = activeChannelRef.current;
+    const trimmed = text.trim();
+    if (!channel || !trimmed) return;
+    setIsAgentSpeaking(true);
+    setAgentReason('direct tts');
+    void recordVoiceSpoken(channel, trimmed).catch(() => {});
+    if (options?.postToChat) {
+      const textToSend = agentConfigRef.current.robotEmojiPrefix ? `🤖 ${trimmed}` : trimmed;
+      agentSentTextsRef.current.add(textToSend.trim());
+      agentSentTextsRef.current.add(trimmed);
+      void sendComment(textToSend, { dedupe: true }).catch(() => {});
+    }
+    try {
+      await playAgentAudio(trimmed, {
+        voice: agentConfigRef.current.ttsVoice,
+        rate: agentConfigRef.current.ttsRate,
+        pitch: agentConfigRef.current.ttsPitch,
+        volume: agentConfigRef.current.ttsVolume,
+      });
+    } finally {
+      setIsAgentSpeaking(false);
+    }
+  };
+
+  const handlePreviewText = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    void previewTtsVoice({
+      text: trimmed,
+      voice: agentConfigRef.current.ttsVoice,
+      rate: agentConfigRef.current.ttsRate,
+      pitch: agentConfigRef.current.ttsPitch,
+      volume: agentConfigRef.current.ttsVolume,
+    });
+  };
+
+  const handlePostText = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const textToSend = agentConfigRef.current.robotEmojiPrefix ? `🤖 ${trimmed}` : trimmed;
+    agentSentTextsRef.current.add(textToSend.trim());
+    agentSentTextsRef.current.add(trimmed);
+    try {
+      await sendComment(textToSend);
+    } catch (err) {
+      toastsStore.add(
+        'error',
+        'Failed to send message',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
 
   // Refs so the queue drain reads current values without being re-created (and
   // without the stale closures the old `useEffect`-driven version captured).
@@ -3634,6 +3750,11 @@ export function RoomsPanel() {
                   volume: agentConfig.ttsVolume,
                 })
               }
+              onGenerateText={handleGenerateText}
+              onPromptAndSpeak={(prompt) => enqueueUtterance(prompt, 'nudge', true)}
+              onSpeakText={handleSpeakText}
+              onPreviewText={handlePreviewText}
+              onPostText={handlePostText}
               onHide={() => setShowAgentSidebar(false)}
             />
           ) : (

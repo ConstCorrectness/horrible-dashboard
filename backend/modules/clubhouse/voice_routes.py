@@ -43,6 +43,15 @@ class TurnRequest(BaseModel):
     # Explicit override from client: true if the client knows it's agent echo,
     # false if known human operator. If omitted, uses speaker_id matching and text overlap.
     is_self: bool | None = None
+    # Whether to record the generated reply as spoken in the room (`session.history`
+    # and `session.spoken`). False when the operator is generating a draft into the
+    # Prompt & TTS box to review or edit before speaking.
+    remember: bool = True
+
+
+class SpokenRequest(BaseModel):
+    channel: str
+    text: str
 
 
 class TurnResponse(BaseModel):
@@ -185,6 +194,7 @@ async def turn(req: TurnRequest) -> TurnResponse:
         speaker=req.speaker,
         source=source,
         speaker_id=req.speaker_id,
+        remember=req.remember,
     )
     return TurnResponse(
         spoke=bool(result.get("spoke")),
@@ -192,6 +202,27 @@ async def turn(req: TurnRequest) -> TurnResponse:
         reply=str(result.get("reply", "")),
         notice=result.get("notice"),
     )
+
+
+@router.post("/spoken")
+def record_spoken(req: SpokenRequest) -> dict[str, Any]:
+    """Record text routed directly to TTS so STT echo suppression ignores it
+    and the agent remembers what it said aloud."""
+    session = V.session_for(req.channel)
+    cleaned = V.clean_reply(req.text)
+    if cleaned:
+        session.remember(V.Turn(role="agent", text=cleaned))
+        session.spoken.append(cleaned)
+        session.last_reply_ts = time.time()
+        session.log(
+            V.TurnEvent(
+                kind="replied",
+                text=cleaned,
+                reason="direct tts",
+                source="nudge",
+            )
+        )
+    return {"recorded": bool(cleaned), "text": cleaned}
 
 
 #: The in-flight Whisper warm-up, held so the task is not garbage-collected mid-load.

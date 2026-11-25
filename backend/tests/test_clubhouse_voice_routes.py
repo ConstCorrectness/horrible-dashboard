@@ -688,3 +688,56 @@ def test_a_probe_that_could_not_ask_is_unknown_not_broken(
     body = client.get("/api/clubhouse/voice/health").json()
     assert body["ears"]["certain"] is False
     assert body["mouth"]["certain"] is False
+
+
+def test_draft_generation_does_not_record_reply_as_already_spoken(
+    client: TestClient, captured: list[list[dict]]
+) -> None:
+    """Generating a draft in the Prompt & TTS card (`remember=False`) returns the
+    cleaned model text so the operator can edit it before routing to TTS, without
+    polluting conversation memory or the echo-suppression list prematurely."""
+    body = _turn(
+        client,
+        "Ask Ada a question about her compiler work",
+        source="nudge",
+        force=True,
+        remember=False,
+    )
+    assert body["spoke"] is True
+    assert body["reason"] == "generated draft"
+    assert body["reply"] == "Sure, happy to help."
+    assert len(captured) == 1
+    state = client.get("/api/clubhouse/voice/state", params={"channel": "c1"}).json()
+    assert state["turns"] == []
+    assert state["events"][-1]["reason"] == "generated draft"
+
+
+def test_direct_tts_spoken_route_records_history_and_suppresses_echo(
+    client: TestClient, captured: list[list[dict]]
+) -> None:
+    """Routing text directly to TTS registers it via `/voice/spoken` so the agent
+    remembers what it said aloud and ignores any transcription echo of that speech."""
+    _enable(client, posture="always")
+    res = client.post(
+        "/api/clubhouse/voice/spoken",
+        json={
+            "channel": "c1",
+            "text": "Agent: *clears throat* Welcome to the compiler design room!",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["recorded"] is True
+    assert data["text"] == "Welcome to the compiler design room!"
+
+    state = client.get("/api/clubhouse/voice/state", params={"channel": "c1"}).json()
+    assert len(state["turns"]) == 1
+    assert state["turns"][0]["role"] == "agent"
+    assert state["turns"][0]["text"] == "Welcome to the compiler design room!"
+    assert state["events"][-1]["reason"] == "direct tts"
+
+    # When the room's STT hears that TTS output back, it is rejected as own speech.
+    echo = _turn(client, "Welcome to the compiler design room!")
+    assert echo["spoke"] is False
+    assert echo["reason"] == "own speech"
+    assert captured == []

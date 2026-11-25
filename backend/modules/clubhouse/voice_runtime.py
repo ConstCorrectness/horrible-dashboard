@@ -343,6 +343,7 @@ async def run_turn(
     speaker: str = "",
     source: Source = "voice",
     speaker_id: int | None = None,
+    remember: bool = True,
 ) -> dict[str, Any]:
     """Produce the agent's reply for one utterance.
 
@@ -366,7 +367,7 @@ async def run_turn(
     # in the history it becomes a phantom line the agent will later summarise back
     # ("you asked me to say something"), and the twelve-turn window is small enough
     # that a few of them crowd out real speech.
-    if source != "nudge":
+    if source != "nudge" and remember:
         session.remember(
             Turn(role="room", text=utterance, speaker=speaker, source=source)
         )
@@ -437,8 +438,10 @@ async def run_turn(
         event("silent", "model returned nothing", ms=ms, detail=detail)
         return {"spoke": False, "reason": "model returned nothing", "reply": ""}
 
-    session.remember(Turn(role="agent", text=reply))
-    session.spoken.append(reply)
-    session.last_reply_ts = time.time()
-    event("replied", "replied", text=reply, ms=ms, detail=detail)
-    return {"spoke": True, "reason": "replied", "reply": reply}
+    if remember:
+        session.remember(Turn(role="agent", text=reply))
+        session.spoken.append(reply)
+        session.last_reply_ts = time.time()
+    reason = "replied" if remember else "generated draft"
+    event("replied", reason, text=reply, ms=ms, detail=detail)
+    return {"spoke": True, "reason": reason, "reply": reply}

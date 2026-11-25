@@ -224,6 +224,8 @@ export function takeVoiceTurn(params: {
   config?: VoiceAgentConfig;
   /** Explicitly flag whether this utterance is known to be the agent's own speech (echo) vs operator. */
   isSelf?: boolean;
+  /** False when generating a draft into the Prompt & TTS box without speaking it yet. */
+  remember?: boolean;
   signal?: AbortSignal;
 }): Promise<VoiceTurnResult> {
   return post<VoiceTurnResult>(
@@ -238,9 +240,24 @@ export function takeVoiceTurn(params: {
       room: params.room,
       config: params.config,
       is_self: params.isSelf,
+      remember: params.remember ?? true,
     },
     params.signal,
   );
+}
+
+/**
+ * Record text routed directly to TTS into the room session so STT echo suppression
+ * ignores it and the agent remembers what it said aloud.
+ */
+export function recordVoiceSpoken(
+  channel: string,
+  text: string,
+): Promise<{ recorded: boolean; text: string }> {
+  return post<{ recorded: boolean; text: string }>('/api/clubhouse/voice/spoken', {
+    channel,
+    text,
+  });
 }
 
 export function pushVoiceConfig(channel: string, config: VoiceAgentConfig): Promise<unknown> {

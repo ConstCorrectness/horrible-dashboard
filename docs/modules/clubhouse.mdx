@@ -1613,8 +1613,14 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
 - **TTS Voice & Pitch Customization:**
   - `GET /api/agent/tts/voices`: Voices cloned in Unsloth (`unsloth:<id>`), then Microsoft Edge neural voices.
   - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...&volume=...`: Customizable voice, speed multiplier, pitch and volume tuning.
+- **Prompt Model & Direct TTS Router (`Prompt & TTS` Card):**
+  - **Prompt Model:** Operators can enter a custom instruction or pick a preset direction (`Take the floor`, `Introduce topic`, `Summarize room`, `Ask a question`) and either click **Generate** (`POST /api/clubhouse/voice/turn` with `source: 'nudge'`, `force: true`, `remember: false`) to generate text into the editable **Route to TTS** box without speaking it yet, or click **Generate & speak** to prompt the room's LLM and immediately broadcast the reply.
+  - **Route to TTS:** Any generated or custom text in the TTS box can be routed directly to the room's TTS synthesizer via **Speak to room** (`playAgentAudio` into the published Agora track + `POST /api/clubhouse/voice/spoken` so Whisper STT echo suppression ignores the synthesized audio and the agent remembers what it said), auditioned locally on speakers via **Preview** (`previewTtsVoice`), or sent to room chat via **Post to chat**.
 - **Real-Time Speaker Attribution:**
   - Correlates Agora RTC audio volume indicator metrics with active room participant rosters during VAD speech windows, passing speaker name and user ID directly to the agent's turn loop.
+- **Stage Mute & Microphone Lifecycle:**
+  - `humanGain` is created unconditionally on the room's `AudioContext` at join time so `toggleMute` (`🎙️ Unmute Mic` / `🎙️ Mic Active (Mute)`) flips the local gain and `isMuted` state immediately on every click, even if `openMicrophone()` timed out at join time (in which case `toggleMute` lazily retries `connectPhysicalMicrophone`).
+  - `upgradeToSpeaker` preserves the operator's current `isMuted` state whenever the account is already on stage (`wasAlreadySpeaker` or `{ preserveMute: true }`), `syncChannelDetails` only triggers `upgradeToSpeaker` on an actual audience-to-stage transition (`meInRoom.is_speaker && !session.isSpeaker`), and `playAgentAudio` / `stopRoomMusic` read `session.state.isMuted` directly and only restore the channel mute if the operator is still muted when speech or music ends.
 
 ---
 
