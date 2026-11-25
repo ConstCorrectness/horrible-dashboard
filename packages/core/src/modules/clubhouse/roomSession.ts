@@ -193,6 +193,10 @@ export interface RoomState {
   music: { title: string; paused: boolean } | null;
   /** The emoji this room accepts, from the join result; empty until joined. */
   reactionOptions: string[];
+  /** Room stage mode (`0` = open stage, `1` = invite only / locked, `2` = everyone, `3` = followed). */
+  handraiseQueueSetting: number | null;
+  /** Whether traditional `/audience_reply` hand-raises are enabled in this room. */
+  isHandraiseEnabled: boolean | null;
   /**
    * The current utterance as transcribed so far, refreshed about once a second
    * while someone is talking and cleared when their finished sentence arrives.
@@ -216,6 +220,8 @@ export const EMPTY_ROOM_STATE: RoomState = {
   chatDisabledReason: null,
   music: null,
   reactionOptions: [],
+  handraiseQueueSetting: null,
+  isHandraiseEnabled: null,
   liveCaption: null,
 };
 
@@ -241,6 +247,7 @@ export class ClubhouseRoomSession {
    */
   sttFinals: Promise<void> = Promise.resolve();
   physicalMicStream: MediaStream | null = null;
+  micSource: MediaStreamAudioSourceNode | null = null;
   humanGain: GainNode | null = null;
   rtcClient: IAgoraRTCClient | null = null;
   localAudioTrack: ILocalAudioTrack | null = null;
@@ -553,7 +560,7 @@ export class ClubhouseRoomSession {
     // Clubhouse join, whose first `createMediaStreamDestination()` throws
     // `InvalidStateError` on a closed context. Disconnect our own nodes instead;
     // the physical mic stream is stopped above, which drops its source with it.
-    for (const node of [this.humanGain, this.agentAudioDest, this.sttBus]) {
+    for (const node of [this.micSource, this.humanGain, this.agentAudioDest, this.sttBus]) {
       try {
         node?.disconnect();
       } catch {
@@ -563,11 +570,21 @@ export class ClubhouseRoomSession {
     this.audioCtx = null;
     this.agentAudioDest = null;
     this.sttBus = null;
+    this.micSource = null;
     this.humanGain = null;
     this.agentAudioSource = null;
     this.isAgentSpeaking = false;
 
     if (this.rtcClient) {
+      // Silence remote speakers explicitly: if `leave()` hangs or throws, their
+      // tracks would otherwise keep playing out of the speakers.
+      for (const remote of this.rtcClient.remoteUsers ?? []) {
+        try {
+          remote.audioTrack?.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
       try {
         await this.rtcClient.leave();
       } catch (err) {
@@ -613,15 +630,25 @@ export function createRoomSession(): ClubhouseRoomSession {
  * it (`useClubhouseVoice`). Unmount still does not: a tab switch or a desktop
  * switch keeps the call, which is the whole point of `pane-lifetime`.
  */
-let appSession: ClubhouseRoomSession | null = null;
+// Held on `globalThis`, not in a module variable: a Vite HMR re-evaluation of this file
+// used to reset the variable to null while the old session's Agora client kept
+// playing -- a room nothing could reach or leave.
+type SessionHolder = { __horribleClubhouseSession__?: ClubhouseRoomSession | null };
+const holder = globalThis as SessionHolder;
+let appSession: ClubhouseRoomSession | null = holder.__horribleClubhouseSession__ ?? null;
 
 export function clubhouseSession(): ClubhouseRoomSession {
   if (!appSession) {
     appSession = new ClubhouseRoomSession();
-    setClubhouseLeaver(leaveClubhouseRoom);
+    holder.__horribleClubhouseSession__ = appSession;
   }
+  // Every call: the presence module may have been re-evaluated and lost the leaver.
+  setClubhouseLeaver(leaveClubhouseRoom);
   return appSession;
 }
+
+// After an HMR reload, re-adopt a live session so the shell's Leave button works.
+if (appSession) setClubhouseLeaver(leaveClubhouseRoom);
 
 /**
  * Leave the app's room, through the same queue as a join so a Leave during a
@@ -657,6 +684,7 @@ function publishPresence(state: RoomState): void {
 /** Test-only: forget the app session without tearing it down. */
 export function resetClubhouseSessionForTests(): void {
   appSession = null;
+  holder.__horribleClubhouseSession__ = null;
   setClubhouseLeaver(null);
 }
 

@@ -371,7 +371,7 @@ def _auth_flow_headers(device_id: str | None = None) -> dict[str, str]:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # The 26.11.12 client's own values for authenticated/room calls. ``CH-AppBuild``
+    # The 26.11.19 client's own values for authenticated/room calls. ``CH-AppBuild``
     # is the numeric build, not the version string: sending "26.07.07" in both was
     # tolerated until 2026-09-10, when Clubhouse began answering "Please upgrade your
     # app". Read both off the new APK when bumping; note that `/start_phone_number_auth`
@@ -383,18 +383,15 @@ def _headers(device_id: str | None = None) -> dict[str, str]:
     # 21 times in one session) while leaving sign-in and chat working — the gate is
     # per feature, so a stale pair reads as a pane with dead buttons.
     #
-    # Bumped again from 26.09.16/1038456 on 2026-11-17, read off
-    # `Clubhouse_26.11.12_APKPure.xapk`: `aapt dump badging` gives
-    # `versionCode='1039311' versionName='26.11.12'`. `aapt` on the 26.08.30 APK
-    # returns exactly `versionCode='1038152' versionName='26.08.30'` — the pair that
-    # had been read out of the interceptor by hand — which is what establishes that
-    # the manifest is the same two values the interceptor sends, rather than an
-    # assumption about it. Dex cross-check: the build literal occurs three times,
-    # as each predecessor's did, one of them in the dex holding `CH-AppBuild`
-    # (R8 repacks between releases: classes ×2 + classes2 ×1 here, classes3 ×2 +
-    # classes4 ×1 in 26.09.16), and `1038456` appears nowhere. The `CH-*` header
-    # name set is unchanged.
-    app_version, app_build = "26.11.12", "1039311"
+    # Bumped from 26.09.16/1038456 to 26.11.12/1039311 on 2026-11-17, and again to
+    # 26.11.19/1039414 on 2026-11-25 after 26.11.12/1039311 began failing `/audience_reply`
+    # ("We're rolling out new room changes! Please upgrade your app...") and self
+    # `/mute_speaker` ("Sorry, they need to update their app before this feature will
+    # work on them!") inside live rooms (`com.clubhouse.app` 26.11.19, versionCode
+    # `1039414`). `aapt` on the 26.08.30 APK returns `versionCode='1038152'
+    # versionName='26.08.30'` — the pair read out of the interceptor by hand — which
+    # establishes that the manifest versionName/versionCode are the two wire values.
+    app_version, app_build = "26.11.19", "1039414"
     return {
         "Accept": "application/json",
         "Accept-Language": "en-US",
@@ -433,8 +430,9 @@ _UPGRADE_GATE = re.compile(
 #: Where the fix lives, said once so every gated button says the same thing.
 _UPGRADE_FIX = (
     "this node's Clubhouse client-version headers are stale — bump CH-AppVersion "
-    "and CH-AppBuild in backend/modules/clubhouse/routes.py (_headers) and in the "
-    "auth helper's Program.cs, reading both off a current APK"
+    "and CH-AppBuild in backend/modules/clubhouse/routes.py (_headers), reading "
+    "both off a current Android APK (keep _auth_flow_headers and Program.cs "
+    "separate on Clubdeck's auth profile)"
 )
 
 
@@ -513,6 +511,28 @@ async def _ch_authed_post(
         raise HTTPException(
             status_code=502, detail=f"Clubhouse unreachable: {exc}"
         ) from exc
+    if path == "/become_speaker" and res.status_code == 400:
+        # In Open Stage rooms (`handraise_queue_setting: 0`) where auto-mod
+        # requires host approval (`user_capabilities.auto_mod.must_request_stage`),
+        # `/become_speaker` routes the caller into the host's stage queue and
+        # answers HTTP 400 `{"success": false, "error_message": "Your request was
+        # sent to the host", "error_code": "channel_routed_to_queue"}`. That is a
+        # queued stage request, not a failure.
+        try:
+            body = res.json()
+        except ValueError:
+            body = None
+        if (
+            isinstance(body, dict)
+            and body.get("error_code") == "channel_routed_to_queue"
+        ):
+            msg = body.get("error_message") or "Your request was sent to the host"
+            logger.info("Clubhouse routed /become_speaker to host queue: %s", msg)
+            return {
+                "success": True,
+                "queued": True,
+                "message": msg,
+            }
     _raise_for_upstream(res, path)
     return res.json()
 
@@ -817,20 +837,31 @@ def _parse_channel_data(ch_raw: dict[str, Any]) -> dict[str, Any] | None:
     if not channel_id:
         return None
 
-    # Map club
+    # Map club / house display fallback
     club_data = None
     if ch_raw.get("social_club") and isinstance(ch_raw["social_club"], dict):
         club_data = {"name": ch_raw["social_club"].get("name")}
     elif ch_raw.get("club") and isinstance(ch_raw["club"], dict):
         club_data = {"name": ch_raw["club"].get("name")}
+    elif (
+        isinstance(ch_raw.get("privacy_settings"), dict)
+        and ch_raw["privacy_settings"].get("type") == "house"
+        and ch_raw["privacy_settings"].get("display_text")
+    ):
+        club_data = {"name": ch_raw["privacy_settings"].get("display_text")}
 
     # Map users
     users_list = []
     for u in ch_raw.get("users", []) or []:
         if isinstance(u, dict):
+            raw_uid = u.get("user_id")
+            try:
+                uid = int(raw_uid) if raw_uid is not None else None
+            except (TypeError, ValueError):
+                uid = None
             users_list.append(
                 {
-                    "user_id": u.get("user_id"),
+                    "user_id": uid,
                     "name": u.get("name"),
                     "username": u.get("username"),
                     "photo_url": u.get("photo_url"),
@@ -847,23 +878,92 @@ def _parse_channel_data(ch_raw: dict[str, Any]) -> dict[str, Any] | None:
         "num_all": ch_raw.get("num_all") or len(users_list),
         "club": club_data,
         "users": users_list,
+        "url": ch_raw.get("url"),
+        "is_trending": bool(
+            ch_raw.get("is_active_trending_topic_channel")
+            or ch_raw.get("is_trending_topic_channel")
+        ),
     }
 
 
+def _extract_feed_channels(
+    raw: dict[str, Any], seen_channels: set[str]
+) -> list[dict[str, Any]]:
+    """Extract unique normalized rooms from one `/get_feed_v3` response."""
+    found: list[dict[str, Any]] = []
+    for item in raw.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if "channel" in item and isinstance(item["channel"], dict):
+            parsed = _parse_channel_data(item["channel"])
+            if parsed and parsed["channel"] not in seen_channels:
+                seen_channels.add(parsed["channel"])
+                found.append(parsed)
+        if "channels" in item and isinstance(item["channels"], list):
+            for sub_ch in item["channels"]:
+                parsed = _parse_channel_data(sub_ch)
+                if parsed and parsed["channel"] not in seen_channels:
+                    seen_channels.add(parsed["channel"])
+                    found.append(parsed)
+        if "items" in item and isinstance(item["items"], list):
+            for sub_item in item["items"]:
+                if (
+                    isinstance(sub_item, dict)
+                    and "channel" in sub_item
+                    and isinstance(sub_item["channel"], dict)
+                ):
+                    parsed = _parse_channel_data(sub_item["channel"])
+                    if parsed and parsed["channel"] not in seen_channels:
+                        seen_channels.add(parsed["channel"])
+                        found.append(parsed)
+    return found
+
+
+def _extract_room_code(query: str) -> str | None:
+    """Extract a Clubhouse room ID from a pasted room URL or bare 8-char code."""
+    q = query.strip()
+    m = re.search(r"clubhouse\.com/room/([A-Za-z0-9]{6,16})(?:[/?:#]|$)", q)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[A-Za-z0-9]{8}", q) and any(
+        c.isupper() or c.isdigit() for c in q
+    ):
+        return q
+    return None
+
+
 @router.get("/channels", response_model=ChannelList)
-async def channels() -> dict[str, Any]:
-    """Live rooms right now (Clubhouse POST /get_feed_v3)."""
+async def channels(
+    cursor: str | None = None,
+    pages: int = 5,
+    topic_key: str | None = None,
+) -> dict[str, Any]:
+    """Live rooms right now (Clubhouse POST /get_feed_v3).
+
+    ``/get_feed_v3`` returns ~12 rooms per page plus ``next_cursor`` and
+    ``available_topics``.  Upstream expects the continuation token under
+    ``next_cursor`` in the POST JSON body — sending ``cursor`` was silently
+    ignored and returned Page 1 six times in a row (capping the list at 12 rooms).
+    """
     auth = _require_auth()
 
     channels_list: list[dict[str, Any]] = []
-    cursor = None
+    current_cursor = (
+        cursor.strip() if isinstance(cursor, str) and cursor.strip() else None
+    )
     seen_channels: set[str] = set()
+    available_topics: list[dict[str, str]] = []
+    bounded_pages = max(1, min(pages, 15))
+    clean_topic = (
+        topic_key.strip() if isinstance(topic_key, str) and topic_key.strip() else None
+    )
 
-    # Fetch up to 6 pages to get comprehensive feed of live rooms
-    for _ in range(6):
+    for _ in range(bounded_pages):
         payload: dict[str, Any] = {}
-        if cursor:
-            payload["cursor"] = cursor
+        if current_cursor:
+            payload["next_cursor"] = current_cursor
+        if clean_topic:
+            payload["topic_key"] = clean_topic
 
         try:
             raw = await _ch_authed_post(
@@ -879,7 +979,7 @@ async def channels() -> dict[str, Any]:
             # "no rooms are live" — a different claim, and a false one, with no
             # error anywhere.  Later pages are only ever extra: failing there
             # truncates a result we already have, so keep what we got.
-            if not channels_list:
+            if not channels_list and not available_topics:
                 if isinstance(exc, HTTPException):
                     raise
                 raise HTTPException(
@@ -887,43 +987,112 @@ async def channels() -> dict[str, Any]:
                 ) from exc
             break
 
-        items = raw.get("items", []) or []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
+        if not available_topics and isinstance(raw.get("available_topics"), list):
+            for t in raw["available_topics"]:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get("key"), str)
+                    and isinstance(t.get("display_name"), str)
+                ):
+                    available_topics.append(
+                        {"key": t["key"], "display_name": t["display_name"]}
+                    )
 
-            # 1. Direct channel item
-            if "channel" in item and isinstance(item["channel"], dict):
-                parsed = _parse_channel_data(item["channel"])
-                if parsed and parsed["channel"] not in seen_channels:
-                    seen_channels.add(parsed["channel"])
-                    channels_list.append(parsed)
+        channels_list.extend(_extract_feed_channels(raw, seen_channels))
 
-            # 2. Carousel / Topic shelf with multiple channels (item['channels'])
-            if "channels" in item and isinstance(item["channels"], list):
-                for sub_ch in item["channels"]:
-                    parsed = _parse_channel_data(sub_ch)
-                    if parsed and parsed["channel"] not in seen_channels:
-                        seen_channels.add(parsed["channel"])
-                        channels_list.append(parsed)
+        next_cursor = raw.get("next_cursor") or raw.get("cursor")
+        if not next_cursor or next_cursor == current_cursor:
+            current_cursor = None
+            break
+        current_cursor = next_cursor
 
-            # 3. Nested items
-            if "items" in item and isinstance(item["items"], list):
-                for sub_item in item["items"]:
-                    if isinstance(sub_item, dict):
-                        if "channel" in sub_item and isinstance(
-                            sub_item["channel"], dict
-                        ):
-                            parsed = _parse_channel_data(sub_item["channel"])
-                            if parsed and parsed["channel"] not in seen_channels:
-                                seen_channels.add(parsed["channel"])
-                                channels_list.append(parsed)
+    return {
+        "channels": channels_list,
+        "next_cursor": current_cursor,
+        "available_topics": available_topics,
+    }
 
-        cursor = raw.get("next_cursor") or raw.get("cursor")
-        if not cursor:
+
+@router.get("/channels/search", response_model=ChannelList)
+async def search_channels(query: str, max_pages: int = 10) -> dict[str, Any]:
+    """Deep-search live Clubhouse rooms across feed pages by topic, house/club,
+    speaker name/@username, or pasted room link / room ID.
+
+    Clubhouse has no `/search_channels` route (404) and `/search` rejects room
+    object types, so deep room discovery scans `/get_feed_v3` pages via
+    `next_cursor` and scores multi-term matches server-side.
+    """
+    auth = _require_auth()
+    q = query.strip()
+    if not q:
+        return {"channels": [], "next_cursor": None, "available_topics": []}
+
+    room_code = _extract_room_code(q)
+    terms = [t for t in q.lower().split() if t]
+    if room_code and q.startswith("http"):
+        terms = [room_code.lower()]
+
+    seen_channels: set[str] = set()
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    current_cursor: str | None = None
+    bounded_pages = max(1, min(max_pages, 20))
+
+    for _ in range(bounded_pages):
+        payload: dict[str, Any] = {}
+        if current_cursor:
+            payload["next_cursor"] = current_cursor
+        try:
+            raw = await _ch_authed_post(
+                "/get_feed_v3",
+                payload,
+                auth["auth_token"],
+                auth["user_id"],
+                auth.get("device_id"),
+            )
+        except Exception as exc:
+            if not seen_channels:
+                if isinstance(exc, HTTPException):
+                    raise
+                raise HTTPException(
+                    status_code=502, detail=f"Clubhouse feed unavailable: {exc}"
+                ) from exc
             break
 
-    return {"channels": channels_list}
+        for ch in _extract_feed_channels(raw, seen_channels):
+            cid = (ch.get("channel") or "").lower()
+            topic = (ch.get("topic") or "").lower()
+            club_name = ((ch.get("club") or {}).get("name") or "").lower()
+            speaker_names = " ".join(
+                f"{u.get('name') or ''} @{u.get('username') or ''}".lower()
+                for u in (ch.get("users") or [])
+            )
+            haystack = f"{cid} {topic} {club_name} {speaker_names}"
+            if room_code and cid == room_code.lower():
+                scored.append((100, ch.get("num_all") or 0, ch))
+                continue
+            if all(term in haystack for term in terms):
+                score = 0
+                for term in terms:
+                    if term in topic:
+                        score += 10
+                    if term in club_name:
+                        score += 6
+                    if term in speaker_names:
+                        score += 4
+                scored.append((score, ch.get("num_all") or 0, ch))
+
+        next_cursor = raw.get("next_cursor") or raw.get("cursor")
+        if not next_cursor or next_cursor == current_cursor:
+            current_cursor = None
+            break
+        current_cursor = next_cursor
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return {
+        "channels": [item[2] for item in scored],
+        "next_cursor": current_cursor,
+        "available_topics": [],
+    }
 
 
 @router.get("/following", response_model=FollowingList)
@@ -1061,25 +1230,120 @@ async def get_channel_details(channel: str) -> dict[str, Any]:
         "num_all": res.get("num_all"),
         "club": club_data,
         "users": users_list,
+        "handraise_queue_setting": res.get("handraise_queue_setting"),
+        "is_handraise_enabled": res.get("is_handraise_enabled"),
     }
 
 
 @router.get("/users/search")
-async def search_users(query: str) -> dict[str, Any]:
-    """Search Clubhouse users (Clubhouse POST /search_users)."""
+async def search_users(
+    query: str,
+    followers_only: bool = False,
+    following_only: bool = False,
+    cofollows_only: bool = False,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Search Clubhouse users (Clubhouse POST /search_users).
+
+    Normalizes ``user_id`` to ``int`` (upstream ``/search_users`` returns string
+    user IDs unlike every other Clubhouse route), supports follower/following/mutual
+    scoping and pagination, and when a query starts with ``@handle`` on page 1,
+    pins the exact ``/get_profile`` handle match at the top.
+    """
     auth = _require_auth()
-    return await _ch_authed_post(
+    raw_query = query.strip()
+    if not raw_query:
+        return {"users": [], "count": 0, "has_next": False}
+
+    is_explicit_handle = raw_query.startswith("@") and " " not in raw_query
+    clean_query = raw_query.lstrip("@") if is_explicit_handle else raw_query
+    if not clean_query:
+        return {"users": [], "count": 0, "has_next": False}
+
+    payload: dict[str, Any] = {
+        "query": clean_query,
+        "followers_only": followers_only,
+        "following_only": following_only,
+        "cofollows_only": cofollows_only,
+    }
+    if page > 1:
+        payload["page"] = page
+        payload["page_size"] = max(1, min(page_size, 100))
+
+    raw = await _ch_authed_post(
         "/search_users",
-        {
-            "query": query,
-            "followers_only": False,
-            "following_only": False,
-            "cofollows_only": False,
-        },
+        payload,
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
     )
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+
+    if (
+        is_explicit_handle
+        and page == 1
+        and not followers_only
+        and not following_only
+        and not cofollows_only
+    ):
+        try:
+            prof_res = await _ch_authed_post(
+                "/get_profile",
+                {"username": clean_query},
+                auth["auth_token"],
+                auth["user_id"],
+                auth.get("device_id"),
+            )
+            prof = prof_res.get("user_profile")
+            if isinstance(prof, dict) and prof.get("user_id") is not None:
+                uid = int(prof["user_id"])
+                seen_ids.add(uid)
+                notif = prof.get("notification_type")
+                normalized.append(
+                    {
+                        "user_id": uid,
+                        "name": prof.get("name"),
+                        "username": prof.get("username"),
+                        "photo_url": prof.get("photo_url"),
+                        "bio": prof.get("bio"),
+                        "num_followers": prof.get("num_followers"),
+                        "follows_me": prof.get("follows_me"),
+                        "is_following": bool(notif and int(notif) > 0)
+                        if notif is not None
+                        else prof.get("is_following"),
+                    }
+                )
+        except Exception:
+            pass
+
+    for u in raw.get("users") or []:
+        if not isinstance(u, dict) or u.get("user_id") is None:
+            continue
+        try:
+            uid = int(u["user_id"])
+        except (TypeError, ValueError):
+            continue
+        if uid in seen_ids:
+            continue
+        seen_ids.add(uid)
+        entry: dict[str, Any] = {
+            **u,
+            "user_id": uid,
+        }
+        if following_only or cofollows_only:
+            entry["is_following"] = True
+        normalized.append(entry)
+
+    return {
+        "users": normalized,
+        "count": raw.get("count")
+        if isinstance(raw.get("count"), int)
+        else len(normalized),
+        "has_next": bool(raw.get("next")),
+    }
 
 
 @router.get("/users/{user_id}")

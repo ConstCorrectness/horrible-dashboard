@@ -13,6 +13,7 @@ import {
   getClubhouseFollowing,
   getClubhouseStatus,
   getClubhouseUserProfile,
+  searchClubhouseChannels,
   searchClubhouseUsers,
   sendChannelMessage,
 } from './api';
@@ -34,9 +35,28 @@ export const clubhouseAgentTools: AgentToolDecl[] = [
       'List all currently active live Clubhouse audio rooms with topics, channels, active speakers, and member counts.',
     sideEffect: false,
     handler: async () => {
-      const res = await getClubhouseChannels();
+      const res = await getClubhouseChannels({ pages: 8 });
       const rooms = res.channels || [];
-      return { count: rooms.length, rooms };
+      return { count: rooms.length, hasMore: Boolean(res.next_cursor), rooms };
+    },
+  },
+  {
+    name: 'clubhouse.searchRooms',
+    description:
+      'Deep-search live Clubhouse audio rooms across the full hallway feed by topic, club/house, speaker name/@username, or room URL/ID.',
+    params: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Topic, speaker, club, or room link/ID to search' },
+      },
+      required: ['query'],
+    },
+    sideEffect: false,
+    handler: async (args: Record<string, unknown>) => {
+      const query = String(args.query || '').trim();
+      if (!query) return { error: 'Search query cannot be empty' };
+      const res = await searchClubhouseChannels(query, 12);
+      return { count: res.channels.length, rooms: res.channels };
     },
   },
   {

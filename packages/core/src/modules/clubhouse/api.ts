@@ -83,6 +83,11 @@ export interface ChannelUser {
   is_moderator: boolean | null;
 }
 
+export interface FeedTopic {
+  key: string;
+  display_name: string;
+}
+
 export interface Channel {
   channel: string | null;
   topic: string | null;
@@ -90,6 +95,16 @@ export interface Channel {
   num_all: number | null;
   club: { name: string | null } | null;
   users: ChannelUser[];
+  handraise_queue_setting?: number | null;
+  is_handraise_enabled?: boolean | null;
+  url?: string | null;
+  is_trending?: boolean | null;
+}
+
+export interface ChannelListResponse {
+  channels: Channel[];
+  next_cursor?: string | null;
+  available_topics?: FeedTopic[];
 }
 
 export interface FollowUser {
@@ -99,8 +114,28 @@ export interface FollowUser {
   photo_url: string | null;
 }
 
-export function getClubhouseChannels(): Promise<{ channels: Channel[] }> {
-  return apiGet<{ channels: Channel[] }>('/clubhouse/channels');
+export function getClubhouseChannels(options?: {
+  cursor?: string | null;
+  pages?: number;
+  topicKey?: string | null;
+}): Promise<ChannelListResponse> {
+  const params = new URLSearchParams();
+  if (options?.cursor) params.set('cursor', options.cursor);
+  if (options?.pages != null) params.set('pages', String(options.pages));
+  if (options?.topicKey) params.set('topic_key', options.topicKey);
+  const qs = params.toString();
+  return apiGet<ChannelListResponse>(`/clubhouse/channels${qs ? `?${qs}` : ''}`);
+}
+
+export function searchClubhouseChannels(
+  query: string,
+  maxPages: number = 10,
+): Promise<ChannelListResponse> {
+  const params = new URLSearchParams({
+    query,
+    max_pages: String(maxPages),
+  });
+  return apiGet<ChannelListResponse>(`/clubhouse/channels/search?${params.toString()}`);
 }
 
 export function getClubhouseFollowing(): Promise<{ users: FollowUser[] }> {
@@ -133,11 +168,17 @@ export interface JoinChannelResult {
    * Per-user verdicts for this room. `can_post_to_chat` is the one that answers
    * "may I write here" — a room can have chat on and still refuse this account.
    */
-  user_capabilities: { can_post_to_chat?: boolean | null } | null;
+  user_capabilities: {
+    can_post_to_chat?: boolean | null;
+    can_speak?: boolean | null;
+    auto_mod?: { must_request_stage?: boolean | null } | null;
+  } | null;
   /** The room's own menus, served with their wire values and labels — render
    *  these rather than a hardcoded list that drifts from what the room offers. */
   handraise_queue_setting: number | null;
   handraise_queue_options: { value: number; label: string; sub_label?: string }[] | null;
+  is_handraise_enabled?: boolean | null;
+  is_handraise_available?: boolean | null;
   emoji_reaction_options: string[] | null;
   topic?: string | null;
   num_speakers?: number | null;
@@ -185,6 +226,8 @@ export function setClubhouseHand(
 
 export interface BecomeSpeakerResult {
   success: boolean;
+  queued?: boolean | null;
+  message?: string | null;
   token?: string | null;
   rtm_token?: string | null;
   pubnub_token?: string | null;
@@ -399,6 +442,16 @@ export interface SearchUserResult {
   photo_url: string | null;
   bio: string | null;
   is_following?: boolean;
+  follows_me?: boolean | null;
+  num_followers?: number | null;
+}
+
+export type UserSearchScope = 'all' | 'following' | 'followers' | 'mutuals';
+
+export interface SearchUsersResponse {
+  users: SearchUserResult[];
+  count?: number;
+  has_next?: boolean;
 }
 
 /** Who can see a new room — Clubhouse's own `privacy_level` choices. There is no
@@ -429,10 +482,21 @@ export function inviteToClubhouseChannel(
   });
 }
 
-export function searchClubhouseUsers(query: string): Promise<{ users: SearchUserResult[] }> {
-  return apiGet<{ users: SearchUserResult[] }>(
-    `/clubhouse/users/search?query=${encodeURIComponent(query)}`,
-  );
+export function searchClubhouseUsers(
+  query: string,
+  options?: {
+    scope?: UserSearchScope;
+    page?: number;
+    pageSize?: number;
+  },
+): Promise<SearchUsersResponse> {
+  const params = new URLSearchParams({ query });
+  if (options?.scope === 'following') params.set('following_only', 'true');
+  else if (options?.scope === 'followers') params.set('followers_only', 'true');
+  else if (options?.scope === 'mutuals') params.set('cofollows_only', 'true');
+  if (options?.page && options.page > 1) params.set('page', String(options.page));
+  if (options?.pageSize) params.set('page_size', String(options.pageSize));
+  return apiGet<SearchUsersResponse>(`/clubhouse/users/search?${params.toString()}`);
 }
 
 export function sendChannelMessage(

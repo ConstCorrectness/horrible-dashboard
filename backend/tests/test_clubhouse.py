@@ -1495,3 +1495,162 @@ def test_join_channel_returns_normalized_roster_and_accept_speaker_returns_token
     assert accept_res.status_code == 200
     assert accept_res.json()["token"] == "agora-speaker-tkn"
     assert accept_res.json()["pubnub_token"] == "pn-speaker-tkn"
+
+
+def test_accept_speaker_channel_routed_to_queue_returns_queued_success(
+    client, tmp_path, monkeypatch
+) -> None:
+    """In Open Stage rooms with auto-mod (`must_request_stage: true`), Clubhouse
+    answers `/become_speaker` with HTTP 400 + `error_code: channel_routed_to_queue`
+    when routing the request to the host. That must return a clean `queued: True`
+    200 response rather than raising an error."""
+    _connect(tmp_path)
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            assert url.endswith("/become_speaker")
+            assert json == {"channel": "open-stage-room"}
+            assert headers["CH-AppVersion"] == "26.11.19"
+            assert headers["CH-AppBuild"] == "1039414"
+            return httpx.Response(
+                400,
+                json={
+                    "success": False,
+                    "error_message": "Your request was sent to the host",
+                    "error_code": "channel_routed_to_queue",
+                },
+            )
+
+    monkeypatch.setattr(routes, "instrumented_client", lambda **_kw: FakeClient())
+    res = client.post("/api/clubhouse/channels/open-stage-room/accept_speaker")
+    assert res.status_code == 200
+    assert res.json() == {
+        "success": True,
+        "queued": True,
+        "message": "Your request was sent to the host",
+    }
+
+
+def test_channels_paginates_with_next_cursor_and_topics(
+    client, tmp_path, monkeypatch
+) -> None:
+    """`/get_feed_v3` expects `next_cursor` (not `cursor`) in the request body;
+    sending `cursor` repeated page 1 six times and capped the feed at 12 rooms."""
+    _connect(tmp_path)
+    payloads: list[dict] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert path == "/get_feed_v3"
+        payloads.append(dict(payload))
+        if not payload.get("next_cursor"):
+            return {
+                "items": [{"channel": {"channel": "r1", "topic": "Page 1 Room"}}],
+                "available_topics": [
+                    {"key": "science_technology", "display_name": "tech"}
+                ],
+                "next_cursor": "cur-2",
+            }
+        assert payload["next_cursor"] == "cur-2"
+        return {
+            "items": [{"channel": {"channel": "r2", "topic": "Page 2 Room"}}],
+            "next_cursor": "cur-3",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    body = client.get(
+        "/api/clubhouse/channels?pages=2&topic_key=science_technology"
+    ).json()
+    assert [c["channel"] for c in body["channels"]] == ["r1", "r2"]
+    assert body["next_cursor"] == "cur-3"
+    assert body["available_topics"] == [
+        {"key": "science_technology", "display_name": "tech"}
+    ]
+    assert payloads == [
+        {"topic_key": "science_technology"},
+        {"next_cursor": "cur-2", "topic_key": "science_technology"},
+    ]
+
+
+def test_search_channels_scans_pages_and_ranks_matches(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert path == "/get_feed_v3"
+        if not payload.get("next_cursor"):
+            return {
+                "items": [
+                    {"channel": {"channel": "aaa11111", "topic": "Cooking pasta"}}
+                ],
+                "next_cursor": "p2",
+            }
+        return {
+            "items": [
+                {
+                    "channel": {
+                        "channel": "mJWB9Dro",
+                        "topic": "Let's Talk APIs & LLMs",
+                        "num_all": 42,
+                        "users": [
+                            {"user_id": "7", "name": "Ada Lovelace", "username": "ada"}
+                        ],
+                    }
+                }
+            ],
+            "next_cursor": None,
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    body = client.get(
+        "/api/clubhouse/channels/search?query=llm%20ada&max_pages=2"
+    ).json()
+    assert [c["channel"] for c in body["channels"]] == ["mJWB9Dro"]
+    assert body["channels"][0]["users"][0]["user_id"] == 7
+
+
+def test_search_users_normalizes_string_ids_and_pins_exact_handle(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        if path == "/get_profile":
+            assert payload == {"username": "horriblecoder"}
+            return {
+                "user_profile": {
+                    "user_id": 1470591015,
+                    "name": "Horrible Coder",
+                    "username": "horriblecoder",
+                    "notification_type": 2,
+                    "follows_me": True,
+                    "num_followers": 99,
+                }
+            }
+        assert path == "/search_users"
+        assert payload["query"] == "horriblecoder"
+        return {
+            "users": [
+                {
+                    "user_id": "1470591015",
+                    "name": "Horrible Coder",
+                    "username": "horriblecoder",
+                },
+                {"user_id": "888", "name": "Other User", "username": "other"},
+            ],
+            "count": 2,
+            "next": None,
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    body = client.get("/api/clubhouse/users/search?query=%40horriblecoder").json()
+    assert [u["user_id"] for u in body["users"]] == [1470591015, 888]
+    assert body["users"][0]["is_following"] is True
+    assert body["users"][0]["follows_me"] is True
+    assert body["has_next"] is False

@@ -5,6 +5,7 @@ import { toastsStore } from '../../toasts';
 import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
 import {
   getClubhouseChannels,
+  searchClubhouseChannels,
   getClubhouseStatus,
   getClubhouseChannelDetails,
   getClubhouseUserProfile,
@@ -28,8 +29,10 @@ import {
   getClubhouseFollowing,
   type Channel,
   type ChannelUser,
+  type FeedTopic,
   type ClubhouseUserProfile,
   type SearchUserResult,
+  type UserSearchScope,
   type FollowUser,
   type TtsVoiceOption,
   searchClubhouseGiphy,
@@ -129,6 +132,15 @@ function writeStored(key: string, value: string): void {
 export function RoomsPanel() {
   const [state, setState] = useState<'loading' | 'disconnected' | 'ready' | 'error'>('loading');
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [availableTopics, setAvailableTopics] = useState<FeedTopic[]>([]);
+  const [selectedTopicKey, setSelectedTopicKey] = useState<string | null>(null);
+  const [roomSort, setRoomSort] = useState<'recommended' | 'listeners' | 'speakers'>('recommended');
+  const [loadingMoreRooms, setLoadingMoreRooms] = useState(false);
+  const [loadingAllRooms, setLoadingAllRooms] = useState(false);
+  const stopLoadAllRef = useRef(false);
+  const [deepRoomResults, setDeepRoomResults] = useState<Channel[] | null>(null);
+  const [searchingDeepRooms, setSearchingDeepRooms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   // Seeded from the session and written through to it, so a remount opens on the
@@ -314,8 +326,17 @@ export function RoomsPanel() {
 
   const [activeTab, setActiveTab] = useState<'rooms' | 'people'>('rooms');
   const [peopleSearchQuery, setPeopleSearchQuery] = useState('');
+  const [peopleSearchScope, setPeopleSearchScope] = useState<UserSearchScope>('all');
   const [peopleSearchResults, setPeopleSearchResults] = useState<SearchUserResult[]>([]);
+  const [peoplePage, setPeoplePage] = useState(1);
+  const [peopleHasNext, setPeopleHasNext] = useState(false);
+  const [peopleTotalCount, setPeopleTotalCount] = useState<number | null>(null);
   const [loadingPeople, setLoadingPeople] = useState(false);
+  const [loadingMorePeople, setLoadingMorePeople] = useState(false);
+  const [followingIdSet, setFollowingIdSet] = useState<Set<number>>(new Set());
+  const [inviteSearchQuery, setInviteSearchQuery] = useState('');
+  const [inviteSearchResults, setInviteSearchResults] = useState<SearchUserResult[] | null>(null);
+  const [searchingInviteUsers, setSearchingInviteUsers] = useState(false);
 
   // Voice Agent Settings sidebar visibility (right-hand column) and resizable splitter
   const [showAgentSidebar, setShowAgentSidebar] = useState(
@@ -458,6 +479,11 @@ export function RoomsPanel() {
         selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
       if (isCurrentlyFollowing) {
         await unfollowClubhouseUser(selectedUser.user_id);
+        setFollowingIdSet((prev) => {
+          const next = new Set(prev);
+          next.delete(selectedUser.user_id);
+          return next;
+        });
         setSelectedUser((prev) =>
           prev
             ? {
@@ -469,6 +495,7 @@ export function RoomsPanel() {
         );
       } else {
         await followClubhouseUser(selectedUser.user_id);
+        setFollowingIdSet((prev) => new Set(prev).add(selectedUser.user_id));
         setSelectedUser((prev) =>
           prev
             ? {
@@ -486,26 +513,109 @@ export function RoomsPanel() {
     }
   };
 
-  const handlePeopleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!peopleSearchQuery.trim()) return;
-    setLoadingPeople(true);
+  const runPeopleSearch = async (
+    queryText: string,
+    scope: UserSearchScope,
+    pageNum: number = 1,
+    append: boolean = false,
+  ) => {
+    const trimmed = queryText.trim();
+    if (!trimmed) {
+      if (!append) {
+        setPeopleSearchResults([]);
+        setPeopleHasNext(false);
+        setPeopleTotalCount(null);
+      }
+      return;
+    }
+    if (append) setLoadingMorePeople(true);
+    else setLoadingPeople(true);
     try {
-      const res = await searchClubhouseUsers(peopleSearchQuery.trim());
-      setPeopleSearchResults(res.users ?? []);
+      const res = await searchClubhouseUsers(trimmed, { scope, page: pageNum, pageSize: 50 });
+      const incoming = res.users ?? [];
+      setPeopleSearchResults((prev) => {
+        if (!append) return incoming;
+        const seen = new Set(prev.map((u) => u.user_id));
+        return [...prev, ...incoming.filter((u) => !seen.has(u.user_id))];
+      });
+      setPeoplePage(pageNum);
+      setPeopleHasNext(Boolean(res.has_next));
+      setPeopleTotalCount(typeof res.count === 'number' ? res.count : null);
     } catch (err) {
       console.error('Failed to search users:', err);
     } finally {
-      setLoadingPeople(false);
+      if (append) setLoadingMorePeople(false);
+      else setLoadingPeople(false);
     }
   };
 
+  const handlePeopleSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    await runPeopleSearch(peopleSearchQuery, peopleSearchScope, 1, false);
+  };
+
+  // Preload followed user IDs so search results accurately show Follow vs Following.
+  useEffect(() => {
+    if (state !== 'ready') return;
+    void getClubhouseFollowing()
+      .then((res) => {
+        const ids = new Set<number>();
+        for (const u of res.users ?? []) {
+          if (typeof u.user_id === 'number') ids.add(u.user_id);
+        }
+        setFollowingIdSet(ids);
+      })
+      .catch(() => {});
+  }, [state]);
+
+  // Debounced live user search when typing or switching scope in Find People.
+  useEffect(() => {
+    if (activeTab !== 'people') return;
+    const trimmed = peopleSearchQuery.trim();
+    if (!trimmed) {
+      setPeopleSearchResults([]);
+      setPeopleHasNext(false);
+      setPeopleTotalCount(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      void runPeopleSearch(trimmed, peopleSearchScope, 1, false);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [peopleSearchQuery, peopleSearchScope, activeTab]);
+
+  // Debounced global user search inside the Invite modal when query doesn't just filter local friends.
+  useEffect(() => {
+    if (!showInviteModal) return;
+    const q = inviteSearchQuery.trim();
+    if (q.length < 2) {
+      setInviteSearchResults(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      setSearchingInviteUsers(true);
+      void searchClubhouseUsers(q, { pageSize: 30 })
+        .then((res) => setInviteSearchResults(res.users ?? []))
+        .catch(() => setInviteSearchResults([]))
+        .finally(() => setSearchingInviteUsers(false));
+    }, 320);
+    return () => clearTimeout(handle);
+  }, [inviteSearchQuery, showInviteModal]);
+
   const handleOpenInvite = async () => {
     setShowInviteModal(true);
+    setInviteSearchQuery('');
+    setInviteSearchResults(null);
     setLoadingFollowing(true);
     try {
       const res = await getClubhouseFollowing();
-      setFollowingUsers(res.users ?? []);
+      const users = res.users ?? [];
+      setFollowingUsers(users);
+      const ids = new Set<number>();
+      for (const u of users) {
+        if (typeof u.user_id === 'number') ids.add(u.user_id);
+      }
+      setFollowingIdSet(ids);
     } catch (err) {
       console.error('Failed to fetch following users:', err);
     } finally {
@@ -912,6 +1022,8 @@ export function RoomsPanel() {
     chatDisabledReason,
     liveCaption,
     reactionOptions,
+    handraiseQueueSetting,
+    isHandraiseEnabled,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -1020,9 +1132,28 @@ export function RoomsPanel() {
     },
   });
 
-  const load = async () => {
+  const mergeUniqueChannels = (existing: Channel[], incoming: Channel[]): Channel[] => {
+    const byId = new Map<string, Channel>();
+    const merged: Channel[] = [];
+    for (const ch of existing) {
+      if (!ch.channel) continue;
+      byId.set(ch.channel, ch);
+      merged.push(ch);
+    }
+    for (const ch of incoming) {
+      if (!ch.channel || byId.has(ch.channel)) continue;
+      byId.set(ch.channel, ch);
+      merged.push(ch);
+    }
+    return merged;
+  };
+
+  const load = async (topicOverride?: string | null) => {
+    stopLoadAllRef.current = true;
+    setLoadingAllRooms(false);
     setState('loading');
     setError(null);
+    const activeTopic = topicOverride === undefined ? selectedTopicKey : topicOverride;
     try {
       const status = await getClubhouseStatus();
       if (!status.connected) {
@@ -1032,14 +1163,110 @@ export function RoomsPanel() {
       setMyUserId(status.user_id);
       // The agent introduces itself by this name and answers to it.
       setMyProfileName(status.name || '');
-      const res = await getClubhouseChannels();
+      const res = await getClubhouseChannels({ pages: 5, topicKey: activeTopic });
       setChannels(res.channels ?? []);
+      setNextCursor(res.next_cursor ?? null);
+      if (res.available_topics && res.available_topics.length > 0) {
+        setAvailableTopics(res.available_topics);
+      }
       setState('ready');
     } catch (e) {
       setError(String(e));
       setState('error');
     }
   };
+
+  const handleSelectTopic = (topicKey: string | null) => {
+    setSelectedTopicKey(topicKey);
+    void load(topicKey);
+  };
+
+  const handleLoadMoreRooms = async () => {
+    if (!nextCursor || loadingMoreRooms || loadingAllRooms) return;
+    setLoadingMoreRooms(true);
+    try {
+      const res = await getClubhouseChannels({
+        cursor: nextCursor,
+        pages: 5,
+        topicKey: selectedTopicKey,
+      });
+      setChannels((prev) => mergeUniqueChannels(prev, res.channels ?? []));
+      setNextCursor(res.next_cursor ?? null);
+    } catch (err) {
+      toastsStore.add(
+        'warning',
+        'Load More Rooms',
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setLoadingMoreRooms(false);
+    }
+  };
+
+  const handleLoadAllRooms = async () => {
+    if (!nextCursor || loadingAllRooms) return;
+    stopLoadAllRef.current = false;
+    setLoadingAllRooms(true);
+    let cursor: string | null = nextCursor;
+    let batches = 0;
+    try {
+      while (cursor && !stopLoadAllRef.current && batches < 8) {
+        batches += 1;
+        const res = await getClubhouseChannels({
+          cursor,
+          pages: 4,
+          topicKey: selectedTopicKey,
+        });
+        const incoming = res.channels ?? [];
+        if (incoming.length === 0) {
+          cursor = null;
+          setNextCursor(null);
+          break;
+        }
+        setChannels((prev) => mergeUniqueChannels(prev, incoming));
+        cursor = res.next_cursor ?? null;
+        setNextCursor(cursor);
+      }
+    } catch (err) {
+      toastsStore.add('warning', 'Room Feed', err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingAllRooms(false);
+    }
+  };
+
+  const runDeepRoomSearch = async (q: string) => {
+    const trimmed = q.trim();
+    if (trimmed.length < 2) {
+      setDeepRoomResults(null);
+      return;
+    }
+    setSearchingDeepRooms(true);
+    try {
+      const res = await searchClubhouseChannels(trimmed, 12);
+      const found = res.channels ?? [];
+      setDeepRoomResults(found);
+      if (found.length > 0) {
+        setChannels((prev) => mergeUniqueChannels(prev, found));
+      }
+    } catch (err) {
+      console.warn('Deep room search failed:', err);
+    } finally {
+      setSearchingDeepRooms(false);
+    }
+  };
+
+  useEffect(() => {
+    if (state !== 'ready' || activeTab !== 'rooms') return;
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 2) {
+      setDeepRoomResults(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      void runDeepRoomSearch(trimmed);
+    }, 450);
+    return () => clearTimeout(handle);
+  }, [searchQuery, state, activeTab]);
 
   useEffect(() => {
     void load();
@@ -1749,16 +1976,49 @@ export function RoomsPanel() {
     }
   }, [comments, myProfileName]);
 
-  // Filter channels based on search query
-  const filteredChannels = channels.filter((c) => {
-    const query = searchQuery.toLowerCase().trim();
-    if (!query) return true;
-    return (
-      (c.topic && c.topic.toLowerCase().includes(query)) ||
-      (c.club?.name && c.club.name.toLowerCase().includes(query)) ||
-      c.users.some((u) => u.name && u.name.toLowerCase().includes(query))
-    );
-  });
+  // Extract direct room code if user pasted a Clubhouse URL or 8-char room ID.
+  const directRoomCode = (() => {
+    const q = searchQuery.trim();
+    if (!q) return null;
+    const urlMatch = /clubhouse\.com\/room\/([A-Za-z0-9]{6,16})(?:[/?:#]|$)/.exec(q);
+    if (urlMatch) return urlMatch[1];
+    if (/^[A-Za-z0-9]{8}$/.test(q) && /[A-Z0-9]/.test(q)) return q;
+    return null;
+  })();
+
+  // Filter and sort channels based on multi-term search query and sort mode
+  const filteredChannels = (() => {
+    const rawQuery = searchQuery.toLowerCase().trim();
+    const terms = rawQuery ? rawQuery.split(/\s+/).filter(Boolean) : [];
+    const sourceList =
+      rawQuery && deepRoomResults && deepRoomResults.length > 0
+        ? mergeUniqueChannels(deepRoomResults, channels)
+        : channels;
+
+    const matched = sourceList.filter((c) => {
+      if (terms.length === 0) return true;
+      if (directRoomCode && c.channel?.toLowerCase() === directRoomCode.toLowerCase()) return true;
+      const haystack = [
+        c.channel ?? '',
+        c.topic ?? '',
+        c.club?.name ?? '',
+        ...c.users.map((u) => `${u.name ?? ''} @${u.username ?? ''}`),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return terms.every((t) => haystack.includes(t));
+    });
+
+    if (roomSort === 'listeners') {
+      return [...matched].sort((a, b) => (b.num_all ?? 0) - (a.num_all ?? 0));
+    }
+    if (roomSort === 'speakers') {
+      return [...matched].sort((a, b) => (b.num_speakers ?? 0) - (a.num_speakers ?? 0));
+    }
+    return matched;
+  })();
+
+  const totalLoadedListeners = channels.reduce((acc, c) => acc + (c.num_all ?? 0), 0);
 
   // Let the agent read the live rooms currently listed.
   useAgentContext(() => ({
@@ -3971,22 +4231,82 @@ export function RoomsPanel() {
               >
                 {isMuted ? '🎙️ Unmute Mic' : '🎙️ Mic Active (Mute)'}
               </button>
+            ) : handraiseQueueSetting === 0 ||
+              (isHandraiseEnabled === false && handraiseQueueSetting !== 1) ? (
+              <>
+                {handRaised && (
+                  <button
+                    className="ch-btn-action hand-raised"
+                    onClick={() => void raiseHand(false)}
+                    disabled={voiceLoading}
+                  >
+                    🖐️ Stage Requested
+                  </button>
+                )}
+                <button
+                  className="ch-btn-action join-stage"
+                  onClick={() => {
+                    void acceptSpeakerInvite().then((outcome) => {
+                      if (outcome === 'queued') {
+                        toastsStore.add(
+                          'info',
+                          'Stage Request Sent',
+                          'Your request to speak was sent to the host.',
+                        );
+                      }
+                    });
+                  }}
+                  disabled={voiceLoading}
+                >
+                  {speakerInvite ? '🎤 Accept Stage' : '📢 Join Stage'}
+                </button>
+              </>
             ) : (
               <>
                 <button
                   className={`ch-btn-action ${handRaised ? 'hand-raised' : ''}`}
-                  onClick={() => void raiseHand(!handRaised)}
-                  disabled={voiceLoading}
+                  onClick={() => {
+                    void raiseHand(!handRaised).then((outcome) => {
+                      if (outcome === 'queued') {
+                        toastsStore.add(
+                          'info',
+                          'Stage Request Sent',
+                          'Your request to speak was sent to the host.',
+                        );
+                      }
+                    });
+                  }}
+                  disabled={voiceLoading || (handraiseQueueSetting === 1 && !handRaised)}
+                  title={
+                    handraiseQueueSetting === 1
+                      ? 'Stage requests are invite-only in this room'
+                      : undefined
+                  }
                 >
-                  🖐️ {handRaised ? 'Lower Hand' : 'Raise Hand'}
+                  🖐️{' '}
+                  {handRaised
+                    ? 'Lower Hand'
+                    : handraiseQueueSetting === 1
+                      ? 'Invite Only'
+                      : 'Raise Hand'}
                 </button>
-                {moderators.length > 0 && (
+                {(moderators.length > 0 || speakerInvite) && (
                   <button
                     className="ch-btn-action join-stage"
-                    onClick={() => void acceptSpeakerInvite()}
+                    onClick={() => {
+                      void acceptSpeakerInvite().then((outcome) => {
+                        if (outcome === 'queued') {
+                          toastsStore.add(
+                            'info',
+                            'Stage Request Sent',
+                            'Your request to speak was sent to the host.',
+                          );
+                        }
+                      });
+                    }}
                     disabled={voiceLoading}
                   >
-                    📢 Join Stage
+                    {speakerInvite ? '🎤 Accept Stage' : '📢 Join Stage'}
                   </button>
                 )}
               </>
@@ -4029,45 +4349,87 @@ export function RoomsPanel() {
                 </button>
               </div>
               <div className="ch-modal-body">
-                {loadingFollowing ? (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <input
+                    className="ch-input"
+                    type="text"
+                    placeholder="Filter friends or search anyone on Clubhouse (@handle or name)..."
+                    value={inviteSearchQuery}
+                    onChange={(e) => setInviteSearchQuery(e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                {loadingFollowing || searchingInviteUsers ? (
                   <div className="ch-profile-loading">
                     <div className="ch-spinner" />
-                    <span>Loading friends...</span>
+                    <span>{searchingInviteUsers ? 'Searching Clubhouse...' : 'Loading friends...'}</span>
                   </div>
-                ) : followingUsers.length === 0 ? (
-                  <p className="dashboard-hint" style={{ textAlign: 'center' }}>
-                    You are not following anyone yet.
-                  </p>
-                ) : (
-                  <ul className="ch-invite-list">
-                    {followingUsers.map((u) => {
-                      const initials = nameInitials(u.name ?? '') || '?';
-                      const isInvited = invitedUserIds.has(u.user_id!);
+                ) : (() => {
+                    const q = inviteSearchQuery.trim().toLowerCase();
+                    const filteredFriends = q
+                      ? followingUsers.filter(
+                          (u) =>
+                            (u.name ?? '').toLowerCase().includes(q) ||
+                            (u.username ?? '').toLowerCase().includes(q.replace(/^@/, '')),
+                        )
+                      : followingUsers;
+                    const seenInviteIds = new Set<number>();
+                    const inviteRows: {
+                      user_id: number;
+                      name: string | null;
+                      username: string | null;
+                      photo_url: string | null;
+                    }[] = [];
+                    for (const u of filteredFriends) {
+                      if (u.user_id != null && !seenInviteIds.has(u.user_id)) {
+                        seenInviteIds.add(u.user_id);
+                        inviteRows.push(u as typeof inviteRows[number]);
+                      }
+                    }
+                    for (const u of inviteSearchResults ?? []) {
+                      if (u.user_id != null && !seenInviteIds.has(u.user_id)) {
+                        seenInviteIds.add(u.user_id);
+                        inviteRows.push(u);
+                      }
+                    }
+                    if (inviteRows.length === 0) {
                       return (
-                        <li key={u.user_id} className="ch-invite-item">
-                          {u.photo_url ? (
-                            <img className="ch-invite-avatar" src={u.photo_url} alt="" />
-                          ) : (
-                            <div className="ch-invite-avatar-placeholder">{initials}</div>
-                          )}
-                          <div className="ch-invite-user-info">
-                            <p className="ch-invite-name">
-                              <ClubhouseName name={u.name} />
-                            </p>
-                            <p className="ch-invite-username">@{u.username}</p>
-                          </div>
-                          <button
-                            className={`ch-btn-invite ${isInvited ? 'invited' : ''}`}
-                            onClick={() => !isInvited && handleSendInvite(u.user_id!)}
-                            disabled={isInvited}
-                          >
-                            {isInvited ? 'Invited' : 'Ping'}
-                          </button>
-                        </li>
+                        <p className="dashboard-hint" style={{ textAlign: 'center' }}>
+                          {q ? 'No matching users found.' : 'You are not following anyone yet.'}
+                        </p>
                       );
-                    })}
-                  </ul>
-                )}
+                    }
+                    return (
+                      <ul className="ch-invite-list">
+                        {inviteRows.map((u) => {
+                          const initials = nameInitials(u.name ?? '') || '?';
+                          const isInvited = invitedUserIds.has(u.user_id);
+                          return (
+                            <li key={u.user_id} className="ch-invite-item">
+                              {u.photo_url ? (
+                                <img className="ch-invite-avatar" src={u.photo_url} alt="" />
+                              ) : (
+                                <div className="ch-invite-avatar-placeholder">{initials}</div>
+                              )}
+                              <div className="ch-invite-user-info">
+                                <p className="ch-invite-name">
+                                  <ClubhouseName name={u.name} />
+                                </p>
+                                <p className="ch-invite-username">@{u.username}</p>
+                              </div>
+                              <button
+                                className={`ch-btn-invite ${isInvited ? 'invited' : ''}`}
+                                onClick={() => !isInvited && handleSendInvite(u.user_id)}
+                                disabled={isInvited}
+                              >
+                                {isInvited ? 'Invited' : 'Ping'}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    );
+                  })()}
               </div>
             </div>
           </div>
@@ -4208,7 +4570,13 @@ export function RoomsPanel() {
             📡 Network
           </button>
           {state === 'ready' && activeTab === 'rooms' && (
-            <div className="ch-search-container">
+            <form
+              className="ch-search-container"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void runDeepRoomSearch(searchQuery);
+              }}
+            >
               <span className="ch-search-icon">
                 <svg
                   width="14"
@@ -4227,11 +4595,34 @@ export function RoomsPanel() {
               <input
                 className="ch-search-input"
                 type="text"
-                placeholder="Search topics, clubs, or users..."
+                placeholder="Search rooms, speakers, @handles, or paste room link..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ minWidth: '250px', paddingRight: searchQuery ? '1.8rem' : undefined }}
               />
-            </div>
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="btn-mini"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDeepRoomResults(null);
+                  }}
+                  title="Clear search"
+                  style={{
+                    position: 'absolute',
+                    right: '0.35rem',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    padding: '0 0.25rem',
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </form>
           )}
           <button
             className={`ch-btn-refresh ${state === 'loading' ? 'spinning' : ''}`}
@@ -4258,19 +4649,54 @@ export function RoomsPanel() {
       </header>
 
       {state === 'ready' && (
-        <div className="ch-tabs" style={{ padding: '0 1.25rem' }}>
-          <button
-            className={`ch-tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
-            onClick={() => setActiveTab('rooms')}
-          >
-            Live Rooms
-          </button>
-          <button
-            className={`ch-tab-btn ${activeTab === 'people' ? 'active' : ''}`}
-            onClick={() => setActiveTab('people')}
-          >
-            Find People
-          </button>
+        <div
+          className="ch-tabs"
+          style={{
+            padding: '0 1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <button
+              className={`ch-tab-btn ${activeTab === 'rooms' ? 'active' : ''}`}
+              onClick={() => setActiveTab('rooms')}
+            >
+              Live Rooms ({channels.length}
+              {nextCursor ? '+' : ''})
+            </button>
+            <button
+              className={`ch-tab-btn ${activeTab === 'people' ? 'active' : ''}`}
+              onClick={() => setActiveTab('people')}
+            >
+              Find People
+            </button>
+          </div>
+          {activeTab === 'rooms' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.75rem' }}>
+              <span style={{ color: 'var(--text-dim)' }}>
+                {searchingDeepRooms
+                  ? 'Scanning all live rooms…'
+                  : `${filteredChannels.length} shown · ${totalLoadedListeners.toLocaleString()} listening`}
+              </span>
+              <select
+                className="ch-input"
+                value={roomSort}
+                onChange={(e) =>
+                  setRoomSort(e.target.value as 'recommended' | 'listeners' | 'speakers')
+                }
+                aria-label="Sort rooms"
+                style={{ padding: '0 0.5rem', fontSize: '0.75rem' }}
+              >
+                <option value="recommended">Sort: Recommended</option>
+                <option value="listeners">Sort: Most Listeners</option>
+                <option value="speakers">Sort: Most Speakers</option>
+              </select>
+            </div>
+          )}
         </div>
       )}
 
@@ -4298,9 +4724,134 @@ export function RoomsPanel() {
 
       {state === 'ready' && activeTab === 'rooms' && (
         <>
+          {availableTopics.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 1.25rem 0.5rem 1.25rem',
+                overflowX: 'auto',
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                className="btn-mini"
+                onClick={() => handleSelectTopic(null)}
+                style={{
+                  height: '24px',
+                  padding: '0 0.65rem',
+                  borderRadius: '999px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  border:
+                    selectedTopicKey === null
+                      ? '1px solid rgba(99, 102, 241, 0.55)'
+                      : '1px solid rgba(255, 255, 255, 0.08)',
+                  background:
+                    selectedTopicKey === null
+                      ? 'rgba(99, 102, 241, 0.22)'
+                      : 'rgba(255, 255, 255, 0.04)',
+                  color: selectedTopicKey === null ? '#e0e7ff' : '#94a3b8',
+                  cursor: 'pointer',
+                }}
+              >
+                All Topics
+              </button>
+              {availableTopics.map((t) => {
+                const active = selectedTopicKey === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    className="btn-mini"
+                    onClick={() => handleSelectTopic(active ? null : t.key)}
+                    style={{
+                      height: '24px',
+                      padding: '0 0.65rem',
+                      borderRadius: '999px',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      textTransform: 'capitalize',
+                      whiteSpace: 'nowrap',
+                      border: active
+                        ? '1px solid rgba(99, 102, 241, 0.55)'
+                        : '1px solid rgba(255, 255, 255, 0.08)',
+                      background: active
+                        ? 'rgba(99, 102, 241, 0.22)'
+                        : 'rgba(255, 255, 255, 0.04)',
+                      color: active ? '#e0e7ff' : '#94a3b8',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t.display_name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {directRoomCode && !filteredChannels.some((c) => c.channel === directRoomCode) && (
+            <div
+              style={{
+                margin: '0 1.25rem 0.65rem 1.25rem',
+                padding: '0.6rem 0.85rem',
+                borderRadius: '10px',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+                background: 'rgba(59, 130, 246, 0.08)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+              }}
+            >
+              <div style={{ fontSize: '0.8rem', color: '#e2e8f0' }}>
+                Direct room code detected:{' '}
+                <code style={{ fontFamily: 'var(--font-mono, monospace)', color: '#93c5fd' }}>
+                  {directRoomCode}
+                </code>
+              </div>
+              <button
+                type="button"
+                className="ch-btn-join"
+                onClick={() => {
+                  setActiveRoomInfo({
+                    channel: directRoomCode,
+                    topic: `Room ${directRoomCode}`,
+                    num_speakers: null,
+                    num_all: null,
+                    club: null,
+                    users: [],
+                  });
+                  void joinRoom(directRoomCode);
+                }}
+                disabled={voiceLoading}
+              >
+                Join Room Directly
+              </button>
+            </div>
+          )}
+
           {channels.length === 0 && <p className="dashboard-hint">No rooms are live right now.</p>}
           {channels.length > 0 && filteredChannels.length === 0 && (
-            <p className="dashboard-hint">No rooms match your search query.</p>
+            <div style={{ textAlign: 'center', padding: '1.25rem' }}>
+              <p className="dashboard-hint" style={{ marginBottom: '0.6rem' }}>
+                {searchingDeepRooms
+                  ? 'Searching across all live Clubhouse rooms…'
+                  : 'No loaded rooms match your search query.'}
+              </p>
+              {!searchingDeepRooms && searchQuery.trim().length >= 2 && (
+                <button
+                  type="button"
+                  className="ch-btn-action"
+                  onClick={() => void runDeepRoomSearch(searchQuery)}
+                >
+                  🔍 Deep Search All Live Rooms
+                </button>
+              )}
+            </div>
           )}
           <ul className="ch-room-list" style={{ padding: '0 1.25rem' }}>
             {filteredChannels.map((c) => {
@@ -4430,7 +4981,7 @@ export function RoomsPanel() {
                           setActiveRoomInfo(c);
                           void joinRoom(c.channel!, c.users);
                         }}
-                        disabled={voiceLoading || (joined && activeChannel !== c.channel)}
+                        disabled={voiceLoading}
                       >
                         {voiceLoading && activeChannel === c.channel ? 'Connecting…' : 'Join Room'}
                       </button>
@@ -4440,6 +4991,46 @@ export function RoomsPanel() {
               );
             })}
           </ul>
+          {nextCursor && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.6rem',
+                padding: '0.85rem 1.25rem 1.5rem 1.25rem',
+              }}
+            >
+              <button
+                type="button"
+                className="ch-btn-action"
+                onClick={() => void handleLoadMoreRooms()}
+                disabled={loadingMoreRooms || loadingAllRooms}
+              >
+                {loadingMoreRooms ? 'Loading more rooms…' : 'Load More Rooms (+60)'}
+              </button>
+              {loadingAllRooms ? (
+                <button
+                  type="button"
+                  className="ch-btn-action"
+                  onClick={() => {
+                    stopLoadAllRef.current = true;
+                  }}
+                >
+                  ⏹ Stop Loading ({channels.length} loaded)
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ch-btn-action"
+                  onClick={() => void handleLoadAllRooms()}
+                  disabled={loadingMoreRooms}
+                >
+                  Show All Available Rooms
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -4450,7 +5041,7 @@ export function RoomsPanel() {
             padding: '0 1.25rem 1.5rem 1.25rem',
             display: 'flex',
             flexDirection: 'column',
-            gap: '1rem',
+            gap: '0.75rem',
             flex: 1,
             overflow: 'hidden',
           }}
@@ -4460,10 +5051,21 @@ export function RoomsPanel() {
               className="ch-comment-input"
               style={{ borderRadius: '8px' }}
               type="text"
-              placeholder="Search people by name or username..."
+              placeholder="Search people by name or @username (live search)..."
               value={peopleSearchQuery}
               onChange={(e) => setPeopleSearchQuery(e.target.value)}
             />
+            {peopleSearchQuery && (
+              <button
+                type="button"
+                className="btn-mini"
+                onClick={() => setPeopleSearchQuery('')}
+                title="Clear search"
+                style={{ padding: '0 0.55rem' }}
+              >
+                ✕
+              </button>
+            )}
             <button
               className="ch-btn-send"
               style={{ borderRadius: '8px', width: '38px', height: '38px' }}
@@ -4490,21 +5092,86 @@ export function RoomsPanel() {
             </button>
           </form>
 
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.4rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+              {(
+                [
+                  { id: 'all', label: 'All Clubhouse' },
+                  { id: 'following', label: 'Following' },
+                  { id: 'followers', label: 'Followers' },
+                  { id: 'mutuals', label: 'Mutuals' },
+                ] as const
+              ).map((s) => {
+                const active = peopleSearchScope === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="btn-mini"
+                    onClick={() => setPeopleSearchScope(s.id)}
+                    style={{
+                      height: '24px',
+                      padding: '0 0.65rem',
+                      borderRadius: '999px',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      border: active
+                        ? '1px solid rgba(99, 102, 241, 0.55)'
+                        : '1px solid rgba(255, 255, 255, 0.08)',
+                      background: active
+                        ? 'rgba(99, 102, 241, 0.22)'
+                        : 'rgba(255, 255, 255, 0.04)',
+                      color: active ? '#e0e7ff' : '#94a3b8',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+            </div>
+            {peopleSearchResults.length > 0 && (
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
+                Showing {peopleSearchResults.length}
+                {peopleTotalCount != null && peopleTotalCount > peopleSearchResults.length
+                  ? ` of ${peopleTotalCount.toLocaleString()}`
+                  : ''}
+              </span>
+            )}
+          </div>
+
           {peopleSearchResults.length === 0 ? (
             <p className="dashboard-hint" style={{ textAlign: 'center', marginTop: '2rem' }}>
-              Search for users to see their profile and follow them.
+              {loadingPeople
+                ? 'Searching Clubhouse users…'
+                : peopleSearchQuery.trim()
+                  ? 'No users matched your search.'
+                  : 'Type a name or @username above to find people on Clubhouse.'}
             </p>
           ) : (
             <ul className="ch-people-list">
               {peopleSearchResults.map((u) => {
                 const initials = nameInitials(u.name ?? '') || '?';
-                const isFollowing = u.is_following;
+                const isFollowing = u.is_following ?? followingIdSet.has(u.user_id);
 
                 const handleFollowToggleInline = async (e: React.MouseEvent) => {
                   e.stopPropagation();
                   try {
                     if (isFollowing) {
                       await unfollowClubhouseUser(u.user_id);
+                      setFollowingIdSet((prev) => {
+                        const next = new Set(prev);
+                        next.delete(u.user_id);
+                        return next;
+                      });
                       setPeopleSearchResults((prev) =>
                         prev.map((item) =>
                           item.user_id === u.user_id ? { ...item, is_following: false } : item,
@@ -4512,6 +5179,7 @@ export function RoomsPanel() {
                       );
                     } else {
                       await followClubhouseUser(u.user_id);
+                      setFollowingIdSet((prev) => new Set(prev).add(u.user_id));
                       setPeopleSearchResults((prev) =>
                         prev.map((item) =>
                           item.user_id === u.user_id ? { ...item, is_following: true } : item,
@@ -4535,10 +5203,33 @@ export function RoomsPanel() {
                       <div className="ch-person-avatar-placeholder">{initials}</div>
                     )}
                     <div className="ch-person-info">
-                      <h4 className="ch-person-name">
-                        <ClubhouseName name={u.name} />
-                      </h4>
-                      <p className="ch-person-username">@{u.username}</p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <h4 className="ch-person-name" style={{ margin: 0 }}>
+                          <ClubhouseName name={u.name} />
+                        </h4>
+                        {u.follows_me && (
+                          <span
+                            style={{
+                              fontSize: '0.66rem',
+                              padding: '0 0.45rem',
+                              height: '18px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              borderRadius: '999px',
+                              background: 'rgba(16, 185, 129, 0.14)',
+                              color: '#6ee7b7',
+                            }}
+                          >
+                            Follows you
+                          </span>
+                        )}
+                      </div>
+                      <p className="ch-person-username">
+                        @{u.username}
+                        {typeof u.num_followers === 'number'
+                          ? ` · ${u.num_followers.toLocaleString()} followers`
+                          : ''}
+                      </p>
                       {u.bio && <p className="ch-person-bio">{u.bio}</p>}
                     </div>
                     <button
@@ -4550,6 +5241,20 @@ export function RoomsPanel() {
                   </li>
                 );
               })}
+              {peopleHasNext && (
+                <li style={{ listStyle: 'none', textAlign: 'center', padding: '0.6rem 0' }}>
+                  <button
+                    type="button"
+                    className="ch-btn-action"
+                    onClick={() =>
+                      void runPeopleSearch(peopleSearchQuery, peopleSearchScope, peoplePage + 1, true)
+                    }
+                    disabled={loadingMorePeople}
+                  >
+                    {loadingMorePeople ? 'Loading more…' : 'Load More People'}
+                  </button>
+                </li>
+              )}
             </ul>
           )}
         </div>

@@ -26,7 +26,6 @@ export type { ChatComment, FloatingReaction, LiveUserState, SpeakerInvite };
 import {
   joinClubhouseChannel,
   pingClubhouseChannel,
-  muteClubhouseChannel,
   setClubhouseHand,
   sendClubhouseReaction,
   sendClubhouseGif,
@@ -209,6 +208,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     chatDisabledReason,
     liveCaption,
     reactionOptions,
+    handraiseQueueSetting,
+    isHandraiseEnabled,
   } = state;
 
   const propsRef = useRef(props);
@@ -474,7 +475,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.patch({ activeChannel: channelName });
 
       // The room's own emoji. Not a constant: a room can serve its own set.
-      session.patch({ reactionOptions: chDetails.emoji_reaction_options ?? [] });
+      session.patch({
+        reactionOptions: chDetails.emoji_reaction_options ?? [],
+        handraiseQueueSetting: chDetails.handraise_queue_setting ?? null,
+        isHandraiseEnabled: chDetails.is_handraise_enabled ?? null,
+      });
 
       // Chat is per-room *and* per-account, and Clubhouse's refusal is a bare
       // "cannot send message", so record its verdict now. Only an explicit
@@ -552,7 +557,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       // c. Listen for remote audio updates
       client.on('user-published', async (user, mediaType) => {
         if (mediaType === 'audio' && typeof user.uid === 'number') {
-          updateLiveUser(user.uid, { isSpeaker: true });
+          updateLiveUser(user.uid, { isSpeaker: true, isMuted: false });
           upsertRoomDetailsUser(user.uid, { is_speaker: true });
         }
         await client.subscribe(user, mediaType);
@@ -566,8 +571,22 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         }
       });
 
-      client.on('user-unpublished', (user) => {
-        user.audioTrack?.stop();
+      client.on('user-unpublished', (user, mediaType) => {
+        if (mediaType === 'audio') {
+          user.audioTrack?.stop();
+          if (typeof user.uid === 'number') {
+            updateLiveUser(user.uid, { isMuted: true });
+          }
+        }
+      });
+
+      client.on('user-info-updated', (uid, msg) => {
+        if (typeof uid !== 'number') return;
+        if (msg === 'mute-audio') {
+          updateLiveUser(uid, { isMuted: true });
+        } else if (msg === 'unmute-audio') {
+          updateLiveUser(uid, { isMuted: false });
+        }
       });
 
       const refreshAgoraTokens = async () => {
@@ -951,6 +970,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         session.physicalMicStream = micStream;
         const micSource = audioCtx.createMediaStreamSource(micStream);
+        session.micSource = micSource;
         micSource.connect(humanGain);
         micSource.connect(sttBus); // agent's ears always hear operator
       } catch (err) {
@@ -978,6 +998,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           'Publishing your microphone track',
         );
         session.isTrackPublished = true;
+        await mixedTrack.setMuted(true).catch(() => {});
       }
       session.patch({ isMuted: true });
 
@@ -1191,6 +1212,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                   session.patch({ isMuted: mutedVal });
                   if (myUserId != null) {
                     updateLiveUser(Number(myUserId), { isMuted: mutedVal });
+                  }
+                  if (session.localAudioTrack && session.isTrackPublished && !session.music) {
+                    void session.localAudioTrack.setMuted(mutedVal).catch(() => {});
                   }
                 }
               } else if (targetId != null) {
@@ -1469,9 +1493,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           micStream.getTracks().forEach((t) => t.stop());
           return false;
         }
+        session.micSource?.disconnect();
         session.physicalMicStream?.getTracks().forEach((t) => t.stop());
         session.physicalMicStream = micStream;
         const micSource = audioCtx.createMediaStreamSource(micStream);
+        session.micSource = micSource;
         micSource.connect(session.humanGain);
         if (session.sttBus) {
           micSource.connect(session.sttBus);
@@ -1484,6 +1510,27 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     },
     [session],
   );
+
+  /**
+   * Synchronize the published Agora track's native mute state (`agora_native_mute`).
+   *
+   * Clubhouse has no `/unmute_speaker` HTTP route (404), and `/mute_speaker` is a
+   * one-way moderator remote-mute command: calling `/mute_speaker` with `is_muted: false`
+   * ignores the boolean and echoes `{ action: "mute_speaker" }` back on PubNub ~120ms
+   * later, snapping `isMuted` right back to `true`. Self-mute/unmute in Clubhouse rooms
+   * is signaled natively via Agora's `localAudioTrack.setMuted(boolean)`.
+   */
+  const syncAgoraTrackMute = useCallback(async () => {
+    const track = session.localAudioTrack;
+    if (!track || !session.isTrackPublished) return;
+    const shouldMute =
+      session.state.isMuted && !session.isAgentSpeaking && session.music === null;
+    try {
+      await track.setMuted(shouldMute);
+    } catch (err) {
+      console.warn('[ClubhouseVoice] localAudioTrack.setMuted failed:', err);
+    }
+  }, [session]);
 
   const upgradeToSpeaker = useCallback(
     (
@@ -1618,9 +1665,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         if (session.humanGain) {
           session.humanGain.gain.value = session.state.isMuted ? 0 : 1;
         }
-        if (!wasAlreadySpeaker && !options?.preserveMute) {
-          void muteClubhouseChannel(channel, session.state.isMuted).catch(() => {});
-        }
+        await syncAgoraTrackMute();
       };
 
       const prev = session.speakerUpgradePromise ?? Promise.resolve();
@@ -1632,7 +1677,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.speakerUpgradePromise = next;
       return next;
     },
-    [reportVoiceError, seedLiveUsers, session, updateLiveUser, upsertRoomDetailsUser],
+    [
+      reportVoiceError,
+      seedLiveUsers,
+      session,
+      syncAgoraTrackMute,
+      updateLiveUser,
+      upsertRoomDetailsUser,
+    ],
   );
 
   const demoteFromSpeaker = useCallback(async (): Promise<void> => {
@@ -1675,17 +1727,32 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.roomDetails = details;
       seedLiveUsers(details.users ?? []);
       const myId = session.myProfile?.userId ?? null;
-      if (myId == null) return;
-      const meInRoom = details.users?.find((u) => Number(u.user_id) === Number(myId));
-      if (!meInRoom) return;
-      if (meInRoom.is_speaker && !session.isSpeaker) {
-        void upgradeToSpeaker();
-      } else if (
-        meInRoom.is_speaker === false &&
-        session.isSpeaker &&
-        Date.now() - session.promotedAt >= 15_000
+      if (myId != null) {
+        const meInRoom = details.users?.find((u) => Number(u.user_id) === Number(myId));
+        if (meInRoom) {
+          if (meInRoom.is_speaker && !session.isSpeaker) {
+            void upgradeToSpeaker();
+          } else if (
+            meInRoom.is_speaker === false &&
+            session.isSpeaker &&
+            Date.now() - session.promotedAt >= 15_000
+          ) {
+            void demoteFromSpeaker();
+          }
+        }
+      }
+      if (
+        details.handraise_queue_setting !== undefined ||
+        details.is_handraise_enabled !== undefined
       ) {
-        void demoteFromSpeaker();
+        session.patch({
+          ...(details.handraise_queue_setting !== undefined
+            ? { handraiseQueueSetting: details.handraise_queue_setting }
+            : {}),
+          ...(details.is_handraise_enabled !== undefined
+            ? { isHandraiseEnabled: details.is_handraise_enabled }
+            : {}),
+        });
       }
     },
     [demoteFromSpeaker, seedLiveUsers, session, upgradeToSpeaker],
@@ -1741,10 +1808,15 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     }
 
     if (!nextMuteState) {
+      if (session.audioCtx?.state === 'suspended') {
+        await within(session.audioCtx.resume(), AUDIO_RESUME_TIMEOUT_MS, 'Resuming audio').catch(
+          () => {},
+        );
+      }
       const hasLiveMic =
         Boolean(session.physicalMicStream) &&
         session.physicalMicStream!.getAudioTracks().some((t) => t.readyState === 'live');
-      if (!hasLiveMic && session.audioCtx && session.agentAudioDest) {
+      if ((!hasLiveMic || !session.micSource) && session.audioCtx && session.agentAudioDest) {
         const connected = await connectPhysicalMicrophone(5000);
         if (!connected) {
           const msg =
@@ -1764,52 +1836,76 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       }
     }
 
-    try {
-      await muteClubhouseChannel(channel, nextMuteState);
-    } catch (err) {
-      // Reported, not just logged. This call fails constantly against a stale
-      // client version (161 times in one day's log, answered "they need to update
-      // their app" — which on a *self*-mute means us), and swallowed into the
-      // console it looks like the button does nothing. It does do something: your
-      // microphone really is gated locally either way. What is out of sync is the
-      // badge the rest of the room sees, so that is what the message says.
-      console.error('Failed to toggle mic state:', err);
-      reportVoiceError(
-        `Your microphone is ${nextMuteState ? 'muted' : 'live'} here, but Clubhouse ` +
-          `did not accept the change, so the room still shows you ` +
-          `${nextMuteState ? 'unmuted' : 'muted'}: ` +
-          `${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    await syncAgoraTrackMute();
   };
 
   // 4. Raise/Lower hand
-  const raiseHand = async (raised: boolean) => {
+  const raiseHand = async (raised: boolean): Promise<'raised' | 'lowered' | 'queued' | 'upgraded' | 'failed'> => {
     const channel = session.state.activeChannel;
-    if (!channel) return;
+    if (!channel) return 'failed';
     session.patch({ error: null });
+    const isOpenStage =
+      session.state.handraiseQueueSetting === 0 ||
+      (session.state.isHandraiseEnabled === false && session.state.handraiseQueueSetting !== 1);
+    if (raised && isOpenStage) {
+      // Open Stage rooms (`handraise_queue_setting: 0`) have `is_handraise_enabled: false`
+      // and step onto stage (or into the host's auto-mod queue) via `/become_speaker`.
+      return acceptSpeakerInvite();
+    }
     try {
       await setClubhouseHand(channel, raised);
       session.patch({ handRaised: raised });
       if (session.myProfile?.userId != null) {
         updateLiveUser(session.myProfile.userId, { handRaised: raised });
       }
+      return raised ? 'raised' : 'lowered';
     } catch (err) {
+      if (!raised && isOpenStage) {
+        // Lowering a queued Open Stage request locally even if `/audience_reply` is off.
+        session.patch({ handRaised: false });
+        if (session.myProfile?.userId != null) {
+          updateLiveUser(session.myProfile.userId, { handRaised: false });
+        }
+        return 'lowered';
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       session.patch({ error: errMsg });
       console.error('Failed to update hand raise state:', err);
+      return 'failed';
     }
   };
 
-  // 5. Accept speaker invitation
-  const acceptSpeakerInvite = async () => {
+  // 5. Accept speaker invitation (or join / request an Open Stage)
+  const acceptSpeakerInvite = async (): Promise<'upgraded' | 'queued' | 'failed'> => {
     const channel = session.state.activeChannel;
-    if (!channel) return;
+    if (!channel) return 'failed';
     session.patch({ error: null });
     try {
       const res = await acceptClubhouseSpeaker(channel);
+      if (res.queued) {
+        // Clubhouse routed `/become_speaker` to the host's queue (`channel_routed_to_queue`),
+        // e.g. when `user_capabilities.auto_mod.must_request_stage` is true. Reflect the
+        // pending request without firing a redundant `/join_channel` probe or error banner.
+        session.patch({ handRaised: true, speakerInvite: null, error: null });
+        if (session.myProfile?.userId != null) {
+          updateLiveUser(session.myProfile.userId, { handRaised: true });
+        }
+        return 'queued';
+      }
       await upgradeToSpeaker(res);
+      return 'upgraded';
     } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      if (
+        rawMsg.includes('channel_routed_to_queue') ||
+        rawMsg.includes('Your request was sent to the host')
+      ) {
+        session.patch({ handRaised: true, speakerInvite: null, error: null });
+        if (session.myProfile?.userId != null) {
+          updateLiveUser(session.myProfile.userId, { handRaised: true });
+        }
+        return 'queued';
+      }
       // When a moderator accepts a raised hand from the handraise queue, Clubhouse
       // promotes the account to speaker on the server immediately (sending
       // `add_speaker` on PubNub) without waiting for `/become_speaker`. Calling
@@ -1827,17 +1923,17 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         );
         if (alreadyOnStage) {
           await upgradeToSpeaker(fresh);
-          return;
+          return 'upgraded';
         }
       } catch {
         /* fall through to original error */
       }
-      const rawMsg = err instanceof Error ? err.message : String(err);
       const errMsg = rawMsg.includes('"error_message":""')
         ? 'You need a moderator invitation (or an accepted hand raise) to join the stage.'
         : rawMsg;
       session.patch({ error: errMsg });
       console.error('Failed to accept speaker invite:', err);
+      return 'failed';
     }
   };
 
@@ -2001,11 +2097,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         await upgradeToSpeaker(undefined, { preserveMute: true });
       }
       if (wasMuted && channel) {
-        try {
-          await muteClubhouseChannel(channel, false);
-        } catch (e) {
-          console.error('Failed to unmute channel for agent TTS:', e);
-        }
+        await syncAgoraTrackMute();
       }
 
       try {
@@ -2052,15 +2144,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           session.state.activeChannel === channel &&
           !session.music
         ) {
-          try {
-            await muteClubhouseChannel(channel, true);
-          } catch (e) {
-            console.error('Failed to restore mute state after agent TTS:', e);
-          }
+          await syncAgoraTrackMute();
         }
       }
     },
-    [reportVoiceError, session, upgradeToSpeaker],
+    [reportVoiceError, session, syncAgoraTrackMute, upgradeToSpeaker],
   );
 
   /** Stop the room music, restoring the channel's mute if the music opened it. */
@@ -2072,13 +2160,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     // Not mid-sentence (the agent restores the mute when it finishes) and not if
     // the operator unmuted their own microphone while the song was playing.
     if (music.wasMuted && session.state.isMuted && channel && !session.isAgentSpeaking) {
-      try {
-        await muteClubhouseChannel(channel, true);
-      } catch (e) {
-        console.error('Failed to restore mute state after music:', e);
-      }
+      await syncAgoraTrackMute();
     }
-  }, [session]);
+  }, [session, syncAgoraTrackMute]);
 
   /**
    * Play a song *into the room*.
@@ -2120,11 +2204,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       // Like the agent's voice: a muted channel publishes nothing, so open it for the
       // song. The human microphone stays behind its own gain either way.
       if (wasMuted && !previous && channel) {
-        try {
-          await muteClubhouseChannel(channel, false);
-        } catch (e) {
-          console.error('Failed to unmute channel for music:', e);
-        }
+        await syncAgoraTrackMute();
       }
       try {
         if (ctx.state === 'suspended') await ctx.resume();
@@ -2134,7 +2214,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         await stopRoomMusic();
       }
     },
-    [session, reportVoiceError, stopRoomMusic],
+    [session, reportVoiceError, stopRoomMusic, syncAgoraTrackMute],
   );
 
   const controlRoomMusic = useCallback(
@@ -2298,6 +2378,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     chatDisabledReason,
     liveCaption,
     reactionOptions,
+    handraiseQueueSetting,
+    isHandraiseEnabled,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,

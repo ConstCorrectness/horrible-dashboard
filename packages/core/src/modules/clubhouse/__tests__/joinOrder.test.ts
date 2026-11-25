@@ -125,4 +125,39 @@ describe('stage promotion upgrades tokens and publishes only when speaker', () =
     expect(agentAudioSlice).toContain('wasMuted &&');
     expect(agentAudioSlice).toContain('session.state.isMuted &&');
   });
+
+  it('handles Open Stage rooms and channel_routed_to_queue without false errors or redundant join probes', () => {
+    const raiseIdx = source.indexOf('const raiseHand = async');
+    const acceptIdx = source.indexOf('const acceptSpeakerInvite = async');
+    const dismissIdx = source.indexOf('const dismissSpeakerInvite =');
+    expect(raiseIdx).toBeGreaterThan(-1);
+    expect(acceptIdx).toBeGreaterThan(raiseIdx);
+    expect(dismissIdx).toBeGreaterThan(acceptIdx);
+
+    const raiseSlice = source.slice(raiseIdx, acceptIdx);
+    expect(raiseSlice).toContain('session.state.handraiseQueueSetting === 0');
+    expect(raiseSlice).toContain('return acceptSpeakerInvite()');
+
+    const acceptSlice = source.slice(acceptIdx, dismissIdx);
+    const queuedBranch = acceptSlice.indexOf('if (res.queued)');
+    const probeCall = acceptSlice.indexOf('await joinClubhouseChannel(channel)');
+    expect(queuedBranch).toBeGreaterThan(-1);
+    expect(probeCall).toBeGreaterThan(queuedBranch);
+    expect(acceptSlice).toContain("return 'queued'");
+  });
+
+  it('signals self-mute/unmute natively through Agora setMuted rather than self-calling /mute_speaker', () => {
+    // Clubhouse has no `/unmute_speaker` route (404), and `/mute_speaker` is a
+    // one-way moderator remote-mute that ignores `is_muted: false` and echoes
+    // `{ action: "mute_speaker" }` back over PubNub ~120ms later, snapping `isMuted`
+    // right back to `true` on every click of Unmute.
+    const toggleIdx = source.indexOf('const toggleMute = async () =>');
+    const raiseIdx = source.indexOf('const raiseHand = async');
+    expect(toggleIdx).toBeGreaterThan(-1);
+    expect(raiseIdx).toBeGreaterThan(toggleIdx);
+    const toggleSlice = source.slice(toggleIdx, raiseIdx);
+    expect(toggleSlice).toContain('await syncAgoraTrackMute()');
+    expect(toggleSlice).not.toContain('muteClubhouseChannel(');
+    expect(source).toContain('await track.setMuted(shouldMute)');
+  });
 });

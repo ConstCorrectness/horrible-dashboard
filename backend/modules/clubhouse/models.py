@@ -71,6 +71,11 @@ class Club(BaseModel):
     name: str | None = None
 
 
+class FeedTopic(BaseModel):
+    key: str
+    display_name: str
+
+
 class Channel(BaseModel):
     channel: str | None = None
     topic: str | None = None
@@ -78,10 +83,16 @@ class Channel(BaseModel):
     num_all: int | None = None
     club: Club | None = None
     users: list[ChannelUser] = []
+    handraise_queue_setting: int | None = None
+    is_handraise_enabled: bool | None = None
+    url: str | None = None
+    is_trending: bool | None = None
 
 
 class ChannelList(BaseModel):
     channels: list[Channel] = []
+    next_cursor: str | None = None
+    available_topics: list[FeedTopic] = []
 
 
 class FollowUser(BaseModel):
@@ -126,6 +137,8 @@ class JoinChannelResult(BaseModel):
     # instead of a hardcoded list that drifts from it.
     handraise_queue_setting: int | None = None
     handraise_queue_options: list[dict[str, Any]] | None = None
+    is_handraise_enabled: bool | None = None
+    is_handraise_available: bool | None = None
     emoji_reaction_options: list[str] | None = None
     # Full room roster & metadata returned by Clubhouse's /join_channel, so the
     # pane knows every speaker, moderator, and listener (including our own
