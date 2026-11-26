@@ -687,3 +687,31 @@ def test_model_file_route_exposes_content_range_to_the_desktop_webview(
     assert response.status_code == 206
     exposed = response.headers["access-control-expose-headers"].lower()
     assert "content-range" in exposed
+
+
+@pytest.mark.anyio
+async def test_fetch_release_skips_placeholder_latest() -> None:
+    """Upstream's `latest` was `v1.0.0` with only `nightly-tag.txt`; the real builds
+    are `bNNNN` prereleases, so `latest` must fall through to one that ships them."""
+    placeholder = {"tag_name": "v1.0.0", "assets": [{"name": "nightly-tag.txt"}]}
+    real = {
+        "tag_name": "b9",
+        "assets": [{"name": "llama-b9-bin-ubuntu-vulkan-x64.tar.gz"}],
+    }
+
+    class Res:
+        def __init__(self, data: Any) -> None:
+            self._data = data
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Any:
+            return self._data
+
+    class Client:
+        async def get(self, url: str, **kw: Any) -> Res:
+            return Res(placeholder if url.endswith("/latest") else [placeholder, real])
+
+    release = await binaries.fetch_release(Client(), "latest")  # type: ignore[arg-type]
+    assert release["tag_name"] == "b9"

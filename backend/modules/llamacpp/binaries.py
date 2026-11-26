@@ -197,12 +197,40 @@ async def fetch_release(
         if tag in ("", "latest")
         else f"{RELEASES_URL}/tags/{tag}"
     )
-    res = await client.get(url, headers={"Accept": "application/vnd.github+json"})
+    headers = {"Accept": "application/vnd.github+json"}
+    res = await client.get(url, headers=headers)
     res.raise_for_status()
     data = res.json()
     if not isinstance(data, dict):
         raise RuntimeError("unexpected release payload from GitHub")
+    if tag in ("", "latest") and not _has_builds(data):
+        # Upstream's "latest" can be a placeholder — `v1.0.0` carries only
+        # `nightly-tag.txt`, while the real builds are the `bNNNN` prereleases that
+        # `/releases/latest` never returns. Walk the list for the newest one that
+        # actually ships binaries rather than reporting "no build for ubuntu/x64".
+        listing = await client.get(
+            RELEASES_URL, params={"per_page": 30}, headers=headers
+        )
+        listing.raise_for_status()
+        items = listing.json()
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and _has_builds(item):
+                    return item
     return data
+
+
+def _has_builds(release: dict[str, Any]) -> bool:
+    """Whether a release carries any `llama-*-bin-*` server archive at all."""
+    for asset in release.get("assets") or []:
+        lower = str(asset.get("name") or "").lower() if isinstance(asset, dict) else ""
+        if (
+            lower.startswith("llama-")
+            and "-bin-" in lower
+            and lower.endswith(ARCHIVE_SUFFIXES)
+        ):
+            return True
+    return False
 
 
 def _expected_digest(asset: dict[str, Any]) -> str:
