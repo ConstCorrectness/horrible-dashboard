@@ -51,6 +51,17 @@ export interface StripDecl {
  */
 export const SHARE_SINK_DEVICE = 'horrible:viewers';
 
+/**
+ * The `deviceId` of the bus that feeds the live Clubhouse room stage (`CLUBHOUSE_DJ`).
+ *
+ * Like `SHARE_SINK_DEVICE`, this is a sentinel ending in a Web Audio node inside
+ * the shared `AudioContext` (wired directly into `ClubhouseRoomSession.agentAudioDest`)
+ * with no local `<audio>` element — so routing a source to both `A1` (your Bluetooth
+ * headphones) and `CLUBHOUSE_DJ` plays it once in your headphones and publishes it
+ * live into the Clubhouse room stage.
+ */
+export const CLUBHOUSE_SINK_DEVICE = 'horrible:clubhouse';
+
 /** An output. A bus with no `deviceId` is the system default. */
 export interface BusConfig {
   id: string;

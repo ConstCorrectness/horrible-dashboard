@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
+import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
+import { createVirtualDevice } from '../audio/api';
+import { listInputs, requestDeviceLabels } from '../audio/devices';
 import {
   getClubhouseChannels,
   searchClubhouseChannels,
@@ -302,6 +305,7 @@ export function RoomsPanel() {
   const patchAgentConfig = (patch: Partial<VoiceAgentConfig>) =>
     setAgentConfig((prev) => {
       const next = normalizeVoiceConfig({ ...prev, ...patch });
+      agentConfigRef.current = next;
       writeStored('clubhouseVoiceConfig', JSON.stringify(next));
       return next;
     });
@@ -318,6 +322,15 @@ export function RoomsPanel() {
 
   // New states for extended Clubhouse functionality
   const [showStartRoomModal, setShowStartRoomModal] = useState(false);
+  // Clubhouse_DJ in-room deck states
+  const [showDjDeck, setShowDjDeck] = useState(false);
+  const [djTrackQueue, setDjTrackQueue] = useState<{ title: string; url: string }[]>([]);
+  const [djTrackIndex, setDjTrackIndex] = useState(0);
+  const [djStreamUrl, setDjStreamUrl] = useState('');
+  const [djInputDevices, setDjInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDjDeviceId, setSelectedDjDeviceId] = useState('');
+  const [creatingDjSink, setCreatingDjSink] = useState(false);
+  const djFileInputRef = useRef<HTMLInputElement | null>(null);
   const [newRoomTopic, setNewRoomTopic] = useState('');
   const [newRoomPrivacy, setNewRoomPrivacy] = useState<RoomAudience>('public');
   const [creatingRoom, setCreatingRoom] = useState(false);
@@ -1024,9 +1037,16 @@ export function RoomsPanel() {
     reactionOptions,
     handraiseQueueSetting,
     isHandraiseEnabled,
+    music,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
+    playRoomMusic,
+    stopRoomMusic,
+    controlRoomMusic,
+    startDjTabCapture,
+    startDjDeviceCapture,
+    setDjMonitor,
     loading: voiceLoading,
     error: voiceError,
     voiceError: speechError,
@@ -1069,16 +1089,45 @@ export function RoomsPanel() {
       if (wasActive) logPane('A person started talking, so the agent stopped.', 'barge-in');
     },
     onTranscribe: (text, _speakerName, speakerId) => {
-      // Resolve actual speaker name from room user roster
+      // Resolve actual speaker name from room user roster (session details, polled details, and live PubNub roster)
+      const effectiveMyId =
+        myUserIdRef.current ?? clubhouseSession().myProfile?.userId ?? myUserId ?? null;
+      const effectiveMyName =
+        myProfileNameRef.current || clubhouseSession().myProfile?.name || myProfileName || 'Me';
+      let resolvedId = speakerId;
+      if (resolvedId == null) {
+        // Fallback 1: check raw Agora volumes right now
+        const rawVols = clubhouseSession().rawVolumes;
+        let bestVol = 5;
+        for (const [uidStr, v] of Object.entries(rawVols)) {
+          const numV = Number(v);
+          if (numV > bestVol) {
+            bestVol = numV;
+            resolvedId = Number(uidStr);
+          }
+        }
+        // Fallback 2: if exactly one remote speaker on stage is unmuted, attribute to them
+        if (resolvedId == null) {
+          const unmutedRemoteSpeakers = liveUsersRef.current.filter(
+            (u) => u.isSpeaker && !u.isMuted && u.userId !== effectiveMyId,
+          );
+          if (unmutedRemoteSpeakers.length === 1) {
+            resolvedId = unmutedRemoteSpeakers[0].userId;
+          }
+        }
+      }
       let resolvedName: string | undefined;
-      if (speakerId === 0 || (myUserId != null && speakerId === myUserId)) {
-        resolvedName = myProfileName || 'Me';
-        speakerId = myUserId;
-      } else if (speakerId != null) {
-        const userInDetails = activeRoomInfoRef.current?.users?.find(
-          (u) => u.user_id === speakerId,
-        );
-        if (userInDetails?.name) resolvedName = userInDetails.name;
+      if (resolvedId === 0 || (effectiveMyId != null && resolvedId === effectiveMyId)) {
+        resolvedName = effectiveMyName;
+        resolvedId = effectiveMyId;
+      } else if (resolvedId != null) {
+        const sessionUsers = clubhouseSession().roomDetails?.users ?? [];
+        const infoUsers = activeRoomInfoRef.current?.users ?? [];
+        const fromDetails =
+          sessionUsers.find((u) => u.user_id === resolvedId) ??
+          infoUsers.find((u) => u.user_id === resolvedId);
+        const fromLive = liveUsersRef.current.find((u) => u.userId === resolvedId);
+        resolvedName = fromDetails?.name || fromLive?.name || undefined;
       }
       if (text.trim().length > 0) {
         const line: HeardLine = {
@@ -1092,8 +1141,15 @@ export function RoomsPanel() {
           }),
         };
         setHeardLines((prev) => [...prev, line].slice(-HEARD_LINES_KEPT));
-        const isSelf = isAgentSpeaking;
-        enqueueUtteranceRef.current(text.trim(), 'voice', false, resolvedName, speakerId, isSelf);
+        const isSelf = agentSpeakingRef.current || clubhouseSession().isAgentSpeaking;
+        enqueueUtteranceRef.current(
+          text.trim(),
+          'voice',
+          false,
+          resolvedName,
+          resolvedId,
+          isSelf,
+        );
       }
     },
 
@@ -1338,7 +1394,7 @@ export function RoomsPanel() {
    */
   const profileCacheRef = useRef<Map<number, string | null>>(new Map());
   useEffect(() => {
-    if (!joined || !agentEnabled) return;
+    if (!joined) return;
     const speakers = liveUsers.filter((u) => u.isSpeaker).slice(0, 12);
     const missing = speakers.filter((u) => !profileCacheRef.current.has(u.userId));
     if (missing.length === 0) return;
@@ -1361,19 +1417,30 @@ export function RoomsPanel() {
 
   /**
    * The room as the backend agent should see it, merging the sources that each know
-   * part of it: `activeRoomInfo` (polled Clubhouse details — names, moderator flags),
-   * `liveUsers`/`speakingVolumes` (the PubNub + Agora feeds, seconds fresher about
-   * who is muted, has a hand up, or is talking right now), and the profile cache.
+   * part of it: `clubhouseSession().roomDetails` and `activeRoomInfoRef` (polled
+   * Clubhouse details — names, moderator flags), `liveUsers`/`speakingVolumes`
+   * (the PubNub + Agora feeds, seconds fresher about who is muted, has a hand up,
+   * or is talking right now), and the profile cache.
    */
   const buildRoomSnapshot = (): VoiceRoom => {
-    // Read through refs, not the render-time values: a turn can take several
-    // seconds, and the queue drain that calls this was created in an earlier
-    // render. Closing over the room would describe it as it was when someone
-    // started speaking, not as it is when the agent answers.
-    const info = activeRoomInfoRef.current;
+    // Read through refs and the singleton session, never render-time closures:
+    // a turn can take several seconds, and the queue drain that calls this was
+    // created in an earlier render.
+    const channel = activeChannelRef.current;
+    const sessionDetails = clubhouseSession().roomDetails;
+    const refDetails = activeRoomInfoRef.current;
+    const info =
+      (sessionDetails?.channel === channel ? sessionDetails : null) ??
+      (refDetails?.channel === channel ? refDetails : null) ??
+      sessionDetails ??
+      refDetails;
     const live = liveUsersRef.current;
     const volumes = speakingVolumesRef.current;
     const details = info?.users ?? [];
+    const effectiveMyId =
+      myUserIdRef.current ?? clubhouseSession().myProfile?.userId ?? null;
+    const effectiveMyName =
+      myProfileNameRef.current || clubhouseSession().myProfile?.name || 'the agent';
     const ids = new Set<number>([
       ...details.map((u) => u.user_id).filter((id): id is number => id != null),
       ...live.map((u) => u.userId),
@@ -1381,11 +1448,12 @@ export function RoomsPanel() {
     const members = [...ids].map((id) => {
       const d = details.find((u) => u.user_id === id);
       const liveUser = live.find((u) => u.userId === id);
+      const isMe = effectiveMyId != null && id === effectiveMyId;
       return {
         user_id: id,
-        name: d?.name ?? '',
+        name: d?.name || liveUser?.name || (isMe ? effectiveMyName : ''),
         is_speaker: liveUser?.isSpeaker ?? d?.is_speaker ?? false,
-        is_moderator: d?.is_moderator ?? false,
+        is_moderator: liveUser?.isModerator ?? d?.is_moderator ?? false,
         is_muted: liveUser?.isMuted ?? false,
         hand_raised: liveUser?.handRaised ?? false,
         speaking: (volumes[id] ?? 0) > 5,
@@ -1393,11 +1461,11 @@ export function RoomsPanel() {
       };
     });
     return {
-      topic: activeRoomInfo?.topic ?? null,
-      club: activeRoomInfo?.club?.name ?? null,
+      topic: info?.topic ?? null,
+      club: info?.club?.name ?? null,
       members,
-      my_user_id: myUserId,
-      my_name: myProfileName || 'the agent',
+      my_user_id: effectiveMyId,
+      my_name: effectiveMyName,
     };
   };
 
@@ -1457,6 +1525,12 @@ export function RoomsPanel() {
           setIsAgentThinking(false);
           agentAbortControllerRef.current = null;
           setAgentReason(result.reason);
+          void getVoiceState(channel)
+            .then((s) => {
+              setAgentMemory(s.turns);
+              setServerEvents(s.events ?? []);
+            })
+            .catch(() => {});
           // A notice is a diagnostic for whoever runs the agent ("the model server
           // is unreachable", "the model took too long"), so it is shown here and
           // never posted. With `postToChat` on it used to go to the room as well,
@@ -1553,6 +1627,12 @@ export function RoomsPanel() {
         signal: controller.signal,
       });
       setAgentReason(result.reason);
+      void getVoiceState(channel)
+        .then((s) => {
+          setAgentMemory(s.turns);
+          setServerEvents(s.events ?? []);
+        })
+        .catch(() => {});
       if (result.notice) toastsStore.add('info', 'Agent', result.notice);
       if (result.reply && result.reply.trim()) {
         return result.reply.trim();
@@ -1595,7 +1675,13 @@ export function RoomsPanel() {
     if (!channel || !trimmed) return;
     setIsAgentSpeaking(true);
     setAgentReason('direct tts');
-    void recordVoiceSpoken(channel, trimmed).catch(() => {});
+    void recordVoiceSpoken(channel, trimmed)
+      .then(() => getVoiceState(channel))
+      .then((s) => {
+        setAgentMemory(s.turns);
+        setServerEvents(s.events ?? []);
+      })
+      .catch(() => {});
     if (options?.postToChat) {
       const textToSend = agentConfigRef.current.robotEmojiPrefix ? `🤖 ${trimmed}` : trimmed;
       agentSentTextsRef.current.add(textToSend.trim());
@@ -1651,16 +1737,23 @@ export function RoomsPanel() {
   const activeRoomInfoRef = useRef<Channel | null>(null);
   const liveUsersRef = useRef(liveUsers);
   const speakingVolumesRef = useRef(speakingVolumes);
+  const myUserIdRef = useRef<number | null>(myUserId);
   const [myProfileName, setMyProfileName] = useState('');
+  const myProfileNameRef = useRef<string>('');
 
   /** The live caption's speaker, resolved the way `onTranscribe` resolves one. */
   const speakerNameFor = (speakerId: number | null): string | undefined => {
-    if (speakerId === 0 || (myUserId != null && speakerId === myUserId)) {
-      return myProfileName || 'Me';
+    const effectiveMyId =
+      myUserIdRef.current ?? clubhouseSession().myProfile?.userId ?? myUserId ?? null;
+    if (speakerId === 0 || (effectiveMyId != null && speakerId === effectiveMyId)) {
+      return myProfileNameRef.current || clubhouseSession().myProfile?.name || myProfileName || 'Me';
     }
     if (speakerId == null) return undefined;
     return (
-      activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId)?.name ?? undefined
+      clubhouseSession().roomDetails?.users?.find((u) => u.user_id === speakerId)?.name ||
+      activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId)?.name ||
+      liveUsersRef.current.find((u) => u.userId === speakerId)?.name ||
+      undefined
     );
   };
   useEffect(() => {
@@ -1681,6 +1774,12 @@ export function RoomsPanel() {
   useEffect(() => {
     speakingVolumesRef.current = speakingVolumes;
   }, [speakingVolumes]);
+  useEffect(() => {
+    myUserIdRef.current = myUserId;
+  }, [myUserId]);
+  useEffect(() => {
+    myProfileNameRef.current = myProfileName;
+  }, [myProfileName]);
 
   const mergedEvents = [...serverEvents, ...paneEvents].sort((a, b) => a.ts - b.ts);
   const railState: AgentRailState = !agentEnabled
@@ -1877,9 +1976,11 @@ export function RoomsPanel() {
     };
   }, [activeChannel, agentEnabled]);
 
-  // Mirror what the agent remembers into the Agent tab.
+  // Mirror what the agent remembers and its decision log into the Agent tab whenever
+  // a room is active (even while `agentEnabled` is toggled off, so manual Prompt & TTS
+  // generations, Speak Now turns, and skipped-turn diagnostics always update).
   useEffect(() => {
-    if (!activeChannel || !agentEnabled) return;
+    if (!activeChannel) return;
     const tick = () =>
       void getVoiceState(activeChannel)
         .then((s) => {
@@ -1939,6 +2040,8 @@ export function RoomsPanel() {
     // in — the same wrong-address failure the `activeChannel` ordering fix removed
     // from the send path.
     setCommentText('');
+    prevCommentsLengthRef.current = 0;
+    seenCommentIdsRef.current.clear();
   }, [activeChannel, stopAgentAudio]);
 
   // Ears and mouth failures reach the log as well as the status line, so they are
@@ -1948,33 +2051,52 @@ export function RoomsPanel() {
   }, [speechError]);
 
   const prevCommentsLengthRef = useRef(0);
+  const seenCommentIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (comments.length > prevCommentsLengthRef.current) {
-      const newComment = comments[comments.length - 1];
+    if (comments.length === 0) {
+      prevCommentsLengthRef.current = 0;
+      seenCommentIdsRef.current.clear();
+      return;
+    }
+    // Initial chat backlog burst loaded on join (e.g. 0 -> N historical messages):
+    // mark them seen so we don't reply to old history, while letting every subsequent
+    // message in this room (even in a room with fewer comments than the last room) fire.
+    if (prevCommentsLengthRef.current === 0 && comments.length > 1) {
+      for (const c of comments) seenCommentIdsRef.current.add(c.id);
       prevCommentsLengthRef.current = comments.length;
-      const rawText = (newComment.text || '').trim();
+      return;
+    }
+    prevCommentsLengthRef.current = comments.length;
+    for (const c of comments) {
+      if (seenCommentIdsRef.current.has(c.id)) continue;
+      seenCommentIdsRef.current.add(c.id);
+      const rawText = (c.text || '').trim();
+      if (!rawText) continue;
+      const effectiveMyId =
+        myUserIdRef.current ?? clubhouseSession().myProfile?.userId ?? myUserId ?? null;
+      const effectiveMyName =
+        myProfileNameRef.current || clubhouseSession().myProfile?.name || myProfileName || '';
       // The agent's own posts should not be enqueued to avoid self-reply loops.
       const isAgentSelf =
         rawText.startsWith('🤖') ||
-        (newComment.userId != null && myUserId != null && newComment.userId === myUserId) ||
+        (c.userId != null && effectiveMyId != null && c.userId === effectiveMyId) ||
         agentSentTextsRef.current.has(rawText) ||
-        (newComment.userName &&
-          myProfileName &&
-          newComment.userName.toLowerCase() === myProfileName.toLowerCase());
+        Boolean(
+          c.userName &&
+            effectiveMyName &&
+            c.userName.toLowerCase() === effectiveMyName.toLowerCase(),
+        );
       if (!isAgentSelf) {
-        // Who actually typed it. This used to pass no sender at all, so every chat
-        // line reached the model as "Someone in chat" — and the model, told to address
-        // people by name, picked one off the stage.
         enqueueUtterance(
           rawText,
           'chat',
           false,
-          chatSpeakerLabel(newComment),
-          newComment.userId ?? null,
+          chatSpeakerLabel(c),
+          c.userId ?? null,
         );
       }
     }
-  }, [comments, myProfileName]);
+  }, [comments, myProfileName, myUserId]);
 
   // Extract direct room code if user pasted a Clubhouse URL or 8-char room ID.
   const directRoomCode = (() => {
@@ -2020,17 +2142,73 @@ export function RoomsPanel() {
 
   const totalLoadedListeners = channels.reduce((acc, c) => acc + (c.num_all ?? 0), 0);
 
-  // Let the agent read the live rooms currently listed.
-  useAgentContext(() => ({
-    state,
-    rooms: channels.map((c) => ({
-      topic: c.topic || null,
-      club: c.club?.name ?? null,
-      speakers: c.num_speakers ?? 0,
-      total: c.num_all ?? 0,
-      people: c.users.map((u) => u.name).filter(Boolean),
-    })),
-  }));
+  // Let the dashboard agent read both the live active room (when joined) and the hallway list.
+  useAgentContext(() => {
+    const snap = joined && activeChannel ? buildRoomSnapshot() : null;
+    const stageSpeakers = snap ? snap.members.filter((m) => m.is_speaker) : [];
+    const audienceMembers = snap ? snap.members.filter((m) => !m.is_speaker) : [];
+    return {
+      state,
+      inRoom: joined,
+      activeChannel: activeChannel ?? null,
+      activeRoom: snap
+        ? {
+            channel: activeChannel,
+            topic: snap.topic,
+            club: snap.club,
+            myName: snap.my_name,
+            myUserId: snap.my_user_id,
+            isMuted,
+            handRaised,
+            music: music ?? null,
+            speakers: stageSpeakers.map((m) => ({
+              userId: m.user_id,
+              name: m.name,
+              isModerator: m.is_moderator,
+              isMuted: m.is_muted,
+              speaking: m.speaking,
+            })),
+            audienceCount: audienceMembers.length,
+            handsRaised: audienceMembers
+              .filter((m) => m.hand_raised)
+              .map((m) => m.name || String(m.user_id)),
+            currentlySpeaking: stageSpeakers
+              .filter((m) => m.speaking)
+              .map((m) => m.name || String(m.user_id)),
+            recentTranscript: heardLines.slice(-6).map((l) => ({
+              speaker: l.speaker || 'Room',
+              text: l.text,
+              time: l.time,
+            })),
+            liveCaption: liveCaption
+              ? {
+                  speaker: speakerNameFor(liveCaption.speakerId) || 'Room',
+                  text: liveCaption.text,
+                }
+              : null,
+            recentChat: comments.slice(-15).map((c) => ({
+              user: c.userName,
+              text: c.text,
+            })),
+            voiceAgent: {
+              enabled: agentConfig.enabled,
+              posture: agentConfig.posture,
+              model: agentConfig.model || agentEngineStatus?.model || 'default',
+              lastReason: agentReason,
+              memoryTurns: agentMemory.length,
+            },
+          }
+        : null,
+      rooms: channels.map((c) => ({
+        channel: c.channel || null,
+        topic: c.topic || null,
+        club: c.club?.name ?? null,
+        speakers: c.num_speakers ?? 0,
+        total: c.num_all ?? 0,
+        people: c.users.map((u) => u.name).filter(Boolean),
+      })),
+    };
+  });
 
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3692,6 +3870,48 @@ export function RoomsPanel() {
               📡 Network Insights
             </button>
             <button
+              type="button"
+              className="ch-btn-action"
+              style={{
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                flex: 'none',
+                background:
+                  showDjDeck || music
+                    ? 'rgba(16, 185, 129, 0.2)'
+                    : 'rgba(255, 255, 255, 0.05)',
+                color: showDjDeck || music ? '#34d399' : '#94a3b8',
+                border:
+                  showDjDeck || music
+                    ? '1px solid rgba(16, 185, 129, 0.45)'
+                    : '1px solid transparent',
+              }}
+              onClick={() => {
+                setShowDjDeck((open) => {
+                  const next = !open;
+                  if (next) {
+                    void listInputs()
+                      .then((devs) => {
+                        setDjInputDevices(devs);
+                        const djMatch = devs.find((d) =>
+                          /clubhouse_dj|virtual|loopback|cable/i.test(d.label),
+                        );
+                        if (djMatch && !selectedDjDeviceId) {
+                          setSelectedDjDeviceId(djMatch.deviceId);
+                        }
+                      })
+                      .catch(() => {});
+                  }
+                  return next;
+                });
+              }}
+              aria-pressed={showDjDeck || Boolean(music)}
+              title="Open Clubhouse_DJ deck — route music files, tab/system audio, or virtual cables to both your Bluetooth headphones and the Clubhouse stage"
+            >
+              🎧 Clubhouse_DJ{music ? (music.paused ? ' (Paused)' : ' ● LIVE') : ''}
+            </button>
+            <button
               className="ch-btn-action"
               style={{
                 padding: '0.4rem 0.8rem',
@@ -4183,6 +4403,435 @@ export function RoomsPanel() {
                       <img src={g.preview_url} alt="" referrerPolicy="no-referrer" loading="lazy" />
                     </button>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Clubhouse_DJ In-Room Deck */}
+          {(showDjDeck || music) && (
+            <div
+              style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(15, 23, 42, 0.85))',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '12px',
+                padding: '0.65rem 0.85rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.55rem',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.15rem 0.55rem',
+                      borderRadius: '999px',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      background: music && !music.paused ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.08)',
+                      color: music && !music.paused ? '#34d399' : '#94a3b8',
+                      border: '1px solid rgba(16, 185, 129, 0.35)',
+                    }}
+                  >
+                    🎧 Clubhouse_DJ {music ? (music.paused ? 'PAUSED' : 'ON AIR') : 'READY'}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.78rem',
+                      color: '#e2e8f0',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: '260px',
+                    }}
+                    title={music?.title || 'Route music to both your Bluetooth headphones & Clubhouse stage'}
+                  >
+                    {music ? music.title : 'Headphones + Clubhouse Stage Mixer'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  {music && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-mini"
+                        onClick={() => controlRoomMusic(music.paused ? 'resume' : 'pause')}
+                        style={{
+                          padding: '0 0.6rem',
+                          borderRadius: '8px',
+                          background: 'rgba(16, 185, 129, 0.2)',
+                          color: '#34d399',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {music.paused ? '▶ Resume' : '⏸ Pause'}
+                      </button>
+                      {djTrackQueue.length > 1 && music.mode === 'file' && (
+                        <button
+                          type="button"
+                          className="btn-mini"
+                          onClick={() => {
+                            const nextIdx = (djTrackIndex + 1) % djTrackQueue.length;
+                            setDjTrackIndex(nextIdx);
+                            const nextTrack = djTrackQueue[nextIdx];
+                            if (nextTrack) void playRoomMusic(nextTrack.url, nextTrack.title);
+                          }}
+                          style={{
+                            padding: '0 0.55rem',
+                            borderRadius: '8px',
+                            background: 'rgba(255, 255, 255, 0.07)',
+                            color: '#e2e8f0',
+                            border: '1px solid rgba(255, 255, 255, 0.14)',
+                            fontSize: '0.72rem',
+                            cursor: 'pointer',
+                          }}
+                          title="Next queued track"
+                        >
+                          ⏭ Next ({djTrackIndex + 1}/{djTrackQueue.length})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-mini"
+                        onClick={() => void stopRoomMusic()}
+                        style={{
+                          padding: '0 0.55rem',
+                          borderRadius: '8px',
+                          background: 'rgba(239, 68, 68, 0.16)',
+                          color: '#f87171',
+                          border: '1px solid rgba(239, 68, 68, 0.35)',
+                          fontWeight: 600,
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ⏹ Stop
+                      </button>
+                      <label
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          fontSize: '0.72rem',
+                          color: '#cbd5e1',
+                        }}
+                        title="DJ music volume sent to Clubhouse stage and headphone monitor"
+                      >
+                        <span>Vol</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={Math.round((music.volume ?? 0.6) * 100)}
+                          onChange={(e) =>
+                            controlRoomMusic('volume', Number(e.target.value) / 100)
+                          }
+                          style={{ width: '76px' }}
+                        />
+                        <span style={{ minWidth: '30px', fontFamily: 'var(--font-mono, monospace)' }}>
+                          {Math.round((music.volume ?? 0.6) * 100)}%
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        className="btn-mini"
+                        onClick={() => setDjMonitor(!(music.monitor ?? true))}
+                        style={{
+                          padding: '0 0.55rem',
+                          borderRadius: '8px',
+                          background:
+                            music.monitor !== false
+                              ? 'rgba(59, 130, 246, 0.22)'
+                              : 'rgba(255, 255, 255, 0.05)',
+                          color: music.monitor !== false ? '#93c5fd' : '#94a3b8',
+                          border:
+                            music.monitor !== false
+                              ? '1px solid rgba(59, 130, 246, 0.45)'
+                              : '1px solid rgba(255, 255, 255, 0.1)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                        }}
+                        title="Toggle monitoring this DJ source in your Bluetooth headphones / local output"
+                      >
+                        🎧 Headphones: {music.monitor !== false ? 'ON' : 'OFF'}
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-mini"
+                    onClick={() => setShowDjDeck(false)}
+                    style={{
+                      padding: '0 0.45rem',
+                      borderRadius: '6px',
+                      background: 'transparent',
+                      color: '#94a3b8',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      fontSize: '0.72rem',
+                      cursor: 'pointer',
+                    }}
+                    title="Hide DJ deck controls (music keeps playing)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {showDjDeck && (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.45rem',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                    paddingTop: '0.5rem',
+                  }}
+                >
+                  <input
+                    ref={djFileInputRef}
+                    type="file"
+                    accept="audio/*"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      if (files.length === 0) return;
+                      const tracks = files.map((f) => ({
+                        title: f.name.replace(/\.[^.]+$/, ''),
+                        url: URL.createObjectURL(f),
+                      }));
+                      setDjTrackQueue(tracks);
+                      setDjTrackIndex(0);
+                      void playRoomMusic(tracks[0].url, tracks[0].title);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      onClick={() => djFileInputRef.current?.click()}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(16, 185, 129, 0.18)',
+                        color: '#6ee7b7',
+                        border: '1px solid rgba(16, 185, 129, 0.4)',
+                        fontWeight: 600,
+                        fontSize: '0.73rem',
+                        cursor: 'pointer',
+                      }}
+                      title="Pick MP3/WAV/FLAC/OGG/M4A files to play to both your Bluetooth headphones and the Clubhouse stage"
+                    >
+                      📂 Play Audio Files
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      onClick={() => void startDjTabCapture({ monitor: false })}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(59, 130, 246, 0.18)',
+                        color: '#93c5fd',
+                        border: '1px solid rgba(59, 130, 246, 0.4)',
+                        fontWeight: 600,
+                        fontSize: '0.73rem',
+                        cursor: 'pointer',
+                      }}
+                      title="Capture audio from any browser tab, YouTube, Spotify, or desktop app and stream it into the Clubhouse room"
+                    >
+                      🖥️ Share Tab / App Audio
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      onClick={() => registry.openPanel('audio.mixer')}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(167, 139, 250, 0.16)',
+                        color: '#c4b5fd',
+                        border: '1px solid rgba(167, 139, 250, 0.35)',
+                        fontWeight: 600,
+                        fontSize: '0.73rem',
+                        cursor: 'pointer',
+                      }}
+                      title="Open the Audio Mixer matrix — route any dashboard strip to both A1 (Bluetooth headphones) and CLUBHOUSE_DJ"
+                    >
+                      🎛️ Audio Mixer (CLUBHOUSE_DJ Bus)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      disabled={creatingDjSink}
+                      onClick={() => {
+                        setCreatingDjSink(true);
+                        void createVirtualDevice('Clubhouse_DJ')
+                          .then(async (dev) => {
+                            toastsStore.add(
+                              'success',
+                              'Clubhouse_DJ Sink Ready',
+                              `Created virtual cable "${dev.name}" (${dev.id}). Route external apps to it and select it below.`,
+                            );
+                            await requestDeviceLabels();
+                            const devs = await listInputs();
+                            setDjInputDevices(devs);
+                            const match = devs.find((d) =>
+                              /clubhouse_dj|horrible_clubhouse_dj/i.test(d.label),
+                            );
+                            if (match) {
+                              setSelectedDjDeviceId(match.deviceId);
+                              await startDjDeviceCapture(match.deviceId, match.label, {
+                                monitor: true,
+                              });
+                            }
+                          })
+                          .catch((err) => {
+                            toastsStore.add(
+                              'info',
+                              'Use Built-In DJ Sources or Script',
+                              `${err instanceof Error ? err.message : String(err)} — you can play files or share tab/app audio above with zero OS setup, or run scripts/clubhouse-dj-sink.sh in your host terminal.`,
+                            );
+                          })
+                          .finally(() => setCreatingDjSink(false));
+                      }}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        color: '#cbd5e1',
+                        border: '1px solid rgba(255, 255, 255, 0.14)',
+                        fontSize: '0.72rem',
+                        cursor: 'pointer',
+                      }}
+                      title="Create the OS-level Clubhouse_DJ PipeWire virtual sink and connect it"
+                    >
+                      {creatingDjSink ? 'Creating Sink…' : '🔌 Create OS Clubhouse_DJ Sink'}
+                    </button>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <select
+                      value={selectedDjDeviceId}
+                      onChange={(e) => setSelectedDjDeviceId(e.target.value)}
+                      onFocus={() => {
+                        void listInputs()
+                          .then(setDjInputDevices)
+                          .catch(() => {});
+                      }}
+                      style={{
+                        flex: '1 1 180px',
+                        padding: '0 0.6rem',
+                        fontSize: '0.75rem',
+                        background: '#14161a',
+                        color: '#f1f5f9',
+                        border: '1px solid var(--border, #2e333d)',
+                        borderRadius: '8px',
+                      }}
+                      title="Pick Clubhouse_DJ_Mic or any auxiliary audio input to mix into the room alongside your voice mic"
+                    >
+                      <option value="">Line-In / Virtual Cable (Clubhouse_DJ_Mic)…</option>
+                      {djInputDevices.map((d) => (
+                        <option key={d.deviceId} value={d.deviceId}>
+                          {d.label || `Audio Input (${d.deviceId.slice(0, 8)})`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      disabled={!selectedDjDeviceId}
+                      onClick={() => {
+                        const dev = djInputDevices.find((d) => d.deviceId === selectedDjDeviceId);
+                        void startDjDeviceCapture(selectedDjDeviceId, dev?.label, {
+                          monitor: true,
+                        });
+                      }}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(16, 185, 129, 0.18)',
+                        color: '#6ee7b7',
+                        border: '1px solid rgba(16, 185, 129, 0.35)',
+                        fontSize: '0.73rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Connect Line-In
+                    </button>
+
+                    <input
+                      type="url"
+                      placeholder="Or paste direct audio stream/MP3 URL…"
+                      value={djStreamUrl}
+                      onChange={(e) => setDjStreamUrl(e.target.value)}
+                      style={{
+                        flex: '1 1 200px',
+                        padding: '0 0.6rem',
+                        fontSize: '0.75rem',
+                        background: '#14161a',
+                        color: '#f1f5f9',
+                        border: '1px solid var(--border, #2e333d)',
+                        borderRadius: '8px',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-mini"
+                      disabled={!djStreamUrl.trim()}
+                      onClick={() => {
+                        const url = djStreamUrl.trim();
+                        if (!url) return;
+                        void playRoomMusic(url, url.split('/').pop() || 'Audio Stream');
+                      }}
+                      style={{
+                        padding: '0 0.65rem',
+                        borderRadius: '8px',
+                        background: 'rgba(59, 130, 246, 0.18)',
+                        color: '#93c5fd',
+                        border: '1px solid rgba(59, 130, 246, 0.35)',
+                        fontSize: '0.73rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ▶ Stream URL
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

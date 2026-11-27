@@ -6,7 +6,14 @@ import PubNub from 'pubnub';
 
 import { usePaneSession } from '../../layout/use-pane-session';
 import { mixer } from '../audio/engine';
-import { openMicrophone } from '../audio/store';
+import {
+  CLUBHOUSE_DJ_BUS_ID,
+  busHasSource,
+  ensureClubhouseDjBus,
+  getState as getMixerStoreState,
+  openMicrophone,
+  subscribeMixer,
+} from '../audio/store';
 import { earsActions, type ObservedContextState } from './earsWatchdog';
 import { MAX_FLOATERS, parseRoomReaction } from './reactions';
 import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
@@ -210,6 +217,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     reactionOptions,
     handraiseQueueSetting,
     isHandraiseEnabled,
+    music,
   } = state;
 
   const propsRef = useRef(props);
@@ -513,6 +521,33 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
       const dest = audioCtx.createMediaStreamDestination();
       session.agentAudioDest = dest;
+
+      // Wire the Audio Mixer's `CLUBHOUSE_DJ` bus directly into `agentAudioDest` so any
+      // dashboard audio strip routed to `CLUBHOUSE_DJ` (while also routed to `A1` for
+      // Bluetooth headphones) broadcasts straight to the Clubhouse stage.
+      const djBusGain = audioCtx.createGain();
+      djBusGain.gain.value = 1;
+      djBusGain.connect(dest);
+      session.djBusGain = djBusGain;
+      let wiredDjBusNode: AudioNode | null = null;
+      const syncClubhouseDjBus = () => {
+        if (session.audioCtx !== audioCtx || session.djBusGain !== djBusGain) return;
+        const busNode = mixer.busGainNode(CLUBHOUSE_DJ_BUS_ID);
+        if (busNode && busNode !== wiredDjBusNode) {
+          try {
+            busNode.connect(djBusGain);
+            wiredDjBusNode = busNode;
+          } catch {
+            /* ignore cross-context or already connected */
+          }
+        }
+        void syncAgoraTrackMute();
+      };
+      void ensureClubhouseDjBus().then(() => {
+        syncClubhouseDjBus();
+      });
+      session.djBusUnsubscribe?.();
+      session.djBusUnsubscribe = subscribeMixer(syncClubhouseDjBus);
 
       // The agent's ears: one bus every remote speaker and the operator's mic feed,
       // tapped for PCM (see `liveCapture`) and watched by the VAD's analyser.
@@ -1523,8 +1558,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const syncAgoraTrackMute = useCallback(async () => {
     const track = session.localAudioTrack;
     if (!track || !session.isTrackPublished) return;
+    const djBusActive = busHasSource(getMixerStoreState(), CLUBHOUSE_DJ_BUS_ID);
     const shouldMute =
-      session.state.isMuted && !session.isAgentSpeaking && session.music === null;
+      session.state.isMuted &&
+      !session.isAgentSpeaking &&
+      session.music === null &&
+      !djBusActive;
     try {
       await track.setMuted(shouldMute);
     } catch (err) {
@@ -2186,6 +2225,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const wasMuted = previous ? previous.wasMuted : session.state.isMuted;
       session.stopMusic();
 
+      if (session.speakerUpgradePromise) {
+        await session.speakerUpgradePromise;
+      } else if (session.isSpeaker && !session.isTrackPublished) {
+        await upgradeToSpeaker(undefined, { preserveMute: true });
+      }
+
       const el = new Audio();
       el.crossOrigin = 'anonymous';
       el.src = url;
@@ -2194,16 +2239,34 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       gain.gain.value = session.isAgentSpeaking ? MUSIC_VOLUME * MUSIC_DUCK : MUSIC_VOLUME;
       source.connect(gain);
       gain.connect(dest);
-      mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse music', icon: '🎵' });
+      mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse_DJ Music', icon: '🎧' });
       const strip = mixer.connectStrip(MUSIC_STRIP);
       gain.connect(strip.input);
-      session.music = { el, source, gain, strip, volume: MUSIC_VOLUME, wasMuted };
-      session.patch({ music: { title, paused: false } });
+      session.music = {
+        el,
+        stream: null,
+        source,
+        gain,
+        strip,
+        volume: MUSIC_VOLUME,
+        wasMuted,
+        mode: 'file',
+        monitor: true,
+      };
+      session.patch({
+        music: {
+          title,
+          paused: false,
+          volume: MUSIC_VOLUME,
+          mode: 'file',
+          monitor: true,
+        },
+      });
       el.onended = () => void stopRoomMusic();
 
       // Like the agent's voice: a muted channel publishes nothing, so open it for the
       // song. The human microphone stays behind its own gain either way.
-      if (wasMuted && !previous && channel) {
+      if (channel) {
         await syncAgoraTrackMute();
       }
       try {
@@ -2214,7 +2277,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         await stopRoomMusic();
       }
     },
-    [session, reportVoiceError, stopRoomMusic, syncAgoraTrackMute],
+    [session, reportVoiceError, stopRoomMusic, syncAgoraTrackMute, upgradeToSpeaker],
   );
 
   const controlRoomMusic = useCallback(
@@ -2223,18 +2286,259 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const current = session.state.music;
       if (!music || !current) return;
       if (action === 'pause') {
-        music.el.pause();
+        if (music.el) {
+          music.el.pause();
+        } else {
+          music.gain.gain.value = 0;
+        }
         session.patch({ music: { ...current, paused: true } });
       } else if (action === 'resume') {
-        void music.el.play().catch(() => {});
+        if (music.el) {
+          void music.el.play().catch(() => {});
+        } else {
+          music.gain.gain.value = session.isAgentSpeaking ? music.volume * MUSIC_DUCK : music.volume;
+        }
         session.patch({ music: { ...current, paused: false } });
       } else if (value != null && Number.isFinite(value)) {
         const next = action === 'step' ? music.volume + value : value;
         music.volume = Math.min(1, Math.max(0, next));
-        if (!session.isAgentSpeaking) music.gain.gain.value = music.volume;
+        if (!session.isAgentSpeaking && !current.paused) {
+          music.gain.gain.value = music.volume;
+        }
+        session.patch({ music: { ...current, volume: music.volume } });
       }
     },
     [session],
+  );
+
+  /** Toggle whether the active Clubhouse_DJ source is also monitored locally to headphones. */
+  const setDjMonitor = useCallback(
+    (enabled: boolean) => {
+      const music = session.music;
+      const current = session.state.music;
+      if (!music || !current) return;
+      if (enabled && !music.monitor) {
+        mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse_DJ Music', icon: '🎧' });
+        const strip = music.strip ?? mixer.connectStrip(MUSIC_STRIP);
+        try {
+          music.gain.connect(strip.input);
+        } catch {
+          /* already connected */
+        }
+        music.strip = strip;
+        music.monitor = true;
+      } else if (!enabled && music.monitor) {
+        if (music.strip) {
+          try {
+            music.gain.disconnect(music.strip.input);
+          } catch {
+            /* ignore */
+          }
+          music.strip.release();
+          music.strip = null;
+        }
+        music.monitor = false;
+      }
+      session.patch({ music: { ...current, monitor: enabled } });
+    },
+    [session],
+  );
+
+  /**
+   * Capture system, tab, or application audio (Spotify, YouTube, browser tab, desktop)
+   * and route it into the Clubhouse room stage (`agentAudioDest`) and optional headphone monitor.
+   */
+  const startDjTabCapture = useCallback(
+    async (options?: { monitor?: boolean }) => {
+      const ctx = session.audioCtx;
+      const dest = session.agentAudioDest;
+      if (!ctx || !dest) {
+        reportVoiceError('Join a room before starting Clubhouse_DJ audio capture.');
+        return;
+      }
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        reportVoiceError('Tab/system audio capture is not supported in this environment.');
+        return;
+      }
+      try {
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          } as MediaTrackConstraints,
+        });
+        // Clubhouse is audio-only: stop any video track right away so no camera/screen frames run.
+        for (const vt of displayStream.getVideoTracks()) {
+          vt.stop();
+        }
+        const audioTracks = displayStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          reportVoiceError(
+            'No audio track was shared — make sure "Share tab/system audio" is checked in the picker.',
+          );
+          return;
+        }
+
+        const previous = session.music;
+        const wasMuted = previous ? previous.wasMuted : session.state.isMuted;
+        session.stopMusic();
+
+        if (session.speakerUpgradePromise) {
+          await session.speakerUpgradePromise;
+        } else if (session.isSpeaker && !session.isTrackPublished) {
+          await upgradeToSpeaker(undefined, { preserveMute: true });
+        }
+
+        if (ctx.state === 'suspended') await ctx.resume();
+        const audioOnlyStream = new MediaStream(audioTracks);
+        const source = ctx.createMediaStreamSource(audioOnlyStream);
+        const gain = ctx.createGain();
+        const vol = 0.85;
+        gain.gain.value = session.isAgentSpeaking ? vol * MUSIC_DUCK : vol;
+        source.connect(gain);
+        gain.connect(dest);
+
+        const shouldMonitor = options?.monitor ?? false;
+        mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse_DJ Music', icon: '🎧' });
+        let strip = null;
+        if (shouldMonitor) {
+          strip = mixer.connectStrip(MUSIC_STRIP);
+          gain.connect(strip.input);
+        }
+
+        const trackLabel = audioTracks[0].label || 'Tab / System Audio';
+        const title = `🖥️ ${trackLabel}`;
+        audioTracks[0].onended = () => {
+          void stopRoomMusic();
+        };
+
+        session.music = {
+          el: null,
+          stream: audioOnlyStream,
+          source,
+          gain,
+          strip,
+          volume: vol,
+          wasMuted,
+          mode: 'capture',
+          monitor: shouldMonitor,
+        };
+        session.patch({
+          music: {
+            title,
+            paused: false,
+            volume: vol,
+            mode: 'capture',
+            monitor: shouldMonitor,
+          },
+        });
+        await syncAgoraTrackMute();
+      } catch (err) {
+        const name = err instanceof DOMException ? err.name : '';
+        if (name !== 'NotAllowedError' && name !== 'AbortError') {
+          reportVoiceError(
+            `Could not capture tab/system audio: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    },
+    [reportVoiceError, session, stopRoomMusic, syncAgoraTrackMute, upgradeToSpeaker],
+  );
+
+  /**
+   * Route an auxiliary audio input device (e.g. `Clubhouse_DJ_Mic`, virtual cable, or line-in)
+   * directly into the Clubhouse stage mix (`agentAudioDest`) and optional headphone monitor,
+   * while keeping your regular voice microphone separate for talk-over.
+   */
+  const startDjDeviceCapture = useCallback(
+    async (deviceId: string, label?: string, options?: { monitor?: boolean }) => {
+      const ctx = session.audioCtx;
+      const dest = session.agentAudioDest;
+      if (!ctx || !dest) {
+        reportVoiceError('Join a room before connecting a Clubhouse_DJ input device.');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        reportVoiceError('MediaDevices API is not available.');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        });
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          reportVoiceError('Selected DJ input device provided no audio track.');
+          return;
+        }
+
+        const previous = session.music;
+        const wasMuted = previous ? previous.wasMuted : session.state.isMuted;
+        session.stopMusic();
+
+        if (session.speakerUpgradePromise) {
+          await session.speakerUpgradePromise;
+        } else if (session.isSpeaker && !session.isTrackPublished) {
+          await upgradeToSpeaker(undefined, { preserveMute: true });
+        }
+
+        if (ctx.state === 'suspended') await ctx.resume();
+        const source = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        const vol = 0.85;
+        gain.gain.value = session.isAgentSpeaking ? vol * MUSIC_DUCK : vol;
+        source.connect(gain);
+        gain.connect(dest);
+
+        const shouldMonitor = options?.monitor ?? true;
+        mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse_DJ Music', icon: '🎧' });
+        let strip = null;
+        if (shouldMonitor) {
+          strip = mixer.connectStrip(MUSIC_STRIP);
+          gain.connect(strip.input);
+        }
+
+        const resolvedLabel = label || audioTracks[0].label || 'Clubhouse_DJ Input';
+        const title = `🎚️ ${resolvedLabel}`;
+        audioTracks[0].onended = () => {
+          void stopRoomMusic();
+        };
+
+        session.music = {
+          el: null,
+          stream,
+          source,
+          gain,
+          strip,
+          volume: vol,
+          wasMuted,
+          mode: 'device',
+          monitor: shouldMonitor,
+        };
+        session.patch({
+          music: {
+            title,
+            paused: false,
+            volume: vol,
+            mode: 'device',
+            monitor: shouldMonitor,
+          },
+        });
+        await syncAgoraTrackMute();
+      } catch (err) {
+        reportVoiceError(
+          `Could not open DJ input device: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    [reportVoiceError, session, stopRoomMusic, syncAgoraTrackMute, upgradeToSpeaker],
   );
 
   /** Read through the session, not render state: the turn queue outlives renders. */
@@ -2380,6 +2684,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     reactionOptions,
     handraiseQueueSetting,
     isHandraiseEnabled,
+    music,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -2387,6 +2692,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     stopRoomMusic,
     controlRoomMusic,
     getRoomMusic,
+    startDjTabCapture,
+    startDjDeviceCapture,
+    setDjMonitor,
     loading,
     error,
     voiceError,

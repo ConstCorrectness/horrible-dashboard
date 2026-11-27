@@ -276,3 +276,4 @@ apps/desktop/dist/
 apps/desktop/release/
 desktop-smoke-results/
 
+scripts/clubhouse-dj-sink.sh

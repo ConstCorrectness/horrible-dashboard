@@ -189,8 +189,14 @@ export interface RoomState {
    * accepting text it will fail to deliver.
    */
   chatDisabledReason: string | null;
-  /** Music the agent is playing into the room, or `null`. */
-  music: { title: string; paused: boolean } | null;
+  /** Music or live DJ source playing into the room, or `null`. */
+  music: {
+    title: string;
+    paused: boolean;
+    volume?: number;
+    mode?: 'file' | 'capture' | 'device';
+    monitor?: boolean;
+  } | null;
   /** The emoji this room accepts, from the join result; empty until joined. */
   reactionOptions: string[];
   /** Room stage mode (`0` = open stage, `1` = invite only / locked, `2` = everyone, `3` = followed). */
@@ -312,15 +318,21 @@ export class ClubhouseRoomSession {
    * orphan a song that is still playing to the room.
    */
   music: {
-    el: HTMLAudioElement;
-    source: MediaElementAudioSourceNode;
+    el: HTMLAudioElement | null;
+    stream?: MediaStream | null;
+    source: AudioNode;
     gain: GainNode;
-    strip: StripHandle;
+    strip: StripHandle | null;
     /** The level to return to after ducking under the agent's voice. */
     volume: number;
     /** Whether the channel was muted before the music opened it. */
     wasMuted: boolean;
+    mode?: 'file' | 'capture' | 'device';
+    monitor?: boolean;
   } | null = null;
+  /** Bridge gain node wiring the Audio Mixer's `CLUBHOUSE_DJ` bus into `agentAudioDest`. */
+  djBusGain: GainNode | null = null;
+  djBusUnsubscribe: (() => void) | null = null;
 
   myProfile: { name: string; photoUrl: string | null; userId: number | null } | null = null;
   /** Whether the connected account is currently on stage as a speaker in this room. */
@@ -465,10 +477,22 @@ export class ClubhouseRoomSession {
     const music = this.music;
     if (!music) return;
     this.music = null;
-    music.el.onended = null;
-    music.el.pause();
-    music.el.removeAttribute('src');
-    music.el.load();
+    if (music.el) {
+      music.el.onended = null;
+      music.el.pause();
+      music.el.removeAttribute('src');
+      music.el.load();
+    }
+    if (music.stream) {
+      for (const track of music.stream.getTracks()) {
+        try {
+          track.onended = null;
+          track.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+    }
     for (const node of [music.source, music.gain]) {
       try {
         node.disconnect();
@@ -477,7 +501,7 @@ export class ClubhouseRoomSession {
       }
     }
     // Release, never close: the strip's routing is the user's setting.
-    music.strip.release();
+    music.strip?.release();
     if (this.state.music) this.patch({ music: null });
   }
 
@@ -560,7 +584,17 @@ export class ClubhouseRoomSession {
     // Clubhouse join, whose first `createMediaStreamDestination()` throws
     // `InvalidStateError` on a closed context. Disconnect our own nodes instead;
     // the physical mic stream is stopped above, which drops its source with it.
-    for (const node of [this.micSource, this.humanGain, this.agentAudioDest, this.sttBus]) {
+    if (this.djBusUnsubscribe) {
+      this.djBusUnsubscribe();
+      this.djBusUnsubscribe = null;
+    }
+    for (const node of [
+      this.micSource,
+      this.humanGain,
+      this.djBusGain,
+      this.agentAudioDest,
+      this.sttBus,
+    ]) {
       try {
         node?.disconnect();
       } catch {
@@ -569,6 +603,7 @@ export class ClubhouseRoomSession {
     }
     this.audioCtx = null;
     this.agentAudioDest = null;
+    this.djBusGain = null;
     this.sttBus = null;
     this.micSource = null;
     this.humanGain = null;

@@ -18,7 +18,12 @@ import { subscribeChannel, type WsMessage } from '../../ws';
 import { getMixerState, resetMixerState, saveMixerState } from './api';
 import { describeMicFailure, listInputs, listOutputs, resolveDeviceId } from './devices';
 import { mixer } from './engine';
-import { SHARE_SINK_DEVICE, type MixerState, type StripState } from './types';
+import {
+  CLUBHOUSE_SINK_DEVICE,
+  SHARE_SINK_DEVICE,
+  type MixerState,
+  type StripState,
+} from './types';
 
 let state: MixerState | null = null;
 let outputs: MediaDeviceInfo[] = [];
@@ -252,6 +257,38 @@ export async function addBus(label: string, deviceId: string): Promise<void> {
  * allocated like `A1`/`A2`, because the share module has to find it again.
  */
 export const SHARE_BUS_ID = 'VIEWERS';
+
+/**
+ * The id of the bus that feeds the live Clubhouse room stage (`Clubhouse_DJ`).
+ * Any dashboard strip routed to both `A1` (headphones) and `CLUBHOUSE_DJ` is
+ * heard locally on headphones and broadcast into the active Clubhouse room.
+ */
+export const CLUBHOUSE_DJ_BUS_ID = 'CLUBHOUSE_DJ';
+
+/**
+ * Make sure the `CLUBHOUSE_DJ` bus exists in the mixer matrix and return its id.
+ */
+export async function ensureClubhouseDjBus(): Promise<string | null> {
+  await ensureLoaded();
+  connectAudio();
+  if (!state) return null;
+  if (state.buses.some((b) => b.id === CLUBHOUSE_DJ_BUS_ID)) return CLUBHOUSE_DJ_BUS_ID;
+  const next = structuredClone(state);
+  next.buses.push({
+    id: CLUBHOUSE_DJ_BUS_ID,
+    label: 'Clubhouse_DJ',
+    deviceId: CLUBHOUSE_SINK_DEVICE,
+    deviceLabel: 'Clubhouse_DJ (Room Stage)',
+    gain: 0,
+    muted: false,
+    virtual: true,
+  });
+  for (const strip of next.strips) {
+    strip.sends[CLUBHOUSE_DJ_BUS_ID] = false;
+  }
+  await commit(next);
+  return CLUBHOUSE_DJ_BUS_ID;
+}
 
 /**
  * Make sure the viewers' bus exists, and return its id — or `null` if the mixer

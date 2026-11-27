@@ -40,6 +40,7 @@
 
 import { canChooseOutput, resolveDeviceId } from './devices';
 import {
+  CLUBHOUSE_SINK_DEVICE,
   SHARE_SINK_DEVICE,
   type BusConfig,
   type MixerState,
@@ -324,6 +325,7 @@ class MixerEngine {
    */
   private resolveTarget(config: BusConfig): string {
     if (config.deviceId === SHARE_SINK_DEVICE) return SHARE_SINK_DEVICE;
+    if (config.deviceId === CLUBHOUSE_SINK_DEVICE) return CLUBHOUSE_SINK_DEVICE;
     return resolveDeviceId(config.deviceId, config.deviceLabel, this.devices);
   }
 
@@ -359,11 +361,11 @@ class MixerEngine {
     this.teardownElement(bus);
     bus.fellBack = false;
 
-    // The viewers' bus ends in a stream, not a speaker. Deliberately **no**
-    // `<audio>` element: this is what other people hear, and playing it locally
-    // too would double every sound the host is already listening to — and echo
-    // their own microphone back at them.
-    if (deviceId === SHARE_SINK_DEVICE) {
+    // The viewers' bus and Clubhouse DJ bus end in a stream/node, not a speaker.
+    // Deliberately **no** `<audio>` element: this is what other people hear, and
+    // playing it locally too would double every sound the host is already listening
+    // to on `A1` (e.g. Bluetooth headphones) — and echo their own microphone back.
+    if (deviceId === SHARE_SINK_DEVICE || deviceId === CLUBHOUSE_SINK_DEVICE) {
       const sink = ctx.createMediaStreamDestination();
       bus.gain.connect(sink);
       bus.sink = sink;
@@ -430,6 +432,16 @@ class MixerEngine {
    */
   busStream(busId: string): MediaStream | null {
     return this.buses.get(busId)?.sink?.stream ?? null;
+  }
+
+  /**
+   * The live output `GainNode` of a bus in the shared `AudioContext`, or null.
+   *
+   * Used by same-context consumers like `ClubhouseRoomSession` to wire the
+   * `CLUBHOUSE_DJ` bus straight into `agentAudioDest` with zero extra buffering.
+   */
+  busGainNode(busId: string): GainNode | null {
+    return this.buses.get(busId)?.gain ?? null;
   }
 
   /** Buses whose audio is not going where the config says. */
