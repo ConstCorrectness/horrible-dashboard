@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
+import { apiUrl } from '../../origin';
 import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
+import { subscribeChannel } from '../../ws';
 import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
 import { createVirtualDevice } from '../audio/api';
 import { listInputs, requestDeviceLabels } from '../audio/devices';
@@ -326,11 +328,20 @@ export function RoomsPanel() {
   const [showDjDeck, setShowDjDeck] = useState(false);
   const [djTrackQueue, setDjTrackQueue] = useState<{ title: string; url: string }[]>([]);
   const [djTrackIndex, setDjTrackIndex] = useState(0);
+  const djTrackQueueRef = useRef<{ title: string; url: string }[]>([]);
+  djTrackQueueRef.current = djTrackQueue;
+  const djTrackIndexRef = useRef(0);
+  djTrackIndexRef.current = djTrackIndex;
   const [djStreamUrl, setDjStreamUrl] = useState('');
   const [djInputDevices, setDjInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDjDeviceId, setSelectedDjDeviceId] = useState('');
   const [creatingDjSink, setCreatingDjSink] = useState(false);
+  const [loadingSongRequest, setLoadingSongRequest] = useState<string | null>(null);
+  const [libraryTracks, setLibraryTracks] = useState<
+    { id: string; title: string; artist: string; status: string }[]
+  >([]);
   const djFileInputRef = useRef<HTMLInputElement | null>(null);
+  const handledDjLaunchIdRef = useRef<string | null>(null);
   const [newRoomTopic, setNewRoomTopic] = useState('');
   const [newRoomPrivacy, setNewRoomPrivacy] = useState<RoomAudience>('public');
   const [creatingRoom, setCreatingRoom] = useState(false);
@@ -1156,6 +1167,20 @@ export function RoomsPanel() {
     onVoiceError: (message) => {
       toastsStore.add('warning', 'Voice', message);
     },
+    onMusicEnded: () => {
+      const q = djTrackQueueRef.current;
+      const nextIdx = djTrackIndexRef.current + 1;
+      if (q.length > 0 && nextIdx < q.length) {
+        setDjTrackIndex(nextIdx);
+        djTrackIndexRef.current = nextIdx;
+        const nextTrack = q[nextIdx];
+        if (nextTrack) {
+          void playRoomMusicRef.current(nextTrack.url, nextTrack.title);
+          return;
+        }
+      }
+      void stopRoomMusic();
+    },
     onSpeakerInvite: (invite) => {
       toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -1326,6 +1351,12 @@ export function RoomsPanel() {
 
   useEffect(() => {
     void load();
+    void fetch(apiUrl('/api/music/tracks'))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.tracks) setLibraryTracks(data.tracks);
+      })
+      .catch(() => {});
     if (
       typeof window !== 'undefined' &&
       'Notification' in window &&
@@ -1333,6 +1364,127 @@ export function RoomsPanel() {
     ) {
       Notification.requestPermission().catch(() => {});
     }
+  }, []);
+
+  const joinRoomRef = useRef(joinRoom);
+  joinRoomRef.current = joinRoom;
+  const playRoomMusicRef = useRef(playRoomMusic);
+  playRoomMusicRef.current = playRoomMusic;
+
+  // Listen for remote DJ launch commands (`clubhouse.djLaunch` setting and `/ws` `clubhouse` channel)
+  useEffect(() => {
+    const executeDjLaunch = async (payload: {
+      id?: string;
+      channel?: string;
+      topic?: string;
+      track_url?: string;
+      track_title?: string;
+      queue?: { title: string; url: string }[];
+      users?: ChannelUser[];
+    }) => {
+      if (!payload?.channel) return;
+      if (payload.id && handledDjLaunchIdRef.current === payload.id) return;
+      if (payload.id) handledDjLaunchIdRef.current = payload.id;
+
+      void fetch(apiUrl('/api/settings/clubhouse.djLaunch'), {
+        method: 'DELETE',
+      }).catch(() => {});
+
+      const roomInfo: Channel = {
+        channel: payload.channel,
+        topic: payload.topic || 'exposing fake coders',
+        num_speakers: payload.users?.length || 1,
+        num_all: payload.users?.length || 1,
+        club: null,
+        users: payload.users ?? [],
+      };
+      setActiveRoomInfo(roomInfo);
+      setShowDjDeck(true);
+
+      if (activeChannelRef.current !== payload.channel || !clubhouseSession().state.joined) {
+        await joinRoomRef.current(payload.channel, roomInfo.users);
+      }
+      const incomingQueue =
+        payload.queue && payload.queue.length > 0
+          ? payload.queue.map((item) => ({
+              title: item.title,
+              url: item.url.startsWith('http') ? item.url : apiUrl(item.url),
+            }))
+          : payload.track_url
+            ? [
+                {
+                  title: payload.track_title || 'Track 1',
+                  url: payload.track_url.startsWith('http')
+                    ? payload.track_url
+                    : apiUrl(payload.track_url),
+                },
+              ]
+            : [];
+      if (incomingQueue.length > 0) {
+        setDjTrackQueue(incomingQueue);
+        djTrackQueueRef.current = incomingQueue;
+        setDjTrackIndex(0);
+        djTrackIndexRef.current = 0;
+        await fetch(apiUrl('/api/music/player/pause'), { method: 'POST' }).catch(() => {});
+        await playRoomMusicRef.current(incomingQueue[0].url, incomingQueue[0].title);
+        void fetch(apiUrl('/api/music/tracks'))
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data?.tracks) setLibraryTracks(data.tracks);
+          })
+          .catch(() => {});
+        toastsStore.add(
+          'success',
+          'Clubhouse_DJ Queue Live',
+          `Playing "${incomingQueue[0].title}" (${incomingQueue.length} tracks queued) in "${roomInfo.topic}".`,
+        );
+      }
+    };
+
+    const unsub = subscribeChannel('clubhouse', (msg) => {
+      if (msg.event === 'dj_launch' && msg.data) {
+        void executeDjLaunch(
+          msg.data as {
+            id?: string;
+            channel?: string;
+            topic?: string;
+            track_url?: string;
+            track_title?: string;
+            users?: ChannelUser[];
+          },
+        );
+      }
+    });
+
+    const checkPendingSetting = () => {
+      void fetch(apiUrl('/api/settings'))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((res) => {
+          const raw = res?.values?.['clubhouse.djLaunch'];
+          if (typeof raw === 'string' && raw.trim()) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed?.channel) {
+                void executeDjLaunch(parsed);
+              }
+            } catch {
+              /* ignore malformed */
+            }
+          }
+        })
+        .catch(() => {});
+    };
+
+    const unsubAudio = subscribeChannel('audio', () => {
+      checkPendingSetting();
+    });
+
+    checkPendingSetting();
+
+    return () => {
+      unsub();
+      unsubAudio();
+    };
   }, []);
 
   /**
@@ -2052,6 +2204,167 @@ export function RoomsPanel() {
 
   const prevCommentsLengthRef = useRef(0);
   const seenCommentIdsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Handle a `!song <query or YouTube URL>` request from room chat or the DJ deck:
+   * searches YouTube / the Music Library, downloads the audio track via `/api/music/download`,
+   * waits until `status === 'ready'`, and plays it immediately into the Clubhouse stage
+   * and headphones via `playRoomMusic`.
+   */
+  const handleSongRequest = async (
+    rawQuery: string,
+    requester?: string,
+    options?: { announceInChat?: boolean },
+  ) => {
+    const cleanQuery = rawQuery.replace(/^[!/]song\s+/i, '').trim();
+    if (!cleanQuery) return;
+
+    const postDjNotice = (msg: string) => {
+      if (!options?.announceInChat) return;
+      agentSentTextsRef.current.add(msg.trim());
+      void sendComment(msg, { dedupe: false }).catch(() => {});
+    };
+
+    const ytMatch = /(?:v=|youtu\.be\/|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})/.exec(cleanQuery);
+    const ytId = ytMatch ? ytMatch[1] : /^[A-Za-z0-9_-]{11}$/.test(cleanQuery) ? cleanQuery : '';
+    const isDirectAudioUrl =
+      /^https?:\/\//i.test(cleanQuery) &&
+      !ytId &&
+      !/youtube\.com|youtu\.be/i.test(cleanQuery);
+
+    if (isDirectAudioUrl) {
+      const title = cleanQuery.split('/').pop()?.split('?')[0] || 'Audio Stream';
+      await fetch(apiUrl('/api/music/player/pause'), { method: 'POST' }).catch(() => {});
+      setDjTrackQueue((prev) => [{ title, url: cleanQuery }, ...prev.filter((t) => t.url !== cleanQuery)]);
+      setDjTrackIndex(0);
+      setShowDjDeck(true);
+      await playRoomMusicRef.current(cleanQuery, title);
+      postDjNotice(`🎧 Now playing: ${title}${requester ? ` (requested by ${requester})` : ''}`);
+      return;
+    }
+
+    setLoadingSongRequest(cleanQuery);
+    setShowDjDeck(true);
+    try {
+      const searchUrl = apiUrl(
+        `/api/music/search?q=${encodeURIComponent(ytId ? `https://www.youtube.com/watch?v=${ytId}` : cleanQuery)}&limit=5`,
+      );
+      const searchRes = await fetch(searchUrl)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const cand = searchRes?.candidates?.[0] as
+        | {
+            source?: string;
+            ref?: string;
+            title?: string;
+            artist?: string;
+            url?: string;
+            track_id?: string | null;
+          }
+        | undefined;
+
+      if (!cand && !ytId) {
+        toastsStore.add('warning', 'Clubhouse_DJ', `No song match found for "${cleanQuery}".`);
+        postDjNotice(`⚠️ Could not find a song matching "${cleanQuery}".`);
+        return;
+      }
+
+      const displayTitle = cand
+        ? cand.artist && cand.title
+          ? `${cand.artist} - ${cand.title}`
+          : cand.title || cleanQuery
+        : cleanQuery;
+
+      const dlRes = await fetch(apiUrl('/api/music/download'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: cand?.source || 'youtube',
+          ref: ytId || cand?.ref || '',
+          url: ytId ? `https://www.youtube.com/watch?v=${ytId}` : cand?.url || cleanQuery,
+          title: cand?.title || '',
+          artist: cand?.artist || '',
+          then: 'none',
+        }),
+      });
+      if (!dlRes.ok) {
+        const errBody = (await dlRes.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(errBody?.detail || `Download failed (HTTP ${dlRes.status})`);
+      }
+      let track = (await dlRes.json()) as {
+        id: string;
+        title: string;
+        artist: string;
+        status: string;
+        error?: string | null;
+      };
+
+      if (track.status !== 'ready') {
+        setLoadingSongRequest(displayTitle);
+        toastsStore.add(
+          'info',
+          'Clubhouse_DJ Downloading',
+          `Loading "${displayTitle}"${requester ? ` for ${requester}` : ''}…`,
+        );
+        postDjNotice(
+          `🎵 Loading "${displayTitle}"${requester ? ` (requested by ${requester})` : ''}…`,
+        );
+
+        const deadline = Date.now() + 180_000;
+        while (track.status !== 'ready' && Date.now() < deadline) {
+          if (track.status === 'failed') {
+            throw new Error(track.error || 'Track download failed.');
+          }
+          await new Promise((r) => setTimeout(r, 1200));
+          const poll = await fetch(apiUrl(`/api/music/tracks/${track.id}`));
+          if (poll.ok) {
+            track = (await poll.json()) as typeof track;
+          }
+        }
+      }
+
+      if (track.status !== 'ready') {
+        throw new Error(`Timed out downloading "${displayTitle}".`);
+      }
+
+      const finalTitle =
+        track.artist && track.title
+          ? `${track.artist} - ${track.title}`
+          : track.title || displayTitle;
+      const mediaUrl = apiUrl(`/api/music/media/${track.id}`);
+
+      void fetch(apiUrl('/api/music/tracks'))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.tracks) setLibraryTracks(data.tracks);
+        })
+        .catch(() => {});
+
+      await fetch(apiUrl('/api/music/player/pause'), { method: 'POST' }).catch(() => {});
+      setDjTrackQueue((prev) => [
+        { title: finalTitle, url: mediaUrl },
+        ...prev.filter((t) => t.url !== mediaUrl),
+      ]);
+      setDjTrackIndex(0);
+      await playRoomMusicRef.current(mediaUrl, finalTitle);
+
+      toastsStore.add(
+        'success',
+        'Clubhouse_DJ Now Playing',
+        `${finalTitle}${requester ? ` (requested by ${requester})` : ''}`,
+      );
+      postDjNotice(
+        `🎧 Now playing: ${finalTitle}${requester ? ` (requested by ${requester})` : ''}`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toastsStore.add('error', 'Song Request Failed', msg);
+      postDjNotice(`⚠️ Could not load "${cleanQuery}": ${msg}`);
+    } finally {
+      setLoadingSongRequest(null);
+    }
+  };
+
   useEffect(() => {
     if (comments.length === 0) {
       prevCommentsLengthRef.current = 0;
@@ -2072,6 +2385,19 @@ export function RoomsPanel() {
       seenCommentIdsRef.current.add(c.id);
       const rawText = (c.text || '').trim();
       if (!rawText) continue;
+
+      // `!song <song request>` (or `/song <song request>`) from ANY user in the room
+      // (including the host!) searches, downloads, and plays the requested track immediately.
+      const songMatch = /^[!/]song(?:\s+(.+))?$/i.exec(rawText);
+      if (songMatch && !agentSentTextsRef.current.has(rawText)) {
+        const songQuery = (songMatch[1] || '').trim();
+        const requester = chatSpeakerLabel(c) || c.userName || 'Room';
+        if (songQuery) {
+          void handleSongRequest(songQuery, requester, { announceInChat: true });
+        }
+        continue;
+      }
+
       const effectiveMyId =
         myUserIdRef.current ?? clubhouseSession().myProfile?.userId ?? myUserId ?? null;
       const effectiveMyName =
@@ -2079,6 +2405,9 @@ export function RoomsPanel() {
       // The agent's own posts should not be enqueued to avoid self-reply loops.
       const isAgentSelf =
         rawText.startsWith('🤖') ||
+        rawText.startsWith('🎵') ||
+        rawText.startsWith('🎧') ||
+        rawText.startsWith('⚠️') ||
         (c.userId != null && effectiveMyId != null && c.userId === effectiveMyId) ||
         agentSentTextsRef.current.has(rawText) ||
         Boolean(
@@ -4650,6 +4979,42 @@ export function RoomsPanel() {
                     >
                       📂 Play Audio Files
                     </button>
+                    {libraryTracks
+                      .filter((t) => t.status === 'ready')
+                      .slice(0, 3)
+                      .map((t) => {
+                        const fullTitle = t.artist ? `${t.artist} - ${t.title}` : t.title;
+                        const mediaUrl = apiUrl(`/api/music/media/${t.id}`);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            className="btn-mini"
+                            onClick={() => {
+                              setDjTrackQueue([{ title: fullTitle, url: mediaUrl }]);
+                              setDjTrackIndex(0);
+                              void playRoomMusic(mediaUrl, fullTitle);
+                            }}
+                            style={{
+                              padding: '0 0.65rem',
+                              borderRadius: '8px',
+                              background: 'rgba(245, 158, 11, 0.18)',
+                              color: '#fcd34d',
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                              fontWeight: 600,
+                              fontSize: '0.73rem',
+                              cursor: 'pointer',
+                              maxWidth: '260px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={`Play "${fullTitle}" from Music Library to headphones + Clubhouse stage`}
+                          >
+                            🎵 {fullTitle}
+                          </button>
+                        );
+                      })}
                     <button
                       type="button"
                       className="btn-mini"
@@ -4795,12 +5160,12 @@ export function RoomsPanel() {
                     </button>
 
                     <input
-                      type="url"
-                      placeholder="Or paste direct audio stream/MP3 URL…"
+                      type="text"
+                      placeholder="Song name, YouTube URL, or !song request (room users can also type !song in chat)…"
                       value={djStreamUrl}
                       onChange={(e) => setDjStreamUrl(e.target.value)}
                       style={{
-                        flex: '1 1 200px',
+                        flex: '1 1 220px',
                         padding: '0 0.6rem',
                         fontSize: '0.75rem',
                         background: '#14161a',
@@ -4812,11 +5177,12 @@ export function RoomsPanel() {
                     <button
                       type="button"
                       className="btn-mini"
-                      disabled={!djStreamUrl.trim()}
+                      disabled={!djStreamUrl.trim() || Boolean(loadingSongRequest)}
                       onClick={() => {
-                        const url = djStreamUrl.trim();
-                        if (!url) return;
-                        void playRoomMusic(url, url.split('/').pop() || 'Audio Stream');
+                        const q = djStreamUrl.trim();
+                        if (!q) return;
+                        setDjStreamUrl('');
+                        void handleSongRequest(q, undefined, { announceInChat: true });
                       }}
                       style={{
                         padding: '0 0.65rem',
@@ -4829,7 +5195,7 @@ export function RoomsPanel() {
                         cursor: 'pointer',
                       }}
                     >
-                      ▶ Stream URL
+                      {loadingSongRequest ? `⏳ Loading ${loadingSongRequest.slice(0, 18)}…` : '🎵 Load & Play (!song)'}
                     </button>
                   </div>
                 </div>

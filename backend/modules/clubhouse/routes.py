@@ -2002,6 +2002,93 @@ async def get_notifications(next_cursor: str | None = None) -> dict[str, Any]:
 # --- Profile Management ---
 
 
+_pending_dj_launch: dict[str, Any] | None = None
+
+
+@router.post("/dj/launch")
+async def dj_launch(body: dict[str, Any]) -> dict[str, Any]:
+    """Open or join a Clubhouse room and tell the running dashboard UI to join it
+    and load a track into Clubhouse_DJ."""
+    from backend.modules.ws import broadcast_event
+
+    global _pending_dj_launch, _joined_channel
+    auth = _require_auth()
+    topic = str(body.get("topic") or "Jumma Mubarak mix").strip()
+    channel = str(body.get("channel") or "").strip()
+    track_url = str(
+        body.get("track_url")
+        or "/api/music/media/be88b35aebac40bea4186b2d2192765c"
+    ).strip()
+    track_title = str(
+        body.get("track_title")
+        or "Proximity - Best EDM of 2010-2019 (Decade Mix)"
+    ).strip()
+
+    users: list[dict[str, Any]] = []
+    if not channel:
+        # 1. Check if a room with this topic is already live in the feed
+        try:
+            search_res = await search_channels(query=topic, max_pages=4)
+            for ch in search_res.channels:
+                if ch.channel and ch.topic and topic.lower() in ch.topic.lower():
+                    channel = ch.channel
+                    topic = ch.topic
+                    users = [u.model_dump() for u in ch.users]
+                    break
+        except Exception:
+            pass
+
+    if not channel:
+        # 2. Create the room on Clubhouse and set its title
+        created = await create_channel(
+            CreateChannelRequest(topic=topic, audience=RoomAudience.public)
+        )
+        channel = str(created.get("channel") or "")
+        _joined_channel = channel
+        users = [
+            {
+                "user_id": auth.get("user_id"),
+                "name": auth.get("name") or "Horrible Coder",
+                "username": auth.get("username"),
+                "photo_url": auth.get("photo_url"),
+                "is_speaker": True,
+                "is_moderator": True,
+            }
+        ]
+
+    payload = {
+        "id": f"dj-{int(time.time() * 1000)}",
+        "channel": channel,
+        "topic": topic,
+        "track_url": track_url,
+        "track_title": track_title,
+        "users": users,
+        "ts": time.time(),
+    }
+    _pending_dj_launch = payload
+    await broadcast_event("clubhouse", "dj_launch", payload)
+    return payload
+
+
+@router.get("/dj/pending")
+def get_pending_dj_launch() -> dict[str, Any]:
+    """Return any unconsumed DJ launch request from the last 5 minutes."""
+    global _pending_dj_launch
+    if _pending_dj_launch and time.time() - float(_pending_dj_launch.get("ts", 0)) < 300:
+        return {"pending": _pending_dj_launch}
+    return {"pending": None}
+
+
+@router.post("/dj/pending/ack")
+def ack_pending_dj_launch(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Acknowledge that the frontend consumed the pending DJ launch."""
+    global _pending_dj_launch
+    ack_id = (body or {}).get("id")
+    if _pending_dj_launch and (not ack_id or _pending_dj_launch.get("id") == ack_id):
+        _pending_dj_launch = None
+    return {"ok": True}
+
+
 @router.post("/me/bio")
 async def update_bio(body: UpdateBioRequest) -> dict[str, Any]:
     """Update profile bio (Clubhouse POST /update_bio)."""

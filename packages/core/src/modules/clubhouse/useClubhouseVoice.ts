@@ -118,6 +118,8 @@ export interface UseClubhouseVoiceProps {
   onHandRaise?: (userId: number, userName: string) => void;
   /** Speech pipeline failed (missing `voice` extra, backend down, decode error). */
   onVoiceError?: (message: string) => void;
+  /** Called when the current room music track ends so a queued DJ playlist can advance. */
+  onMusicEnded?: () => void;
   /** How often the live caption re-transcribes the utterance in progress. */
   liveCaptionMs?: number;
   /** How long a pause has to last before it ends someone's sentence. */
@@ -232,6 +234,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     onSpeakerInvite: props?.onSpeakerInvite,
     onHandRaise: props?.onHandRaise,
     onVoiceError: props?.onVoiceError,
+    onMusicEnded: props?.onMusicEnded,
   };
 
   const reportVoiceError = useCallback(
@@ -2262,7 +2265,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           monitor: true,
         },
       });
-      el.onended = () => void stopRoomMusic();
+      el.onended = () => {
+        if (session.handlers.onMusicEnded) {
+          session.handlers.onMusicEnded();
+        } else {
+          void stopRoomMusic();
+        }
+      };
 
       // Like the agent's voice: a muted channel publishes nothing, so open it for the
       // song. The human microphone stays behind its own gain either way.
@@ -2273,6 +2282,20 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         if (ctx.state === 'suspended') await ctx.resume();
         await el.play();
       } catch (e) {
+        if (e instanceof DOMException && e.name === 'NotAllowedError') {
+          // Autoplay needs one user click in the window: keep the track loaded and
+          // ready on the DJ deck so pressing Resume starts it immediately.
+          session.patch({
+            music: {
+              title,
+              paused: true,
+              volume: MUSIC_VOLUME,
+              mode: 'file',
+              monitor: true,
+            },
+          });
+          return;
+        }
         reportVoiceError(`Couldn't play "${title}": ${e instanceof Error ? e.message : String(e)}`);
         await stopRoomMusic();
       }

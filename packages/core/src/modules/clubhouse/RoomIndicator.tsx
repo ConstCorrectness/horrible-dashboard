@@ -1,7 +1,9 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import { IconClose } from '../../glyphs';
+import { apiUrl } from '../../origin';
 import { registry } from '../../registry';
+import { subscribeChannel } from '../../ws';
 import { getClubhousePresence, leaveClubhouse, subscribeClubhousePresence } from './presence';
 
 import './room-indicator.css';
@@ -25,6 +27,23 @@ export function ClubhouseRoomIndicator() {
     getClubhousePresence,
   );
   const [leaving, setLeaving] = useState(false);
+
+  useEffect(() => {
+    void fetch(apiUrl('/api/settings'))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (res?.values?.['clubhouse.djLaunch']) {
+          registry.openPanel('clubhouse.account');
+        }
+      })
+      .catch(() => {});
+    return subscribeChannel('clubhouse', (msg) => {
+      if (msg.event === 'dj_launch') {
+        registry.openPanel('clubhouse.account');
+      }
+    });
+  }, []);
+
   if (!presence.joined) return null;
 
   const meta = [`${presence.people} in room`];

@@ -376,6 +376,7 @@ export class ClubhouseRoomSession {
     onSpeakerInvite?: (invite: SpeakerInvite) => void;
     onHandRaise?: (userId: number, userName: string) => void;
     onVoiceError?: (message: string) => void;
+    onMusicEnded?: () => void;
   } = {};
 
   /** Distinct speech-pipeline failures already reported, so a per-chunk failure

@@ -284,7 +284,7 @@ export async function ensureClubhouseDjBus(): Promise<string | null> {
     virtual: true,
   });
   for (const strip of next.strips) {
-    strip.sends[CLUBHOUSE_DJ_BUS_ID] = false;
+    strip.sends[CLUBHOUSE_DJ_BUS_ID] = strip.id === 'music' || strip.id === 'clubhouse-music';
   }
   await commit(next);
   return CLUBHOUSE_DJ_BUS_ID;
